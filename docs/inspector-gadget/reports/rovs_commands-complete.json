@@ -1,0 +1,520 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "rovs_commands.rs",
+  "plugin": {
+    "name": "rovs_commands",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "AddPortInput",
+    "fields": {
+      "bridge_name": {
+        "rust_type": "String",
+        "description": "Parent bridge name",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "interface_type": {
+        "rust_type": "String",
+        "description": "Interface type (e.g. \"internal\", \"system\")",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "string"
+      },
+      "port_name": {
+        "rust_type": "String",
+        "description": "Port name to add",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      }
+    },
+    "nested_types": {
+      "CreateBridgeInput": {
+        "bridge_name": {
+          "rust_type": "String",
+          "description": "Name of the bridge to create",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "datapath_type": {
+          "rust_type": "String",
+          "description": "Datapath type (e.g. \"system\", \"netdev\")",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeleteBridgeInput": {
+        "bridge_name": {
+          "rust_type": "String",
+          "description": "Name of the bridge to delete",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ListPortsInput": {
+        "bridge_name": {
+          "rust_type": "String",
+          "description": "Bridge name to query",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "RemovePortInput": {
+        "bridge_name": {
+          "rust_type": "String",
+          "description": "Bridge name containing the port (optional for backward compat)",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "port_name": {
+          "rust_type": "String",
+          "description": "Port name to remove",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 10,
+    "warn": 48,
+    "hint": 9,
+    "findings": [
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CreateBridgeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateBridgeInput.bridge_name",
+        "message": "field `bridge_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateBridgeInput.bridge_name",
+        "message": "consider #[serde(default)] on `bridge_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateBridgeInput.datapath_type",
+        "message": "field `datapath_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeleteBridgeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteBridgeInput.bridge_name",
+        "message": "field `bridge_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteBridgeInput.bridge_name",
+        "message": "consider #[serde(default)] on `bridge_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddPortInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.bridge_name",
+        "message": "field `bridge_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPortInput.bridge_name",
+        "message": "consider #[serde(default)] on `bridge_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.port_name",
+        "message": "field `port_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPortInput.port_name",
+        "message": "consider #[serde(default)] on `port_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.interface_type",
+        "message": "field `interface_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct RemovePortInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RemovePortInput.bridge_name",
+        "message": "field `bridge_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RemovePortInput.port_name",
+        "message": "field `port_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RemovePortInput.port_name",
+        "message": "consider #[serde(default)] on `port_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListPortsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListPortsInput.bridge_name",
+        "message": "field `bridge_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListPortsInput.bridge_name",
+        "message": "consider #[serde(default)] on `bridge_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_x_oscal_category",
+        "location": null,
+        "message": "no #[schemars(extend(\"x-oscal-category\" = \"…\"))] on a state struct — declare what the plugin IS",
+        "severity": "fail"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/ovs.xml version=repomix nodes=0 elements=341 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=117 introspected=341 missing_in_plugin=341 extra_in_plugin=117",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.cid",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.cid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.connected",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.connected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.index",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.index` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.leader",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.leader` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.model",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.model` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.name",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.schema",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.schema` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.sid",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.sid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Config",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Config` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Config.field.connections",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Config.field.connections` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.other_config",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.other_config` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.read_only",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.read_only` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.role",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.role` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.status",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.status` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.target",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.target` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_type",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.fail_mode",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.fail_mode` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mcast_snooping_enable",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.mcast_snooping_enable` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.name",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 301 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/ovs.xml",
+    "files_by_kind": {
+      "json": 4
+    },
+    "by_kind": {
+      "json": 341
+    },
+    "element_path_count": 341,
+    "gaps": {
+      "surface_paths_total": 341,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

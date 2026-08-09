@@ -1,0 +1,974 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "wireguard.rs",
+  "plugin": {
+    "name": "wireguard",
+    "category": "network",
+    "version": "1.0.0",
+    "description": "WireGuard interface state",
+    "display_name": "GB.Wireguard",
+    "state_root": "WireGuardState",
+    "fields": {
+      "interfaces": {
+        "rust_type": "Vec<WireGuardInterface>",
+        "description": "Active WireGuard interfaces.",
+        "subid": "exp.network.wireguard.interfaces.render@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      }
+    },
+    "nested_types": {
+      "AddPeerInput": {
+        "allowed_ips": {
+          "rust_type": "Vec<String>",
+          "description": "Allowed IP addresses.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "endpoint": {
+          "rust_type": "Option<String>",
+          "description": "Endpoint address (optional).",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "interface": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "persistent_keepalive": {
+          "rust_type": "Option<u16>",
+          "description": "Persistent keepalive interval (optional).",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "preshared_key": {
+          "rust_type": "Option<String>",
+          "description": "Preshared key (optional).",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "public_key": {
+          "rust_type": "String",
+          "description": "Peer's public key.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "GetDeviceInput": {
+        "interface": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "GetDeviceOutput": {
+        "interface": {
+          "rust_type": "Option<WireGuardInterface>",
+          "description": "Interface details.",
+          "has_serde_default": false,
+          "optional": true
+        }
+      },
+      "ListPeersInput": {
+        "interface": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ListPeersOutput": {
+        "peers": {
+          "rust_type": "Vec<WireGuardPeer>",
+          "description": "List of peers.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "RemovePeerInput": {
+        "interface": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "public_key": {
+          "rust_type": "String",
+          "description": "Peer's public key.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SetConfigInput": {
+        "config": {
+          "rust_type": "serde_json::Value",
+          "description": "Full configuration as JSON.",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "interface": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SetDeviceInput": {
+        "fwmark": {
+          "rust_type": "Option<u32>",
+          "description": "Firewall mark (optional).",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "interface": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "listen_port": {
+          "rust_type": "Option<u16>",
+          "description": "Listen port (optional).",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "private_key": {
+          "rust_type": "Option<String>",
+          "description": "Private key (optional).",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        }
+      },
+      "WireGuardInterface": {
+        "listen_port": {
+          "rust_type": "u16",
+          "description": "Listen port.",
+          "subid": "exp.network.wireguard.interface.port.render@v1",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Interface name.",
+          "subid": "exp.network.wireguard.interface.name.render@v1",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "peers": {
+          "rust_type": "Vec<WireGuardPeer>",
+          "description": "Configured peers.",
+          "subid": "exp.network.wireguard.peers.render@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "private_key": {
+          "rust_type": "Option<String>",
+          "description": "Private key (only present when set).",
+          "subid": "obs.network.wireguard.interface.private-key.observe@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        }
+      },
+      "WireGuardPeer": {
+        "allowed_ips": {
+          "rust_type": "Vec<String>",
+          "description": "Allowed IP addresses.",
+          "subid": "exp.network.wireguard.peer.allowed-ips.render@v1",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "endpoint": {
+          "rust_type": "Option<String>",
+          "description": "Endpoint address.",
+          "subid": "obs.network.wireguard.peer.endpoint.render@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "public_key": {
+          "rust_type": "String",
+          "description": "Peer's public key.",
+          "subid": "exp.network.wireguard.peer.public-key.render@v1",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {
+      "add_peer": {
+        "name": "add_peer",
+        "input_type": "AddPeerInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "wireguard.write",
+        "subid": "mut.network.wireguard.peer.add@v1",
+        "args": {
+          "properties": {
+            "allowed_ips": {
+              "description": "Allowed IP addresses.",
+              "type": "array"
+            },
+            "endpoint": {
+              "description": "Endpoint address (optional).",
+              "type": "string"
+            },
+            "interface": {
+              "description": "Interface name.",
+              "type": "string"
+            },
+            "persistent_keepalive": {
+              "description": "Persistent keepalive interval (optional).",
+              "type": "integer"
+            },
+            "preshared_key": {
+              "description": "Preshared key (optional).",
+              "type": "string"
+            },
+            "public_key": {
+              "description": "Peer's public key.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "allowed_ips",
+            "interface",
+            "public_key"
+          ],
+          "title": "AddPeerInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "get_device": {
+        "name": "get_device",
+        "input_type": "GetDeviceInput",
+        "output_type": "GetDeviceOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "wireguard.read",
+        "subid": "obs.network.wireguard.device.get@v1",
+        "args": {
+          "properties": {
+            "interface": {
+              "description": "Interface name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface"
+          ],
+          "title": "GetDeviceInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "interface": {
+              "description": "Interface details.",
+              "type": "object",
+              "x-rust-type": "Option<WireGuardInterface>"
+            }
+          },
+          "title": "GetDeviceOutput",
+          "type": "object"
+        }
+      },
+      "list_peers": {
+        "name": "list_peers",
+        "input_type": "ListPeersInput",
+        "output_type": "ListPeersOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "wireguard.read",
+        "subid": "obs.network.wireguard.peers.list@v1",
+        "args": {
+          "properties": {
+            "interface": {
+              "description": "Interface name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface"
+          ],
+          "title": "ListPeersInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "peers": {
+              "description": "List of peers.",
+              "type": "array"
+            }
+          },
+          "required": [
+            "peers"
+          ],
+          "title": "ListPeersOutput",
+          "type": "object"
+        }
+      },
+      "remove_peer": {
+        "name": "remove_peer",
+        "input_type": "RemovePeerInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "wireguard.write",
+        "subid": "mut.network.wireguard.peer.remove@v1",
+        "args": {
+          "properties": {
+            "interface": {
+              "description": "Interface name.",
+              "type": "string"
+            },
+            "public_key": {
+              "description": "Peer's public key.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface",
+            "public_key"
+          ],
+          "title": "RemovePeerInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "set_config": {
+        "name": "set_config",
+        "input_type": "SetConfigInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "wireguard.write",
+        "subid": "mut.network.wireguard.config.set@v1",
+        "args": {
+          "properties": {
+            "config": {
+              "description": "Full configuration as JSON.",
+              "type": "object",
+              "x-rust-type": "serde_json::Value"
+            },
+            "interface": {
+              "description": "Interface name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config",
+            "interface"
+          ],
+          "title": "SetConfigInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "set_device": {
+        "name": "set_device",
+        "input_type": "SetDeviceInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "wireguard.write",
+        "subid": "mut.network.wireguard.device.set@v1",
+        "args": {
+          "properties": {
+            "fwmark": {
+              "description": "Firewall mark (optional).",
+              "type": "integer"
+            },
+            "interface": {
+              "description": "Interface name.",
+              "type": "string"
+            },
+            "listen_port": {
+              "description": "Listen port (optional).",
+              "type": "integer"
+            },
+            "private_key": {
+              "description": "Private key (optional).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface"
+          ],
+          "title": "SetDeviceInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "audit": {
+    "ok": false,
+    "fail": 18,
+    "warn": 43,
+    "hint": 21,
+    "findings": [
+      {
+        "code": "missing_serde_default",
+        "location": "WireGuardInterface.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "WireGuardInterface.private_key",
+        "message": "`private_key` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "WireGuardInterface.listen_port",
+        "message": "consider #[serde(default)] on `listen_port` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_port_range",
+        "location": "WireGuardInterface.listen_port",
+        "message": "field `listen_port` looks like a port — add #[schemars(range(min = 1, max = 65535))]",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "WireGuardPeer.public_key",
+        "message": "consider #[serde(default)] on `public_key` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "WireGuardPeer.allowed_ips",
+        "message": "consider #[serde(default)] on `allowed_ips` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "WireGuardPeer.endpoint",
+        "message": "`endpoint` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetDeviceInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetDeviceInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetDeviceInput.private_key",
+        "message": "field `private_key` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetDeviceInput.listen_port",
+        "message": "field `listen_port` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetDeviceInput.fwmark",
+        "message": "field `fwmark` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetDeviceInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetDeviceInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetDeviceOutput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPeerInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPeerInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPeerInput.public_key",
+        "message": "field `public_key` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPeerInput.public_key",
+        "message": "consider #[serde(default)] on `public_key` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPeerInput.endpoint",
+        "message": "field `endpoint` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPeerInput.allowed_ips",
+        "message": "field `allowed_ips` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPeerInput.allowed_ips",
+        "message": "consider #[serde(default)] on `allowed_ips` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPeerInput.persistent_keepalive",
+        "message": "field `persistent_keepalive` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPeerInput.preshared_key",
+        "message": "field `preshared_key` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RemovePeerInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RemovePeerInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RemovePeerInput.public_key",
+        "message": "field `public_key` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RemovePeerInput.public_key",
+        "message": "consider #[serde(default)] on `public_key` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListPeersInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListPeersInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListPeersOutput.peers",
+        "message": "field `peers` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListPeersOutput.peers",
+        "message": "consider #[serde(default)] on `peers` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetConfigInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetConfigInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetConfigInput.config",
+        "message": "field `config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetConfigInput.config",
+        "message": "consider #[serde(default)] on `config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/wireguard.xml version=repomix nodes=0 elements=101 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=11 introspected=101 missing_in_plugin=101 extra_in_plugin=11",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.TunError",
+        "message": "external surface has `enum.rs.TunError` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.TunError.Disconnected",
+        "message": "external surface has `enum.rs.TunError.Disconnected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError",
+        "message": "external surface has `enum.rs.WireGuardError` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.ConnectionExpired",
+        "message": "external surface has `enum.rs.WireGuardError.ConnectionExpired` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.DestinationBufferTooSmall",
+        "message": "external surface has `enum.rs.WireGuardError.DestinationBufferTooSmall` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.DuplicateCounter",
+        "message": "external surface has `enum.rs.WireGuardError.DuplicateCounter` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.IncorrectPacketLength",
+        "message": "external surface has `enum.rs.WireGuardError.IncorrectPacketLength` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidAeadTag",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidAeadTag` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidCounter",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidCounter` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidMac",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidMac` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidPacket",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidPacket` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidTai64nTimestamp",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidTai64nTimestamp` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.LockFailed",
+        "message": "external surface has `enum.rs.WireGuardError.LockFailed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.NoCurrentSession",
+        "message": "external surface has `enum.rs.WireGuardError.NoCurrentSession` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.UnderLoad",
+        "message": "external surface has `enum.rs.WireGuardError.UnderLoad` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.UnexpectedPacket",
+        "message": "external surface has `enum.rs.WireGuardError.UnexpectedPacket` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongIndex",
+        "message": "external surface has `enum.rs.WireGuardError.WrongIndex` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongKey",
+        "message": "external surface has `enum.rs.WireGuardError.WrongKey` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongPacketType",
+        "message": "external surface has `enum.rs.WireGuardError.WrongPacketType` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongTai64nTimestamp",
+        "message": "external surface has `enum.rs.WireGuardError.WrongTai64nTimestamp` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.config.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.config.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.error.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.error.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.uapi.get.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.uapi.get.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.uapi.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.uapi.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.uapi.set.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.uapi.set.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.main.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.main.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.endpoint.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.endpoint.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.tun.dummy.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.tun.dummy.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.tun.void.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.tun.void.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.udp.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.udp.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.endpoint.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.endpoint.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.tun.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.tun.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.uapi.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.uapi.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.udp.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.udp.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.tun.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.tun.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.uapi.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.uapi.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 61 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/wireguard.xml",
+    "files_by_kind": {
+      "rust": 83
+    },
+    "by_kind": {
+      "rust": 101
+    },
+    "element_path_count": 101,
+    "gaps": {
+      "surface_paths_total": 101,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

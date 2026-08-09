@@ -1,0 +1,3419 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "json_render.rs",
+  "plugin": {
+    "name": "json_render",
+    "category": "software",
+    "version": "1.0.0",
+    "description": "json-render catalog projection — schema, specs, catalogs, renderers, actions, validation, and upstream API inventory",
+    "display_name": "GB.JsonRender",
+    "state_root": "JsonRenderState",
+    "fields": {
+      "actions": {
+        "rust_type": "Vec<ActionDecl>",
+        "description": "Built-in runtime actions exposed by the React action provider.",
+        "subid": "exp.software.plugin.json-render.actions@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "components": {
+        "rust_type": "Vec<ComponentDecl>",
+        "description": "Catalog component declarations from the shadcn catalog exemplar.",
+        "subid": "exp.software.plugin.json-render.components@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "config": {
+        "rust_type": "JsonRenderConfig",
+        "description": "Local policy for exposing json-render through D-Bus projections.",
+        "subid": "sch.software.plugin.json-render.config@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "core_exports": {
+        "rust_type": "Vec<ApiExport>",
+        "description": "Core exported functions and schemas available to hosts.",
+        "subid": "obs.software.plugin.json-render.core-exports@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "directives": {
+        "rust_type": "Vec<NamedCapability>",
+        "description": "Built-in and custom directive vocabulary.",
+        "subid": "obs.software.plugin.json-render.directives@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "methods": {
+        "rust_type": "Vec<MethodSurface>",
+        "description": "D-Bus method declarations exported by this plugin.",
+        "subid": "exp.software.plugin.json-render.methods@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "packages": {
+        "rust_type": "Vec<JsonRenderPackage>",
+        "description": "Package inventory observed from the upstream workspace.",
+        "subid": "obs.software.plugin.json-render.packages@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "renderers": {
+        "rust_type": "Vec<RendererSurface>",
+        "description": "Renderer packages and their host integration surfaces.",
+        "subid": "exp.software.plugin.json-render.renderers@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "source": {
+        "rust_type": "JsonRenderSource",
+        "description": "Source authority used to define this projection.",
+        "subid": "src.software.plugin.json-render.source@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "spec_contract": {
+        "rust_type": "SpecContract",
+        "description": "Flat UI tree contract used by json-render specs.",
+        "subid": "sch.software.plugin.json-render.spec-contract@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "status": {
+        "rust_type": "String",
+        "description": "Operational status of the catalog projection.",
+        "subid": "obs.software.plugin.json-render.status@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "string"
+      },
+      "validation_checks": {
+        "rust_type": "Vec<NamedCapability>",
+        "description": "Validation checks built into the core validation module.",
+        "subid": "obs.software.plugin.json-render.validation-checks@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      }
+    },
+    "nested_types": {
+      "ActionDecl": {
+        "description": {
+          "rust_type": "String",
+          "description": "Human-readable description.",
+          "subid": "exp.software.plugin.json-render.action-description@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "mutates_state": {
+          "rust_type": "bool",
+          "description": "Whether the action mutates state.",
+          "subid": "exp.software.plugin.json-render.action-mutates-state@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Action name.",
+          "subid": "exp.software.plugin.json-render.action-name@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "params": {
+          "rust_type": "Vec<String>",
+          "description": "Action parameter names.",
+          "subid": "exp.software.plugin.json-render.action-params@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ActionsOutput": {
+        "actions": {
+          "rust_type": "Vec<ActionDecl>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ApiExport": {
+        "category": {
+          "rust_type": "String",
+          "description": "Operational category.",
+          "subid": "obs.software.plugin.json-render.api-export-category@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "kind": {
+          "rust_type": "String",
+          "description": "Export kind.",
+          "subid": "obs.software.plugin.json-render.api-export-kind@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Exported symbol.",
+          "subid": "obs.software.plugin.json-render.api-export-name@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "package": {
+          "rust_type": "String",
+          "description": "Package or module that owns this symbol.",
+          "subid": "obs.software.plugin.json-render.api-export-package@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ComponentDecl": {
+        "category": {
+          "rust_type": "String",
+          "description": "Component category.",
+          "subid": "exp.software.plugin.json-render.component-category@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "description": {
+          "rust_type": "String",
+          "description": "Human-readable description.",
+          "subid": "exp.software.plugin.json-render.component-description@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "events": {
+          "rust_type": "Vec<String>",
+          "description": "Supported event names.",
+          "subid": "exp.software.plugin.json-render.component-events@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Component name.",
+          "subid": "exp.software.plugin.json-render.component-name@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "props": {
+          "rust_type": "Vec<String>",
+          "description": "Required or commonly used props.",
+          "subid": "exp.software.plugin.json-render.component-props@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ComponentLookupInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ComponentOutput": {
+        "component": {
+          "rust_type": "Option<ComponentDecl>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true
+        }
+      },
+      "ComponentsOutput": {
+        "components": {
+          "rust_type": "Vec<ComponentDecl>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ConfigOutput": {
+        "config": {
+          "rust_type": "JsonRenderConfig",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "CoreExportsOutput": {
+        "exports": {
+          "rust_type": "Vec<ApiExport>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "EmptyJsonRenderInput": {},
+      "HealthOutput": {
+        "action_count": {
+          "rust_type": "usize",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "component_count": {
+          "rust_type": "usize",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "package_count": {
+          "rust_type": "usize",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "source_commit": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "status": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "JsonRenderConfig": {
+        "default_renderer": {
+          "rust_type": "String",
+          "description": "Default renderer target for UI projection previews.",
+          "subid": "mut.software.plugin.json-render.config-renderer@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "expose_catalog": {
+          "rust_type": "bool",
+          "description": "Allow catalog metadata to be exposed through D-Bus.",
+          "subid": "mut.software.plugin.json-render.config-catalog-exposure@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "expose_prompt_surface": {
+          "rust_type": "bool",
+          "description": "Allow prompt-building metadata to be exposed through D-Bus.",
+          "subid": "mut.software.plugin.json-render.config-prompt-exposure@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "schema_mode": {
+          "rust_type": "String",
+          "description": "Default schema export mode.",
+          "subid": "mut.software.plugin.json-render.config-schema-mode@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "JsonRenderPackage": {
+        "folder": {
+          "rust_type": "String",
+          "description": "Workspace folder name.",
+          "subid": "obs.software.plugin.json-render.package-folder@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "package_name": {
+          "rust_type": "String",
+          "description": "npm package name.",
+          "subid": "obs.software.plugin.json-render.package-name@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "role": {
+          "rust_type": "String",
+          "description": "Package role in the json-render system.",
+          "subid": "obs.software.plugin.json-render.package-role@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "version": {
+          "rust_type": "String",
+          "description": "Package version observed upstream.",
+          "subid": "obs.software.plugin.json-render.package-version@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "JsonRenderSource": {
+        "commit": {
+          "rust_type": "String",
+          "description": "Upstream commit inspected for package and API inventory.",
+          "subid": "src.software.plugin.json-render.source-commit@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "docs_url": {
+          "rust_type": "String",
+          "description": "Documentation home page.",
+          "subid": "src.software.plugin.json-render.source-docs@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "repository_url": {
+          "rust_type": "String",
+          "description": "Upstream repository URL.",
+          "subid": "src.software.plugin.json-render.source-repository@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "summary": {
+          "rust_type": "String",
+          "description": "Short source summary.",
+          "subid": "obs.software.plugin.json-render.source-summary@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "MethodSurface": {
+        "name": {
+          "rust_type": "String",
+          "description": "D-Bus method name.",
+          "subid": "exp.software.plugin.json-render.method-name@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "required_capability": {
+          "rust_type": "String",
+          "description": "Required capability.",
+          "subid": "exp.software.plugin.json-render.method-capability@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "side_effect": {
+          "rust_type": "String",
+          "description": "Read or mutation side effect.",
+          "subid": "exp.software.plugin.json-render.method-side-effect@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "subid": {
+          "rust_type": "String",
+          "description": "Stable OSCAL subid for the method.",
+          "subid": "exp.software.plugin.json-render.method-subid@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "NamedCapability": {
+        "category": {
+          "rust_type": "String",
+          "description": "Capability category.",
+          "subid": "obs.software.plugin.json-render.capability-category@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "description": {
+          "rust_type": "String",
+          "description": "Short description.",
+          "subid": "obs.software.plugin.json-render.capability-description@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Capability name.",
+          "subid": "obs.software.plugin.json-render.capability-name@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "PackageLookupInput": {
+        "package_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "PackageOutput": {
+        "package": {
+          "rust_type": "Option<JsonRenderPackage>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true
+        }
+      },
+      "PackagesOutput": {
+        "packages": {
+          "rust_type": "Vec<JsonRenderPackage>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "PromptSurfaceInput": {
+        "custom_rules": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "mode": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "PromptSurfaceOutput": {
+        "actions": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "components": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "mode": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "rules": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "RendererSurface": {
+        "exports": {
+          "rust_type": "Vec<String>",
+          "description": "Important exported host methods.",
+          "subid": "exp.software.plugin.json-render.renderer-exports@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "id": {
+          "rust_type": "String",
+          "description": "Renderer identifier.",
+          "subid": "exp.software.plugin.json-render.renderer-id@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "package_name": {
+          "rust_type": "String",
+          "description": "Package providing this renderer.",
+          "subid": "exp.software.plugin.json-render.renderer-package@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "target": {
+          "rust_type": "String",
+          "description": "Render target.",
+          "subid": "exp.software.plugin.json-render.renderer-target@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "RenderersOutput": {
+        "renderers": {
+          "rust_type": "Vec<RendererSurface>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "SchemaExportInput": {
+        "strict": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        }
+      },
+      "SchemaExportOutput": {
+        "schema": {
+          "rust_type": "serde_json::Value",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "SetConfigOutput": {
+        "accepted": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "config": {
+          "rust_type": "JsonRenderConfig",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "SetJsonRenderConfigInput": {
+        "config": {
+          "rust_type": "JsonRenderConfig",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "SpecContract": {
+        "element_fields": {
+          "rust_type": "Vec<String>",
+          "description": "UI element fields recognized by core.",
+          "subid": "sch.software.plugin.json-render.element-fields@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "elements_field": {
+          "rust_type": "String",
+          "description": "Required elements map.",
+          "subid": "sch.software.plugin.json-render.spec-elements@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "patch_ops": {
+          "rust_type": "Vec<String>",
+          "description": "Supported JSON Patch operations for streaming edits.",
+          "subid": "sch.software.plugin.json-render.patch-ops@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "root_field": {
+          "rust_type": "String",
+          "description": "Required root element key.",
+          "subid": "sch.software.plugin.json-render.spec-root@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "state_field": {
+          "rust_type": "String",
+          "description": "Optional initial state field.",
+          "subid": "sch.software.plugin.json-render.spec-state@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SpecContractOutput": {
+        "spec_contract": {
+          "rust_type": "SpecContract",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "SpecValidationInput": {
+        "spec": {
+          "rust_type": "serde_json::Value",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "strict": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        }
+      },
+      "ToolsOutput": {
+        "tools": {
+          "rust_type": "Vec<MethodSurface>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ValidationResultOutput": {
+        "issues": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "valid": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        }
+      }
+    },
+    "methods": {
+      "build_prompt_surface": {
+        "name": "build_prompt_surface",
+        "input_type": "PromptSurfaceInput",
+        "output_type": "PromptSurfaceOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.prompt.build@v1",
+        "args": {
+          "properties": {
+            "custom_rules": {
+              "type": "array"
+            },
+            "mode": {
+              "type": "string"
+            }
+          },
+          "title": "PromptSurfaceInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "actions": {
+              "type": "array"
+            },
+            "components": {
+              "type": "array"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "rules": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "actions",
+            "components",
+            "mode",
+            "rules"
+          ],
+          "title": "PromptSurfaceOutput",
+          "type": "object"
+        }
+      },
+      "export_json_schema": {
+        "name": "export_json_schema",
+        "input_type": "SchemaExportInput",
+        "output_type": "SchemaExportOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.schema.export@v1",
+        "args": {
+          "properties": {
+            "strict": {
+              "type": "boolean"
+            }
+          },
+          "title": "SchemaExportInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "schema": {
+              "type": "object",
+              "x-rust-type": "serde_json::Value"
+            }
+          },
+          "required": [
+            "schema"
+          ],
+          "title": "SchemaExportOutput",
+          "type": "object"
+        }
+      },
+      "get_component_schema": {
+        "name": "get_component_schema",
+        "input_type": "ComponentLookupInput",
+        "output_type": "ComponentOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.component.get@v1",
+        "args": {
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "ComponentLookupInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "component": {
+              "type": "object",
+              "x-rust-type": "Option<ComponentDecl>"
+            }
+          },
+          "title": "ComponentOutput",
+          "type": "object"
+        }
+      },
+      "get_config": {
+        "name": "get_config",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "ConfigOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.config.get@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "config": {
+              "type": "object",
+              "x-rust-type": "JsonRenderConfig"
+            }
+          },
+          "required": [
+            "config"
+          ],
+          "title": "ConfigOutput",
+          "type": "object"
+        }
+      },
+      "get_health": {
+        "name": "get_health",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "HealthOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.health@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "action_count": {
+              "type": "integer"
+            },
+            "component_count": {
+              "type": "integer"
+            },
+            "package_count": {
+              "type": "integer"
+            },
+            "source_commit": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action_count",
+            "component_count",
+            "package_count",
+            "source_commit",
+            "status"
+          ],
+          "title": "HealthOutput",
+          "type": "object"
+        }
+      },
+      "get_package": {
+        "name": "get_package",
+        "input_type": "PackageLookupInput",
+        "output_type": "PackageOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.package.get@v1",
+        "args": {
+          "properties": {
+            "package_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "package_name"
+          ],
+          "title": "PackageLookupInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "package": {
+              "type": "object",
+              "x-rust-type": "Option<JsonRenderPackage>"
+            }
+          },
+          "title": "PackageOutput",
+          "type": "object"
+        }
+      },
+      "get_spec_schema": {
+        "name": "get_spec_schema",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "SpecContractOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.spec.get@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "spec_contract": {
+              "type": "object",
+              "x-rust-type": "SpecContract"
+            }
+          },
+          "required": [
+            "spec_contract"
+          ],
+          "title": "SpecContractOutput",
+          "type": "object"
+        }
+      },
+      "list_actions": {
+        "name": "list_actions",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "ActionsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.action.list@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "actions": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "actions"
+          ],
+          "title": "ActionsOutput",
+          "type": "object"
+        }
+      },
+      "list_components": {
+        "name": "list_components",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "ComponentsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.component.list@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "components": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "components"
+          ],
+          "title": "ComponentsOutput",
+          "type": "object"
+        }
+      },
+      "list_core_exports": {
+        "name": "list_core_exports",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "CoreExportsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.core-export.list@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "exports": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "exports"
+          ],
+          "title": "CoreExportsOutput",
+          "type": "object"
+        }
+      },
+      "list_packages": {
+        "name": "list_packages",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "PackagesOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.package.list@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "packages": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "packages"
+          ],
+          "title": "PackagesOutput",
+          "type": "object"
+        }
+      },
+      "list_renderers": {
+        "name": "list_renderers",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "RenderersOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.renderer.list@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "renderers": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "renderers"
+          ],
+          "title": "RenderersOutput",
+          "type": "object"
+        }
+      },
+      "list_tools": {
+        "name": "list_tools",
+        "input_type": "EmptyJsonRenderInput",
+        "output_type": "ToolsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.tool.list@v1",
+        "args": {
+          "properties": {},
+          "title": "EmptyJsonRenderInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "tools": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "tools"
+          ],
+          "title": "ToolsOutput",
+          "type": "object"
+        }
+      },
+      "set_config": {
+        "name": "set_config",
+        "input_type": "SetJsonRenderConfigInput",
+        "output_type": "SetConfigOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "json_render.invoke",
+        "subid": "mut.software.plugin.json-render.config.set@v1",
+        "args": {
+          "properties": {
+            "config": {
+              "type": "object",
+              "x-rust-type": "JsonRenderConfig"
+            }
+          },
+          "required": [
+            "config"
+          ],
+          "title": "SetJsonRenderConfigInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "accepted": {
+              "type": "boolean"
+            },
+            "config": {
+              "type": "object",
+              "x-rust-type": "JsonRenderConfig"
+            }
+          },
+          "required": [
+            "accepted",
+            "config"
+          ],
+          "title": "SetConfigOutput",
+          "type": "object"
+        }
+      },
+      "validate_spec": {
+        "name": "validate_spec",
+        "input_type": "SpecValidationInput",
+        "output_type": "ValidationResultOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "json_render.read",
+        "subid": "obs.software.plugin.json-render.spec.validate@v1",
+        "args": {
+          "properties": {
+            "spec": {
+              "type": "object",
+              "x-rust-type": "serde_json::Value"
+            },
+            "strict": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "spec"
+          ],
+          "title": "SpecValidationInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "issues": {
+              "type": "array"
+            },
+            "valid": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "issues",
+            "valid"
+          ],
+          "title": "ValidationResultOutput",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "audit": {
+    "ok": false,
+    "fail": 32,
+    "warn": 117,
+    "hint": 46,
+    "findings": [
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderState.status",
+        "message": "`status` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderState.packages",
+        "message": "`packages` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderState.core_exports",
+        "message": "`core_exports` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderState.validation_checks",
+        "message": "`validation_checks` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderState.directives",
+        "message": "`directives` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderSource.summary",
+        "message": "`summary` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderPackage.folder",
+        "message": "`folder` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderPackage.package_name",
+        "message": "`package_name` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderPackage.version",
+        "message": "`version` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "JsonRenderPackage.role",
+        "message": "`role` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "ApiExport.name",
+        "message": "`name` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "ApiExport.package",
+        "message": "`package` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "ApiExport.kind",
+        "message": "`kind` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "ApiExport.category",
+        "message": "`category` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "NamedCapability.name",
+        "message": "`name` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "NamedCapability.category",
+        "message": "`category` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "NamedCapability.description",
+        "message": "`description` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct EmptyJsonRenderInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct EmptyJsonRenderInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetJsonRenderConfigInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SetJsonRenderConfigInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetJsonRenderConfigInput.config",
+        "message": "field `config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SetJsonRenderConfigInput.config",
+        "message": "field `config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetJsonRenderConfigInput.config",
+        "message": "consider #[serde(default)] on `config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ComponentLookupInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ComponentLookupInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ComponentLookupInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ComponentLookupInput.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ComponentLookupInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PackageLookupInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct PackageLookupInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PackageLookupInput.package_name",
+        "message": "field `package_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PackageLookupInput.package_name",
+        "message": "field `package_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PackageLookupInput.package_name",
+        "message": "consider #[serde(default)] on `package_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SpecValidationInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SpecValidationInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SpecValidationInput.spec",
+        "message": "field `spec` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SpecValidationInput.spec",
+        "message": "field `spec` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SpecValidationInput.spec",
+        "message": "consider #[serde(default)] on `spec` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SpecValidationInput.strict",
+        "message": "field `strict` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SpecValidationInput.strict",
+        "message": "field `strict` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SchemaExportInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SchemaExportInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SchemaExportInput.strict",
+        "message": "field `strict` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SchemaExportInput.strict",
+        "message": "field `strict` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PromptSurfaceInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct PromptSurfaceInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PromptSurfaceInput.mode",
+        "message": "field `mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PromptSurfaceInput.mode",
+        "message": "field `mode` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PromptSurfaceInput.custom_rules",
+        "message": "field `custom_rules` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PromptSurfaceInput.custom_rules",
+        "message": "field `custom_rules` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct HealthOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct HealthOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "HealthOutput.status",
+        "message": "field `status` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "HealthOutput.status",
+        "message": "field `status` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "HealthOutput.status",
+        "message": "consider #[serde(default)] on `status` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "HealthOutput.package_count",
+        "message": "field `package_count` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "HealthOutput.package_count",
+        "message": "field `package_count` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "HealthOutput.package_count",
+        "message": "consider #[serde(default)] on `package_count` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "HealthOutput.component_count",
+        "message": "field `component_count` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "HealthOutput.component_count",
+        "message": "field `component_count` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "HealthOutput.component_count",
+        "message": "consider #[serde(default)] on `component_count` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "HealthOutput.action_count",
+        "message": "field `action_count` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "HealthOutput.action_count",
+        "message": "field `action_count` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "HealthOutput.action_count",
+        "message": "consider #[serde(default)] on `action_count` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "HealthOutput.source_commit",
+        "message": "field `source_commit` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "HealthOutput.source_commit",
+        "message": "field `source_commit` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "HealthOutput.source_commit",
+        "message": "consider #[serde(default)] on `source_commit` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ConfigOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ConfigOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ConfigOutput.config",
+        "message": "field `config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ConfigOutput.config",
+        "message": "field `config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ConfigOutput.config",
+        "message": "consider #[serde(default)] on `config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetConfigOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SetConfigOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetConfigOutput.accepted",
+        "message": "field `accepted` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SetConfigOutput.accepted",
+        "message": "field `accepted` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetConfigOutput.accepted",
+        "message": "consider #[serde(default)] on `accepted` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetConfigOutput.config",
+        "message": "field `config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SetConfigOutput.config",
+        "message": "field `config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetConfigOutput.config",
+        "message": "consider #[serde(default)] on `config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ToolsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ToolsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ToolsOutput.tools",
+        "message": "field `tools` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ToolsOutput.tools",
+        "message": "field `tools` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ToolsOutput.tools",
+        "message": "consider #[serde(default)] on `tools` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PackagesOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct PackagesOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PackagesOutput.packages",
+        "message": "field `packages` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PackagesOutput.packages",
+        "message": "field `packages` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PackagesOutput.packages",
+        "message": "consider #[serde(default)] on `packages` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PackageOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct PackageOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PackageOutput.package",
+        "message": "field `package` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PackageOutput.package",
+        "message": "field `package` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ComponentsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ComponentsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ComponentsOutput.components",
+        "message": "field `components` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ComponentsOutput.components",
+        "message": "field `components` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ComponentsOutput.components",
+        "message": "consider #[serde(default)] on `components` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ComponentOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ComponentOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ComponentOutput.component",
+        "message": "field `component` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ComponentOutput.component",
+        "message": "field `component` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ActionsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ActionsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ActionsOutput.actions",
+        "message": "field `actions` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ActionsOutput.actions",
+        "message": "field `actions` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ActionsOutput.actions",
+        "message": "consider #[serde(default)] on `actions` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CoreExportsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CoreExportsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CoreExportsOutput.exports",
+        "message": "field `exports` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CoreExportsOutput.exports",
+        "message": "field `exports` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CoreExportsOutput.exports",
+        "message": "consider #[serde(default)] on `exports` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct RenderersOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct RenderersOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RenderersOutput.renderers",
+        "message": "field `renderers` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RenderersOutput.renderers",
+        "message": "field `renderers` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RenderersOutput.renderers",
+        "message": "consider #[serde(default)] on `renderers` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SpecContractOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SpecContractOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SpecContractOutput.spec_contract",
+        "message": "field `spec_contract` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SpecContractOutput.spec_contract",
+        "message": "field `spec_contract` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SpecContractOutput.spec_contract",
+        "message": "consider #[serde(default)] on `spec_contract` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ValidationResultOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ValidationResultOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ValidationResultOutput.valid",
+        "message": "field `valid` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ValidationResultOutput.valid",
+        "message": "field `valid` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ValidationResultOutput.valid",
+        "message": "consider #[serde(default)] on `valid` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ValidationResultOutput.issues",
+        "message": "field `issues` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ValidationResultOutput.issues",
+        "message": "field `issues` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ValidationResultOutput.issues",
+        "message": "consider #[serde(default)] on `issues` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SchemaExportOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SchemaExportOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SchemaExportOutput.schema",
+        "message": "field `schema` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SchemaExportOutput.schema",
+        "message": "field `schema` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SchemaExportOutput.schema",
+        "message": "consider #[serde(default)] on `schema` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PromptSurfaceOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct PromptSurfaceOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PromptSurfaceOutput.mode",
+        "message": "field `mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PromptSurfaceOutput.mode",
+        "message": "field `mode` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PromptSurfaceOutput.mode",
+        "message": "consider #[serde(default)] on `mode` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PromptSurfaceOutput.rules",
+        "message": "field `rules` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PromptSurfaceOutput.rules",
+        "message": "field `rules` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PromptSurfaceOutput.rules",
+        "message": "consider #[serde(default)] on `rules` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PromptSurfaceOutput.components",
+        "message": "field `components` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PromptSurfaceOutput.components",
+        "message": "field `components` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PromptSurfaceOutput.components",
+        "message": "consider #[serde(default)] on `components` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PromptSurfaceOutput.actions",
+        "message": "field `actions` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PromptSurfaceOutput.actions",
+        "message": "field `actions` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PromptSurfaceOutput.actions",
+        "message": "consider #[serde(default)] on `actions` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/json-render.xml version=repomix nodes=0 elements=770 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=70 introspected=770 missing_in_plugin=770 extra_in_plugin=70",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.index",
+        "message": "external surface has `ts.packages.codegen.src.index` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize",
+        "message": "external surface has `ts.packages.codegen.src.serialize` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.function.escapeString",
+        "message": "external surface has `ts.packages.codegen.src.serialize.function.escapeString` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.function.serializePropValue",
+        "message": "external surface has `ts.packages.codegen.src.serialize.function.serializePropValue` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.function.serializeProps",
+        "message": "external surface has `ts.packages.codegen.src.serialize.function.serializeProps` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.indent",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions.field.indent` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.options",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions.field.options` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.props",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions.field.props` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.quotes",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions.field.quotes` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.str",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions.field.str` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.value",
+        "message": "external surface has `ts.packages.codegen.src.serialize.interface.SerializeOptions.field.value` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse",
+        "message": "external surface has `ts.packages.codegen.src.traverse` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.collectActions",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.collectActions` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.collectPathFromItem",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.collectPathFromItem` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.collectPathsFromCondition",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.collectPathsFromCondition` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.collectStatePaths",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.collectStatePaths` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.collectUsedComponents",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.collectUsedComponents` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.traverseSpec",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.traverseSpec` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.function.visit",
+        "message": "external surface has `ts.packages.codegen.src.traverse.function.visit` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.condition",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.condition` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.depth",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.depth` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.element",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.element` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.item",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.item` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.key",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.key` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.parent",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.parent` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.paths",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.paths` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.spec",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.spec` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.startKey",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.startKey` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.visitor",
+        "message": "external surface has `ts.packages.codegen.src.traverse.interface.TreeVisitor.field.visitor` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.types",
+        "message": "external surface has `ts.packages.codegen.src.types` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.types.interface.CodeGenerator",
+        "message": "external surface has `ts.packages.codegen.src.types.interface.CodeGenerator` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.types.interface.CodeGenerator.method.generate",
+        "message": "external surface has `ts.packages.codegen.src.types.interface.CodeGenerator.method.generate` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.types.interface.GeneratedFile",
+        "message": "external surface has `ts.packages.codegen.src.types.interface.GeneratedFile` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.types.interface.GeneratedFile.field.content",
+        "message": "external surface has `ts.packages.codegen.src.types.interface.GeneratedFile.field.content` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.codegen.src.types.interface.GeneratedFile.field.path",
+        "message": "external surface has `ts.packages.codegen.src.types.interface.GeneratedFile.field.path` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.core.src.action-observer",
+        "message": "external surface has `ts.packages.core.src.action-observer` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.core.src.action-observer.function.nextActionDispatchId",
+        "message": "external surface has `ts.packages.core.src.action-observer.function.nextActionDispatchId` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "ts.packages.core.src.action-observer.function.notifyActionDispatch",
+        "message": "external surface has `ts.packages.core.src.action-observer.function.notifyActionDispatch` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 730 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/json-render.xml",
+    "files_by_kind": {
+      "typescript": 39
+    },
+    "by_kind": {
+      "typescript": 770
+    },
+    "element_path_count": 770,
+    "gaps": {
+      "surface_paths_total": 770,
+      "signal_paths_considered": 770,
+      "covered_approx": 52,
+      "missing_from_plugin": 718,
+      "missing_cli_commands": [
+        "ts.packages.codegen.src.serialize.function.escapeString",
+        "ts.packages.codegen.src.serialize.function.serializePropValue",
+        "ts.packages.codegen.src.serialize.function.serializeProps",
+        "ts.packages.codegen.src.traverse.function.collectActions",
+        "ts.packages.codegen.src.traverse.function.collectPathFromItem",
+        "ts.packages.codegen.src.traverse.function.collectPathsFromCondition",
+        "ts.packages.codegen.src.traverse.function.collectStatePaths",
+        "ts.packages.codegen.src.traverse.function.collectUsedComponents",
+        "ts.packages.codegen.src.traverse.function.traverseSpec",
+        "ts.packages.codegen.src.traverse.function.visit",
+        "ts.packages.codegen.src.types.interface.CodeGenerator.method.generate",
+        "ts.packages.core.src.action-observer.function.nextActionDispatchId",
+        "ts.packages.core.src.action-observer.function.notifyActionDispatch",
+        "ts.packages.core.src.action-observer.function.notifyActionSettle",
+        "ts.packages.core.src.action-observer.function.registerActionObserver",
+        "ts.packages.core.src.actions.function.executeAction",
+        "ts.packages.core.src.actions.function.interpolateString",
+        "ts.packages.core.src.actions.function.resolveAction",
+        "ts.packages.core.src.devtools-flag.function.isDevtoolsActive",
+        "ts.packages.core.src.devtools-flag.function.markDevtoolsActive",
+        "ts.packages.core.src.devtools-flag.function.notifyDevtoolsActiveChange",
+        "ts.packages.core.src.devtools-flag.function.subscribeDevtoolsActive",
+        "ts.packages.core.src.diff.function.arraysEqual",
+        "ts.packages.core.src.diff.function.buildPath",
+        "ts.packages.core.src.diff.function.diffToPatches",
+        "ts.packages.core.src.diff.function.escapeToken",
+        "ts.packages.core.src.diff.function.isPlainObject",
+        "ts.packages.core.src.directives.function.createDirectiveRegistry",
+        "ts.packages.core.src.directives.function.findDirective",
+        "ts.packages.core.src.edit-modes.function.addLineNumbers",
+        "ts.packages.core.src.edit-modes.function.buildEditInstructions",
+        "ts.packages.core.src.edit-modes.function.buildEditUserPrompt",
+        "ts.packages.core.src.edit-modes.function.isNonEmptySpec",
+        "ts.packages.core.src.edit-modes.function.jsonDiffInstructions",
+        "ts.packages.core.src.edit-modes.function.jsonMergeInstructions",
+        "ts.packages.core.src.edit-modes.function.jsonPatchInstructions",
+        "ts.packages.core.src.edit-modes.function.modeSelectionGuidance",
+        "ts.packages.core.src.edit-modes.function.normalizeModes",
+        "ts.packages.core.src.edit-modes.function.yamlDiffInstructions",
+        "ts.packages.core.src.edit-modes.function.yamlMergeInstructions",
+        "ts.packages.core.src.edit-modes.function.yamlPatchInstructions",
+        "ts.packages.core.src.merge.function.deepMergeSpec",
+        "ts.packages.core.src.merge.function.isPlainObject",
+        "ts.packages.core.src.prompt.function.buildUserPrompt",
+        "ts.packages.core.src.props.function._resetWarnedComputedFns",
+        "ts.packages.core.src.props.function.isBindItemExpression",
+        "ts.packages.core.src.props.function.isBindStateExpression",
+        "ts.packages.core.src.props.function.isComputedExpression",
+        "ts.packages.core.src.props.function.isCondExpression",
+        "ts.packages.core.src.props.function.isIndexExpression",
+        "ts.packages.core.src.props.function.isItemExpression",
+        "ts.packages.core.src.props.function.isStateExpression",
+        "ts.packages.core.src.props.function.isTemplateExpression",
+        "ts.packages.core.src.props.function.resolveActionParam",
+        "ts.packages.core.src.props.function.resolveBindItemPath",
+        "ts.packages.core.src.props.function.resolveBindings",
+        "ts.packages.core.src.props.function.resolveElementProps",
+        "ts.packages.core.src.props.function.resolvePropValue",
+        "ts.packages.core.src.schema.function.buildZodSchemaFromDefinition",
+        "ts.packages.core.src.schema.function.buildZodType",
+        "ts.packages.core.src.schema.function.createBuilder",
+        "ts.packages.core.src.schema.function.findFirstStringProp",
+        "ts.packages.core.src.schema.function.formatZodType",
+        "ts.packages.core.src.schema.function.generateExamplePropsFromZod",
+        "ts.packages.core.src.schema.function.generateExampleValue",
+        "ts.packages.core.src.schema.function.getExampleProps",
+        "ts.packages.core.src.schema.function.getKeysFromPath",
+        "ts.packages.core.src.schema.function.getPropsFromPath",
+        "ts.packages.core.src.schema.function.getZodTypeName",
+        "ts.packages.core.src.schema.function.normalizeTypeName",
+        "ts.packages.core.src.schema.function.zodToJsonSchema",
+        "ts.packages.core.src.schema.function.zodTypeName",
+        "ts.packages.core.src.schema.interface.Catalog.method.jsonSchema",
+        "ts.packages.core.src.schema.interface.Catalog.method.prompt",
+        "ts.packages.core.src.schema.interface.Catalog.method.validate",
+        "ts.packages.core.src.schema.interface.Catalog.method.zodSchema",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.any",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.boolean",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.number",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.optional",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.propsOf",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.ref",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.string",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.zod",
+        "ts.packages.core.src.schema.type.InferPropsOfType.method.validate",
+        "ts.packages.core.src.schema.type.InferPropsOfType.method.zodSchema",
+        "ts.packages.core.src.spec-validator.function.autoFixSpec",
+        "ts.packages.core.src.spec-validator.function.formatSpecIssues",
+        "ts.packages.core.src.state-store.function.createStateStore",
+        "ts.packages.core.src.state-store.function.createStoreAdapter",
+        "ts.packages.core.src.state-store.function.flattenToPointers",
+        "ts.packages.core.src.state-store.function.immutableSetByPath",
+        "ts.packages.core.src.state-store.function.notify",
+        "ts.packages.core.src.state-store.type.StateModel.method.get",
+        "ts.packages.core.src.state-store.type.StateModel.method.getServerSnapshot",
+        "ts.packages.core.src.state-store.type.StateModel.method.getSnapshot",
+        "ts.packages.core.src.state-store.type.StateModel.method.set",
+        "ts.packages.core.src.state-store.type.StateModel.method.update",
+        "ts.packages.core.src.types.function.addByPath",
+        "ts.packages.core.src.types.function.applySpecPatch",
+        "ts.packages.core.src.types.function.closeTextBlock",
+        "ts.packages.core.src.types.function.createJsonRenderTransform",
+        "ts.packages.core.src.types.function.createMixedStreamParser",
+        "ts.packages.core.src.types.function.deepEqual",
+        "ts.packages.core.src.types.function.emitPatch",
+        "ts.packages.core.src.types.function.emitTextDelta",
+        "ts.packages.core.src.types.function.ensureTextBlock",
+        "ts.packages.core.src.types.function.findFormValue",
+        "ts.packages.core.src.types.function.flushBuffer",
+        "ts.packages.core.src.types.function.getByPath",
+        "ts.packages.core.src.types.function.isNumericIndex",
+        "ts.packages.core.src.types.function.nestedToFlat",
+        "ts.packages.core.src.types.function.parseJsonPointer",
+        "ts.packages.core.src.types.function.parseSpecStreamLine",
+        "ts.packages.core.src.types.function.processCompleteLine",
+        "ts.packages.core.src.types.function.processLine",
+        "ts.packages.core.src.types.function.removeByPath",
+        "ts.packages.core.src.types.function.setByPath",
+        "ts.packages.core.src.types.function.unescapeJsonPointer",
+        "ts.packages.core.src.types.function.walk",
+        "ts.packages.core.src.types.interface.MixedStreamParser.method.flush",
+        "ts.packages.core.src.types.interface.MixedStreamParser.method.push",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.getPatches",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.getResult",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.push",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.reset",
+        "ts.packages.core.src.validation.function.runValidation",
+        "ts.packages.core.src.validation.function.runValidationCheck",
+        "ts.packages.core.src.visibility.function.conditionUsesItemScope",
+        "ts.packages.core.src.visibility.function.evaluateCondition",
+        "ts.packages.core.src.visibility.function.evaluateVisibility",
+        "ts.packages.core.src.visibility.function.isAndCondition",
+        "ts.packages.core.src.visibility.function.isIndexCondition",
+        "ts.packages.core.src.visibility.function.isItemCondition",
+        "ts.packages.core.src.visibility.function.isOrCondition",
+        "ts.packages.core.src.visibility.function.resolveComparisonValue",
+        "ts.packages.core.src.visibility.function.resolveConditionValue",
+        "ts.packages.core.src.visibility.function.splitRepeatVisibility",
+        "ts.packages.mcp.src.app.function.McpAppView",
+        "ts.packages.mcp.src.build-app-html.function.buildAppHtml",
+        "ts.packages.mcp.src.build-app-html.function.escapeHtml",
+        "ts.packages.mcp.src.server.function.createMcpApp",
+        "ts.packages.mcp.src.server.function.getExtApps",
+        "ts.packages.mcp.src.server.function.registerJsonRenderResource",
+        "ts.packages.mcp.src.server.function.registerJsonRenderTool",
+        "ts.packages.mcp.src.use-json-render-app.function.parseSpecFromToolResult",
+        "ts.packages.mcp.src.use-json-render-app.function.useJsonRenderApp",
+        "ts.packages.react.src.contexts.actions.function.ActionProvider",
+        "ts.packages.react.src.contexts.actions.function.deepResolveValue",
+        "ts.packages.react.src.contexts.actions.function.generateUniqueId",
+        "ts.packages.react.src.contexts.actions.function.useAction",
+        "ts.packages.react.src.contexts.actions.function.useActions",
+        "ts.packages.react.src.contexts.repeat-scope.function.RepeatScopeProvider",
+        "ts.packages.react.src.contexts.repeat-scope.function.useRepeatScope",
+        "ts.packages.react.src.contexts.validation.function.ValidationProvider",
+        "ts.packages.react.src.contexts.validation.function.dynamicArgsEqual",
+        "ts.packages.react.src.contexts.validation.function.useFieldValidation",
+        "ts.packages.react.src.contexts.validation.function.useOptionalValidation",
+        "ts.packages.react.src.contexts.validation.function.useValidation",
+        "ts.packages.react.src.contexts.validation.function.validationConfigEqual",
+        "ts.packages.react.src.contexts.visibility.function.VisibilityProvider",
+        "ts.packages.react.src.contexts.visibility.function.useIsVisible",
+        "ts.packages.react.src.contexts.visibility.function.useVisibility",
+        "ts.packages.react.src.hooks.function.MessageBubble",
+        "ts.packages.react.src.hooks.function.applyPatch",
+        "ts.packages.react.src.hooks.function.buildSpecFromParts",
+        "ts.packages.react.src.hooks.function.flatToTree",
+        "ts.packages.react.src.hooks.function.generateChatId",
+        "ts.packages.react.src.hooks.function.getSpecValue",
+        "ts.packages.react.src.hooks.function.getTextFromParts",
+        "ts.packages.react.src.hooks.function.isSpecDataPart",
+        "ts.packages.react.src.hooks.function.parseLine",
+        "ts.packages.react.src.hooks.function.removeSpecValue",
+        "ts.packages.react.src.hooks.function.setSpecValue",
+        "ts.packages.react.src.hooks.function.useChatUI",
+        "ts.packages.react.src.hooks.function.useJsonRenderMessage",
+        "ts.packages.react.src.hooks.function.useUIStream",
+        "ts.packages.react.src.renderer.function.useDevtoolsActive",
+        "ts.packages.react.src.renderer.function.useDirectives",
+        "ts.packages.react.src.renderer.function.useFunctions"
+      ],
+      "missing_config_fields": [
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.indent",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.options",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.quotes",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.str",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.value",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.condition",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.depth",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.element",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.item",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.key",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.parent",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.paths",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.spec",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.startKey",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.visitor",
+        "ts.packages.codegen.src.types.interface.GeneratedFile.field.content",
+        "ts.packages.codegen.src.types.interface.GeneratedFile.field.path",
+        "ts.packages.core.src.action-observer.interface.ActionDispatchInfo.field.at",
+        "ts.packages.core.src.action-observer.interface.ActionObserver.field.onDispatch",
+        "ts.packages.core.src.action-observer.interface.ActionObserver.field.onSettle",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.at",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.durationMs",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.error",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.ok",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.result",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.action",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.confirm",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.onError",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.onSuccess",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.preventDefault",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.cancelLabel",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.confirmLabel",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.message",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.title",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.variant",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.action",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.ctx",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.executeAction",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.handler",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.navigate",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.setState",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.action",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.binding",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.confirm",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.onError",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.onSuccess",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.stateModel",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.template",
+        "ts.packages.core.src.directives.interface.DirectiveDefinition.field.resolve",
+        "ts.packages.core.src.directives.interface.DirectiveDefinition.field.schema",
+        "ts.packages.core.src.directives.type.checking.field.definition",
+        "ts.packages.core.src.directives.type.checking.field.value",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.currentSpec",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.format",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.maxPromptLength",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.options",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.prompt",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.serializer",
+        "ts.packages.core.src.edit-modes.interface.EditConfig.field.format",
+        "ts.packages.core.src.edit-modes.interface.EditConfig.field.modes",
+        "ts.packages.core.src.env.d.interface.so.field.NODE_ENV",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.currentSpec",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.editModes",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.format",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.maxPromptLength",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.prompt",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.serializer",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.state",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.ctx",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.functions",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.itemPath",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.repeatBasePath",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.value",
+        "ts.packages.core.src.props.type.PropExpression.field.$cond",
+        "ts.packages.core.src.props.type.PropExpression.field.$else",
+        "ts.packages.core.src.props.type.PropExpression.field.$then",
+        "ts.packages.core.src.schema.enum.of.field.catalog",
+        "ts.packages.core.src.schema.enum.of.field.options",
+        "ts.packages.core.src.schema.interface.Catalog.field._specType",
+        "ts.packages.core.src.schema.interface.Catalog.field.actionNames",
+        "ts.packages.core.src.schema.interface.Catalog.field.componentNames",
+        "ts.packages.core.src.schema.interface.Catalog.field.data",
+        "ts.packages.core.src.schema.interface.Catalog.field.schema",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef.field.example",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef.field.schema",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef.field.slots",
+        "ts.packages.core.src.schema.interface.JsonSchemaOptions.field.strict",
+        "ts.packages.core.src.schema.interface.PromptContext.field.actionNames",
+        "ts.packages.core.src.schema.interface.PromptContext.field.catalog",
+        "ts.packages.core.src.schema.interface.PromptContext.field.componentNames",
+        "ts.packages.core.src.schema.interface.PromptContext.field.options",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.customRules",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.editModes",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.mode",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.system",
+        "ts.packages.core.src.schema.interface.Schema.field.builtInActions",
+        "ts.packages.core.src.schema.interface.Schema.field.catalog",
+        "ts.packages.core.src.schema.interface.Schema.field.defaultRules",
+        "ts.packages.core.src.schema.interface.Schema.field.definition",
+        "ts.packages.core.src.schema.interface.Schema.field.promptTemplate",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.field.entryShape",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.field.shape",
+        "ts.packages.core.src.schema.interface.SchemaDefinition.field.catalog",
+        "ts.packages.core.src.schema.interface.SchemaDefinition.field.spec",
+        "ts.packages.core.src.schema.interface.SchemaOptions.field.builtInActions",
+        "ts.packages.core.src.schema.interface.SchemaOptions.field.defaultRules",
+        "ts.packages.core.src.schema.interface.SchemaOptions.field.promptTemplate",
+        "ts.packages.core.src.schema.interface.SpecValidationResult.field.data",
+        "ts.packages.core.src.schema.interface.SpecValidationResult.field.error",
+        "ts.packages.core.src.schema.interface.SpecValidationResult.field.success",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.builder",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.catalog",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.catalogData",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.definition",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.options",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.schema",
+        "ts.packages.core.src.schema.type.InferSpec.field.spec",
+        "ts.packages.core.src.schema.type.as.field.context",
+        "ts.packages.core.src.schema.type.as.field.formatZodType",
+        "ts.packages.core.src.schema.type.representation.field.inner",
+        "ts.packages.core.src.schema.type.representation.field.optional",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions.field.lossy",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions.field.options",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions.field.spec",
+        "ts.packages.core.src.spec-validator.interface.SpecFix.field.lossy",
+        "ts.packages.core.src.spec-validator.interface.SpecFix.field.message",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.code",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.elementKey",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.message",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.severity",
+        "ts.packages.core.src.spec-validator.interface.SpecValidationIssues.field.issues",
+        "ts.packages.core.src.spec-validator.interface.SpecValidationIssues.field.valid",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions.field.checkOrphans",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions.field.options",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions.field.spec",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field._seen",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field._warned",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.getSnapshot",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.obj",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.setSnapshot",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.subscribe",
+        "ts.packages.core.src.state-store.type.StateModel.field.path",
+        "ts.packages.core.src.state-store.type.StateModel.field.root",
+        "ts.packages.core.src.state-store.type.StateModel.field.value",
+        "ts.packages.core.src.types.interface.JsonPatch.field.fieldName",
+        "ts.packages.core.src.types.interface.JsonPatch.field.from",
+        "ts.packages.core.src.types.interface.JsonPatch.field.obj",
+        "ts.packages.core.src.types.interface.JsonPatch.field.op",
+        "ts.packages.core.src.types.interface.JsonPatch.field.path",
+        "ts.packages.core.src.types.interface.JsonPatch.field.state",
+        "ts.packages.core.src.types.interface.JsonPatch.field.stateModel",
+        "ts.packages.core.src.types.interface.JsonPatch.field.value",
+        "ts.packages.core.src.types.interface.MixedStreamCallbacks.field.onPatch",
+        "ts.packages.core.src.types.interface.MixedStreamCallbacks.field.onText",
+        "ts.packages.core.src.types.interface.MixedStreamParser.field.callbacks",
+        "ts.packages.core.src.types.interface.NestedNode.field.children",
+        "ts.packages.core.src.types.interface.NestedNode.field.type",
+        "ts.packages.core.src.types.interface.Spec.field.elements",
+        "ts.packages.core.src.types.interface.Spec.field.root",
+        "ts.packages.core.src.types.interface.Spec.field.state",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.field.initial",
+        "ts.packages.core.src.types.interface.StateStore.field.get",
+        "ts.packages.core.src.types.interface.StateStore.field.getServerSnapshot",
+        "ts.packages.core.src.types.interface.StateStore.field.getSnapshot",
+        "ts.packages.core.src.types.interface.StateStore.field.set",
+        "ts.packages.core.src.types.interface.StateStore.field.subscribe",
+        "ts.packages.core.src.types.interface.StateStore.field.update",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.eq",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.gt",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.gte",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.lt",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.lte",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.neq",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.not",
+        "ts.packages.core.src.types.type.SpecStreamLine.field.obj",
+        "ts.packages.core.src.types.type.SpecStreamLine.field.patch",
+        "ts.packages.core.src.types.type.StreamChunk.field.controller",
+        "ts.packages.core.src.types.type.StreamChunk.field.delta",
+        "ts.packages.core.src.types.type.StreamChunk.field.line",
+        "ts.packages.core.src.types.type.StreamChunk.field.patch",
+        "ts.packages.core.src.types.type.cast.field.stream",
+        "ts.packages.core.src.types.type.from.field.children",
+        "ts.packages.core.src.types.type.from.field.key",
+        "ts.packages.core.src.types.type.from.field.on",
+        "ts.packages.core.src.types.type.from.field.parentKey",
+        "ts.packages.core.src.types.type.from.field.repeat",
+        "ts.packages.core.src.types.type.from.field.type",
+        "ts.packages.core.src.types.type.from.field.visible",
+        "ts.packages.core.src.types.type.from.field.watch",
+        "ts.packages.core.src.validation.interface.ValidationCheck.field.args",
+        "ts.packages.core.src.validation.interface.ValidationCheck.field.message",
+        "ts.packages.core.src.validation.interface.ValidationCheck.field.type",
+        "ts.packages.core.src.validation.interface.ValidationConfig.field.checks",
+        "ts.packages.core.src.validation.interface.ValidationConfig.field.enabled",
+        "ts.packages.core.src.validation.interface.ValidationConfig.field.validateOn",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.check",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.ctx",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.customFunctions",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.stateModel",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.valid",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.value",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition.field.args",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition.field.validate",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition.field.value",
+        "ts.packages.core.src.validation.interface.ValidationResult.field.checks",
+        "ts.packages.core.src.validation.interface.ValidationResult.field.errors",
+        "ts.packages.core.src.validation.interface.ValidationResult.field.valid",
+        "ts.packages.core.src.validation.type.ValidationFunction.field.args",
+        "ts.packages.core.src.validation.type.ValidationFunction.field.value",
+        "ts.packages.core.src.validation.type.numeric.field.message",
+        "ts.packages.core.src.validation.type.numeric.field.type",
+        "ts.packages.core.src.validation.type.numeric.field.valid",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.cond",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.condition",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.ctx",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.repeatIndex",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.repeatItem",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.stateModel",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.value",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.css",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.head",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.js",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.title",
+        "ts.packages.mcp.src.types.interface.CreateMcpAppOptions.field.catalog",
+        "ts.packages.mcp.src.types.interface.CreateMcpAppOptions.field.html",
+        "ts.packages.mcp.src.types.interface.CreateMcpAppOptions.field.tool",
+        "ts.packages.mcp.src.types.interface.McpToolOptions.field.title",
+        "ts.packages.mcp.src.types.interface.RegisterResourceOptions.field.html",
+        "ts.packages.mcp.src.types.interface.RegisterResourceOptions.field.resourceUri",
+        "ts.packages.mcp.src.types.interface.RegisterToolOptions.field.catalog",
+        "ts.packages.mcp.src.types.interface.RegisterToolOptions.field.resourceUri",
+        "ts.packages.mcp.src.types.interface.RegisterToolOptions.field.title",
+        "ts.packages.mcp.src.use-json-render-app.interface.ToolResultContent.field.content",
+        "ts.packages.mcp.src.use-json-render-app.interface.ToolResultContent.field.options",
+        "ts.packages.mcp.src.use-json-render-app.interface.ToolResultContent.field.text",
+        "ts.packages.mcp.src.use-json-render-app.interface.ToolResultContent.field.type",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.app",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.args",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.callServerTool",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.connected",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.connecting",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.error",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.loading",
+        "ts.packages.mcp.src.use-json-render-app.interface.UseJsonRenderAppReturn.field.spec",
+        "ts.packages.react.src.catalog-types.interface.BaseComponentProps.field.bindings",
+        "ts.packages.react.src.catalog-types.interface.BaseComponentProps.field.children",
+        "ts.packages.react.src.catalog-types.interface.BaseComponentProps.field.emit",
+        "ts.packages.react.src.catalog-types.interface.BaseComponentProps.field.loading",
+        "ts.packages.react.src.catalog-types.interface.BaseComponentProps.field.on",
+        "ts.packages.react.src.catalog-types.interface.EventHandle.field.bound",
+        "ts.packages.react.src.catalog-types.interface.EventHandle.field.emit",
+        "ts.packages.react.src.catalog-types.interface.EventHandle.field.shouldPreventDefault",
+        "ts.packages.react.src.catalog-types.type.ActionFn.field.setState",
+        "ts.packages.react.src.catalog-types.type.ActionFn.field.state",
+        "ts.packages.react.src.catalog-types.type.SetState.field.updater",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.cancel",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.confirm",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.execute",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.handlers",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.loadingActions",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.pendingConfirmation",
+        "ts.packages.react.src.contexts.actions.interface.ActionContextValue.field.registerHandler",
+        "ts.packages.react.src.contexts.actions.interface.ActionProviderProps.field.children",
+        "ts.packages.react.src.contexts.actions.interface.ActionProviderProps.field.handlers",
+        "ts.packages.react.src.contexts.actions.interface.ActionProviderProps.field.navigate",
+        "ts.packages.react.src.contexts.actions.interface.ConfirmDialogProps.field.confirm",
+        "ts.packages.react.src.contexts.actions.interface.ConfirmDialogProps.field.onCancel",
+        "ts.packages.react.src.contexts.actions.interface.ConfirmDialogProps.field.onConfirm",
+        "ts.packages.react.src.contexts.actions.interface.PendingConfirmation.field.action",
+        "ts.packages.react.src.contexts.actions.interface.PendingConfirmation.field.handler",
+        "ts.packages.react.src.contexts.actions.interface.PendingConfirmation.field.reject",
+        "ts.packages.react.src.contexts.actions.interface.PendingConfirmation.field.resolve",
+        "ts.packages.react.src.contexts.actions.type.ActionBinding.field.get",
+        "ts.packages.react.src.contexts.actions.type.ActionBinding.field.value",
+        "ts.packages.react.src.contexts.repeat-scope.type.ReactNode.field.basePath",
+        "ts.packages.react.src.contexts.repeat-scope.type.ReactNode.field.index",
+        "ts.packages.react.src.contexts.repeat-scope.type.ReactNode.field.item",
+        "ts.packages.react.src.contexts.validation.interface.FieldValidationState.field.result",
+        "ts.packages.react.src.contexts.validation.interface.FieldValidationState.field.touched",
+        "ts.packages.react.src.contexts.validation.interface.FieldValidationState.field.validated",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.clear",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.customFunctions",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.fieldStates",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.registerField",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.touch",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.validate",
+        "ts.packages.react.src.contexts.validation.interface.ValidationContextValue.field.validateAll",
+        "ts.packages.react.src.contexts.validation.interface.ValidationProviderProps.field.a",
+        "ts.packages.react.src.contexts.validation.interface.ValidationProviderProps.field.b",
+        "ts.packages.react.src.contexts.validation.interface.ValidationProviderProps.field.children",
+        "ts.packages.react.src.contexts.validation.interface.ValidationProviderProps.field.customFunctions",
+        "ts.packages.react.src.contexts.validation.interface.ValidationProviderProps.field.path",
+        "ts.packages.react.src.contexts.visibility.interface.VisibilityContextValue.field.ctx",
+        "ts.packages.react.src.contexts.visibility.interface.VisibilityContextValue.field.isVisible",
+        "ts.packages.react.src.contexts.visibility.interface.VisibilityProviderProps.field.children",
+        "ts.packages.react.src.contexts.visibility.interface.VisibilityProviderProps.field.condition",
+        "ts.packages.react.src.hooks.interface.ChatMessage.field.spec",
+        "ts.packages.react.src.hooks.interface.ChatMessage.field.text",
+        "ts.packages.react.src.hooks.interface.TokenUsage.field.completionTokens",
+        "ts.packages.react.src.hooks.interface.TokenUsage.field.promptTokens",
+        "ts.packages.react.src.hooks.interface.TokenUsage.field.totalTokens",
+        "ts.packages.react.src.hooks.interface.UseChatUIOptions.field.api",
+        "ts.packages.react.src.hooks.interface.UseChatUIOptions.field.onComplete",
+        "ts.packages.react.src.hooks.interface.UseChatUIOptions.field.onError",
+        "ts.packages.react.src.hooks.interface.UseUIStreamOptions.field.api",
+        "ts.packages.react.src.hooks.interface.UseUIStreamOptions.field.onComplete",
+        "ts.packages.react.src.hooks.interface.UseUIStreamOptions.field.onError",
+        "ts.packages.react.src.hooks.type.for.field.bindingPath",
+        "ts.packages.react.src.hooks.type.for.field.clear",
+        "ts.packages.react.src.hooks.type.for.field.error",
+        "ts.packages.react.src.hooks.type.for.field.isStreaming",
+        "ts.packages.react.src.hooks.type.for.field.messages",
+        "ts.packages.react.src.hooks.type.for.field.propValue",
+        "ts.packages.react.src.hooks.type.for.field.rawLines",
+        "ts.packages.react.src.hooks.type.for.field.send",
+        "ts.packages.react.src.hooks.type.for.field.spec",
+        "ts.packages.react.src.hooks.type.for.field.usage",
+        "ts.packages.react.src.hooks.type.so.field.data",
+        "ts.packages.react.src.hooks.type.so.field.text",
+        "ts.packages.react.src.hooks.type.so.field.type",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.actionName",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.element",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.elementKey",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.fallback",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.getSetState",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.getState",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.loading",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.registry",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.setState",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.spec",
+        "ts.packages.react.src.renderer.class.ElementErrorBoundary.field.state",
+        "ts.packages.react.src.renderer.interface.ComponentRenderProps.field.bindings",
+        "ts.packages.react.src.renderer.interface.ComponentRenderProps.field.children",
+        "ts.packages.react.src.renderer.interface.ComponentRenderProps.field.element",
+        "ts.packages.react.src.renderer.interface.ComponentRenderProps.field.emit",
+        "ts.packages.react.src.renderer.interface.ComponentRenderProps.field.loading",
+        "ts.packages.react.src.renderer.interface.ComponentRenderProps.field.on",
+        "ts.packages.react.src.renderer.interface.ElementErrorBoundaryProps.field.children",
+        "ts.packages.react.src.renderer.interface.ElementErrorBoundaryProps.field.elementType",
+        "ts.packages.react.src.renderer.interface.ElementErrorBoundaryState.field.hasError",
+        "ts.packages.react.src.renderer.interface.RendererProps.field.fallback",
+        "ts.packages.react.src.renderer.interface.RendererProps.field.loading",
+        "ts.packages.react.src.renderer.interface.RendererProps.field.registry",
+        "ts.packages.react.src.renderer.interface.RendererProps.field.spec",
+        "ts.packages.react.src.schema.type.from.field.createCatalog"
+      ],
+      "missing_by_group": {
+        "typescript": 718
+      },
+      "delegated_paths": [],
+      "missing_paths_sample": [
+        "ts.packages.codegen.src.index",
+        "ts.packages.codegen.src.serialize",
+        "ts.packages.codegen.src.serialize.function.escapeString",
+        "ts.packages.codegen.src.serialize.function.serializePropValue",
+        "ts.packages.codegen.src.serialize.function.serializeProps",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.indent",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.options",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.quotes",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.str",
+        "ts.packages.codegen.src.serialize.interface.SerializeOptions.field.value",
+        "ts.packages.codegen.src.traverse",
+        "ts.packages.codegen.src.traverse.function.collectActions",
+        "ts.packages.codegen.src.traverse.function.collectPathFromItem",
+        "ts.packages.codegen.src.traverse.function.collectPathsFromCondition",
+        "ts.packages.codegen.src.traverse.function.collectStatePaths",
+        "ts.packages.codegen.src.traverse.function.collectUsedComponents",
+        "ts.packages.codegen.src.traverse.function.traverseSpec",
+        "ts.packages.codegen.src.traverse.function.visit",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.condition",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.depth",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.element",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.item",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.key",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.parent",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.paths",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.spec",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.startKey",
+        "ts.packages.codegen.src.traverse.interface.TreeVisitor.field.visitor",
+        "ts.packages.codegen.src.types",
+        "ts.packages.codegen.src.types.interface.CodeGenerator",
+        "ts.packages.codegen.src.types.interface.CodeGenerator.method.generate",
+        "ts.packages.codegen.src.types.interface.GeneratedFile",
+        "ts.packages.codegen.src.types.interface.GeneratedFile.field.content",
+        "ts.packages.codegen.src.types.interface.GeneratedFile.field.path",
+        "ts.packages.core.src.action-observer",
+        "ts.packages.core.src.action-observer.function.nextActionDispatchId",
+        "ts.packages.core.src.action-observer.function.notifyActionDispatch",
+        "ts.packages.core.src.action-observer.function.notifyActionSettle",
+        "ts.packages.core.src.action-observer.function.registerActionObserver",
+        "ts.packages.core.src.action-observer.interface.ActionDispatchInfo",
+        "ts.packages.core.src.action-observer.interface.ActionDispatchInfo.field.at",
+        "ts.packages.core.src.action-observer.interface.ActionObserver",
+        "ts.packages.core.src.action-observer.interface.ActionObserver.field.onDispatch",
+        "ts.packages.core.src.action-observer.interface.ActionObserver.field.onSettle",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.at",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.durationMs",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.error",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.ok",
+        "ts.packages.core.src.action-observer.interface.ActionSettleInfo.field.result",
+        "ts.packages.core.src.actions.function.executeAction",
+        "ts.packages.core.src.actions.function.interpolateString",
+        "ts.packages.core.src.actions.function.resolveAction",
+        "ts.packages.core.src.actions.interface.ActionBinding",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.action",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.confirm",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.onError",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.onSuccess",
+        "ts.packages.core.src.actions.interface.ActionBinding.field.preventDefault",
+        "ts.packages.core.src.actions.interface.ActionConfirm",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.cancelLabel",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.confirmLabel",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.message",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.title",
+        "ts.packages.core.src.actions.interface.ActionConfirm.field.variant",
+        "ts.packages.core.src.actions.interface.ActionDefinition",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.action",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.ctx",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.executeAction",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.handler",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.navigate",
+        "ts.packages.core.src.actions.interface.ActionExecutionContext.field.setState",
+        "ts.packages.core.src.actions.interface.ResolvedAction",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.action",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.binding",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.confirm",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.onError",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.onSuccess",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.stateModel",
+        "ts.packages.core.src.actions.interface.ResolvedAction.field.template",
+        "ts.packages.core.src.actions.type.Action",
+        "ts.packages.core.src.actions.type.ActionHandler",
+        "ts.packages.core.src.actions.type.ActionOnError",
+        "ts.packages.core.src.actions.type.ActionOnSuccess",
+        "ts.packages.core.src.devtools-flag",
+        "ts.packages.core.src.devtools-flag.function.isDevtoolsActive",
+        "ts.packages.core.src.devtools-flag.function.markDevtoolsActive",
+        "ts.packages.core.src.devtools-flag.function.notifyDevtoolsActiveChange",
+        "ts.packages.core.src.devtools-flag.function.subscribeDevtoolsActive",
+        "ts.packages.core.src.diff",
+        "ts.packages.core.src.diff.function.arraysEqual",
+        "ts.packages.core.src.diff.function.buildPath",
+        "ts.packages.core.src.diff.function.diffToPatches",
+        "ts.packages.core.src.diff.function.escapeToken",
+        "ts.packages.core.src.diff.function.isPlainObject",
+        "ts.packages.core.src.directives.function.createDirectiveRegistry",
+        "ts.packages.core.src.directives.function.findDirective",
+        "ts.packages.core.src.directives.interface.DirectiveDefinition",
+        "ts.packages.core.src.directives.interface.DirectiveDefinition.field.resolve",
+        "ts.packages.core.src.directives.interface.DirectiveDefinition.field.schema",
+        "ts.packages.core.src.directives.type.DirectiveRegistry",
+        "ts.packages.core.src.directives.type.checking",
+        "ts.packages.core.src.directives.type.checking.field.definition",
+        "ts.packages.core.src.directives.type.checking.field.value",
+        "ts.packages.core.src.edit-modes",
+        "ts.packages.core.src.edit-modes.function.addLineNumbers",
+        "ts.packages.core.src.edit-modes.function.buildEditInstructions",
+        "ts.packages.core.src.edit-modes.function.buildEditUserPrompt",
+        "ts.packages.core.src.edit-modes.function.isNonEmptySpec",
+        "ts.packages.core.src.edit-modes.function.jsonDiffInstructions",
+        "ts.packages.core.src.edit-modes.function.jsonMergeInstructions",
+        "ts.packages.core.src.edit-modes.function.jsonPatchInstructions",
+        "ts.packages.core.src.edit-modes.function.modeSelectionGuidance",
+        "ts.packages.core.src.edit-modes.function.normalizeModes",
+        "ts.packages.core.src.edit-modes.function.yamlDiffInstructions",
+        "ts.packages.core.src.edit-modes.function.yamlMergeInstructions",
+        "ts.packages.core.src.edit-modes.function.yamlPatchInstructions",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.currentSpec",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.format",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.maxPromptLength",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.options",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.prompt",
+        "ts.packages.core.src.edit-modes.interface.BuildEditUserPromptOptions.field.serializer",
+        "ts.packages.core.src.edit-modes.interface.EditConfig",
+        "ts.packages.core.src.edit-modes.interface.EditConfig.field.format",
+        "ts.packages.core.src.edit-modes.interface.EditConfig.field.modes",
+        "ts.packages.core.src.edit-modes.type.EditMode",
+        "ts.packages.core.src.env.d",
+        "ts.packages.core.src.env.d.interface.so",
+        "ts.packages.core.src.env.d.interface.so.field.NODE_ENV",
+        "ts.packages.core.src.index",
+        "ts.packages.core.src.merge",
+        "ts.packages.core.src.merge.function.deepMergeSpec",
+        "ts.packages.core.src.merge.function.isPlainObject",
+        "ts.packages.core.src.prompt",
+        "ts.packages.core.src.prompt.function.buildUserPrompt",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.currentSpec",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.editModes",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.format",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.maxPromptLength",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.prompt",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.serializer",
+        "ts.packages.core.src.prompt.interface.UserPromptOptions.field.state",
+        "ts.packages.core.src.props.function._resetWarnedComputedFns",
+        "ts.packages.core.src.props.function.isBindItemExpression",
+        "ts.packages.core.src.props.function.isBindStateExpression",
+        "ts.packages.core.src.props.function.isComputedExpression",
+        "ts.packages.core.src.props.function.isCondExpression",
+        "ts.packages.core.src.props.function.isIndexExpression",
+        "ts.packages.core.src.props.function.isItemExpression",
+        "ts.packages.core.src.props.function.isStateExpression",
+        "ts.packages.core.src.props.function.isTemplateExpression",
+        "ts.packages.core.src.props.function.resolveActionParam",
+        "ts.packages.core.src.props.function.resolveBindItemPath",
+        "ts.packages.core.src.props.function.resolveBindings",
+        "ts.packages.core.src.props.function.resolveElementProps",
+        "ts.packages.core.src.props.function.resolvePropValue",
+        "ts.packages.core.src.props.interface.PropResolutionContext",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.ctx",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.functions",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.itemPath",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.repeatBasePath",
+        "ts.packages.core.src.props.interface.PropResolutionContext.field.value",
+        "ts.packages.core.src.props.type.ComputedFunction",
+        "ts.packages.core.src.props.type.DirectiveRegistry",
+        "ts.packages.core.src.props.type.PropExpression",
+        "ts.packages.core.src.props.type.PropExpression.field.$cond",
+        "ts.packages.core.src.props.type.PropExpression.field.$else",
+        "ts.packages.core.src.props.type.PropExpression.field.$then",
+        "ts.packages.core.src.props.type.VisibilityContext",
+        "ts.packages.core.src.schema",
+        "ts.packages.core.src.schema.enum.of",
+        "ts.packages.core.src.schema.enum.of.field.catalog",
+        "ts.packages.core.src.schema.enum.of.field.options",
+        "ts.packages.core.src.schema.function.buildZodSchemaFromDefinition",
+        "ts.packages.core.src.schema.function.buildZodType",
+        "ts.packages.core.src.schema.function.createBuilder",
+        "ts.packages.core.src.schema.function.findFirstStringProp",
+        "ts.packages.core.src.schema.function.formatZodType",
+        "ts.packages.core.src.schema.function.generateExamplePropsFromZod",
+        "ts.packages.core.src.schema.function.generateExampleValue",
+        "ts.packages.core.src.schema.function.getExampleProps",
+        "ts.packages.core.src.schema.function.getKeysFromPath",
+        "ts.packages.core.src.schema.function.getPropsFromPath",
+        "ts.packages.core.src.schema.function.getZodTypeName",
+        "ts.packages.core.src.schema.function.normalizeTypeName",
+        "ts.packages.core.src.schema.function.zodToJsonSchema",
+        "ts.packages.core.src.schema.function.zodTypeName",
+        "ts.packages.core.src.schema.interface.BuiltInAction",
+        "ts.packages.core.src.schema.interface.Catalog",
+        "ts.packages.core.src.schema.interface.Catalog.field._specType",
+        "ts.packages.core.src.schema.interface.Catalog.field.actionNames",
+        "ts.packages.core.src.schema.interface.Catalog.field.componentNames",
+        "ts.packages.core.src.schema.interface.Catalog.field.data",
+        "ts.packages.core.src.schema.interface.Catalog.field.schema",
+        "ts.packages.core.src.schema.interface.Catalog.method.jsonSchema",
+        "ts.packages.core.src.schema.interface.Catalog.method.prompt",
+        "ts.packages.core.src.schema.interface.Catalog.method.validate",
+        "ts.packages.core.src.schema.interface.Catalog.method.zodSchema",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef.field.example",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef.field.schema",
+        "ts.packages.core.src.schema.interface.CatalogComponentDef.field.slots",
+        "ts.packages.core.src.schema.interface.JsonSchemaOptions",
+        "ts.packages.core.src.schema.interface.JsonSchemaOptions.field.strict",
+        "ts.packages.core.src.schema.interface.PromptContext",
+        "ts.packages.core.src.schema.interface.PromptContext.field.actionNames",
+        "ts.packages.core.src.schema.interface.PromptContext.field.catalog",
+        "ts.packages.core.src.schema.interface.PromptContext.field.componentNames",
+        "ts.packages.core.src.schema.interface.PromptContext.field.options",
+        "ts.packages.core.src.schema.interface.PromptOptions",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.customRules",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.editModes",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.mode",
+        "ts.packages.core.src.schema.interface.PromptOptions.field.system",
+        "ts.packages.core.src.schema.interface.Schema",
+        "ts.packages.core.src.schema.interface.Schema.field.builtInActions",
+        "ts.packages.core.src.schema.interface.Schema.field.catalog",
+        "ts.packages.core.src.schema.interface.Schema.field.defaultRules",
+        "ts.packages.core.src.schema.interface.Schema.field.definition",
+        "ts.packages.core.src.schema.interface.Schema.field.promptTemplate",
+        "ts.packages.core.src.schema.interface.SchemaBuilder",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.field.entryShape",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.field.shape",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.any",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.boolean",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.number",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.optional",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.propsOf",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.ref",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.string",
+        "ts.packages.core.src.schema.interface.SchemaBuilder.method.zod",
+        "ts.packages.core.src.schema.interface.SchemaDefinition",
+        "ts.packages.core.src.schema.interface.SchemaDefinition.field.catalog",
+        "ts.packages.core.src.schema.interface.SchemaDefinition.field.spec",
+        "ts.packages.core.src.schema.interface.SchemaOptions",
+        "ts.packages.core.src.schema.interface.SchemaOptions.field.builtInActions",
+        "ts.packages.core.src.schema.interface.SchemaOptions.field.defaultRules",
+        "ts.packages.core.src.schema.interface.SchemaOptions.field.promptTemplate",
+        "ts.packages.core.src.schema.interface.SpecValidationResult",
+        "ts.packages.core.src.schema.interface.SpecValidationResult.field.data",
+        "ts.packages.core.src.schema.interface.SpecValidationResult.field.error",
+        "ts.packages.core.src.schema.interface.SpecValidationResult.field.success",
+        "ts.packages.core.src.schema.type.ButtonProps",
+        "ts.packages.core.src.schema.type.InferActionParams",
+        "ts.packages.core.src.schema.type.InferCatalogActions",
+        "ts.packages.core.src.schema.type.InferCatalogComponents",
+        "ts.packages.core.src.schema.type.InferCatalogField",
+        "ts.packages.core.src.schema.type.InferCatalogInput",
+        "ts.packages.core.src.schema.type.InferComponentProps",
+        "ts.packages.core.src.schema.type.InferMapEntryField",
+        "ts.packages.core.src.schema.type.InferMapEntryOptional",
+        "ts.packages.core.src.schema.type.InferMapEntryRequired",
+        "ts.packages.core.src.schema.type.InferPropsOfType",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.builder",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.catalog",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.catalogData",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.definition",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.options",
+        "ts.packages.core.src.schema.type.InferPropsOfType.field.schema",
+        "ts.packages.core.src.schema.type.InferPropsOfType.method.validate",
+        "ts.packages.core.src.schema.type.InferPropsOfType.method.zodSchema",
+        "ts.packages.core.src.schema.type.InferRefType",
+        "ts.packages.core.src.schema.type.InferSpec",
+        "ts.packages.core.src.schema.type.InferSpec.field.spec",
+        "ts.packages.core.src.schema.type.InferSpecField",
+        "ts.packages.core.src.schema.type.InferSpecObject",
+        "ts.packages.core.src.schema.type.ViewCustomersParams",
+        "ts.packages.core.src.schema.type.as",
+        "ts.packages.core.src.schema.type.as.field.context",
+        "ts.packages.core.src.schema.type.as.field.formatZodType",
+        "ts.packages.core.src.schema.type.from",
+        "ts.packages.core.src.schema.type.representation",
+        "ts.packages.core.src.schema.type.representation.field.inner",
+        "ts.packages.core.src.schema.type.representation.field.optional",
+        "ts.packages.core.src.spec-validator",
+        "ts.packages.core.src.spec-validator.function.autoFixSpec",
+        "ts.packages.core.src.spec-validator.function.formatSpecIssues",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions.field.lossy",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions.field.options",
+        "ts.packages.core.src.spec-validator.interface.AutoFixOptions.field.spec",
+        "ts.packages.core.src.spec-validator.interface.SpecFix",
+        "ts.packages.core.src.spec-validator.interface.SpecFix.field.lossy",
+        "ts.packages.core.src.spec-validator.interface.SpecFix.field.message",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.code",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.elementKey",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.message",
+        "ts.packages.core.src.spec-validator.interface.SpecIssue.field.severity",
+        "ts.packages.core.src.spec-validator.interface.SpecValidationIssues",
+        "ts.packages.core.src.spec-validator.interface.SpecValidationIssues.field.issues",
+        "ts.packages.core.src.spec-validator.interface.SpecValidationIssues.field.valid",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions.field.checkOrphans",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions.field.options",
+        "ts.packages.core.src.spec-validator.interface.ValidateSpecOptions.field.spec",
+        "ts.packages.core.src.spec-validator.type.SpecIssueSeverity",
+        "ts.packages.core.src.state-store",
+        "ts.packages.core.src.state-store.function.createStateStore",
+        "ts.packages.core.src.state-store.function.createStoreAdapter",
+        "ts.packages.core.src.state-store.function.flattenToPointers",
+        "ts.packages.core.src.state-store.function.immutableSetByPath",
+        "ts.packages.core.src.state-store.function.notify",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field._seen",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field._warned",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.getSnapshot",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.obj",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.setSnapshot",
+        "ts.packages.core.src.state-store.interface.StoreAdapterConfig.field.subscribe",
+        "ts.packages.core.src.state-store.type.StateModel",
+        "ts.packages.core.src.state-store.type.StateModel.field.path",
+        "ts.packages.core.src.state-store.type.StateModel.field.root",
+        "ts.packages.core.src.state-store.type.StateModel.field.value",
+        "ts.packages.core.src.state-store.type.StateModel.method.get",
+        "ts.packages.core.src.state-store.type.StateModel.method.getServerSnapshot",
+        "ts.packages.core.src.state-store.type.StateModel.method.getSnapshot",
+        "ts.packages.core.src.state-store.type.StateModel.method.set",
+        "ts.packages.core.src.state-store.type.StateModel.method.update",
+        "ts.packages.core.src.store-utils",
+        "ts.packages.core.src.types",
+        "ts.packages.core.src.types.function.addByPath",
+        "ts.packages.core.src.types.function.applySpecPatch",
+        "ts.packages.core.src.types.function.closeTextBlock",
+        "ts.packages.core.src.types.function.createJsonRenderTransform",
+        "ts.packages.core.src.types.function.createMixedStreamParser",
+        "ts.packages.core.src.types.function.deepEqual",
+        "ts.packages.core.src.types.function.emitPatch",
+        "ts.packages.core.src.types.function.emitTextDelta",
+        "ts.packages.core.src.types.function.ensureTextBlock",
+        "ts.packages.core.src.types.function.findFormValue",
+        "ts.packages.core.src.types.function.flushBuffer",
+        "ts.packages.core.src.types.function.getByPath",
+        "ts.packages.core.src.types.function.isNumericIndex",
+        "ts.packages.core.src.types.function.nestedToFlat",
+        "ts.packages.core.src.types.function.parseJsonPointer",
+        "ts.packages.core.src.types.function.parseSpecStreamLine",
+        "ts.packages.core.src.types.function.processCompleteLine",
+        "ts.packages.core.src.types.function.processLine",
+        "ts.packages.core.src.types.function.removeByPath",
+        "ts.packages.core.src.types.function.setByPath",
+        "ts.packages.core.src.types.function.unescapeJsonPointer",
+        "ts.packages.core.src.types.function.walk",
+        "ts.packages.core.src.types.interface.JsonPatch",
+        "ts.packages.core.src.types.interface.JsonPatch.field.fieldName",
+        "ts.packages.core.src.types.interface.JsonPatch.field.from",
+        "ts.packages.core.src.types.interface.JsonPatch.field.obj",
+        "ts.packages.core.src.types.interface.JsonPatch.field.op",
+        "ts.packages.core.src.types.interface.JsonPatch.field.path",
+        "ts.packages.core.src.types.interface.JsonPatch.field.state",
+        "ts.packages.core.src.types.interface.JsonPatch.field.stateModel",
+        "ts.packages.core.src.types.interface.JsonPatch.field.value",
+        "ts.packages.core.src.types.interface.MixedStreamCallbacks",
+        "ts.packages.core.src.types.interface.MixedStreamCallbacks.field.onPatch",
+        "ts.packages.core.src.types.interface.MixedStreamCallbacks.field.onText",
+        "ts.packages.core.src.types.interface.MixedStreamParser",
+        "ts.packages.core.src.types.interface.MixedStreamParser.field.callbacks",
+        "ts.packages.core.src.types.interface.MixedStreamParser.method.flush",
+        "ts.packages.core.src.types.interface.MixedStreamParser.method.push",
+        "ts.packages.core.src.types.interface.NestedNode",
+        "ts.packages.core.src.types.interface.NestedNode.field.children",
+        "ts.packages.core.src.types.interface.NestedNode.field.type",
+        "ts.packages.core.src.types.interface.Spec",
+        "ts.packages.core.src.types.interface.Spec.field.elements",
+        "ts.packages.core.src.types.interface.Spec.field.root",
+        "ts.packages.core.src.types.interface.Spec.field.state",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.field.initial",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.getPatches",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.getResult",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.push",
+        "ts.packages.core.src.types.interface.SpecStreamCompiler.method.reset",
+        "ts.packages.core.src.types.interface.StateStore",
+        "ts.packages.core.src.types.interface.StateStore.field.get",
+        "ts.packages.core.src.types.interface.StateStore.field.getServerSnapshot",
+        "ts.packages.core.src.types.interface.StateStore.field.getSnapshot",
+        "ts.packages.core.src.types.interface.StateStore.field.set",
+        "ts.packages.core.src.types.interface.StateStore.field.subscribe",
+        "ts.packages.core.src.types.interface.StateStore.field.update",
+        "ts.packages.core.src.types.interface.UIElement",
+        "ts.packages.core.src.types.type.AndCondition",
+        "ts.packages.core.src.types.type.ComparisonOperators",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.eq",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.gt",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.gte",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.lt",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.lte",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.neq",
+        "ts.packages.core.src.types.type.ComparisonOperators.field.not",
+        "ts.packages.core.src.types.type.ComponentSchema",
+        "ts.packages.core.src.types.type.DynamicBoolean",
+        "ts.packages.core.src.types.type.DynamicNumber",
+        "ts.packages.core.src.types.type.DynamicString",
+        "ts.packages.core.src.types.type.DynamicValue",
+        "ts.packages.core.src.types.type.IndexCondition",
+        "ts.packages.core.src.types.type.ItemCondition",
+        "ts.packages.core.src.types.type.OrCondition",
+        "ts.packages.core.src.types.type.PatchOp",
+        "ts.packages.core.src.types.type.SingleCondition",
+        "ts.packages.core.src.types.type.SpecDataPart",
+        "ts.packages.core.src.types.type.SpecStreamLine",
+        "ts.packages.core.src.types.type.SpecStreamLine.field.obj",
+        "ts.packages.core.src.types.type.SpecStreamLine.field.patch",
+        "ts.packages.core.src.types.type.StateCondition",
+        "ts.packages.core.src.types.type.StateModel",
+        "ts.packages.core.src.types.type.StreamChunk",
+        "ts.packages.core.src.types.type.StreamChunk.field.controller",
+        "ts.packages.core.src.types.type.StreamChunk.field.delta",
+        "ts.packages.core.src.types.type.StreamChunk.field.line",
+        "ts.packages.core.src.types.type.StreamChunk.field.patch",
+        "ts.packages.core.src.types.type.ValidationMode",
+        "ts.packages.core.src.types.type.VisibilityCondition",
+        "ts.packages.core.src.types.type.cast",
+        "ts.packages.core.src.types.type.cast.field.stream",
+        "ts.packages.core.src.types.type.from",
+        "ts.packages.core.src.types.type.from.field.children",
+        "ts.packages.core.src.types.type.from.field.key",
+        "ts.packages.core.src.types.type.from.field.on",
+        "ts.packages.core.src.types.type.from.field.parentKey",
+        "ts.packages.core.src.types.type.from.field.repeat",
+        "ts.packages.core.src.types.type.from.field.type",
+        "ts.packages.core.src.types.type.from.field.visible",
+        "ts.packages.core.src.types.type.from.field.watch",
+        "ts.packages.core.src.types.type.is",
+        "ts.packages.core.src.types.type.string",
+        "ts.packages.core.src.validation",
+        "ts.packages.core.src.validation.function.runValidation",
+        "ts.packages.core.src.validation.function.runValidationCheck",
+        "ts.packages.core.src.validation.interface.ValidationCheck",
+        "ts.packages.core.src.validation.interface.ValidationCheck.field.args",
+        "ts.packages.core.src.validation.interface.ValidationCheck.field.message",
+        "ts.packages.core.src.validation.interface.ValidationCheck.field.type",
+        "ts.packages.core.src.validation.interface.ValidationConfig",
+        "ts.packages.core.src.validation.interface.ValidationConfig.field.checks",
+        "ts.packages.core.src.validation.interface.ValidationConfig.field.enabled",
+        "ts.packages.core.src.validation.interface.ValidationConfig.field.validateOn",
+        "ts.packages.core.src.validation.interface.ValidationContext",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.check",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.ctx",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.customFunctions",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.stateModel",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.valid",
+        "ts.packages.core.src.validation.interface.ValidationContext.field.value",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition.field.args",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition.field.validate",
+        "ts.packages.core.src.validation.interface.ValidationFunctionDefinition.field.value",
+        "ts.packages.core.src.validation.interface.ValidationResult",
+        "ts.packages.core.src.validation.interface.ValidationResult.field.checks",
+        "ts.packages.core.src.validation.interface.ValidationResult.field.errors",
+        "ts.packages.core.src.validation.interface.ValidationResult.field.valid",
+        "ts.packages.core.src.validation.type.ValidationFunction",
+        "ts.packages.core.src.validation.type.ValidationFunction.field.args",
+        "ts.packages.core.src.validation.type.ValidationFunction.field.value",
+        "ts.packages.core.src.validation.type.numeric",
+        "ts.packages.core.src.validation.type.numeric.field.message",
+        "ts.packages.core.src.validation.type.numeric.field.type",
+        "ts.packages.core.src.validation.type.numeric.field.valid",
+        "ts.packages.core.src.visibility",
+        "ts.packages.core.src.visibility.function.conditionUsesItemScope",
+        "ts.packages.core.src.visibility.function.evaluateCondition",
+        "ts.packages.core.src.visibility.function.evaluateVisibility",
+        "ts.packages.core.src.visibility.function.isAndCondition",
+        "ts.packages.core.src.visibility.function.isIndexCondition",
+        "ts.packages.core.src.visibility.function.isItemCondition",
+        "ts.packages.core.src.visibility.function.isOrCondition",
+        "ts.packages.core.src.visibility.function.resolveComparisonValue",
+        "ts.packages.core.src.visibility.function.resolveConditionValue",
+        "ts.packages.core.src.visibility.function.splitRepeatVisibility",
+        "ts.packages.core.src.visibility.interface.VisibilityContext",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.cond",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.condition",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.ctx",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.repeatIndex",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.repeatItem",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.stateModel",
+        "ts.packages.core.src.visibility.interface.VisibilityContext.field.value",
+        "ts.packages.mcp.src.app",
+        "ts.packages.mcp.src.app.function.McpAppView",
+        "ts.packages.mcp.src.build-app-html",
+        "ts.packages.mcp.src.build-app-html-entry",
+        "ts.packages.mcp.src.build-app-html.function.buildAppHtml",
+        "ts.packages.mcp.src.build-app-html.function.escapeHtml",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.css",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.head",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.js",
+        "ts.packages.mcp.src.build-app-html.interface.BuildAppHtmlOptions.field.title",
+        "ts.packages.mcp.src.index",
+        "ts.packages.mcp.src.server",
+        "ts.packages.mcp.src.server.function.createMcpApp",
+        "ts.packages.mcp.src.server.function.getExtApps",
+        "ts.packages.mcp.src.server.function.registerJsonRenderResource",
+        "ts.packages.mcp.src.server.function.registerJsonRenderTool"
+      ],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

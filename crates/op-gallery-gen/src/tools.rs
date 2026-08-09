@@ -84,7 +84,9 @@ impl ToolRegistry {
                     "name": s.name,
                     "version": s.version,
                     "description": s.description,
-                    "category": s.category
+                    "category": s.category,
+                    "authoritative_ui_surfaces": s.ui_surfaces,
+                    "ui_surface_fallback": !s.ui_surfaces.is_authoritative()
                 })
             })
             .collect();
@@ -114,11 +116,26 @@ impl ToolRegistry {
             }
         };
 
+        let plugin_name = crate::context::resolve_ui_plugin_id(plugin_name, &ctx.schemas);
         match ctx.schemas.iter().find(|s| s.name == plugin_name) {
-            Some(schema) => ToolResult {
-                success: true,
-                result: schema.raw_json.clone(),
-            },
+            Some(schema) => {
+                let mut result = schema.raw_json.clone();
+                if let Some(object) = result.as_object_mut() {
+                    object.insert(
+                        "authoritative_ui_surfaces".to_string(),
+                        serde_json::to_value(&schema.ui_surfaces)
+                            .unwrap_or_else(|_| serde_json::json!({})),
+                    );
+                    object.insert(
+                        "ui_surface_fallback".to_string(),
+                        serde_json::Value::Bool(!schema.ui_surfaces.is_authoritative()),
+                    );
+                }
+                ToolResult {
+                    success: true,
+                    result,
+                }
+            }
             None => ToolResult {
                 success: false,
                 result: serde_json::json!({
@@ -420,5 +437,55 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{SchemaPayload, UiSurfaceProjection, UiSurfaceRoute};
+
+    fn context() -> GenerationContext {
+        let schema = SchemaPayload {
+            name: "demo".into(),
+            version: "1.0.0".into(),
+            description: None,
+            category: None,
+            fields: HashMap::new(),
+            methods: HashMap::new(),
+            subids: HashMap::new(),
+            ui_surfaces: UiSurfaceProjection {
+                subids: vec!["exp.service.demo.ui-surfaces@v1".into()],
+                routes: vec![UiSurfaceRoute {
+                    path: "/demo".into(),
+                    name: Some("Demo".into()),
+                    schema: Some("demo".into()),
+                    raw: serde_json::json!({"path": "/demo"}),
+                }],
+                value_source: Some("default".into()),
+            },
+            raw_json: serde_json::json!({"name": "demo"}),
+        };
+        GenerationContext::new(vec![schema], String::new())
+    }
+
+    #[test]
+    fn plugin_tools_expose_authoritative_routes() {
+        let registry = ToolRegistry::new();
+        let ctx = context();
+        let listed = registry.list_plugins(&ctx);
+        assert_eq!(
+            listed.result["plugins"][0]["authoritative_ui_surfaces"]["routes"][0]["path"],
+            "/demo"
+        );
+        assert_eq!(listed.result["plugins"][0]["ui_surface_fallback"], false);
+
+        let args = HashMap::from([("plugin_name".into(), serde_json::json!("demo"))]);
+        let schema = registry.get_plugin_schema(&ctx, &args);
+        assert_eq!(
+            schema.result["authoritative_ui_surfaces"]["routes"][0]["path"],
+            "/demo"
+        );
+        assert_eq!(schema.result["ui_surface_fallback"], false);
     }
 }

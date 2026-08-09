@@ -1,0 +1,775 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "rtnetlink.rs",
+  "plugin": {
+    "name": "rtnetlink",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "AddIpv4AddressInput",
+    "fields": {
+      "address": {
+        "rust_type": "String",
+        "description": "IP address (CIDR notation, e.g. \"10.0.0.1/24\")",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "name": {
+        "rust_type": "String",
+        "description": "Interface name",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      }
+    },
+    "nested_types": {
+      "AddLinkInput": {
+        "link_type": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "AddRouteInput": {
+        "destination": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "gateway": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "interface": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        }
+      },
+      "AddRuleInput": {
+        "rule": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DelLinkInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DelRouteInput": {
+        "destination": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SetDefaultRouteInput": {
+        "gateway": {
+          "rust_type": "String",
+          "description": "Gateway IP address",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Interface name for default route",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SetLinkStateInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "Interface name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "state": {
+          "rust_type": "String",
+          "description": "Desired state: \"up\" or \"down\"",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SetMacAddressInput": {
+        "mac": {
+          "rust_type": "String",
+          "description": "MAC address",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Interface name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 17,
+    "warn": 65,
+    "hint": 18,
+    "findings": [
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetLinkStateInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetLinkStateInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetLinkStateInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetLinkStateInput.state",
+        "message": "field `state` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetLinkStateInput.state",
+        "message": "consider #[serde(default)] on `state` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddIpv4AddressInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddIpv4AddressInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddIpv4AddressInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddIpv4AddressInput.address",
+        "message": "field `address` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddIpv4AddressInput.address",
+        "message": "consider #[serde(default)] on `address` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetMacAddressInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetMacAddressInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetMacAddressInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetMacAddressInput.mac",
+        "message": "field `mac` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetMacAddressInput.mac",
+        "message": "consider #[serde(default)] on `mac` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetDefaultRouteInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetDefaultRouteInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetDefaultRouteInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetDefaultRouteInput.gateway",
+        "message": "field `gateway` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetDefaultRouteInput.gateway",
+        "message": "consider #[serde(default)] on `gateway` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddLinkInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct AddLinkInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddLinkInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "AddLinkInput.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddLinkInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddLinkInput.link_type",
+        "message": "field `link_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "AddLinkInput.link_type",
+        "message": "field `link_type` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddLinkInput.link_type",
+        "message": "consider #[serde(default)] on `link_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DelLinkInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DelLinkInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DelLinkInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DelLinkInput.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DelLinkInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddRouteInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct AddRouteInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddRouteInput.destination",
+        "message": "field `destination` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "AddRouteInput.destination",
+        "message": "field `destination` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddRouteInput.destination",
+        "message": "consider #[serde(default)] on `destination` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddRouteInput.gateway",
+        "message": "field `gateway` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "AddRouteInput.gateway",
+        "message": "field `gateway` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddRouteInput.gateway",
+        "message": "consider #[serde(default)] on `gateway` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddRouteInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "AddRouteInput.interface",
+        "message": "field `interface` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DelRouteInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DelRouteInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DelRouteInput.destination",
+        "message": "field `destination` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DelRouteInput.destination",
+        "message": "field `destination` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DelRouteInput.destination",
+        "message": "consider #[serde(default)] on `destination` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddRuleInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct AddRuleInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddRuleInput.rule",
+        "message": "field `rule` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "AddRuleInput.rule",
+        "message": "field `rule` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddRuleInput.rule",
+        "message": "consider #[serde(default)] on `rule` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_x_oscal_category",
+        "location": null,
+        "message": "no #[schemars(extend(\"x-oscal-category\" = \"…\"))] on a state struct — declare what the plugin IS",
+        "severity": "fail"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/netlink.xml version=repomix nodes=0 elements=81 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=121 introspected=81 missing_in_plugin=81 extra_in_plugin=121",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.buffer.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.buffer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.constants.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.constants.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.done.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.done.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.error.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.error.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.header.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.header.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.lib.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.lib.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.macros.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.macros.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.message.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.message.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.nla.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.nla.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.parsers.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.parsers.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.payload.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.payload.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.traits.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.traits.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.add.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.add.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.builder.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.builder.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.del.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.del.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.get.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.get.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.handle.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.mod.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.connection.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.connection.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.constants.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.constants.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.errors.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.errors.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.handle.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.lib.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.lib.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.add.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.add.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bond.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bond.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bond_port.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bond_port.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bridge.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bridge.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bridge_port.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bridge_port.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bridge_vlan.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bridge_vlan.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.builder.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.builder.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.del.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.del.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.dummy.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.dummy.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.get.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.get.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.handle.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.hsr.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.hsr.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.ip6tnl.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.ip6tnl.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.iptun.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.iptun.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.mac_vlan.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.mac_vlan.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.mac_vtap.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.mac_vtap.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.macsec.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.macsec.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 41 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/netlink.xml",
+    "files_by_kind": {
+      "rust": 81
+    },
+    "by_kind": {
+      "rust": 81
+    },
+    "element_path_count": 81,
+    "gaps": {
+      "surface_paths_total": 81,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

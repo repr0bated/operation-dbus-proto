@@ -28,6 +28,10 @@ pub struct ConfigSchemaState {
         extend("default" = serde_json::json!({}), "x-oscal-subid" = "mut.software.plugin.config.configs@v1")
     )]
     pub configs: JsonValue,
+    /// Uncapped fields discovered from the Nickel configuration sources.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.config.inspector-fields@v1"))]
+    pub inspector_fields: inspector_gadget_generated::InspectorGadgetFields,
 }
 
 fn example_configs() -> JsonValue {
@@ -356,3 +360,127 @@ mod tests {
 inventory::submit! {
     crate::default_registry::PluginReg::new("config", |ctx| std::sync::Arc::new(ConfigPlugin::new(ctx.config_path("config", "/etc/op-dbus/config-store.json"))))
 }
+
+// ── Inspector Gadget + Repomix generated candidates ───────────────────────
+// Generated against PLUGIN-RENDER-CONTRACT.md. The original plugin above is
+// preserved. Review ownership, concrete types, defaults, side effects, and
+// runtime dispatch before flattening these candidates into the live state/schema.
+#[allow(dead_code)]
+mod inspector_gadget_generated {
+    use serde::{Deserialize, Serialize};
+
+    /// Repomix-discovered fields not represented by the input plugin.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.config.inspector-candidates.schema@v1"))]
+    pub struct InspectorGadgetFields {
+        /// Discovered from Repomix path `enum.rs.Command.Convert`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.convert@v1"))]
+        pub convert: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Doc`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.doc@v1"))]
+        pub doc: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Eval`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.eval@v1"))]
+        pub eval: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Export`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.export@v1"))]
+        pub export: Option<u64>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Format`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.format@v1"))]
+        pub format: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.GenCompletions`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.gencompletions@v1"))]
+        pub gencompletions: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Package`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.package@v1"))]
+        pub package: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.PprintAst`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.pprintast@v1"))]
+        pub pprintast: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Query`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.query@v1"))]
+        pub query: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Repl`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.repl@v1"))]
+        pub repl: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Test`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.test@v1"))]
+        pub test: Option<String>,
+
+        /// Discovered from Repomix path `enum.rs.Command.Typecheck`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.typecheck@v1"))]
+        pub typecheck: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.GlobalOptions.color`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.color@v1"))]
+        pub color: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.GlobalOptions.error_format`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.error-format@v1"))]
+        pub error_format: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.GlobalOptions.metrics`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.metrics@v1"))]
+        pub metrics: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.Options.command`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.command@v1"))]
+        pub command: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.Options.global`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.config.global@v1"))]
+        pub global: Option<String>,
+    }
+
+    /// Metadata needed when promoting a generated typed method into `schema.methods`.
+    pub struct MethodCandidate {
+        pub name: &'static str,
+        pub side_effect: &'static str,
+        pub idempotent: bool,
+        pub required_capability: &'static str,
+        pub subid: &'static str,
+        pub repomix_path: &'static str,
+        pub command: &'static [&'static str],
+    }
+
+    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[];
+
+    /// Promote every generated method into the sealed plugin schema.
+    pub(super) fn register_methods(schema: &mut op_state_store::PluginSchema) {
+        use super::super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    }
+}
+
+// Promotion checklist (Fable contract):
+// 1. Move owned fields into the plugin State struct with concrete Rust types.
+// 2. Replace method placeholders with dedicated typed Input/Output fields.
+// 3. Register with method_decl_from_schemars_with_output and correct SideEffect.
+// 4. Register every subid, implement dispatch, and add schema/subid tests.
+// 5. Re-run op-plugin-lint; only then replace the original plugin file.

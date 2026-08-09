@@ -1,0 +1,61 @@
+{
+  "binary": "/usr/bin/btrfs",
+  "version": "btrfs-progs v7.1",
+  "ssh": null,
+  "nodes": [
+    {
+      "path": [],
+      "usage": "",
+      "about": "usage: btrfs [global options] <group> [<group>...] <command> [options] [<args>]",
+      "commands": [],
+      "flags": [
+        {
+          "name": "--verbose",
+          "short": "-v",
+          "value_name": null,
+          "description": "increase verbosity of the subcommand"
+        },
+        {
+          "name": "--quiet",
+          "short": "-q",
+          "value_name": null,
+          "description": "print only errors"
+        },
+        {
+          "name": "--log",
+          "short": null,
+          "value_name": "level",
+          "description": "set log level (default, info, verbose, debug, quiet)"
+        },
+        {
+          "name": "--dry-run",
+          "short": null,
+          "value_name": null,
+          "description": "if supported, do not do any active/changing actions"
+        },
+        {
+          "name": "--help",
+          "short": null,
+          "value_name": null,
+          "description": "print condensed help for all subcommands"
+        },
+        {
+          "name": "--version",
+          "short": null,
+          "value_name": null,
+          "description": "print version string and built-in features"
+        }
+      ],
+      "arguments": []
+    }
+  ],
+  "element_paths": [
+    "cmd",
+    "flag.root.dry_run",
+    "flag.root.help",
+    "flag.root.log",
+    "flag.root.quiet",
+    "flag.root.verbose",
+    "flag.root.version"
+  ]
+}

@@ -1,0 +1,323 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "config.rs",
+  "plugin": {
+    "name": "config",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "ConfigSchemaState",
+    "fields": {
+      "configs": {
+        "rust_type": "JsonValue",
+        "description": "",
+        "subid": "mut.software.plugin.config.configs@v1",
+        "has_serde_default": false,
+        "optional": false
+      }
+    },
+    "nested_types": {},
+    "methods": {}
+  },
+  "audit": {
+    "ok": true,
+    "fail": 0,
+    "warn": 42,
+    "hint": 3,
+    "findings": [
+      {
+        "code": "missing_field_doc",
+        "location": "ConfigSchemaState.configs",
+        "message": "field `configs` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/config.xml version=repomix nodes=0 elements=118 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=1 introspected=118 missing_in_plugin=118 extra_in_plugin=1",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command",
+        "message": "external surface has `enum.rs.Command` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Convert",
+        "message": "external surface has `enum.rs.Command.Convert` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Doc",
+        "message": "external surface has `enum.rs.Command.Doc` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Eval",
+        "message": "external surface has `enum.rs.Command.Eval` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Export",
+        "message": "external surface has `enum.rs.Command.Export` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Format",
+        "message": "external surface has `enum.rs.Command.Format` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.GenCompletions",
+        "message": "external surface has `enum.rs.Command.GenCompletions` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Package",
+        "message": "external surface has `enum.rs.Command.Package` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.PprintAst",
+        "message": "external surface has `enum.rs.Command.PprintAst` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Query",
+        "message": "external surface has `enum.rs.Command.Query` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Repl",
+        "message": "external surface has `enum.rs.Command.Repl` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Test",
+        "message": "external surface has `enum.rs.Command.Test` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Command.Typecheck",
+        "message": "external surface has `enum.rs.Command.Typecheck` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.completions.rs",
+        "message": "external surface has `file.cli.src.completions.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.convert.rs",
+        "message": "external surface has `file.cli.src.convert.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.customize.interface.rs",
+        "message": "external surface has `file.cli.src.customize.interface.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.customize.mod.rs",
+        "message": "external surface has `file.cli.src.customize.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.doc.rs",
+        "message": "external surface has `file.cli.src.doc.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.doctest.rs",
+        "message": "external surface has `file.cli.src.doctest.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.error.rs",
+        "message": "external surface has `file.cli.src.error.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.eval.rs",
+        "message": "external surface has `file.cli.src.eval.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.export.rs",
+        "message": "external surface has `file.cli.src.export.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.format.rs",
+        "message": "external surface has `file.cli.src.format.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.global.rs",
+        "message": "external surface has `file.cli.src.global.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.input.rs",
+        "message": "external surface has `file.cli.src.input.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.main.rs",
+        "message": "external surface has `file.cli.src.main.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.metrics.rs",
+        "message": "external surface has `file.cli.src.metrics.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.package.rs",
+        "message": "external surface has `file.cli.src.package.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.pprint_ast.rs",
+        "message": "external surface has `file.cli.src.pprint_ast.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.query.rs",
+        "message": "external surface has `file.cli.src.query.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.repl.rs",
+        "message": "external surface has `file.cli.src.repl.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.cli.src.typecheck.rs",
+        "message": "external surface has `file.cli.src.typecheck.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.ast.compat.rs",
+        "message": "external surface has `file.core.src.ast.compat.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.ast.mod.rs",
+        "message": "external surface has `file.core.src.ast.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.cache.rs",
+        "message": "external surface has `file.core.src.cache.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.closurize.rs",
+        "message": "external surface has `file.core.src.closurize.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.deserialize.rs",
+        "message": "external surface has `file.core.src.deserialize.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.environment.rs",
+        "message": "external surface has `file.core.src.environment.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.error.mod.rs",
+        "message": "external surface has `file.core.src.error.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.core.src.error.report.rs",
+        "message": "external surface has `file.core.src.error.report.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 78 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/config.xml",
+    "files_by_kind": {
+      "rust": 87
+    },
+    "by_kind": {
+      "rust": 118
+    },
+    "element_path_count": 118,
+    "gaps": {
+      "surface_paths_total": 118,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

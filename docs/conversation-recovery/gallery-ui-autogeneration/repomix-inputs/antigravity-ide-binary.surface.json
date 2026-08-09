@@ -1,0 +1,201 @@
+{
+  "binary": "/opt/antigravity-ide/bin/antigravity-ide",
+  "version": "1.107.0",
+  "ssh": null,
+  "nodes": [
+    {
+      "path": [],
+      "usage": "Usage: antigravity-ide [options] [paths...]",
+      "about": "Antigravity IDE 1.107.0",
+      "commands": [],
+      "flags": [
+        {
+          "name": "--remove",
+          "short": null,
+          "value_name": "folder",
+          "description": "Remove folder(s) from the last"
+        },
+        {
+          "name": "--locale",
+          "short": null,
+          "value_name": "locale",
+          "description": "The locale to use (e.g. en-US or"
+        },
+        {
+          "name": "--user-data-dir",
+          "short": null,
+          "value_name": "dir",
+          "description": "Specifies the directory that user"
+        },
+        {
+          "name": "--profile",
+          "short": null,
+          "value_name": "profileName",
+          "description": "Opens the provided folder or"
+        },
+        {
+          "name": "--extensions-dir",
+          "short": null,
+          "value_name": "dir",
+          "description": "Set the root path for extensions."
+        },
+        {
+          "name": "--list-extensions",
+          "short": null,
+          "value_name": null,
+          "description": "List the installed extensions."
+        },
+        {
+          "name": "--show-versions",
+          "short": null,
+          "value_name": null,
+          "description": "Show versions of installed extensions,"
+        },
+        {
+          "name": "--category",
+          "short": null,
+          "value_name": "category",
+          "description": "Filters installed extensions by provided"
+        },
+        {
+          "name": "--pre-release",
+          "short": null,
+          "value_name": null,
+          "description": "Installs the pre-release version of the"
+        },
+        {
+          "name": "--install-extension",
+          "short": null,
+          "value_name": null,
+          "description": ""
+        },
+        {
+          "name": "--uninstall-extension",
+          "short": null,
+          "value_name": "ext-id",
+          "description": "Uninstalls an extension."
+        },
+        {
+          "name": "--update-extensions",
+          "short": null,
+          "value_name": null,
+          "description": "Update the installed extensions."
+        },
+        {
+          "name": "--enable-proposed-api",
+          "short": null,
+          "value_name": "ext-id",
+          "description": "Enables proposed API features for"
+        },
+        {
+          "name": "--verbose",
+          "short": null,
+          "value_name": null,
+          "description": "Print verbose output (implies"
+        },
+        {
+          "name": "--log",
+          "short": null,
+          "value_name": "level",
+          "description": "Log level to use. Default is 'info'."
+        },
+        {
+          "name": "--prof-startup",
+          "short": null,
+          "value_name": null,
+          "description": "Run CPU profiler during startup."
+        },
+        {
+          "name": "--disable-extensions",
+          "short": null,
+          "value_name": null,
+          "description": "Disable all installed extensions."
+        },
+        {
+          "name": "--disable-extension",
+          "short": null,
+          "value_name": "ext-id",
+          "description": "Disable the provided extension. This"
+        },
+        {
+          "name": "--sync",
+          "short": null,
+          "value_name": "on | off",
+          "description": "Turn sync on or off."
+        },
+        {
+          "name": "--inspect-extensions",
+          "short": null,
+          "value_name": "port",
+          "description": "Allow debugging and profiling of"
+        },
+        {
+          "name": "--inspect-brk-extensions",
+          "short": null,
+          "value_name": "port",
+          "description": "Allow debugging and profiling of"
+        },
+        {
+          "name": "--disable-lcd-text",
+          "short": null,
+          "value_name": null,
+          "description": "Disable LCD font rendering."
+        },
+        {
+          "name": "--disable-gpu",
+          "short": null,
+          "value_name": null,
+          "description": "Disable GPU hardware acceleration."
+        },
+        {
+          "name": "--disable-chromium-sandbox",
+          "short": null,
+          "value_name": null,
+          "description": "Use this option only when there is"
+        },
+        {
+          "name": "--telemetry",
+          "short": null,
+          "value_name": null,
+          "description": "Shows all telemetry events which VS"
+        },
+        {
+          "name": "--transient",
+          "short": null,
+          "value_name": null,
+          "description": "Run with temporary data and extension"
+        }
+      ],
+      "arguments": []
+    }
+  ],
+  "element_paths": [
+    "cmd",
+    "flag.root.category",
+    "flag.root.disable_chromium_sandbox",
+    "flag.root.disable_extension",
+    "flag.root.disable_extensions",
+    "flag.root.disable_gpu",
+    "flag.root.disable_lcd_text",
+    "flag.root.enable_proposed_api",
+    "flag.root.extensions_dir",
+    "flag.root.inspect_brk_extensions",
+    "flag.root.inspect_extensions",
+    "flag.root.install_extension",
+    "flag.root.list_extensions",
+    "flag.root.locale",
+    "flag.root.log",
+    "flag.root.pre_release",
+    "flag.root.prof_startup",
+    "flag.root.profile",
+    "flag.root.remove",
+    "flag.root.show_versions",
+    "flag.root.sync",
+    "flag.root.telemetry",
+    "flag.root.transient",
+    "flag.root.uninstall_extension",
+    "flag.root.update_extensions",
+    "flag.root.user_data_dir",
+    "flag.root.verbose"
+  ]
+}

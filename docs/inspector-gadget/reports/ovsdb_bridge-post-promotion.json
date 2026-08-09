@@ -1,0 +1,2022 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "ovsdb_bridge.rs",
+  "plugin": {
+    "name": "ovsdb_bridge",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "OvsBridgeState",
+    "fields": {
+      "bridges": {
+        "rust_type": "Vec<BridgeConfig>",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "array"
+      },
+      "inspector_fields": {
+        "rust_type": "inspector_gadget_generated::InspectorGadgetFields",
+        "description": "Full source-owned OVSDB table/column surface discovered from the authoritative Open vSwitch schemas. Nested to preserve the existing Bridge/Port/Interface contract while making the rest UI-selectable.",
+        "has_serde_default": true,
+        "optional": false
+      }
+    },
+    "nested_types": {
+      "AddPortInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "interface": {
+          "rust_type": "Option<String>",
+          "description": "Interface name",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "port": {
+          "rust_type": "String",
+          "description": "Port name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "tag": {
+          "rust_type": "Option<i32>",
+          "description": "VLAN tag (optional)",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "integer"
+        }
+      },
+      "BridgeConfig": {
+        "datapath_type": {
+          "rust_type": "String",
+          "description": "\"system\" | \"netdev\" | \"\" (kernel datapath)",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "fail_mode": {
+          "rust_type": "Option<String>",
+          "description": "\"standalone\" | \"secure\" | null",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "mcast_snooping_enable": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "other_config": {
+          "rust_type": "std::collections::HashMap<String, String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false
+        },
+        "ports": {
+          "rust_type": "Vec<PortConfig>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "stp_enable": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        }
+      },
+      "CancelInput": {
+        "id": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "CreateBridgeInput": {
+        "datapath_type": {
+          "rust_type": "Option<String>",
+          "description": "Datapath type (e.g., \"system\", \"internal\")",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "fail_mode": {
+          "rust_type": "Option<String>",
+          "description": "Fail mode (secure or standalone)",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "stp_enable": {
+          "rust_type": "Option<bool>",
+          "description": "Enable STP",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "boolean"
+        }
+      },
+      "DeleteBridgeInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "Bridge name to delete",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "EchoInput": {
+        "params": {
+          "rust_type": "Vec<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "GetSchemaInput": {
+        "db_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "InterfaceConfig": {
+        "admin_state": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "iface_type": {
+          "rust_type": "String",
+          "description": "\"system\" | \"internal\" | \"patch\" | \"vxlan\" | \"gre\" | \"geneve\" | \"\"",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "string"
+        },
+        "link_state": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "mac": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "mac_in_use": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "options": {
+          "rust_type": "std::collections::HashMap<String, String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false
+        }
+      },
+      "ListDbsInput": {},
+      "LockInput": {
+        "lock_id": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "MonitorCondInput": {
+        "db_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "monitor_cond_requests": {
+          "rust_type": "std::collections::HashMap<String, serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "monitor_id": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "MonitorInput": {
+        "db_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "monitor_id": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "monitor_requests": {
+          "rust_type": "std::collections::HashMap<String, serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "PortConfig": {
+        "bond_mode": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "interfaces": {
+          "rust_type": "Vec<InterfaceConfig>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "tag": {
+          "rust_type": "Option<u16>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "trunks": {
+          "rust_type": "Vec<u16>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "vlan_mode": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        }
+      },
+      "RemovePortInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "port": {
+          "rust_type": "String",
+          "description": "Port name to remove",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "StealInput": {
+        "lock_id": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "TransactInput": {
+        "db_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "operations": {
+          "rust_type": "Vec<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "UnlockInput": {
+        "lock_id": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 49,
+    "warn": 102,
+    "hint": 27,
+    "findings": [
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: obs.network.ovsdb.monitor_cond@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListDbsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListDbsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetSchemaInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetSchemaInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetSchemaInput.db_name",
+        "message": "field `db_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetSchemaInput.db_name",
+        "message": "field `db_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetSchemaInput.db_name",
+        "message": "consider #[serde(default)] on `db_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct TransactInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct TransactInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "TransactInput.db_name",
+        "message": "field `db_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "TransactInput.db_name",
+        "message": "field `db_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "TransactInput.db_name",
+        "message": "consider #[serde(default)] on `db_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "TransactInput.operations",
+        "message": "field `operations` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "TransactInput.operations",
+        "message": "field `operations` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "TransactInput.operations",
+        "message": "consider #[serde(default)] on `operations` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct MonitorInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct MonitorInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MonitorInput.db_name",
+        "message": "field `db_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MonitorInput.db_name",
+        "message": "field `db_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MonitorInput.db_name",
+        "message": "consider #[serde(default)] on `db_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MonitorInput.monitor_id",
+        "message": "field `monitor_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MonitorInput.monitor_id",
+        "message": "field `monitor_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MonitorInput.monitor_id",
+        "message": "consider #[serde(default)] on `monitor_id` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MonitorInput.monitor_requests",
+        "message": "field `monitor_requests` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MonitorInput.monitor_requests",
+        "message": "field `monitor_requests` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MonitorInput.monitor_requests",
+        "message": "consider #[serde(default)] on `monitor_requests` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct MonitorCondInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct MonitorCondInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MonitorCondInput.db_name",
+        "message": "field `db_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MonitorCondInput.db_name",
+        "message": "field `db_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MonitorCondInput.db_name",
+        "message": "consider #[serde(default)] on `db_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MonitorCondInput.monitor_id",
+        "message": "field `monitor_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MonitorCondInput.monitor_id",
+        "message": "field `monitor_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MonitorCondInput.monitor_id",
+        "message": "consider #[serde(default)] on `monitor_id` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MonitorCondInput.monitor_cond_requests",
+        "message": "field `monitor_cond_requests` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MonitorCondInput.monitor_cond_requests",
+        "message": "field `monitor_cond_requests` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MonitorCondInput.monitor_cond_requests",
+        "message": "consider #[serde(default)] on `monitor_cond_requests` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct LockInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct LockInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "LockInput.lock_id",
+        "message": "field `lock_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "LockInput.lock_id",
+        "message": "field `lock_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "LockInput.lock_id",
+        "message": "consider #[serde(default)] on `lock_id` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct StealInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct StealInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "StealInput.lock_id",
+        "message": "field `lock_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "StealInput.lock_id",
+        "message": "field `lock_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "StealInput.lock_id",
+        "message": "consider #[serde(default)] on `lock_id` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct UnlockInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct UnlockInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "UnlockInput.lock_id",
+        "message": "field `lock_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "UnlockInput.lock_id",
+        "message": "field `lock_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "UnlockInput.lock_id",
+        "message": "consider #[serde(default)] on `lock_id` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct EchoInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct EchoInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EchoInput.params",
+        "message": "field `params` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "EchoInput.params",
+        "message": "field `params` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EchoInput.params",
+        "message": "consider #[serde(default)] on `params` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CancelInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CancelInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CancelInput.id",
+        "message": "field `id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CancelInput.id",
+        "message": "field `id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CancelInput.id",
+        "message": "consider #[serde(default)] on `id` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CreateBridgeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateBridgeInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateBridgeInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateBridgeInput.datapath_type",
+        "message": "field `datapath_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateBridgeInput.fail_mode",
+        "message": "field `fail_mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateBridgeInput.stp_enable",
+        "message": "field `stp_enable` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeleteBridgeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteBridgeInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteBridgeInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddPortInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPortInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.port",
+        "message": "field `port` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddPortInput.port",
+        "message": "consider #[serde(default)] on `port` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddPortInput.tag",
+        "message": "field `tag` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct RemovePortInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RemovePortInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RemovePortInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RemovePortInput.port",
+        "message": "field `port` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RemovePortInput.port",
+        "message": "consider #[serde(default)] on `port` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct OvsBridgeState",
+        "message": "state struct missing #[schemars(extend(\"x-oscal-subid\" = \"sch.…@v1\"))]",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OvsBridgeState.bridges",
+        "message": "field `bridges` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "OvsBridgeState.bridges",
+        "message": "field `bridges` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "OvsBridgeState.bridges",
+        "message": "consider #[serde(default)] on `bridges` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OvsBridgeState.inspector_fields",
+        "message": "field `inspector_fields` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct BridgeConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BridgeConfig.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "BridgeConfig.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.ports",
+        "message": "field `ports` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BridgeConfig.ports",
+        "message": "field `ports` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.datapath_type",
+        "message": "field `datapath_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.fail_mode",
+        "message": "field `fail_mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.stp_enable",
+        "message": "field `stp_enable` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BridgeConfig.stp_enable",
+        "message": "field `stp_enable` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.mcast_snooping_enable",
+        "message": "field `mcast_snooping_enable` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BridgeConfig.mcast_snooping_enable",
+        "message": "field `mcast_snooping_enable` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeConfig.other_config",
+        "message": "field `other_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BridgeConfig.other_config",
+        "message": "field `other_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PortConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PortConfig.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PortConfig.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "PortConfig.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PortConfig.interfaces",
+        "message": "field `interfaces` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PortConfig.interfaces",
+        "message": "field `interfaces` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PortConfig.tag",
+        "message": "field `tag` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PortConfig.tag",
+        "message": "field `tag` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PortConfig.trunks",
+        "message": "field `trunks` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PortConfig.trunks",
+        "message": "field `trunks` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PortConfig.vlan_mode",
+        "message": "field `vlan_mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PortConfig.vlan_mode",
+        "message": "field `vlan_mode` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "PortConfig.bond_mode",
+        "message": "field `bond_mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "PortConfig.bond_mode",
+        "message": "field `bond_mode` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct InterfaceConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "InterfaceConfig.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "InterfaceConfig.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.iface_type",
+        "message": "field `iface_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.mac_in_use",
+        "message": "field `mac_in_use` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "InterfaceConfig.mac_in_use",
+        "message": "field `mac_in_use` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.mac",
+        "message": "field `mac` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "InterfaceConfig.mac",
+        "message": "field `mac` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.admin_state",
+        "message": "field `admin_state` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "InterfaceConfig.admin_state",
+        "message": "field `admin_state` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.link_state",
+        "message": "field `link_state` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "InterfaceConfig.link_state",
+        "message": "field `link_state` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.options",
+        "message": "field `options` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "InterfaceConfig.options",
+        "message": "field `options` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/ovs.xml version=repomix nodes=0 elements=341 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=26 introspected=341 missing_in_plugin=341 extra_in_plugin=26",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.cid",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.cid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.connected",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.connected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.index",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.index` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.leader",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.leader` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.model",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.model` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.name",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.schema",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.schema` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.sid",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.sid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Config",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Config` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Config.field.connections",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Config.field.connections` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.other_config",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.other_config` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.read_only",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.read_only` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.role",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.role` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.status",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.status` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.target",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.target` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_type",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.fail_mode",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.fail_mode` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mcast_snooping_enable",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.mcast_snooping_enable` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.name",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 301 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/ovs.xml",
+    "files_by_kind": {
+      "json": 4
+    },
+    "by_kind": {
+      "json": 341
+    },
+    "element_path_count": 341,
+    "gaps": {
+      "surface_paths_total": 341,
+      "signal_paths_considered": 341,
+      "covered_approx": 48,
+      "missing_from_plugin": 293,
+      "missing_cli_commands": [],
+      "missing_config_fields": [
+        "json.ovsdb._server.ovsschema.table.Database.field.cid",
+        "json.ovsdb._server.ovsschema.table.Database.field.connected",
+        "json.ovsdb._server.ovsschema.table.Database.field.index",
+        "json.ovsdb._server.ovsschema.table.Database.field.leader",
+        "json.ovsdb._server.ovsschema.table.Database.field.model",
+        "json.ovsdb._server.ovsschema.table.Database.field.schema",
+        "json.ovsdb._server.ovsschema.table.Database.field.sid",
+        "json.ovsdb.local-config.ovsschema.table.Config.field.connections",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.read_only",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.role",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.status",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.target",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.protocols",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.rstp_enable",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.rstp_status",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.sflow",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Timeout_Policy.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Timeout_Policy.field.timeouts",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone.field.limit",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone.field.timeout_policy",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.connection_mode",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.controller_burst_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.controller_queue_size",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.controller_rate_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.enable_async_messages",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.inactivity_probe",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.is_connected",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.local_gateway",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.local_ip",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.local_netmask",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.max_backoff",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.role",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.target",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.type",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.capabilities",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.ct_zone_default_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.ct_zones",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.datapath_version",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.bridge",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.id",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.ipfix",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.local_group_id",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.flow_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.groups",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.overflow_policy",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.prefixes",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.cache_active_timeout",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.cache_max_flows",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.obs_domain_id",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.obs_point_id",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.sampling",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.stats_interval",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.targets",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.template_interval",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.bfd",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.bfd_status",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_fault",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_fault_status",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_flap_count",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_health",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_mpid",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_remote_mpids",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_remote_opstate",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.duplex",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.error",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ifindex",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_burst",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_kpkts_burst",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_kpkts_rate",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_rate",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.lacp_current",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.link_resets",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.link_speed",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.lldp",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.mtu",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.mtu_request",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ofport",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ofport_request",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.type",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.connection_mode",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.inactivity_probe",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.is_connected",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.max_backoff",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.target",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.filter",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.output_port",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.output_vlan",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_all",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_dst_port",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_src_port",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_vlan",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.snaplen",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.active_timeout",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.add_id_to_interface",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.engine_id",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.engine_type",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.targets",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.cur_cfg",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.datapath_types",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.datapaths",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.db_version",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.dpdk_initialized",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.dpdk_version",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.iface_types",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.manager_options",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.next_cfg",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.ovs_version",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.ssl",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.system_type",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.system_version",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_active_slave",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_downdelay",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_fake_iface",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_updelay",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.cvlans",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.fake_bridge",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.lacp",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.protected",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.qos",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.rstp_statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.rstp_status",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.QoS.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.QoS.field.queues",
+        "json.vswitchd.vswitch.ovsschema.table.QoS.field.type",
+        "json.vswitchd.vswitch.ovsschema.table.Queue.field.dscp",
+        "json.vswitchd.vswitch.ovsschema.table.Queue.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.bootstrap_ca_cert",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.ca_cert",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.certificate",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.private_key",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.agent",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.header",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.polling",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.sampling",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.targets",
+        "json.vtep.vtep.ovsschema.table.ACL.field.acl_entries",
+        "json.vtep.vtep.ovsschema.table.ACL.field.acl_fault_status",
+        "json.vtep.vtep.ovsschema.table.ACL.field.acl_name",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.acle_fault_status",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.action",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_ip",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_mac",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_mask",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_port_max",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_port_min",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.direction",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.ethertype",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.icmp_code",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.icmp_type",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.protocol",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.sequence",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_ip",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_mac",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_mask",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_port_max",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_port_min",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.tcp_flags",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.tcp_flags_mask",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Local.field.locator",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Local.field.src_mac",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Remote.field.locator",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Remote.field.src_mac",
+        "json.vtep.vtep.ovsschema.table.Global.field.managers",
+        "json.vtep.vtep.ovsschema.table.Global.field.switches",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.bytes_from_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.bytes_to_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.packets_from_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.packets_to_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.LR_fault_status",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.acl_binding",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.description",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.static_routes",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.switch_binding",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch.field.description",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch.field.replication_mode",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch.field.tunnel_key",
+        "json.vtep.vtep.ovsschema.table.Manager.field.inactivity_probe",
+        "json.vtep.vtep.ovsschema.table.Manager.field.is_connected",
+        "json.vtep.vtep.ovsschema.table.Manager.field.max_backoff",
+        "json.vtep.vtep.ovsschema.table.Manager.field.status",
+        "json.vtep.vtep.ovsschema.table.Manager.field.target",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local.field.locator_set",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local.field.logical_switch",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote.field.locator_set",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote.field.logical_switch",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator.field.dst_ip",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator.field.encapsulation_type",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator.field.tunnel_key",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator_Set.field.locators",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.acl_bindings",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.description",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.port_fault_status",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.vlan_bindings",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.vlan_stats",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.description",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.management_ips",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.switch_fault_status",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.tunnel_ips",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.tunnels",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_config_local",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_config_remote",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_params",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_status",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.local",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.remote",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local.field.locator",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local.field.logical_switch",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote.field.locator",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote.field.logical_switch"
+      ],
+      "missing_by_group": {
+        "ovsdb_schema": 293
+      },
+      "delegated_paths": [],
+      "missing_paths_sample": [
+        "json.ovsdb._server.ovsschema.table.Database",
+        "json.ovsdb._server.ovsschema.table.Database.field.cid",
+        "json.ovsdb._server.ovsschema.table.Database.field.connected",
+        "json.ovsdb._server.ovsschema.table.Database.field.index",
+        "json.ovsdb._server.ovsschema.table.Database.field.leader",
+        "json.ovsdb._server.ovsschema.table.Database.field.model",
+        "json.ovsdb._server.ovsschema.table.Database.field.schema",
+        "json.ovsdb._server.ovsschema.table.Database.field.sid",
+        "json.ovsdb.local-config.ovsschema.table.Config",
+        "json.ovsdb.local-config.ovsschema.table.Config.field.connections",
+        "json.ovsdb.local-config.ovsschema.table.Connection",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.read_only",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.role",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.status",
+        "json.ovsdb.local-config.ovsschema.table.Connection.field.target",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description",
+        "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.protocols",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.rstp_enable",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.rstp_status",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.sflow",
+        "json.vswitchd.vswitch.ovsschema.table.Bridge.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Timeout_Policy",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Timeout_Policy.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Timeout_Policy.field.timeouts",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone.field.limit",
+        "json.vswitchd.vswitch.ovsschema.table.CT_Zone.field.timeout_policy",
+        "json.vswitchd.vswitch.ovsschema.table.Controller",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.connection_mode",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.controller_burst_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.controller_queue_size",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.controller_rate_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.enable_async_messages",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.inactivity_probe",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.is_connected",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.local_gateway",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.local_ip",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.local_netmask",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.max_backoff",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.role",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.target",
+        "json.vswitchd.vswitch.ovsschema.table.Controller.field.type",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.capabilities",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.ct_zone_default_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.ct_zones",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.datapath_version",
+        "json.vswitchd.vswitch.ovsschema.table.Datapath.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.bridge",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.id",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.ipfix",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Sample_Collector_Set.field.local_group_id",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.flow_limit",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.groups",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.overflow_policy",
+        "json.vswitchd.vswitch.ovsschema.table.Flow_Table.field.prefixes",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.cache_active_timeout",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.cache_max_flows",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.obs_domain_id",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.obs_point_id",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.sampling",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.stats_interval",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.targets",
+        "json.vswitchd.vswitch.ovsschema.table.IPFIX.field.template_interval",
+        "json.vswitchd.vswitch.ovsschema.table.Interface",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.bfd",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.bfd_status",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_fault",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_fault_status",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_flap_count",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_health",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_mpid",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_remote_mpids",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.cfm_remote_opstate",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.duplex",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.error",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ifindex",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_burst",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_kpkts_burst",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_kpkts_rate",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ingress_policing_rate",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.lacp_current",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.link_resets",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.link_speed",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.lldp",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.mtu",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.mtu_request",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ofport",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.ofport_request",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.Interface.field.type",
+        "json.vswitchd.vswitch.ovsschema.table.Manager",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.connection_mode",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.inactivity_probe",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.is_connected",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.max_backoff",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.Manager.field.target",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.filter",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.output_port",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.output_vlan",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_all",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_dst_port",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_src_port",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.select_vlan",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.snaplen",
+        "json.vswitchd.vswitch.ovsschema.table.Mirror.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.active_timeout",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.add_id_to_interface",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.engine_id",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.engine_type",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.NetFlow.field.targets",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.cur_cfg",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.datapath_types",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.datapaths",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.db_version",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.dpdk_initialized",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.dpdk_version",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.iface_types",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.manager_options",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.next_cfg",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.ovs_version",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.ssl",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.system_type",
+        "json.vswitchd.vswitch.ovsschema.table.Open_vSwitch.field.system_version",
+        "json.vswitchd.vswitch.ovsschema.table.Port",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_active_slave",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_downdelay",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_fake_iface",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.bond_updelay",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.cvlans",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.fake_bridge",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.lacp",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.protected",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.qos",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.rstp_statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.rstp_status",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.statistics",
+        "json.vswitchd.vswitch.ovsschema.table.Port.field.status",
+        "json.vswitchd.vswitch.ovsschema.table.QoS",
+        "json.vswitchd.vswitch.ovsschema.table.QoS.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.QoS.field.queues",
+        "json.vswitchd.vswitch.ovsschema.table.QoS.field.type",
+        "json.vswitchd.vswitch.ovsschema.table.Queue",
+        "json.vswitchd.vswitch.ovsschema.table.Queue.field.dscp",
+        "json.vswitchd.vswitch.ovsschema.table.Queue.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.SSL",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.bootstrap_ca_cert",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.ca_cert",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.certificate",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.SSL.field.private_key",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.agent",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.external_ids",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.header",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.polling",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.sampling",
+        "json.vswitchd.vswitch.ovsschema.table.sFlow.field.targets",
+        "json.vtep.vtep.ovsschema.table.ACL",
+        "json.vtep.vtep.ovsschema.table.ACL.field.acl_entries",
+        "json.vtep.vtep.ovsschema.table.ACL.field.acl_fault_status",
+        "json.vtep.vtep.ovsschema.table.ACL.field.acl_name",
+        "json.vtep.vtep.ovsschema.table.ACL_entry",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.acle_fault_status",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.action",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_ip",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_mac",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_mask",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_port_max",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.dest_port_min",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.direction",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.ethertype",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.icmp_code",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.icmp_type",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.protocol",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.sequence",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_ip",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_mac",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_mask",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_port_max",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.source_port_min",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.tcp_flags",
+        "json.vtep.vtep.ovsschema.table.ACL_entry.field.tcp_flags_mask",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Local",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Local.field.locator",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Local.field.src_mac",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Remote",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Remote.field.locator",
+        "json.vtep.vtep.ovsschema.table.Arp_Sources_Remote.field.src_mac",
+        "json.vtep.vtep.ovsschema.table.Global",
+        "json.vtep.vtep.ovsschema.table.Global.field.managers",
+        "json.vtep.vtep.ovsschema.table.Global.field.switches",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.bytes_from_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.bytes_to_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.packets_from_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Binding_Stats.field.packets_to_local",
+        "json.vtep.vtep.ovsschema.table.Logical_Router",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.LR_fault_status",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.acl_binding",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.description",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.static_routes",
+        "json.vtep.vtep.ovsschema.table.Logical_Router.field.switch_binding",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch.field.description",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch.field.replication_mode",
+        "json.vtep.vtep.ovsschema.table.Logical_Switch.field.tunnel_key",
+        "json.vtep.vtep.ovsschema.table.Manager",
+        "json.vtep.vtep.ovsschema.table.Manager.field.inactivity_probe",
+        "json.vtep.vtep.ovsschema.table.Manager.field.is_connected",
+        "json.vtep.vtep.ovsschema.table.Manager.field.max_backoff",
+        "json.vtep.vtep.ovsschema.table.Manager.field.status",
+        "json.vtep.vtep.ovsschema.table.Manager.field.target",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local.field.locator_set",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Local.field.logical_switch",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote.field.locator_set",
+        "json.vtep.vtep.ovsschema.table.Mcast_Macs_Remote.field.logical_switch",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator.field.dst_ip",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator.field.encapsulation_type",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator.field.tunnel_key",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator_Set",
+        "json.vtep.vtep.ovsschema.table.Physical_Locator_Set.field.locators",
+        "json.vtep.vtep.ovsschema.table.Physical_Port",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.acl_bindings",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.description",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.port_fault_status",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.vlan_bindings",
+        "json.vtep.vtep.ovsschema.table.Physical_Port.field.vlan_stats",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.description",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.management_ips",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.switch_fault_status",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.tunnel_ips",
+        "json.vtep.vtep.ovsschema.table.Physical_Switch.field.tunnels",
+        "json.vtep.vtep.ovsschema.table.Tunnel",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_config_local",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_config_remote",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_params",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.bfd_status",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.local",
+        "json.vtep.vtep.ovsschema.table.Tunnel.field.remote",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local.field.locator",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Local.field.logical_switch",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote.field.ipaddr",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote.field.locator",
+        "json.vtep.vtep.ovsschema.table.Ucast_Macs_Remote.field.logical_switch"
+      ],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

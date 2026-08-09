@@ -1527,47 +1527,6 @@ pub(crate) fn openflow_schema() -> PluginSchema {
 
     // Add D-Bus methods for OpenFlow - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
     schema.methods.insert(
-        "add_flow".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            AddFlowInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "AddFlow",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "openflow.write",
-            "mut.network.openflow.flow.add@v1",
-        ),
-    );
-    schema.methods.insert(
-        "delete_flow".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            DeleteFlowInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "DeleteFlow",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "openflow.write",
-            "mut.network.openflow.flow.delete@v1",
-        ),
-    );
-    schema.methods.insert(
-        "modify_flow".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            ModifyFlowInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "ModifyFlow",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "openflow.write",
-            "mut.network.openflow.flow.modify@v1",
-        ),
-    );
-
-
-    schema.methods.insert(
         "ensure_fallback_normal".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             EnsureFallbackNormalInput,
@@ -1648,7 +1607,6 @@ pub(crate) fn openflow_schema() -> PluginSchema {
 
     schema
 }
-
 
 /// Input for EnsureFallbackNormal — cookied priority=0 actions=NORMAL.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1757,7 +1715,6 @@ pub struct ModifyFlowInput {
     pub priority: Option<u16>,
 }
 
-
 /// Dispatch an `openflow` schema method. Called from `op-grpc-bridge`'s
 /// `MutationEngine::dispatch_method_call`. JSON args validated against
 /// MethodDecl Input schemas before this runs.
@@ -1773,20 +1730,20 @@ pub async fn dispatch_openflow_method(
             Ok(serde_json::json!({ "success": true }))
         }
         "set_fail_mode" => {
-            let input: SetFailModeInput = serde_json::from_value(args.clone())
-                .context("invalid SetFailMode arguments")?;
+            let input: SetFailModeInput =
+                serde_json::from_value(args.clone()).context("invalid SetFailMode arguments")?;
             op_network::set_fail_mode(&input.bridge, &input.mode).await?;
             Ok(serde_json::json!({ "success": true }))
         }
         "del_controller" => {
-            let input: DelControllerInput = serde_json::from_value(args.clone())
-                .context("invalid DelController arguments")?;
+            let input: DelControllerInput =
+                serde_json::from_value(args.clone()).context("invalid DelController arguments")?;
             op_network::del_controller(&input.bridge).await?;
             Ok(serde_json::json!({ "success": true }))
         }
         "set_controller" => {
-            let input: SetControllerInput = serde_json::from_value(args.clone())
-                .context("invalid SetController arguments")?;
+            let input: SetControllerInput =
+                serde_json::from_value(args.clone()).context("invalid SetController arguments")?;
             op_network::set_controller(&input.bridge, &input.endpoint).await?;
             Ok(serde_json::json!({ "success": true }))
         }
@@ -1820,10 +1777,6 @@ pub async fn dispatch_openflow_method(
                 disable_in_band: h.disable_in_band,
             })?)
         }
-        "add_flow" | "delete_flow" | "modify_flow" => Err(anyhow!(
-            "openflow.{} is declared for schema/Call validation; use StatePlugin apply or SendFlow on org.opdbus.v1.plugins.openflow",
-            method
-        )),
         other => Err(anyhow!("unknown openflow method: {}", other)),
     }
 }

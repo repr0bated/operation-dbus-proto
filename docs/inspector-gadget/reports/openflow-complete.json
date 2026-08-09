@@ -1,0 +1,1499 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "openflow.rs",
+  "plugin": {
+    "name": "openflow",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "AddFlowInput",
+    "fields": {
+      "actions": {
+        "rust_type": "Vec<FlowAction>",
+        "description": "Actions to apply",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "array"
+      },
+      "bridge": {
+        "rust_type": "String",
+        "description": "Bridge name",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "cookie": {
+        "rust_type": "Option<u64>",
+        "description": "Cookie value for flow",
+        "has_serde_default": false,
+        "optional": true,
+        "json_type": "integer"
+      },
+      "hard_timeout": {
+        "rust_type": "Option<u32>",
+        "description": "Hard timeout in seconds (0 = never expires)",
+        "has_serde_default": false,
+        "optional": true,
+        "json_type": "integer"
+      },
+      "idle_timeout": {
+        "rust_type": "Option<u32>",
+        "description": "Idle timeout in seconds (0 = never expires)",
+        "has_serde_default": false,
+        "optional": true,
+        "json_type": "integer"
+      },
+      "match_fields": {
+        "rust_type": "HashMap<String, String>",
+        "description": "Match fields (in_port, ip, nw_src, nw_dst, etc.)",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "object"
+      },
+      "priority": {
+        "rust_type": "u16",
+        "description": "Flow priority",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "integer"
+      },
+      "table": {
+        "rust_type": "u8",
+        "description": "Flow table ID",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "integer"
+      }
+    },
+    "nested_types": {
+      "AttachControllerSafeInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "endpoint": {
+          "rust_type": "String",
+          "description": "Controller endpoint, e.g. `tcp:10.200.0.1:6653`",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "BridgeFlowConfig": {
+        "flows": {
+          "rust_type": "Vec<FlowEntry>",
+          "description": "OpenFlow flows for this bridge",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Bridge name (e.g., \"ovsbr0\")",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "socket_ports": {
+          "rust_type": "Option<Vec<SocketPort>>",
+          "description": "Container socket ports (internal OVS ports for containerless networking)",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "array"
+        }
+      },
+      "DatapathHealthOutput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "connection_mode": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "controllers": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "disable_in_band": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "fail_mode": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "fallback_cookie": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "fallback_normal": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "fallback_priority": {
+          "rust_type": "u16",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        }
+      },
+      "DelControllerInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeleteFlowInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "match_fields": {
+          "rust_type": "HashMap<String, String>",
+          "description": "Match fields to identify flow (empty = delete all)",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "object"
+        }
+      },
+      "EnsureFallbackNormalInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name (e.g. ovsbr0)",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "FlowEntry": {
+        "actions": {
+          "rust_type": "Vec<FlowAction>",
+          "description": "Actions to perform",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "cookie": {
+          "rust_type": "Option<u64>",
+          "description": "Cookie for flow identification",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "hard_timeout": {
+          "rust_type": "u16",
+          "description": "Hard timeout in seconds (0 = permanent)",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "idle_timeout": {
+          "rust_type": "u16",
+          "description": "Idle timeout in seconds (0 = permanent)",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "match_fields": {
+          "rust_type": "HashMap<String, String>",
+          "description": "Match criteria (OpenFlow match fields)",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "object"
+        },
+        "priority": {
+          "rust_type": "u16",
+          "description": "Flow priority (0-65535, higher = more specific)",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "table": {
+          "rust_type": "u8",
+          "description": "Flow table number (0-254)",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        }
+      },
+      "GetDatapathHealthInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ModifyFlowInput": {
+        "actions": {
+          "rust_type": "Vec<FlowAction>",
+          "description": "New actions to apply",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "match_fields": {
+          "rust_type": "HashMap<String, String>",
+          "description": "Match fields to identify flow",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "object"
+        },
+        "priority": {
+          "rust_type": "Option<u16>",
+          "description": "Update priority",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "integer"
+        }
+      },
+      "OpenFlowConfig": {
+        "auto_discover_containers": {
+          "rust_type": "bool",
+          "description": "Legacy discovery toggle retained for compatibility.",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "bridges": {
+          "rust_type": "Vec<BridgeFlowConfig>",
+          "description": "Bridges managed by this controller",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "controller_endpoint": {
+          "rust_type": "Option<String>",
+          "description": "Controller endpoint (tcp:IP:PORT)",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "enable_security_flows": {
+          "rust_type": "bool",
+          "description": "Enable security hardening flows (default: true)",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "obfuscation_level": {
+          "rust_type": "u8",
+          "description": "Traffic obfuscation level for privacy (0=none, 1=basic, 2=pattern-hiding, 3=advanced) Level 1: Basic security (drop invalid, rate limit) Level 2: Pattern hiding (timing randomization, packet padding, TTL rewriting) Level 3: Advanced obfuscation (traffic morphing, protocol mimicry, decoy traffic)",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "integer"
+        }
+      },
+      "SetControllerInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "endpoint": {
+          "rust_type": "String",
+          "description": "Controller endpoint, e.g. `tcp:10.200.0.1:6653`",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SetFailModeInput": {
+        "bridge": {
+          "rust_type": "String",
+          "description": "Bridge name",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "mode": {
+          "rust_type": "String",
+          "description": "`standalone` or `secure`",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SocketPort": {
+        "name": {
+          "rust_type": "String",
+          "description": "Port name: - Privacy: \"gbr_wg\", \"gbr_xray\", \"gbr_warp\" (predefined GhostBridge chain) - SharedIngress: \"{bridge}-sock\" (shared gRPC bridge ingress)",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "ofport": {
+          "rust_type": "Option<u16>",
+          "description": "OVS port number (assigned by OVS)",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "port_type": {
+          "rust_type": "SocketPortType",
+          "description": "Port type",
+          "has_serde_default": false,
+          "optional": false
+        }
+      }
+    },
+    "methods": {
+      "AttachControllerSafe": {
+        "name": "AttachControllerSafe",
+        "input_type": "AttachControllerSafeInput",
+        "output_type": "DatapathHealthOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "openflow.write",
+        "subid": "mut.network.openflow.datapath.attach_controller_safe@v1",
+        "args": {
+          "properties": {
+            "bridge": {
+              "description": "Bridge name",
+              "type": "string"
+            },
+            "endpoint": {
+              "description": "Controller endpoint, e.g. `tcp:10.200.0.1:6653`",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bridge",
+            "endpoint"
+          ],
+          "title": "AttachControllerSafeInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "connection_mode": {
+              "type": "string"
+            },
+            "controllers": {
+              "type": "array"
+            },
+            "disable_in_band": {
+              "type": "boolean"
+            },
+            "fail_mode": {
+              "type": "string"
+            },
+            "fallback_cookie": {
+              "type": "string"
+            },
+            "fallback_normal": {
+              "type": "boolean"
+            },
+            "fallback_priority": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "bridge",
+            "connection_mode",
+            "controllers",
+            "disable_in_band",
+            "fail_mode",
+            "fallback_cookie",
+            "fallback_normal",
+            "fallback_priority"
+          ],
+          "title": "DatapathHealthOutput",
+          "type": "object"
+        }
+      },
+      "GetDatapathHealth": {
+        "name": "GetDatapathHealth",
+        "input_type": "GetDatapathHealthInput",
+        "output_type": "DatapathHealthOutput",
+        "side_effect": "read",
+        "idempotent": false,
+        "required_capability": "openflow.read",
+        "subid": "mut.network.openflow.datapath.get_health@v1",
+        "args": {
+          "properties": {
+            "bridge": {
+              "description": "Bridge name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "bridge"
+          ],
+          "title": "GetDatapathHealthInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "connection_mode": {
+              "type": "string"
+            },
+            "controllers": {
+              "type": "array"
+            },
+            "disable_in_band": {
+              "type": "boolean"
+            },
+            "fail_mode": {
+              "type": "string"
+            },
+            "fallback_cookie": {
+              "type": "string"
+            },
+            "fallback_normal": {
+              "type": "boolean"
+            },
+            "fallback_priority": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "bridge",
+            "connection_mode",
+            "controllers",
+            "disable_in_band",
+            "fail_mode",
+            "fallback_cookie",
+            "fallback_normal",
+            "fallback_priority"
+          ],
+          "title": "DatapathHealthOutput",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "audit": {
+    "ok": false,
+    "fail": 55,
+    "warn": 65,
+    "hint": 39,
+    "findings": [
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: mut.network.openflow.datapath.attach_controller_safe@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: mut.network.openflow.datapath.del_controller@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: mut.network.openflow.datapath.ensure_fallback_normal@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: mut.network.openflow.datapath.get_health@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: mut.network.openflow.datapath.set_controller@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: mut.network.openflow.datapath.set_fail_mode@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct OpenFlowConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OpenFlowConfig.bridges",
+        "message": "field `bridges` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "OpenFlowConfig.bridges",
+        "message": "consider #[serde(default)] on `bridges` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OpenFlowConfig.controller_endpoint",
+        "message": "field `controller_endpoint` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OpenFlowConfig.auto_discover_containers",
+        "message": "field `auto_discover_containers` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OpenFlowConfig.enable_security_flows",
+        "message": "field `enable_security_flows` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "OpenFlowConfig.obfuscation_level",
+        "message": "field `obfuscation_level` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct BridgeFlowConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeFlowConfig.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "BridgeFlowConfig.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeFlowConfig.flows",
+        "message": "field `flows` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "BridgeFlowConfig.flows",
+        "message": "consider #[serde(default)] on `flows` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BridgeFlowConfig.socket_ports",
+        "message": "field `socket_ports` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct FlowEntry",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.table",
+        "message": "field `table` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "FlowEntry.table",
+        "message": "consider #[serde(default)] on `table` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.priority",
+        "message": "field `priority` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "FlowEntry.priority",
+        "message": "consider #[serde(default)] on `priority` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.match_fields",
+        "message": "field `match_fields` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "FlowEntry.match_fields",
+        "message": "consider #[serde(default)] on `match_fields` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.actions",
+        "message": "field `actions` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "FlowEntry.actions",
+        "message": "consider #[serde(default)] on `actions` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.cookie",
+        "message": "field `cookie` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.idle_timeout",
+        "message": "field `idle_timeout` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FlowEntry.hard_timeout",
+        "message": "field `hard_timeout` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SocketPort",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SocketPort.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SocketPort.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SocketPort.port_type",
+        "message": "field `port_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SocketPort.port_type",
+        "message": "consider #[serde(default)] on `port_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SocketPort.ofport",
+        "message": "field `ofport` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct EnsureFallbackNormalInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EnsureFallbackNormalInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EnsureFallbackNormalInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetFailModeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetFailModeInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetFailModeInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetFailModeInput.mode",
+        "message": "field `mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetFailModeInput.mode",
+        "message": "consider #[serde(default)] on `mode` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DelControllerInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DelControllerInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DelControllerInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetControllerInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetControllerInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetControllerInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetControllerInput.endpoint",
+        "message": "field `endpoint` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetControllerInput.endpoint",
+        "message": "consider #[serde(default)] on `endpoint` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetDatapathHealthInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetDatapathHealthInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetDatapathHealthInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DatapathHealthOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.bridge",
+        "message": "field `bridge` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.fail_mode",
+        "message": "field `fail_mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.fail_mode",
+        "message": "field `fail_mode` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.fail_mode",
+        "message": "consider #[serde(default)] on `fail_mode` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.controllers",
+        "message": "field `controllers` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.controllers",
+        "message": "field `controllers` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.controllers",
+        "message": "consider #[serde(default)] on `controllers` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.fallback_normal",
+        "message": "field `fallback_normal` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.fallback_normal",
+        "message": "field `fallback_normal` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.fallback_normal",
+        "message": "consider #[serde(default)] on `fallback_normal` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.fallback_priority",
+        "message": "field `fallback_priority` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.fallback_priority",
+        "message": "field `fallback_priority` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.fallback_priority",
+        "message": "consider #[serde(default)] on `fallback_priority` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.fallback_cookie",
+        "message": "field `fallback_cookie` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.fallback_cookie",
+        "message": "field `fallback_cookie` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.fallback_cookie",
+        "message": "consider #[serde(default)] on `fallback_cookie` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.connection_mode",
+        "message": "field `connection_mode` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.connection_mode",
+        "message": "field `connection_mode` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.connection_mode",
+        "message": "consider #[serde(default)] on `connection_mode` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DatapathHealthOutput.disable_in_band",
+        "message": "field `disable_in_band` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DatapathHealthOutput.disable_in_band",
+        "message": "field `disable_in_band` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DatapathHealthOutput.disable_in_band",
+        "message": "consider #[serde(default)] on `disable_in_band` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AttachControllerSafeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AttachControllerSafeInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AttachControllerSafeInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AttachControllerSafeInput.endpoint",
+        "message": "field `endpoint` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AttachControllerSafeInput.endpoint",
+        "message": "consider #[serde(default)] on `endpoint` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddFlowInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddFlowInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.table",
+        "message": "field `table` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddFlowInput.table",
+        "message": "consider #[serde(default)] on `table` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.priority",
+        "message": "field `priority` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddFlowInput.priority",
+        "message": "consider #[serde(default)] on `priority` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.match_fields",
+        "message": "field `match_fields` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddFlowInput.match_fields",
+        "message": "consider #[serde(default)] on `match_fields` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.actions",
+        "message": "field `actions` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddFlowInput.actions",
+        "message": "consider #[serde(default)] on `actions` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.cookie",
+        "message": "field `cookie` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.idle_timeout",
+        "message": "field `idle_timeout` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "AddFlowInput.hard_timeout",
+        "message": "field `hard_timeout` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeleteFlowInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteFlowInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteFlowInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteFlowInput.match_fields",
+        "message": "field `match_fields` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteFlowInput.match_fields",
+        "message": "consider #[serde(default)] on `match_fields` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ModifyFlowInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ModifyFlowInput.bridge",
+        "message": "field `bridge` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ModifyFlowInput.bridge",
+        "message": "consider #[serde(default)] on `bridge` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ModifyFlowInput.match_fields",
+        "message": "field `match_fields` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ModifyFlowInput.match_fields",
+        "message": "consider #[serde(default)] on `match_fields` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ModifyFlowInput.actions",
+        "message": "field `actions` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ModifyFlowInput.actions",
+        "message": "consider #[serde(default)] on `actions` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ModifyFlowInput.priority",
+        "message": "field `priority` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/ovs.xml version=repomix nodes=0 elements=341 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=162 introspected=341 missing_in_plugin=341 extra_in_plugin=162",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.cid",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.cid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.connected",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.connected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.index",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.index` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.leader",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.leader` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.model",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.model` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.name",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.schema",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.schema` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb._server.ovsschema.table.Database.field.sid",
+        "message": "external surface has `json.ovsdb._server.ovsschema.table.Database.field.sid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Config",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Config` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Config.field.connections",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Config.field.connections` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.external_ids` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.inactivity_probe` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.is_connected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.max_backoff` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.other_config",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.other_config` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.read_only",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.read_only` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.role",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.role` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.status",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.status` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.ovsdb.local-config.ovsschema.table.Connection.field.target",
+        "message": "external surface has `json.ovsdb.local-config.ovsschema.table.Connection.field.target` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.mappings` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_description` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.AutoAttach.field.system_name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.auto_attach` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.controller` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_type",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.datapath_version` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.external_ids` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.fail_mode",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.fail_mode` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.flood_vlans` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.flow_tables` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.ipfix` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mcast_snooping_enable",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.mcast_snooping_enable` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.mirrors` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.name",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow",
+        "message": "external surface has `json.vswitchd.vswitch.ovsschema.table.Bridge.field.netflow` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 301 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/ovs.xml",
+    "files_by_kind": {
+      "json": 4
+    },
+    "by_kind": {
+      "json": 341
+    },
+    "element_path_count": 341,
+    "gaps": {
+      "surface_paths_total": 341,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

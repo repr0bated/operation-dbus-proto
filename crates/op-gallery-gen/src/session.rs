@@ -77,10 +77,7 @@ pub enum ProgressEvent {
         plugin_count: usize,
     },
     /// Generation started.
-    GenerationStarted {
-        target: usize,
-        model: String,
-    },
+    GenerationStarted { target: usize, model: String },
     /// A spec was admitted to the gallery.
     Admitted {
         spec_id: String,
@@ -88,10 +85,7 @@ pub enum ProgressEvent {
         total: usize,
     },
     /// A spec was rejected (validation or dedup failure).
-    Rejected {
-        reason: String,
-        index: usize,
-    },
+    Rejected { reason: String, index: usize },
     /// Generation completed.
     Complete {
         generated: usize,
@@ -99,13 +93,9 @@ pub enum ProgressEvent {
         attempts: usize,
     },
     /// Generation was cancelled.
-    Cancelled {
-        generated: usize,
-    },
+    Cancelled { generated: usize },
     /// An error occurred.
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// Render the gallery-gen session UI as a json-render spec.

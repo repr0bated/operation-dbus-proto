@@ -44,13 +44,12 @@ use crate::proto::{
     GetSnapshotRequest, GetSnapshotResponse, GetStateRequest, GetStateResponse,
     ListPluginsResponse, MerkleProofSibling, MutateRequest, MutateResponse,
     MutationError as ProtoMutationError, NumaNode as ProtoNumaNode,
-    OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
-    OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
-    OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest, OvsdbGetDatapathHealthResponse,
-    OvsdbAttachControllerSafeRequest, OvsdbAttachControllerSafeResponse,
-    OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
-    OvsdbDelControllerRequest, OvsdbDelControllerResponse,
-    OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
+    OperationType as ProtoOperationType, OvsdbAttachControllerSafeRequest,
+    OvsdbAttachControllerSafeResponse, OvsdbBridge as ProtoOvsdbBridge, OvsdbDelControllerRequest,
+    OvsdbDelControllerResponse, OvsdbDumpDbRequest, OvsdbDumpDbResponse, OvsdbEchoRequest,
+    OvsdbEchoResponse, OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
+    OvsdbGetBridgeStateRequest, OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest,
+    OvsdbGetDatapathHealthResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
     OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse, OvsdbMonitorRequest,
     OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse, OvsdbUpdate,
     PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
@@ -95,10 +94,12 @@ fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
 fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
     use op_state::StatePlugin;
     let schema = match plugin_id {
-        "human_principal" => op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
-            .schema()?,
-        "identity_sled" => op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
-            .schema()?,
+        "human_principal" => {
+            op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new().schema()?
+        }
+        "identity_sled" => {
+            op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new().schema()?
+        }
         _ => return None,
     };
     serde_json::to_value(&schema).ok()
@@ -772,10 +773,7 @@ pub fn build_operation_routes_with_validator(
         PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        RegistrationServiceServer::with_interceptor(
-            server.clone(),
-            registration_intercept,
-        ),
+        RegistrationServiceServer::with_interceptor(server.clone(), registration_intercept),
     ))
     .add_service(crate::grpc_web::enable(
         DbusPassthroughServer::with_interceptor(server.clone(), intercept.clone()),

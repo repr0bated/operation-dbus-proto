@@ -1,0 +1,5766 @@
+<repomix><file_summary>This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+The content has been processed where content has been formatted for parsing in xml style, content has been compressed (code blocks are separated by ⋮---- delimiter).<purpose>This file contains a packed representation of a subset of the repository&apos;s contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.</purpose><file_format>The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file</file_format><usage_guidelines>- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.</usage_guidelines><notes>- Some files may have been excluded based on .gitignore rules and Repomix&apos;s configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: packages/core/src/**, packages/codegen/src/**, packages/mcp/src/**, packages/react/src/**
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Content has been formatted for parsing in xml style
+- Content has been compressed - code blocks are separated by ⋮---- delimiter
+- Files are sorted by Git change count (files with more changes are at the bottom)</notes></file_summary><directory_structure>packages/
+  codegen/
+    src/
+      index.ts
+      serialize.ts
+      traverse.test.ts
+      traverse.ts
+      types.ts
+  core/
+    src/
+      action-observer.test.ts
+      action-observer.ts
+      actions.test.ts
+      actions.ts
+      devtools-flag.test.ts
+      devtools-flag.ts
+      diff.ts
+      directives.test.ts
+      directives.ts
+      edit-modes.ts
+      env.d.ts
+      index.ts
+      merge.ts
+      prompt.ts
+      props.test.ts
+      props.ts
+      schema.test.ts
+      schema.ts
+      spec-validator.test.ts
+      spec-validator.ts
+      state-store.test.ts
+      state-store.ts
+      store-utils.ts
+      types.test.ts
+      types.ts
+      validation.test.ts
+      validation.ts
+      visibility.test.ts
+      visibility.ts
+  mcp/
+    src/
+      app.ts
+      build-app-html-entry.ts
+      build-app-html.ts
+      index.ts
+      server.ts
+      types.ts
+      use-json-render-app.ts
+  react/
+    src/
+      contexts/
+        actions.tsx
+        repeat-scope.tsx
+        state.test.tsx
+        state.tsx
+        validation.tsx
+        visibility.test.tsx
+        visibility.tsx
+      catalog-types.ts
+      chained-actions.test.tsx
+      devtools-integration.test.tsx
+      directives.test.tsx
+      dynamic-forms.test.tsx
+      hooks.test.ts
+      hooks.ts
+      index.ts
+      renderer.test.tsx
+      renderer.tsx
+      repeat-filter.test.tsx
+      schema.ts</directory_structure><files>This section contains the contents of the repository&apos;s files.<file path="packages/codegen/src/index.ts"></file><file path="packages/codegen/src/serialize.ts">/**
+ * Options for serialization
+ */
+export interface SerializeOptions {
+  /** Quote style for strings */
+  quotes?: &quot;single&quot; | &quot;double&quot;;
+  /** Indent for objects/arrays */
+  indent?: number;
+}
+⋮----
+/** Quote style for strings */
+⋮----
+/** Indent for objects/arrays */
+⋮----
+/**
+ * Escape a string for use in code
+ */
+export function escapeString(
+  str: string,
+  quotes: &quot;single&quot; | &quot;double&quot; = &quot;double&quot;,
+): string
+⋮----
+/**
+ * Serialize a single prop value to a code string
+ *
+ * @returns Object with `value` (the serialized string) and `needsBraces` (whether JSX needs {})
+ */
+export function serializePropValue(
+  value: unknown,
+  options: SerializeOptions = {},
+):
+⋮----
+return { value: &quot;true&quot;, needsBraces: false }; // Can use shorthand
+⋮----
+// Check for $state reference
+⋮----
+// Use shorthand if key matches value for simple identifiers
+⋮----
+/**
+ * Serialize props object to JSX attributes string
+ */
+export function serializeProps(
+  props: Record&lt;string, unknown&gt;,
+  options: SerializeOptions = {},
+): string
+⋮----
+// Boolean true can be shorthand</file><file path="packages/codegen/src/traverse.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import {
+  traverseSpec,
+  collectUsedComponents,
+  collectStatePaths,
+  collectActions,
+} from &quot;./traverse&quot;;
+import type { Spec } from &quot;@json-render/core&quot;;</file><file path="packages/codegen/src/traverse.ts">import type { Spec, UIElement } from &quot;@json-render/core&quot;;
+⋮----
+/**
+ * Visitor function for spec traversal
+ */
+export interface TreeVisitor {
+  (
+    element: UIElement,
+    key: string,
+    depth: number,
+    parent: UIElement | null,
+  ): void;
+}
+⋮----
+/**
+ * Traverse a UI spec depth-first
+ */
+export function traverseSpec(
+  spec: Spec,
+  visitor: TreeVisitor,
+  startKey?: string,
+): void
+⋮----
+function visit(key: string, depth: number, parent: UIElement | null): void
+⋮----
+/**
+ * Collect all unique component types used in a spec
+ */
+export function collectUsedComponents(spec: Spec): Set&lt;string&gt;
+⋮----
+/**
+ * Collect all state paths referenced in a spec
+ */
+export function collectStatePaths(spec: Spec): Set&lt;string&gt;
+⋮----
+// Check props for data paths
+⋮----
+// Check for path props (e.g., statePath, dataPath, bindPath)
+⋮----
+// Check for dynamic value objects with $state
+⋮----
+// Check visibility conditions for $state paths
+⋮----
+function collectPathFromItem(
+  item: Record&lt;string, unknown&gt;,
+  paths: Set&lt;string&gt;,
+): void
+⋮----
+// Also collect $state references in comparison values (eq, neq, etc.)
+⋮----
+function collectPathsFromCondition(
+  condition: unknown,
+  paths: Set&lt;string&gt;,
+): void
+⋮----
+// Array = implicit AND
+⋮----
+// $or: recurse into each child condition
+⋮----
+// Single StateCondition
+⋮----
+/**
+ * Collect all action names used in a spec
+ */
+export function collectActions(spec: Spec): Set&lt;string&gt;
+⋮----
+// Check for action prop (string action name)
+⋮----
+// Check for action objects
+⋮----
+// Also check direct action prop
+⋮----
+// Collect actions from on event bindings</file><file path="packages/codegen/src/types.ts">import type { Spec } from &quot;@json-render/core&quot;;
+⋮----
+/**
+ * Represents a generated file
+ */
+export interface GeneratedFile {
+  /** File path relative to project root */
+  path: string;
+  /** File contents */
+  content: string;
+}
+⋮----
+/** File path relative to project root */
+⋮----
+/** File contents */
+⋮----
+/**
+ * Interface for code generators
+ */
+export interface CodeGenerator {
+  /** Generate files from a UI spec */
+  generate(spec: Spec): GeneratedFile[];
+}
+⋮----
+/** Generate files from a UI spec */
+generate(spec: Spec): GeneratedFile[];</file><file path="packages/core/src/action-observer.test.ts">import { describe, expect, it, vi } from &quot;vitest&quot;;
+import {
+  nextActionDispatchId,
+  notifyActionDispatch,
+  notifyActionSettle,
+  registerActionObserver,
+} from &quot;./action-observer&quot;;</file><file path="packages/core/src/action-observer.ts">// =============================================================================
+// Action Observer Registry
+// =============================================================================
+//
+// Module-level pub/sub for action dispatches used by devtools (and any other
+// logging / telemetry consumer). Framework ActionProviders (React, Vue,
+// Svelte, Solid) call `notifyActionDispatch` / `notifyActionSettle` around
+// every dispatched action. Observers register via `registerActionObserver`
+// and receive events from every provider tree mounted in the page.
+//
+// Additive and non-breaking: consumers that never touch this API see no
+// behavioural change.
+// =============================================================================
+⋮----
+/**
+ * Emitted when an action begins executing. The same `id` will appear on a
+ * matching {@link ActionSettleInfo} emitted when the action resolves or throws.
+ */
+export interface ActionDispatchInfo {
+  /** Stable dispatch id; paired with the matching `onSettle`. */
+  id: string;
+  /** Resolved action name. */
+  name: string;
+  /** Resolved params, if any. */
+  params?: Record&lt;string, unknown&gt;;
+  /** Wall clock time (ms) at dispatch. */
+  at: number;
+}
+⋮----
+/** Stable dispatch id; paired with the matching `onSettle`. */
+⋮----
+/** Resolved action name. */
+⋮----
+/** Resolved params, if any. */
+⋮----
+/** Wall clock time (ms) at dispatch. */
+⋮----
+/**
+ * Emitted after an action has resolved or thrown.
+ */
+export interface ActionSettleInfo {
+  /** Matches the `id` of the corresponding `onDispatch`. */
+  id: string;
+  /** Resolved action name. */
+  name: string;
+  /** `true` if the handler resolved, `false` if it threw. */
+  ok: boolean;
+  /** Wall clock time (ms) at settle. */
+  at: number;
+  /** Elapsed time in milliseconds. */
+  durationMs: number;
+  /** Return value from the handler, if any. */
+  result?: unknown;
+  /** Error if the handler threw. */
+  error?: unknown;
+}
+⋮----
+/** Matches the `id` of the corresponding `onDispatch`. */
+⋮----
+/** Resolved action name. */
+⋮----
+/** `true` if the handler resolved, `false` if it threw. */
+⋮----
+/** Wall clock time (ms) at settle. */
+⋮----
+/** Elapsed time in milliseconds. */
+⋮----
+/** Return value from the handler, if any. */
+⋮----
+/** Error if the handler threw. */
+⋮----
+/**
+ * Observer for action lifecycle events. Either callback is optional.
+ */
+export interface ActionObserver {
+  onDispatch?: (evt: ActionDispatchInfo) =&gt; void;
+  onSettle?: (evt: ActionSettleInfo) =&gt; void;
+}
+⋮----
+/**
+ * Register an observer for action lifecycle events. Returns an unsubscribe
+ * function. Intended for devtools integrations; safe to call from any
+ * framework adapter.
+ *
+ * @example
+ * ```ts
+ * import { registerActionObserver } from &quot;@json-render/core&quot;;
+ * const unsub = registerActionObserver({
+ *   onDispatch: (evt) =&gt; console.log(&quot;fired&quot;, evt.name),
+ *   onSettle: (evt) =&gt; console.log(&quot;settled&quot;, evt.name, evt.durationMs),
+ * });
+ * ```
+ */
+export function registerActionObserver(observer: ActionObserver): () =&gt; void
+⋮----
+/**
+ * Emit a dispatch event to all registered observers. Called by framework
+ * ActionProviders at the start of every action execution.
+ *
+ * Wrapped in try/catch per-observer so a buggy observer cannot interrupt
+ * action execution.
+ */
+export function notifyActionDispatch(evt: ActionDispatchInfo): void
+⋮----
+/**
+ * Emit a settle event to all registered observers. Called by framework
+ * ActionProviders after every action resolves or throws.
+ */
+export function notifyActionSettle(evt: ActionSettleInfo): void
+⋮----
+// Counter-based id generator. Prefixed with timestamp so ids don&apos;t collide
+// across hot-reload boundaries in dev.
+⋮----
+export function nextActionDispatchId(): string</file><file path="packages/core/src/actions.test.ts">import { describe, it, expect, vi } from &quot;vitest&quot;;
+import {
+  resolveAction,
+  executeAction,
+  interpolateString,
+  actionBinding,
+  ActionOnSuccessSchema,
+  ActionOnErrorSchema,
+} from &quot;./actions&quot;;</file><file path="packages/core/src/actions.ts">import { z } from &quot;zod&quot;;
+import type { DynamicValue, StateModel } from &quot;./types&quot;;
+import { DynamicValueSchema, resolveDynamicValue } from &quot;./types&quot;;
+⋮----
+/**
+ * Confirmation dialog configuration
+ */
+export interface ActionConfirm {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: &quot;default&quot; | &quot;danger&quot;;
+}
+⋮----
+/**
+ * Action success handler
+ */
+export type ActionOnSuccess =
+  | { navigate: string }
+  | { set: Record&lt;string, unknown&gt; }
+  | { action: string; params?: Record&lt;string, DynamicValue&gt; };
+⋮----
+/**
+ * Action error handler
+ */
+export type ActionOnError =
+  | { set: Record&lt;string, unknown&gt; }
+  | { action: string; params?: Record&lt;string, DynamicValue&gt; };
+⋮----
+/**
+ * Action binding — maps an event to an action invocation.
+ *
+ * Used inside the `on` field of a UIElement:
+ * ```json
+ * { &quot;on&quot;: { &quot;press&quot;: { &quot;action&quot;: &quot;setState&quot;, &quot;params&quot;: { &quot;statePath&quot;: &quot;/x&quot;, &quot;value&quot;: 1 } } } }
+ * ```
+ */
+export interface ActionBinding {
+  /** Action name (must be in catalog) */
+  action: string;
+  /** Parameters to pass to the action handler */
+  params?: Record&lt;string, DynamicValue&gt;;
+  /** Confirmation dialog before execution */
+  confirm?: ActionConfirm;
+  /** Handler after successful execution */
+  onSuccess?: ActionOnSuccess;
+  /** Handler after failed execution */
+  onError?: ActionOnError;
+  /** Whether to prevent default browser behavior (e.g. navigation on links) */
+  preventDefault?: boolean;
+}
+⋮----
+/** Action name (must be in catalog) */
+⋮----
+/** Parameters to pass to the action handler */
+⋮----
+/** Confirmation dialog before execution */
+⋮----
+/** Handler after successful execution */
+⋮----
+/** Handler after failed execution */
+⋮----
+/** Whether to prevent default browser behavior (e.g. navigation on links) */
+⋮----
+/**
+ * @deprecated Use ActionBinding instead
+ */
+export type Action = ActionBinding;
+⋮----
+/**
+ * Schema for action confirmation
+ */
+⋮----
+/**
+ * Schema for success handlers
+ */
+⋮----
+/**
+ * Schema for error handlers
+ */
+⋮----
+/**
+ * Full action binding schema
+ */
+⋮----
+/**
+ * @deprecated Use ActionBindingSchema instead
+ */
+⋮----
+/**
+ * Action handler function signature
+ */
+export type ActionHandler&lt;
+  TParams = Record&lt;string, unknown&gt;,
+  TResult = unknown,
+&gt; = (params: TParams) =&gt; Promise&lt;TResult&gt; | TResult;
+⋮----
+/**
+ * Action definition in catalog
+ */
+export interface ActionDefinition&lt;TParams = Record&lt;string, unknown&gt;&gt; {
+  /** Zod schema for params validation */
+  params?: z.ZodType&lt;TParams&gt;;
+  /** Description for AI */
+  description?: string;
+}
+⋮----
+/** Zod schema for params validation */
+⋮----
+/** Description for AI */
+⋮----
+/**
+ * Resolved action with all dynamic values resolved
+ */
+export interface ResolvedAction {
+  action: string;
+  params: Record&lt;string, unknown&gt;;
+  confirm?: ActionConfirm;
+  onSuccess?: ActionOnSuccess;
+  onError?: ActionOnError;
+}
+⋮----
+/**
+ * Resolve all dynamic values in an action binding
+ */
+export function resolveAction(
+  binding: ActionBinding,
+  stateModel: StateModel,
+): ResolvedAction
+⋮----
+// Interpolate confirmation message if present
+⋮----
+/**
+ * Interpolate ${path} expressions in a string
+ */
+export function interpolateString(
+  template: string,
+  stateModel: StateModel,
+): string
+⋮----
+/**
+ * Context for action execution
+ */
+export interface ActionExecutionContext {
+  /** The resolved action */
+  action: ResolvedAction;
+  /** The action handler from the host */
+  handler: ActionHandler;
+  /** Function to update state model */
+  setState: (path: string, value: unknown) =&gt; void;
+  /** Function to navigate */
+  navigate?: (path: string) =&gt; void;
+  /** Function to execute another action */
+  executeAction?: (binding: ActionBinding) =&gt; Promise&lt;void&gt;;
+}
+⋮----
+/** The resolved action */
+⋮----
+/** The action handler from the host */
+⋮----
+/** Function to update state model */
+⋮----
+/** Function to navigate */
+⋮----
+/** Function to execute another action */
+⋮----
+/**
+ * Execute an action with all callbacks
+ */
+export async function executeAction(
+  ctx: ActionExecutionContext,
+): Promise&lt;void&gt;
+⋮----
+// Handle success
+⋮----
+// Handle error
+⋮----
+// Replace $error.message with actual error
+⋮----
+/**
+ * Helper to create action bindings
+ */
+⋮----
+/** Create a simple action binding */
+⋮----
+/** Create an action binding with confirmation */
+⋮----
+/** Create an action binding with success handler */
+⋮----
+/**
+ * @deprecated Use actionBinding instead
+ */</file><file path="packages/core/src/devtools-flag.test.ts">import { describe, expect, it, vi } from &quot;vitest&quot;;
+import {
+  isDevtoolsActive,
+  markDevtoolsActive,
+  subscribeDevtoolsActive,
+} from &quot;./devtools-flag&quot;;
+⋮----
+// Other tests may have flipped the counter; skip assertion if so.
+// The release returned by markDevtoolsActive tracks its own increment,
+// so this suite is self-contained when run with fresh module state.
+⋮----
+release(); // should not over-decrement
+// And a fresh mark still works correctly.</file><file path="packages/core/src/devtools-flag.ts">// =============================================================================
+// Devtools Active Flag
+// =============================================================================
+//
+// A tiny module-level counter that adapters increment while devtools is
+// mounted. Framework renderers read it to decide whether to add the
+// `data-jr-key` attribute that lets the picker map DOM nodes back to
+// spec element keys.
+//
+// Purely opt-in; when no devtools is mounted the counter stays at 0 and
+// renderers behave exactly as before.
+// =============================================================================
+⋮----
+/**
+ * Mark devtools as active. Returns a release function. Safe to call
+ * multiple times (nested counter).
+ *
+ * @example
+ * ```ts
+ * // In a devtools adapter:
+ * useEffect(() =&gt; markDevtoolsActive(), []);
+ * ```
+ */
+export function markDevtoolsActive(): () =&gt; void
+⋮----
+/**
+ * True when at least one devtools adapter is mounted in the page.
+ * Cheap to call; a plain integer comparison.
+ */
+export function isDevtoolsActive(): boolean
+⋮----
+/**
+ * Subscribe to changes in the devtools-active flag. Framework renderers
+ * that need to re-render on state change (e.g. React&apos;s `useSyncExternalStore`)
+ * subscribe here; most can just read `isDevtoolsActive()` on render.
+ */
+export function subscribeDevtoolsActive(listener: () =&gt; void): () =&gt; void
+⋮----
+function notifyDevtoolsActiveChange()</file><file path="packages/core/src/diff.ts">import type { JsonPatch } from &quot;./types&quot;;
+⋮----
+/**
+ * Escape a single JSON Pointer token per RFC 6901.
+ * `~` → `~0`, `/` → `~1`.
+ */
+function escapeToken(token: string): string
+⋮----
+function buildPath(basePath: string, key: string): string
+⋮----
+function isPlainObject(value: unknown): value is Record&lt;string, unknown&gt;
+⋮----
+/**
+ * Shallow equality for arrays — used to avoid emitting patches when the
+ * children list hasn&apos;t actually changed.
+ */
+function arraysEqual(a: unknown[], b: unknown[]): boolean
+⋮----
+/**
+ * Produce RFC 6902 JSON Patch operations that transform `oldObj` into `newObj`.
+ *
+ * - New keys → `add`
+ * - Changed scalar/array values → `replace`
+ * - Removed keys → `remove`
+ * - Arrays are compared shallowly and replaced atomically (not element-diffed)
+ * - Plain objects recurse
+ */
+export function diffToPatches(
+  oldObj: Record&lt;string, unknown&gt;,
+  newObj: Record&lt;string, unknown&gt;,
+  basePath = &quot;&quot;,
+): JsonPatch[]
+⋮----
+// Keys present in newObj
+⋮----
+// Both exist — compare
+⋮----
+// Keys removed from oldObj</file><file path="packages/core/src/directives.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import { z } from &quot;zod&quot;;
+import {
+  defineDirective,
+  createDirectiveRegistry,
+  findDirective,
+} from &quot;./directives&quot;;
+import { resolvePropValue } from &quot;./props&quot;;
+import type { PropResolutionContext } from &quot;./props&quot;;
+⋮----
+resolve(value, ctx)</file><file path="packages/core/src/directives.ts">import type { z } from &quot;zod&quot;;
+import type { PropResolutionContext } from &quot;./props&quot;;
+⋮----
+/**
+ * Definition for a custom directive — a user-defined `$`-prefixed dynamic
+ * value that extends the spec language.
+ *
+ * @example
+ * ```ts
+ * const formatDirective = defineDirective({
+ *   name: &apos;$format&apos;,
+ *   description: &apos;Locale-aware value formatting (date, currency, number, percent).&apos;,
+ *   schema: z.object({
+ *     $format: z.enum([&apos;date&apos;, &apos;currency&apos;, &apos;number&apos;]),
+ *     value: z.unknown(),
+ *   }),
+ *   resolve(value, ctx) {
+ *     const resolved = resolvePropValue(value.value, ctx);
+ *     return new Intl.NumberFormat().format(resolved);
+ *   },
+ * });
+ * ```
+ */
+export interface DirectiveDefinition&lt;TSchema extends z.ZodType = z.ZodType&gt; {
+  /** The `$`-prefixed key that triggers this directive (e.g. `&quot;$format&quot;`). */
+  name: string;
+  /**
+   * Short description of the directive for the AI system prompt.
+   * The schema fields are auto-generated; this adds behavioral context.
+   */
+  description?: string;
+  /** Zod schema for validating the directive object. */
+  schema: TSchema;
+  /**
+   * Resolver function. Receives the raw directive value and the current
+   * {@link PropResolutionContext}. May call `resolvePropValue` on sub-values
+   * to support composition with other dynamic expressions.
+   */
+  resolve: (value: z.infer&lt;TSchema&gt;, ctx: PropResolutionContext) =&gt; unknown;
+}
+⋮----
+/** The `$`-prefixed key that triggers this directive (e.g. `&quot;$format&quot;`). */
+⋮----
+/**
+   * Short description of the directive for the AI system prompt.
+   * The schema fields are auto-generated; this adds behavioral context.
+   */
+⋮----
+/** Zod schema for validating the directive object. */
+⋮----
+/**
+   * Resolver function. Receives the raw directive value and the current
+   * {@link PropResolutionContext}. May call `resolvePropValue` on sub-values
+   * to support composition with other dynamic expressions.
+   */
+⋮----
+/**
+ * A Map from directive name (e.g. `&quot;$format&quot;`) to its definition.
+ * Passed through {@link PropResolutionContext} for runtime resolution.
+ */
+export type DirectiveRegistry = Map&lt;string, DirectiveDefinition&gt;;
+⋮----
+/** Keys handled by built-in prop resolution — directives must not shadow these. */
+⋮----
+/**
+ * Define a custom directive.
+ *
+ * This is an identity function that provides type checking and serves as
+ * a documentation convention. Throws if the name collides with a built-in
+ * prop expression key.
+ */
+export function defineDirective&lt;TSchema extends z.ZodType&gt;(
+  definition: DirectiveDefinition&lt;TSchema&gt;,
+): DirectiveDefinition&lt;TSchema&gt;
+⋮----
+/**
+ * Convert an array of directive definitions into a {@link DirectiveRegistry}.
+ */
+export function createDirectiveRegistry(
+  directives: DirectiveDefinition[],
+): DirectiveRegistry
+⋮----
+/**
+ * Look up a custom directive for a plain-object value.
+ *
+ * Iterates the registry and checks whether the object contains a matching key.
+ * Returns `undefined` when no match is found or when no registry is provided.
+ *
+ * This is only called **after** all built-in expressions (`$state`, `$cond`,
+ * etc.) have been checked in `resolvePropValue`, so built-ins always take
+ * precedence. {@link defineDirective} enforces this at registration time by
+ * rejecting names that collide with built-in keys.
+ */
+export function findDirective(
+  value: Record&lt;string, unknown&gt;,
+  directives?: DirectiveRegistry,
+): DirectiveDefinition | undefined</file><file path="packages/core/src/edit-modes.ts">import type { Spec } from &quot;./types&quot;;
+⋮----
+/**
+ * Edit mode for modifying an existing spec.
+ *
+ * - `&quot;patch&quot;` — RFC 6902 JSON Patch. One operation per line.
+ * - `&quot;merge&quot;` — RFC 7396 JSON Merge Patch. Partial object deep-merged; `null` deletes.
+ * - `&quot;diff&quot;`  — Unified diff (POSIX). Line-level text edits against the serialized spec.
+ */
+export type EditMode = &quot;patch&quot; | &quot;merge&quot; | &quot;diff&quot;;
+⋮----
+export interface EditConfig {
+  /** Which edit modes are enabled. When &gt;1, the AI chooses per edit. */
+  modes: EditMode[];
+}
+⋮----
+/** Which edit modes are enabled. When &gt;1, the AI chooses per edit. */
+⋮----
+function normalizeModes(config?: EditConfig): EditMode[]
+⋮----
+// ── JSON-format instructions ──
+⋮----
+function jsonPatchInstructions(): string
+⋮----
+function jsonMergeInstructions(): string
+⋮----
+function jsonDiffInstructions(): string
+⋮----
+// ── YAML-format instructions ──
+⋮----
+function yamlPatchInstructions(): string
+⋮----
+function yamlMergeInstructions(): string
+⋮----
+function yamlDiffInstructions(): string
+⋮----
+// ── Mode selection guidance ──
+⋮----
+function modeSelectionGuidance(modes: EditMode[]): string
+⋮----
+/**
+ * Generate the prompt section describing available edit modes.
+ * Only documents the modes that are enabled.
+ */
+export function buildEditInstructions(
+  config: EditConfig | undefined,
+  format: &quot;json&quot; | &quot;yaml&quot;,
+): string
+⋮----
+function addLineNumbers(text: string): string
+⋮----
+export function isNonEmptySpec(spec: unknown): spec is Spec
+⋮----
+export interface BuildEditUserPromptOptions {
+  prompt: string;
+  currentSpec?: Spec | null;
+  config?: EditConfig;
+  format: &quot;json&quot; | &quot;yaml&quot;;
+  maxPromptLength?: number;
+  /** Serialise the spec. Defaults to JSON.stringify for json, must be provided for yaml. */
+  serializer?: (spec: Spec) =&gt; string;
+}
+⋮----
+/** Serialise the spec. Defaults to JSON.stringify for json, must be provided for yaml. */
+⋮----
+/**
+ * Generate the user prompt for edits, including the current spec
+ * (with line numbers when diff mode is enabled) and mode instructions.
+ */
+export function buildEditUserPrompt(
+  options: BuildEditUserPromptOptions,
+): string</file><file path="packages/core/src/env.d.ts">// Minimal process.env typing for dev-only warnings.
+// Uses a namespaced interface so it merges cleanly with @types/node if present.
+⋮----
+interface ProcessEnv {
+    readonly NODE_ENV?: string;
+  }</file><file path="packages/core/src/index.ts">// Types
+⋮----
+// SpecStream types
+⋮----
+// Mixed stream types (chat + GenUI)
+⋮----
+// AI SDK stream transform
+⋮----
+// SpecStream - streaming format for building specs (RFC 6902)
+⋮----
+// Mixed stream parser (chat + GenUI)
+⋮----
+// AI SDK stream transform
+⋮----
+// State Store
+⋮----
+// Visibility
+⋮----
+// Prop Expressions
+⋮----
+// Custom Directives
+⋮----
+// Actions
+⋮----
+/** @deprecated Use ActionBinding instead */
+⋮----
+// Action observer (devtools hook)
+⋮----
+// Devtools active flag
+⋮----
+/** @deprecated Use ActionBindingSchema instead */
+⋮----
+/** @deprecated Use actionBinding instead */
+⋮----
+// Validation
+⋮----
+// Spec Structural Validation
+⋮----
+// Schema — defines the grammar (how specs and catalogs are structured)
+⋮----
+// Catalog — defines the vocabulary (what components and actions are available)
+⋮----
+// User Prompt Builder
+⋮----
+// Object diff &amp; merge (format-agnostic)
+⋮----
+// Edit modes</file><file path="packages/core/src/merge.ts">function isPlainObject(value: unknown): value is Record&lt;string, unknown&gt;
+⋮----
+/**
+ * Deep-merge `patch` into `base`, returning a new object.
+ *
+ * Semantics (RFC 7396 JSON Merge Patch):
+ * - `null` values in `patch` delete the corresponding key from `base`
+ * - Arrays in `patch` replace (not concat) the corresponding array in `base`
+ * - Plain objects recurse
+ * - All other values replace
+ *
+ * Neither `base` nor `patch` is mutated.
+ */
+export function deepMergeSpec(
+  base: Record&lt;string, unknown&gt;,
+  patch: Record&lt;string, unknown&gt;,
+): Record&lt;string, unknown&gt;
+⋮----
+// null → delete</file><file path="packages/core/src/prompt.ts">import type { Spec } from &quot;./types&quot;;
+import type { EditMode } from &quot;./edit-modes&quot;;
+import { buildEditUserPrompt, isNonEmptySpec } from &quot;./edit-modes&quot;;
+⋮----
+/**
+ * Options for building a user prompt.
+ */
+export interface UserPromptOptions {
+  /** The user&apos;s text prompt */
+  prompt: string;
+  /** Existing spec to refine (triggers patch-only mode) */
+  currentSpec?: Spec | null;
+  /** Runtime state context to include */
+  state?: Record&lt;string, unknown&gt; | null;
+  /** Maximum length for the user&apos;s text prompt (applied before wrapping) */
+  maxPromptLength?: number;
+  /** Edit modes to offer when refining an existing spec. Default: `[&quot;patch&quot;]`. */
+  editModes?: EditMode[];
+  /** Wire format. Default: `&quot;json&quot;`. */
+  format?: &quot;json&quot; | &quot;yaml&quot;;
+  /** Serialise the spec for edits. Defaults to JSON.stringify for json, must be provided for yaml. */
+  serializer?: (spec: Spec) =&gt; string;
+}
+⋮----
+/** The user&apos;s text prompt */
+⋮----
+/** Existing spec to refine (triggers patch-only mode) */
+⋮----
+/** Runtime state context to include */
+⋮----
+/** Maximum length for the user&apos;s text prompt (applied before wrapping) */
+⋮----
+/** Edit modes to offer when refining an existing spec. Default: `[&quot;patch&quot;]`. */
+⋮----
+/** Wire format. Default: `&quot;json&quot;`. */
+⋮----
+/** Serialise the spec for edits. Defaults to JSON.stringify for json, must be provided for yaml. */
+⋮----
+/**
+ * Build a user prompt for AI generation.
+ *
+ * Handles common patterns that every consuming app needs:
+ * - Truncating the user&apos;s prompt to a max length
+ * - Including the current spec for refinement (edit mode)
+ * - Including runtime state context
+ *
+ * @example
+ * ```ts
+ * // Fresh generation
+ * buildUserPrompt({ prompt: &quot;create a todo app&quot; })
+ *
+ * // Refinement with existing spec
+ * buildUserPrompt({ prompt: &quot;add a dark mode toggle&quot;, currentSpec: spec })
+ *
+ * // With multiple edit modes
+ * buildUserPrompt({ prompt: &quot;change title&quot;, currentSpec: spec, editModes: [&quot;patch&quot;, &quot;merge&quot;] })
+ * ```
+ */
+export function buildUserPrompt(options: UserPromptOptions): string
+⋮----
+// Sanitize and optionally truncate the user&apos;s text
+⋮----
+// --- Refinement mode: currentSpec is provided ---
+⋮----
+// Append state context if provided
+⋮----
+// --- Fresh generation mode ---</file><file path="packages/core/src/props.test.ts">import { describe, it, expect, vi } from &quot;vitest&quot;;
+import {
+  resolvePropValue,
+  resolveElementProps,
+  resolveBindings,
+  resolveActionParam,
+  _resetWarnedComputedFns,
+} from &quot;./props&quot;;
+import type { PropResolutionContext } from &quot;./props&quot;;
+⋮----
+// =============================================================================
+// resolvePropValue
+// =============================================================================
+⋮----
+// =============================================================================
+// resolveElementProps
+// =============================================================================
+⋮----
+// =============================================================================
+// $bindState / $bindItem expressions
+// =============================================================================
+⋮----
+// Without repeatBasePath, the raw item path won&apos;t resolve in stateModel
+⋮----
+// =============================================================================
+// resolveActionParam
+// =============================================================================
+⋮----
+// =============================================================================
+// $computed expressions
+// =============================================================================
+⋮----
+// =============================================================================
+// $template expressions
+// =============================================================================</file><file path="packages/core/src/props.ts">import type { VisibilityCondition, StateModel } from &quot;./types&quot;;
+import { getByPath } from &quot;./types&quot;;
+import { evaluateVisibility, type VisibilityContext } from &quot;./visibility&quot;;
+import { findDirective, type DirectiveRegistry } from &quot;./directives&quot;;
+⋮----
+// =============================================================================
+// Prop Expression Types
+// =============================================================================
+⋮----
+/**
+ * A prop expression that resolves to a value based on state.
+ *
+ * - `{ $state: string }` reads a value from the global state model
+ * - `{ $item: string }` reads a field from the current repeat item
+ *    (relative path into the item object; use `&quot;&quot;` for the whole item)
+ * - `{ $index: true }` returns the current repeat array index. Uses `true`
+ *    as a sentinel flag because the index is a scalar with no sub-path to
+ *    navigate — unlike `$item` which needs a path into the item object.
+ * - `{ $bindState: string }` two-way binding to a global state path —
+ *    resolves to the value at the path (like `$state`) AND exposes the
+ *    resolved path so the component can write back.
+ * - `{ $bindItem: string }` two-way binding to a field on the current
+ *    repeat item — resolves via `repeatBasePath + path` and exposes the
+ *    absolute state path for write-back.
+ * - `{ $cond, $then, $else }` conditionally picks a value
+ * - `{ $computed: string, args?: Record&lt;string, PropExpression&gt; }` calls a
+ *    registered function with resolved args and returns the result
+ * - `{ $template: string }` interpolates `${/path}` and `${field}`
+ *    references. Absolute paths (`${/path}`) resolve against the state
+ *    model. Bare names (`${field}`) resolve against the current repeat
+ *    item first, then fall back to the state model at `/&lt;field&gt;`.
+ * - Any other value is a literal (passthrough)
+ */
+export type PropExpression&lt;T = unknown&gt; =
+  | T
+  | { $state: string }
+  | { $item: string }
+  | { $index: true }
+  | { $bindState: string }
+  | { $bindItem: string }
+  | {
+      $cond: VisibilityCondition;
+      $then: PropExpression&lt;T&gt;;
+      $else: PropExpression&lt;T&gt;;
+    }
+  | { $computed: string; args?: Record&lt;string, unknown&gt; }
+  | { $template: string };
+⋮----
+/**
+ * Function signature for `$computed` expressions.
+ * Receives a record of resolved argument values and returns a computed result.
+ */
+export type ComputedFunction = (args: Record&lt;string, unknown&gt;) =&gt; unknown;
+⋮----
+/**
+ * Context for resolving prop expressions.
+ * Extends {@link VisibilityContext} with an optional `repeatBasePath` used
+ * to resolve `$bindItem` paths to absolute state paths.
+ */
+export interface PropResolutionContext extends VisibilityContext {
+  /** Absolute state path to the current repeat item (e.g. &quot;/todos/0&quot;). Set inside repeat scopes. */
+  repeatBasePath?: string;
+  /** Named functions available for `$computed` expressions. */
+  functions?: Record&lt;string, ComputedFunction&gt;;
+  /** Custom directive registry for user-defined `$`-prefixed dynamic values. */
+  directives?: DirectiveRegistry;
+}
+⋮----
+/** Absolute state path to the current repeat item (e.g. &quot;/todos/0&quot;). Set inside repeat scopes. */
+⋮----
+/** Named functions available for `$computed` expressions. */
+⋮----
+/** Custom directive registry for user-defined `$`-prefixed dynamic values. */
+⋮----
+// =============================================================================
+// Type Guards
+// =============================================================================
+⋮----
+function isStateExpression(value: unknown): value is
+⋮----
+function isItemExpression(value: unknown): value is
+⋮----
+function isIndexExpression(value: unknown): value is
+⋮----
+function isBindStateExpression(
+  value: unknown,
+): value is
+⋮----
+function isBindItemExpression(value: unknown): value is
+⋮----
+function isCondExpression(
+  value: unknown,
+): value is
+⋮----
+function isComputedExpression(
+  value: unknown,
+): value is
+⋮----
+function isTemplateExpression(value: unknown): value is
+⋮----
+// Module-level set to avoid spamming console.warn on every render for the same
+// unknown $computed function name. Once the set reaches WARNED_COMPUTED_MAX,
+// new names are no longer deduplicated (warnings still fire) but the set stops
+// growing, preventing unbounded memory use in long-lived processes (e.g. SSR).
+⋮----
+/** @internal Test-only: clear the deduplication set for $computed warnings. */
+export function _resetWarnedComputedFns(): void
+⋮----
+// =============================================================================
+// Prop Expression Resolution
+// =============================================================================
+⋮----
+// =============================================================================
+// $bindItem path resolution helper
+// =============================================================================
+⋮----
+/**
+ * Resolve a `$bindItem` path into an absolute state path using the repeat
+ * scope&apos;s base path.
+ *
+ * `&quot;&quot;` resolves to `repeatBasePath` (the whole item).
+ * `&quot;field&quot;` resolves to `repeatBasePath + &quot;/field&quot;`.
+ *
+ * Returns `undefined` when no `repeatBasePath` is available (i.e. `$bindItem`
+ * is used outside a repeat scope).
+ */
+function resolveBindItemPath(
+  itemPath: string,
+  ctx: PropResolutionContext,
+): string | undefined
+⋮----
+// =============================================================================
+// Prop Expression Resolution
+// =============================================================================
+⋮----
+/**
+ * Resolve a single prop value that may contain expressions.
+ * Handles $state, $item, $index, $bindState, $bindItem, and $cond/$then/$else in a single pass.
+ */
+export function resolvePropValue(
+  value: unknown,
+  ctx: PropResolutionContext,
+): unknown
+⋮----
+// $state: read from global state model
+⋮----
+// $item: read from current repeat item
+⋮----
+// &quot;&quot; means the whole item, &quot;field&quot; means a field on the item
+⋮----
+// $index: return current repeat array index
+⋮----
+// $bindState: two-way binding to global state path
+⋮----
+// $bindItem: two-way binding to repeat item field
+⋮----
+// $cond/$then/$else: evaluate condition and pick branch
+⋮----
+// $computed: call a registered function with resolved args
+⋮----
+// $template: interpolate ${/path} and ${field} references.
+// Absolute paths (starting with &quot;/&quot;) resolve against the state model.
+// Bare names resolve against the current repeat item first, then fall
+// back to the state model at &quot;/&lt;name&gt;&quot;.
+⋮----
+// Bare name: try repeat item first
+⋮----
+// Fall back to state model
+⋮----
+// Arrays: resolve each element
+⋮----
+// Custom directives: check registry before generic object recursion
+⋮----
+// Plain objects (not expressions): resolve each value recursively
+⋮----
+// Primitive literal: passthrough
+⋮----
+/**
+ * Resolve all prop values in an element&apos;s props object.
+ * Returns a new props object with all expressions resolved.
+ */
+export function resolveElementProps(
+  props: Record&lt;string, unknown&gt;,
+  ctx: PropResolutionContext,
+): Record&lt;string, unknown&gt;
+⋮----
+/**
+ * Scan an element&apos;s raw props for `$bindState` / `$bindItem` expressions
+ * and return a map of prop name → resolved absolute state path.
+ *
+ * This is called **before** `resolveElementProps` so the component can
+ * receive both the resolved value (in `props`) and the write-back path
+ * (in `bindings`).
+ *
+ * @example
+ * ```ts
+ * const rawProps = { value: { $bindState: &quot;/form/email&quot; }, label: &quot;Email&quot; };
+ * const bindings = resolveBindings(rawProps, ctx);
+ * // bindings = { value: &quot;/form/email&quot; }
+ * ```
+ */
+export function resolveBindings(
+  props: Record&lt;string, unknown&gt;,
+  ctx: PropResolutionContext,
+): Record&lt;string, string&gt; | undefined
+⋮----
+/**
+ * Resolve a single action parameter value.
+ *
+ * Like {@link resolvePropValue} but with special handling for path-valued
+ * params: `{ $item: &quot;field&quot; }` resolves to an **absolute state path**
+ * (e.g. `/todos/0/field`) instead of the field&apos;s value, so the path can
+ * be passed to `setState` / `pushState` / `removeState`.
+ *
+ * - `{ $item: &quot;field&quot; }` → absolute state path via `repeatBasePath`
+ * - `{ $index: true }` → current repeat index (number)
+ * - Everything else delegates to `resolvePropValue` ($state, $cond, literals).
+ */
+export function resolveActionParam(
+  value: unknown,
+  ctx: PropResolutionContext,
+): unknown</file><file path="packages/core/src/schema.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import { z } from &quot;zod&quot;;
+import { defineSchema, defineCatalog } from &quot;./schema&quot;;
+⋮----
+// =============================================================================
+// Shared test schema (mirrors the React schema shape)
+// =============================================================================
+⋮----
+// =============================================================================
+// defineSchema
+// =============================================================================
+⋮----
+const template = ()
+⋮----
+// =============================================================================
+// defineCatalog / createCatalog
+// =============================================================================
+⋮----
+// =============================================================================
+// catalog.prompt()
+// =============================================================================
+⋮----
+// =============================================================================
+// catalog.validate()
+// =============================================================================
+⋮----
+// =============================================================================
+// catalog.jsonSchema()
+// =============================================================================
+⋮----
+function hasNoPropertyNames(obj: unknown): boolean
+⋮----
+function allObjectsHaveAdditionalPropertiesFalse(obj: unknown): boolean
+⋮----
+function allObjectPropertiesRequired(obj: unknown): boolean
+⋮----
+// Walk the schema and ensure no additionalProperties is set to a non-false value
+function noAdditionalPropertiesSchema(obj: unknown): boolean
+⋮----
+// Use a schema where propsOf resolves to a single component&apos;s props
+// (no record wrapper around the props) so the optional anyOf handling
+// is directly visible in the JSON Schema output.
+⋮----
+// caption is optional – in strict mode it must be in `required`
+// and wrapped in anyOf with null
+⋮----
+// =============================================================================
+// catalog.zodSchema()
+// =============================================================================</file><file path="packages/core/src/schema.ts">import { z } from &quot;zod&quot;;
+import type { EditMode } from &quot;./edit-modes&quot;;
+import { buildEditInstructions } from &quot;./edit-modes&quot;;
+import type { DirectiveDefinition } from &quot;./directives&quot;;
+⋮----
+/**
+ * Schema builder primitives
+ */
+export interface SchemaBuilder {
+  /** String type */
+  string(): SchemaType&lt;&quot;string&quot;&gt;;
+  /** Number type */
+  number(): SchemaType&lt;&quot;number&quot;&gt;;
+  /** Boolean type */
+  boolean(): SchemaType&lt;&quot;boolean&quot;&gt;;
+  /** Array of type */
+  array&lt;T extends SchemaType&gt;(item: T): SchemaType&lt;&quot;array&quot;, T&gt;;
+  /** Object with shape */
+  object&lt;T extends Record&lt;string, SchemaType&gt;&gt;(
+    shape: T,
+  ): SchemaType&lt;&quot;object&quot;, T&gt;;
+  /** Record/map with value type */
+  record&lt;T extends SchemaType&gt;(value: T): SchemaType&lt;&quot;record&quot;, T&gt;;
+  /** Any type */
+  any(): SchemaType&lt;&quot;any&quot;&gt;;
+  /** Placeholder for user-provided Zod schema */
+  zod(): SchemaType&lt;&quot;zod&quot;&gt;;
+  /** Reference to catalog key (e.g., &apos;catalog.components&apos;) */
+  ref(path: string): SchemaType&lt;&quot;ref&quot;, string&gt;;
+  /** Props from referenced catalog entry */
+  propsOf(path: string): SchemaType&lt;&quot;propsOf&quot;, string&gt;;
+  /** Map of named entries with shared shape */
+  map&lt;T extends Record&lt;string, SchemaType&gt;&gt;(
+    entryShape: T,
+  ): SchemaType&lt;&quot;map&quot;, T&gt;;
+  /** Optional modifier */
+  optional(): { optional: true };
+}
+⋮----
+/** String type */
+string(): SchemaType&lt;&quot;string&quot;&gt;;
+/** Number type */
+number(): SchemaType&lt;&quot;number&quot;&gt;;
+/** Boolean type */
+boolean(): SchemaType&lt;&quot;boolean&quot;&gt;;
+/** Array of type */
+array&lt;T extends SchemaType&gt;(item: T): SchemaType&lt;&quot;array&quot;, T&gt;;
+/** Object with shape */
+object&lt;T extends Record&lt;string, SchemaType&gt;&gt;(
+    shape: T,
+  ): SchemaType&lt;&quot;object&quot;, T&gt;;
+/** Record/map with value type */
+record&lt;T extends SchemaType&gt;(value: T): SchemaType&lt;&quot;record&quot;, T&gt;;
+/** Any type */
+any(): SchemaType&lt;&quot;any&quot;&gt;;
+/** Placeholder for user-provided Zod schema */
+zod(): SchemaType&lt;&quot;zod&quot;&gt;;
+/** Reference to catalog key (e.g., &apos;catalog.components&apos;) */
+ref(path: string): SchemaType&lt;&quot;ref&quot;, string&gt;;
+/** Props from referenced catalog entry */
+propsOf(path: string): SchemaType&lt;&quot;propsOf&quot;, string&gt;;
+/** Map of named entries with shared shape */
+map&lt;T extends Record&lt;string, SchemaType&gt;&gt;(
+    entryShape: T,
+  ): SchemaType&lt;&quot;map&quot;, T&gt;;
+/** Optional modifier */
+optional():
+⋮----
+/**
+ * Schema type representation
+ */
+export interface SchemaType&lt;TKind extends string = string, TInner = unknown&gt; {
+  kind: TKind;
+  inner?: TInner;
+  optional?: boolean;
+}
+⋮----
+/**
+ * Schema definition shape
+ */
+export interface SchemaDefinition&lt;
+  TSpec extends SchemaType = SchemaType,
+  TCatalog extends SchemaType = SchemaType,
+&gt; {
+  /** What the AI-generated spec looks like */
+  spec: TSpec;
+  /** What the catalog must provide */
+  catalog: TCatalog;
+}
+⋮----
+/** What the AI-generated spec looks like */
+⋮----
+/** What the catalog must provide */
+⋮----
+/**
+ * Schema instance with methods
+ */
+export interface Schema&lt;TDef extends SchemaDefinition = SchemaDefinition&gt; {
+  /** The schema definition */
+  readonly definition: TDef;
+  /** Custom prompt template for this schema */
+  readonly promptTemplate?: PromptTemplate;
+  /** Default rules baked into the schema (injected before customRules) */
+  readonly defaultRules?: string[];
+  /** Built-in actions always available at runtime (injected into prompts automatically) */
+  readonly builtInActions?: BuiltInAction[];
+  /** Create a catalog from this schema */
+  createCatalog&lt;TCatalog extends InferCatalogInput&lt;TDef[&quot;catalog&quot;]&gt;&gt;(
+    catalog: TCatalog,
+  ): Catalog&lt;TDef, TCatalog&gt;;
+}
+⋮----
+/** The schema definition */
+⋮----
+/** Custom prompt template for this schema */
+⋮----
+/** Default rules baked into the schema (injected before customRules) */
+⋮----
+/** Built-in actions always available at runtime (injected into prompts automatically) */
+⋮----
+/** Create a catalog from this schema */
+createCatalog&lt;TCatalog extends InferCatalogInput&lt;TDef[&quot;catalog&quot;]&gt;&gt;(
+    catalog: TCatalog,
+  ): Catalog&lt;TDef, TCatalog&gt;;
+⋮----
+/**
+ * Catalog instance with methods
+ */
+export interface Catalog&lt;
+  TDef extends SchemaDefinition = SchemaDefinition,
+  TCatalog = unknown,
+&gt; {
+  /** The schema this catalog is based on */
+  readonly schema: Schema&lt;TDef&gt;;
+  /** The catalog data */
+  readonly data: TCatalog;
+  /** Component names */
+  readonly componentNames: string[];
+  /** Action names */
+  readonly actionNames: string[];
+  /** Generate system prompt for AI */
+  prompt(options?: PromptOptions): string;
+  /** Export as JSON Schema for structured outputs */
+  jsonSchema(options?: JsonSchemaOptions): object;
+  /** Validate a spec against this catalog */
+  validate(spec: unknown): SpecValidationResult&lt;InferSpec&lt;TDef, TCatalog&gt;&gt;;
+  /** Get the Zod schema for the spec */
+  zodSchema(): z.ZodType&lt;InferSpec&lt;TDef, TCatalog&gt;&gt;;
+  /** Type helper for the spec type */
+  readonly _specType: InferSpec&lt;TDef, TCatalog&gt;;
+}
+⋮----
+/** The schema this catalog is based on */
+⋮----
+/** The catalog data */
+⋮----
+/** Component names */
+⋮----
+/** Action names */
+⋮----
+/** Generate system prompt for AI */
+prompt(options?: PromptOptions): string;
+/** Export as JSON Schema for structured outputs */
+jsonSchema(options?: JsonSchemaOptions): object;
+/** Validate a spec against this catalog */
+validate(spec: unknown): SpecValidationResult&lt;InferSpec&lt;TDef, TCatalog&gt;&gt;;
+/** Get the Zod schema for the spec */
+zodSchema(): z.ZodType&lt;InferSpec&lt;TDef, TCatalog&gt;&gt;;
+/** Type helper for the spec type */
+⋮----
+/**
+ * Options for JSON Schema export
+ */
+export interface JsonSchemaOptions {
+  /**
+   * When true, produces a strict JSON Schema subset compatible with
+   * LLM structured output APIs (OpenAI, Google Gemini, Anthropic, etc.).
+   * This ensures:
+   * - `additionalProperties: false` on every object
+   * - All object properties listed in `required` (optionals use nullable types)
+   * - Record/map types converted to fixed-key objects
+   *
+   * **Limitation:** Record types (dynamic-key maps) cannot be represented in
+   * strict JSON Schema because `additionalProperties` must be `false`. They
+   * are emitted as `{ type: &quot;object&quot;, properties: {}, additionalProperties: false }`.
+   * The LLM prompt (via `catalog.prompt()`) still describes the full structure,
+   * so the model can produce valid output even though the JSON Schema for
+   * record entries is opaque.
+   */
+  strict?: boolean;
+}
+⋮----
+/**
+   * When true, produces a strict JSON Schema subset compatible with
+   * LLM structured output APIs (OpenAI, Google Gemini, Anthropic, etc.).
+   * This ensures:
+   * - `additionalProperties: false` on every object
+   * - All object properties listed in `required` (optionals use nullable types)
+   * - Record/map types converted to fixed-key objects
+   *
+   * **Limitation:** Record types (dynamic-key maps) cannot be represented in
+   * strict JSON Schema because `additionalProperties` must be `false`. They
+   * are emitted as `{ type: &quot;object&quot;, properties: {}, additionalProperties: false }`.
+   * The LLM prompt (via `catalog.prompt()`) still describes the full structure,
+   * so the model can produce valid output even though the JSON Schema for
+   * record entries is opaque.
+   */
+⋮----
+/**
+ * Prompt generation options
+ */
+export interface PromptOptions {
+  /** Custom system message intro */
+  system?: string;
+  /** Additional rules to append */
+  customRules?: string[];
+  /**
+   * Output mode for the generated prompt.
+   *
+   * - `&quot;standalone&quot;` (default): The LLM should output only JSONL patches (no prose).
+   * - `&quot;inline&quot;`: The LLM should respond conversationally first, then output JSONL patches.
+   *   Includes rules about interleaving text with JSONL and not wrapping in code fences.
+   *
+   * @deprecated `&quot;generate&quot;` — use `&quot;standalone&quot;` instead.
+   * @deprecated `&quot;chat&quot;` — use `&quot;inline&quot;` instead.
+   */
+  mode?: &quot;standalone&quot; | &quot;inline&quot; | &quot;generate&quot; | &quot;chat&quot;;
+  /** Edit modes to document in the system prompt. Default: `[&quot;patch&quot;]`. */
+  editModes?: EditMode[];
+  /**
+   * Custom directives to include in the system prompt.
+   * Each directive&apos;s schema is auto-described; the optional `description`
+   * field adds behavioral context. Pass the same array used at runtime.
+   */
+  directives?: DirectiveDefinition[];
+}
+⋮----
+/** Custom system message intro */
+⋮----
+/** Additional rules to append */
+⋮----
+/**
+   * Output mode for the generated prompt.
+   *
+   * - `&quot;standalone&quot;` (default): The LLM should output only JSONL patches (no prose).
+   * - `&quot;inline&quot;`: The LLM should respond conversationally first, then output JSONL patches.
+   *   Includes rules about interleaving text with JSONL and not wrapping in code fences.
+   *
+   * @deprecated `&quot;generate&quot;` — use `&quot;standalone&quot;` instead.
+   * @deprecated `&quot;chat&quot;` — use `&quot;inline&quot;` instead.
+   */
+⋮----
+/** Edit modes to document in the system prompt. Default: `[&quot;patch&quot;]`. */
+⋮----
+/**
+   * Custom directives to include in the system prompt.
+   * Each directive&apos;s schema is auto-described; the optional `description`
+   * field adds behavioral context. Pass the same array used at runtime.
+   */
+⋮----
+/**
+ * Context provided to prompt templates
+ */
+export interface PromptContext&lt;TCatalog = unknown&gt; {
+  /** The catalog data */
+  catalog: TCatalog;
+  /** Component names from the catalog */
+  componentNames: string[];
+  /** Action names from the catalog (if any) */
+  actionNames: string[];
+  /** Prompt options provided by the user */
+  options: PromptOptions;
+  /** Helper to format a Zod type as a human-readable string */
+  formatZodType: (schema: z.ZodType) =&gt; string;
+}
+⋮----
+/** The catalog data */
+⋮----
+/** Component names from the catalog */
+⋮----
+/** Action names from the catalog (if any) */
+⋮----
+/** Prompt options provided by the user */
+⋮----
+/** Helper to format a Zod type as a human-readable string */
+⋮----
+/**
+ * Prompt template function type
+ */
+export type PromptTemplate&lt;TCatalog = unknown&gt; = (
+  context: PromptContext&lt;TCatalog&gt;,
+) =&gt; string;
+⋮----
+/**
+ * A built-in action that is always available regardless of catalog configuration.
+ * These are handled by the runtime (e.g. ActionProvider) and injected into prompts
+ * automatically so the LLM knows about them.
+ */
+export interface BuiltInAction {
+  /** Action name (e.g. &quot;setState&quot;) */
+  name: string;
+  /** Human-readable description for the LLM */
+  description: string;
+}
+⋮----
+/** Action name (e.g. &quot;setState&quot;) */
+⋮----
+/** Human-readable description for the LLM */
+⋮----
+/**
+ * Schema options
+ */
+export interface SchemaOptions&lt;TCatalog = unknown&gt; {
+  /** Custom prompt template for this schema */
+  promptTemplate?: PromptTemplate&lt;TCatalog&gt;;
+  /** Default rules baked into the schema (injected before customRules in prompts) */
+  defaultRules?: string[];
+  /**
+   * Built-in actions that are always available regardless of catalog configuration.
+   * These are injected into prompts automatically so the LLM knows about them,
+   * but they don&apos;t require handlers in defineRegistry because the runtime
+   * (e.g. ActionProvider) handles them directly.
+   */
+  builtInActions?: BuiltInAction[];
+}
+⋮----
+/** Custom prompt template for this schema */
+⋮----
+/** Default rules baked into the schema (injected before customRules in prompts) */
+⋮----
+/**
+   * Built-in actions that are always available regardless of catalog configuration.
+   * These are injected into prompts automatically so the LLM knows about them,
+   * but they don&apos;t require handlers in defineRegistry because the runtime
+   * (e.g. ActionProvider) handles them directly.
+   */
+⋮----
+/**
+ * Spec validation result
+ */
+export interface SpecValidationResult&lt;T&gt; {
+  success: boolean;
+  data?: T;
+  error?: z.ZodError;
+}
+⋮----
+// =============================================================================
+// Catalog Type Inference Helpers
+// =============================================================================
+⋮----
+/**
+ * Extract the components map type from a catalog
+ * @example type Components = InferCatalogComponents&lt;typeof myCatalog&gt;;
+ */
+export type InferCatalogComponents&lt;C extends Catalog&gt; =
+  C extends Catalog&lt;SchemaDefinition, infer TCatalog&gt;
+    ? TCatalog extends { components: infer Comps }
+      ? Comps
+      : never
+    : never;
+⋮----
+/**
+ * Extract the actions map type from a catalog
+ * @example type Actions = InferCatalogActions&lt;typeof myCatalog&gt;;
+ */
+export type InferCatalogActions&lt;C extends Catalog&gt; =
+  C extends Catalog&lt;SchemaDefinition, infer TCatalog&gt;
+    ? TCatalog extends { actions: infer Acts }
+      ? Acts
+      : never
+    : never;
+⋮----
+/**
+ * Infer component props from a catalog by component name
+ * @example type ButtonProps = InferComponentProps&lt;typeof myCatalog, &apos;Button&apos;&gt;;
+ */
+export type InferComponentProps&lt;
+  C extends Catalog,
+  K extends keyof InferCatalogComponents&lt;C&gt;,
+&gt; = InferCatalogComponents&lt;C&gt;[K] extends { props: z.ZodType&lt;infer P&gt; }
+  ? P
+  : never;
+⋮----
+/**
+ * Infer action params from a catalog by action name
+ * @example type ViewCustomersParams = InferActionParams&lt;typeof myCatalog, &apos;viewCustomers&apos;&gt;;
+ */
+export type InferActionParams&lt;
+  C extends Catalog,
+  K extends keyof InferCatalogActions&lt;C&gt;,
+&gt; = InferCatalogActions&lt;C&gt;[K] extends { params: z.ZodType&lt;infer P&gt; }
+  ? P
+  : never;
+⋮----
+// =============================================================================
+// Internal Type Inference Helpers
+// =============================================================================
+⋮----
+export type InferCatalogInput&lt;T&gt; =
+  T extends SchemaType&lt;&quot;object&quot;, infer Shape&gt;
+    ? { [K in keyof Shape]: InferCatalogField&lt;Shape[K]&gt; }
+    : never;
+⋮----
+type InferCatalogField&lt;T&gt; =
+  T extends SchemaType&lt;&quot;map&quot;, infer EntryShape&gt;
+    ? Record&lt;
+        string,
+        // Only &apos;props&apos; is required, rest are optional
+        InferMapEntryRequired&lt;EntryShape&gt; &amp;
+          Partial&lt;InferMapEntryOptional&lt;EntryShape&gt;&gt;
+      &gt;
+    : T extends SchemaType&lt;&quot;zod&quot;&gt;
+      ? z.ZodType
+      : T extends SchemaType&lt;&quot;string&quot;&gt;
+        ? string
+        : T extends SchemaType&lt;&quot;number&quot;&gt;
+          ? number
+          : T extends SchemaType&lt;&quot;boolean&quot;&gt;
+            ? boolean
+            : T extends SchemaType&lt;&quot;array&quot;, infer Item&gt;
+              ? InferCatalogField&lt;Item&gt;[]
+              : T extends SchemaType&lt;&quot;object&quot;, infer Shape&gt;
+                ? { [K in keyof Shape]: InferCatalogField&lt;Shape[K]&gt; }
+                : unknown;
+⋮----
+// Only &apos;props&apos; is required, rest are optional
+⋮----
+// Extract required fields (props is always required)
+type InferMapEntryRequired&lt;T&gt; = {
+  [K in keyof T as K extends &quot;props&quot; ? K : never]: InferMapEntryField&lt;T[K]&gt;;
+};
+⋮----
+// Extract optional fields (everything except props)
+type InferMapEntryOptional&lt;T&gt; = {
+  [K in keyof T as K extends &quot;props&quot; ? never : K]: InferMapEntryField&lt;T[K]&gt;;
+};
+⋮----
+type InferMapEntryField&lt;T&gt; =
+  T extends SchemaType&lt;&quot;zod&quot;&gt;
+    ? z.ZodType
+    : T extends SchemaType&lt;&quot;string&quot;&gt;
+      ? string
+      : T extends SchemaType&lt;&quot;number&quot;&gt;
+        ? number
+        : T extends SchemaType&lt;&quot;boolean&quot;&gt;
+          ? boolean
+          : T extends SchemaType&lt;&quot;array&quot;, infer Item&gt;
+            ? InferMapEntryField&lt;Item&gt;[]
+            : T extends SchemaType&lt;&quot;object&quot;, infer Shape&gt;
+              ? { [K in keyof Shape]: InferMapEntryField&lt;Shape[K]&gt; }
+              : unknown;
+⋮----
+// Spec inference (simplified - will be expanded)
+export type InferSpec&lt;TDef extends SchemaDefinition, TCatalog&gt; = TDef extends {
+  spec: SchemaType&lt;&quot;object&quot;, infer Shape&gt;;
+}
+  ? InferSpecObject&lt;Shape, TCatalog&gt;
+  : unknown;
+⋮----
+type InferSpecObject&lt;Shape, TCatalog&gt; = {
+  [K in keyof Shape as Shape[K] extends { optional: true }
+    ? never
+    : K]: InferSpecField&lt;Shape[K], TCatalog&gt;;
+} &amp; {
+  [K in keyof Shape as Shape[K] extends { optional: true }
+    ? K
+    : never]?: InferSpecField&lt;Shape[K], TCatalog&gt;;
+};
+⋮----
+type InferSpecField&lt;T, TCatalog&gt; =
+  T extends SchemaType&lt;&quot;string&quot;&gt;
+    ? string
+    : T extends SchemaType&lt;&quot;number&quot;&gt;
+      ? number
+      : T extends SchemaType&lt;&quot;boolean&quot;&gt;
+        ? boolean
+        : T extends SchemaType&lt;&quot;array&quot;, infer Item&gt;
+          ? InferSpecField&lt;Item, TCatalog&gt;[]
+          : T extends SchemaType&lt;&quot;object&quot;, infer Shape&gt;
+            ? InferSpecObject&lt;Shape, TCatalog&gt;
+            : T extends SchemaType&lt;&quot;record&quot;, infer Value&gt;
+              ? Record&lt;string, InferSpecField&lt;Value, TCatalog&gt;&gt;
+              : T extends SchemaType&lt;&quot;ref&quot;, infer Path&gt;
+                ? InferRefType&lt;Path, TCatalog&gt;
+                : T extends SchemaType&lt;&quot;propsOf&quot;, infer Path&gt;
+                  ? InferPropsOfType&lt;Path, TCatalog&gt;
+                  : T extends SchemaType&lt;&quot;any&quot;&gt;
+                    ? unknown
+                    : unknown;
+⋮----
+type InferRefType&lt;Path, TCatalog&gt; = Path extends &quot;catalog.components&quot;
+  ? TCatalog extends { components: infer C }
+    ? keyof C
+    : string
+  : Path extends &quot;catalog.actions&quot;
+    ? TCatalog extends { actions: infer A }
+      ? keyof A
+      : string
+    : string;
+⋮----
+type InferPropsOfType&lt;Path, TCatalog&gt; = Path extends &quot;catalog.components&quot;
+  ? TCatalog extends { components: infer C }
+    ? C extends Record&lt;string, { props: z.ZodType&lt;infer P&gt; }&gt;
+      ? P
+      : Record&lt;string, unknown&gt;
+    : Record&lt;string, unknown&gt;
+  : Record&lt;string, unknown&gt;;
+⋮----
+/**
+ * Create the schema builder
+ */
+function createBuilder(): SchemaBuilder
+⋮----
+/**
+ * Define a schema using the builder pattern
+ */
+export function defineSchema&lt;TDef extends SchemaDefinition&gt;(
+  builder: (s: SchemaBuilder) =&gt; TDef,
+  options?: SchemaOptions,
+): Schema&lt;TDef&gt;
+⋮----
+createCatalog&lt;TCatalog extends InferCatalogInput&lt;TDef[&quot;catalog&quot;]&gt;&gt;(
+      catalog: TCatalog,
+): Catalog&lt;TDef, TCatalog&gt;
+⋮----
+/**
+ * Create a catalog from a schema (internal)
+ */
+function createCatalogFromSchema&lt;TDef extends SchemaDefinition, TCatalog&gt;(
+  schema: Schema&lt;TDef&gt;,
+  catalogData: TCatalog,
+): Catalog&lt;TDef, TCatalog&gt;
+⋮----
+// Extract component and action names
+⋮----
+// Build the Zod schema for validation
+⋮----
+prompt(options: PromptOptions =
+⋮----
+jsonSchema(options: JsonSchemaOptions =
+⋮----
+validate(spec: unknown): SpecValidationResult&lt;InferSpec&lt;TDef, TCatalog&gt;&gt;
+⋮----
+zodSchema(): z.ZodType&lt;InferSpec&lt;TDef, TCatalog&gt;&gt;
+⋮----
+get _specType(): InferSpec&lt;TDef, TCatalog&gt;
+⋮----
+/**
+ * Build Zod schema from schema definition
+ */
+function buildZodSchemaFromDefinition(
+  definition: SchemaDefinition,
+  catalogData: unknown,
+): z.ZodType
+⋮----
+function buildZodType(schemaType: SchemaType, catalogData: unknown): z.ZodType
+⋮----
+// Reference to catalog key - create enum of valid keys
+⋮----
+// Props from catalog entry - create union of all props schemas
+⋮----
+// For propsOf, we need to be lenient since type determines which props apply
+⋮----
+function getKeysFromPath(path: string, catalogData: unknown): string[]
+⋮----
+function getPropsFromPath(path: string, catalogData: unknown): z.ZodType[]
+⋮----
+/**
+ * Generate system prompt from catalog
+ */
+function generatePrompt&lt;TDef extends SchemaDefinition, TCatalog&gt;(
+  catalog: Catalog&lt;TDef, TCatalog&gt;,
+  options: PromptOptions,
+): string
+⋮----
+// Check if schema has a custom prompt template
+⋮----
+// Default JSONL element-tree format (for @json-render/react and similar)
+⋮----
+// Output format section - explain JSONL streaming patch format
+⋮----
+// Build example using actual catalog component names and props to avoid hallucinations
+⋮----
+// Find a string prop on comp2 to demonstrate $state dynamic bindings
+⋮----
+// Initial state section
+⋮----
+// Components section — reuse the typed reference from example generation
+⋮----
+// Actions section
+⋮----
+// Built-in actions (handled by runtime, always available)
+⋮----
+// Custom actions (declared in catalog, require handlers)
+⋮----
+// Events section
+⋮----
+// Visibility conditions
+⋮----
+// Dynamic prop expressions
+⋮----
+// $computed section — only emit when catalog defines functions
+⋮----
+// Custom directives section — auto-describe schema + optional description
+⋮----
+// Validation section — only emit when at least one component has a `checks` prop
+⋮----
+// State watchers section — only emit when actions are available (watchers
+// trigger actions, so the section is irrelevant without them).
+⋮----
+// Edit modes
+⋮----
+// Rules
+⋮----
+// =============================================================================
+// Example Value Generation from Zod Schemas
+// =============================================================================
+⋮----
+/**
+ * Component definition shape as it appears in catalog data
+ */
+interface CatalogComponentDef {
+  props?: z.ZodType;
+  description?: string;
+  slots?: string[];
+  events?: string[];
+  example?: Record&lt;string, unknown&gt;;
+}
+⋮----
+/**
+ * Get example props for a catalog component.
+ * Uses the explicit `example` field if provided, otherwise generates from Zod schema.
+ */
+function getExampleProps(def: CatalogComponentDef): Record&lt;string, unknown&gt;
+⋮----
+/**
+ * Generate example prop values from a Zod object schema.
+ * Only includes required fields to keep examples concise.
+ */
+function generateExamplePropsFromZod(
+  schema: z.ZodType,
+): Record&lt;string, unknown&gt;
+⋮----
+// Skip optional props to keep examples concise
+⋮----
+/**
+ * Generate a single example value from a Zod type.
+ */
+function generateExampleValue(schema: z.ZodType): unknown
+⋮----
+/**
+ * Find the name of the first required string prop in a Zod object schema.
+ * Used to demonstrate $state dynamic bindings in examples.
+ */
+function findFirstStringProp(schema?: z.ZodType): string | null
+⋮----
+// Skip optional props
+⋮----
+// Unwrap to check the actual type
+⋮----
+// =============================================================================
+// Zod Introspection Helpers
+// =============================================================================
+⋮----
+/**
+ * Get Zod type name from schema (handles different Zod versions)
+ */
+function getZodTypeName(schema: z.ZodType): string
+⋮----
+// Zod 4+ uses _def.type, older versions use _def.typeName
+⋮----
+/**
+ * Format a Zod type into a human-readable string
+ */
+function formatZodType(schema: z.ZodType): string
+⋮----
+// Zod 4 uses def.values (array), Zod 3 uses def.value
+⋮----
+// Zod 3 uses values array, Zod 4 uses entries object
+⋮----
+// safely resolve inner type for Zod arrays
+⋮----
+// Shape can be a function (Zod 3) or direct object (Zod 4)
+⋮----
+/**
+ * Resolve the Zod type name from a schema&apos;s internal definition.
+ * Supports both Zod 3 (`_def.typeName`) and Zod 4 (`_def.type`).
+ */
+function zodTypeName(def: Record&lt;string, unknown&gt;): string
+⋮----
+// Zod 4 uses _def.type as a plain string (e.g. &quot;string&quot;, &quot;object&quot;)
+⋮----
+// Zod 3 uses _def.typeName (e.g. &quot;ZodString&quot;, &quot;ZodObject&quot;)
+⋮----
+/**
+ * Normalise a Zod type name to a canonical lowercase form.
+ * Handles both Zod 3 (&quot;ZodString&quot;) and Zod 4 (&quot;string&quot;) conventions.
+ */
+function normalizeTypeName(raw: string): string
+⋮----
+// Zod 3 names start with &quot;Zod&quot;, e.g. &quot;ZodString&quot; → &quot;string&quot;
+⋮----
+/**
+ * Convert Zod schema to JSON Schema.
+ *
+ * When `strict` is true the output conforms to the JSON Schema subset required
+ * by LLM structured output APIs (no `propertyNames`, `additionalProperties: false`
+ * everywhere, all properties listed in `required`).
+ */
+function zodToJsonSchema(schema: z.ZodType, strict = false): object
+⋮----
+// Zod 4: _def.values (array), Zod 3: _def.value (single)
+⋮----
+// Zod 4: _def.entries (object { a:&quot;a&quot;, b:&quot;b&quot; }), Zod 3: _def.values (string[])
+⋮----
+// Zod 4: _def.element, Zod 3: _def.type
+⋮----
+// Zod 4: _def.shape is an object, Zod 3: _def.shape is a function
+⋮----
+// In strict mode, all properties must be in required.
+// Optional properties are represented as nullable types.
+⋮----
+// LLM strict schemas require `additionalProperties: false` and do not
+// permit a schema value for `additionalProperties`. Since record types
+// have dynamic keys that cannot be enumerated at schema-generation time,
+// we emit an opaque object. The LLM prompt still describes the expected
+// structure so the model can produce valid output.
+⋮----
+/**
+ * Shorthand: Define a catalog directly from a schema
+ */
+export function defineCatalog&lt;
+  TDef extends SchemaDefinition,
+  TCatalog extends InferCatalogInput&lt;TDef[&quot;catalog&quot;]&gt;,
+&gt;(schema: Schema&lt;TDef&gt;, catalog: TCatalog): Catalog&lt;TDef, TCatalog&gt;</file><file path="packages/core/src/spec-validator.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import type { Spec } from &quot;./types&quot;;
+import { validateSpec, autoFixSpec } from &quot;./spec-validator&quot;;
+⋮----
+// =============================================================================
+// validateSpec
+// =============================================================================
+⋮----
+// =============================================================================
+// autoFixSpec
+// =============================================================================
+⋮----
+const base = (visible: unknown): Spec =&gt; (
+⋮----
+// The real problem (missing template) stays visible to the repair loop.</file><file path="packages/core/src/spec-validator.ts">import type { Spec, UIElement } from &quot;./types&quot;;
+import { getByPath } from &quot;./types&quot;;
+import { VisibilityConditionStrictSchema } from &quot;./visibility&quot;;
+⋮----
+// =============================================================================
+// Spec Structural Validation
+// =============================================================================
+⋮----
+/**
+ * Severity level for validation issues.
+ */
+export type SpecIssueSeverity = &quot;error&quot; | &quot;warning&quot;;
+⋮----
+/**
+ * A single validation issue found in a spec.
+ */
+export interface SpecIssue {
+  /** Severity: errors should be fixed, warnings are informational */
+  severity: SpecIssueSeverity;
+  /** Human-readable description of the issue */
+  message: string;
+  /** The element key where the issue was found (if applicable) */
+  elementKey?: string;
+  /** Machine-readable issue code for programmatic handling */
+  code:
+    | &quot;missing_root&quot;
+    | &quot;root_not_found&quot;
+    | &quot;missing_child&quot;
+    | &quot;invalid_visible&quot;
+    | &quot;repeat_without_children&quot;
+    | &quot;repeat_state_mismatch&quot;
+    | &quot;visible_in_props&quot;
+    | &quot;orphaned_element&quot;
+    | &quot;empty_spec&quot;
+    | &quot;on_in_props&quot;
+    | &quot;repeat_in_props&quot;
+    | &quot;watch_in_props&quot;;
+}
+⋮----
+/** Severity: errors should be fixed, warnings are informational */
+⋮----
+/** Human-readable description of the issue */
+⋮----
+/** The element key where the issue was found (if applicable) */
+⋮----
+/** Machine-readable issue code for programmatic handling */
+⋮----
+/**
+ * Result of spec structural validation.
+ */
+export interface SpecValidationIssues {
+  /** Whether the spec passed validation (no errors; warnings are OK) */
+  valid: boolean;
+  /** List of issues found */
+  issues: SpecIssue[];
+}
+⋮----
+/** Whether the spec passed validation (no errors; warnings are OK) */
+⋮----
+/** List of issues found */
+⋮----
+/**
+ * Options for validateSpec.
+ */
+export interface ValidateSpecOptions {
+  /**
+   * Whether to check for orphaned elements (elements not reachable from root).
+   * Defaults to false since orphans are harmless (just unused).
+   */
+  checkOrphans?: boolean;
+}
+⋮----
+/**
+   * Whether to check for orphaned elements (elements not reachable from root).
+   * Defaults to false since orphans are harmless (just unused).
+   */
+⋮----
+/**
+ * Validate a spec for structural integrity.
+ *
+ * Checks for common AI-generation errors:
+ * - Missing or empty root
+ * - Root element not found in elements map
+ * - Children referencing non-existent elements
+ * - `visible` placed inside `props` instead of on the element
+ * - Orphaned elements (optional)
+ *
+ * @example
+ * ```ts
+ * const result = validateSpec(spec);
+ * if (!result.valid) {
+ *   console.log(&quot;Spec errors:&quot;, result.issues);
+ * }
+ * ```
+ */
+export function validateSpec(
+  spec: Spec,
+  options: ValidateSpecOptions = {},
+): SpecValidationIssues
+⋮----
+// 1. Check root
+⋮----
+// 2. Check for empty spec
+⋮----
+// 3. Check each element
+⋮----
+// 3a. Missing children
+⋮----
+// 3b. Repeat containers that can never render anything. Both shapes pass
+// schema validation but produce silently empty regions at runtime.
+⋮----
+// 3b. Malformed visible condition. Unrecognized shapes silently evaluate
+// to hidden at runtime, so catch them here with a repairable message.
+⋮----
+// 3b. `visible` inside props
+⋮----
+// 3c. `on` inside props (should be a top-level field)
+⋮----
+// 3d. `repeat` inside props (should be a top-level field)
+⋮----
+// 3e. `watch` inside props (should be a top-level field)
+⋮----
+// 4. Orphaned elements (optional)
+⋮----
+const walk = (key: string) =&gt;
+⋮----
+/**
+ * Auto-fix common spec issues in-place and return a corrected copy.
+ *
+ * Currently fixes:
+ * - `visible` inside `props` → moved to element level
+ * - `on` inside `props` → moved to element level
+ * - `repeat` inside `props` → moved to element level
+ *
+ * Returns the fixed spec and a list of fixes applied.
+ */
+export interface SpecFix {
+  message: string;
+  /**
+   * Lossy fixes change what renders (e.g. pruning a dangling child
+   * reference); lossless fixes only relocate misplaced fields. Callers with a
+   * repair loop should prefer re-prompting over accepting lossy fixes, and
+   * use the lossy-fixed spec as a last resort.
+   */
+  lossy: boolean;
+}
+⋮----
+/**
+   * Lossy fixes change what renders (e.g. pruning a dangling child
+   * reference); lossless fixes only relocate misplaced fields. Callers with a
+   * repair loop should prefer re-prompting over accepting lossy fixes, and
+   * use the lossy-fixed spec as a last resort.
+   */
+⋮----
+export interface AutoFixOptions {
+  /**
+   * Apply lossy fixes (content pruning). Default true. Callers with a repair
+   * loop should pass false while retries remain so the model regenerates the
+   * missing content, then true as a last resort.
+   */
+  lossy?: boolean;
+}
+⋮----
+/**
+   * Apply lossy fixes (content pruning). Default true. Callers with a repair
+   * loop should pass false while retries remain so the model regenerates the
+   * missing content, then true as a last resort.
+   */
+⋮----
+export function autoFixSpec(
+  spec: Spec,
+  options: AutoFixOptions = {},
+):
+⋮----
+/** Structured fix records; fixes is the plain-message projection. */
+⋮----
+push(message: string, lossy = false)
+⋮----
+// Move visible from props to element level
+⋮----
+// Move on from props to element level
+⋮----
+// Move repeat from props to element level
+⋮----
+// Drop references to elements that were never defined. The renderer skips
+// missing children at runtime, so pruning produces the same rendered output
+// while letting the spec pass validation instead of hard-failing.
+⋮----
+// Pruning every child of a repeat container would only trade the
+// missing_child error for repeat_without_children; keep the dangling
+// reference so repair targets the real problem (the missing template).
+⋮----
+/**
+ * Format validation issues into a human-readable string suitable for
+ * inclusion in a repair prompt sent back to the AI.
+ */
+export function formatSpecIssues(issues: SpecIssue[]): string</file><file path="packages/core/src/state-store.test.ts">import { describe, it, expect, vi } from &quot;vitest&quot;;
+import { createStateStore, flattenToPointers } from &quot;./state-store&quot;;</file><file path="packages/core/src/state-store.ts">import {
+  getByPath,
+  parseJsonPointer,
+  type StateModel,
+  type StateStore,
+} from &quot;./types&quot;;
+⋮----
+/**
+ * Immutably set a value at a JSON Pointer path using structural sharing.
+ * Only objects along the path are shallow-cloned; untouched branches keep
+ * their original references.
+ */
+export function immutableSetByPath(
+  root: StateModel,
+  path: string,
+  value: unknown,
+): StateModel
+⋮----
+/**
+ * Create a simple in-memory {@link StateStore}.
+ *
+ * This is the default store used by `StateProvider` when no external store is
+ * provided. It mirrors the previous `useState`-based behaviour but is
+ * framework-agnostic so it can also be used in tests or non-React contexts.
+ */
+export function createStateStore(initialState: StateModel =
+⋮----
+function notify()
+⋮----
+get(path: string): unknown
+⋮----
+set(path: string, value: unknown): void
+⋮----
+update(updates: Record&lt;string, unknown&gt;): void
+⋮----
+getSnapshot(): StateModel
+⋮----
+getServerSnapshot(): StateModel
+⋮----
+subscribe(listener: () =&gt; void): () =&gt; void
+⋮----
+/**
+ * Configuration for {@link createStoreAdapter}. Adapter authors supply these
+ * three callbacks; everything else (get, set, update, no-op detection,
+ * getServerSnapshot) is handled by the returned {@link StateStore}.
+ */
+export interface StoreAdapterConfig {
+  /** Return the current state snapshot from the underlying store. */
+  getSnapshot: () =&gt; StateModel;
+  /** Write a new state snapshot to the underlying store. */
+  setSnapshot: (next: StateModel) =&gt; void;
+  /** Subscribe to changes in the underlying store. Return an unsubscribe fn. */
+  subscribe: (listener: () =&gt; void) =&gt; () =&gt; void;
+}
+⋮----
+/** Return the current state snapshot from the underlying store. */
+⋮----
+/** Write a new state snapshot to the underlying store. */
+⋮----
+/** Subscribe to changes in the underlying store. Return an unsubscribe fn. */
+⋮----
+/**
+ * Build a full {@link StateStore} from a minimal adapter config.
+ *
+ * Handles `get`, `set` (with no-op detection), `update` (batched, with no-op
+ * detection), `getSnapshot`, `getServerSnapshot`, and `subscribe` -- so each
+ * adapter only needs to wire its snapshot source, write API, and subscribe
+ * mechanism.
+ */
+export function createStoreAdapter(config: StoreAdapterConfig): StateStore
+⋮----
+/**
+ * Recursively flatten a plain object into a `Record&lt;string, unknown&gt;` keyed by
+ * JSON Pointer paths. Only leaf values (non-plain-object) appear in the output.
+ *
+ * Includes circular reference protection and a depth cap to prevent stack
+ * overflow on pathological inputs.
+ *
+ * ```ts
+ * flattenToPointers({ user: { name: &quot;Alice&quot; }, count: 1 })
+ * // =&gt; { &quot;/user/name&quot;: &quot;Alice&quot;, &quot;/count&quot;: 1 }
+ * ```
+ */
+export function flattenToPointers(
+  obj: Record&lt;string, unknown&gt;,
+  prefix = &quot;&quot;,
+  _depth = 0,
+  _seen?: Set&lt;object&gt;,
+  _warned?: { current: boolean },
+): Record&lt;string, unknown&gt;</file><file path="packages/core/src/store-utils.ts"></file><file path="packages/core/src/types.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import {
+  resolveDynamicValue,
+  getByPath,
+  setByPath,
+  addByPath,
+  removeByPath,
+  applySpecStreamPatch,
+  applySpecPatch,
+  nestedToFlat,
+  compileSpecStream,
+  createSpecStreamCompiler,
+  createMixedStreamParser,
+  createJsonRenderTransform,
+  SPEC_DATA_PART_TYPE,
+} from &quot;./types&quot;;
+import type { Spec, SpecStreamLine, StreamChunk } from &quot;./types&quot;;
+⋮----
+// =============================================================================
+// JSON Pointer (RFC 6901) escaping
+// =============================================================================
+⋮----
+// =============================================================================
+// addByPath (RFC 6902 &quot;add&quot; semantics)
+// =============================================================================
+⋮----
+// =============================================================================
+// removeByPath (RFC 6902 &quot;remove&quot; semantics)
+// =============================================================================
+⋮----
+// =============================================================================
+// applySpecStreamPatch - RFC 6902 operations
+// =============================================================================
+⋮----
+// Source should still exist
+⋮----
+// =============================================================================
+// compileSpecStream
+// =============================================================================
+⋮----
+// =============================================================================
+// createSpecStreamCompiler
+// =============================================================================
+⋮----
+// First chunk is incomplete
+⋮----
+// Complete the line
+⋮----
+// No newline, so not processed yet
+⋮----
+// =============================================================================
+// applySpecPatch
+// =============================================================================
+⋮----
+// =============================================================================
+// createMixedStreamParser
+// =============================================================================
+⋮----
+// No trailing newline — stuck in buffer
+⋮----
+// =============================================================================
+// nestedToFlat
+// =============================================================================
+⋮----
+// state should not appear as a field on the element
+⋮----
+// Only root state hoists to spec.state
+⋮----
+// The child&apos;s state is not a standard field, so it should not leak
+⋮----
+// =============================================================================
+// createJsonRenderTransform
+// =============================================================================
+⋮----
+/** Helper: push text-delta chunks through the transform and collect output */
+async function transformText(text: string): Promise&lt;StreamChunk[]&gt;
+⋮----
+// Read and write concurrently to avoid backpressure deadlock
+⋮----
+// Prose before and after should come through
+⋮----
+// Fence delimiters should NOT appear in text
+⋮----
+// Write a text delta with no trailing newline
+⋮----
+// The buffered patch should be flushed on text-end
+⋮----
+// ===========================================================================
+// Text block splitting around spec data
+// ===========================================================================
+⋮----
+// There should be two text blocks: one before the patch and one after
+⋮----
+// Spec data should appear between the two text blocks
+⋮----
+// Find the indices of the first text-end and the spec chunk
+⋮----
+// Write text-start + text-delta, then close WITHOUT text-end
+⋮----
+// The transform&apos;s flush should have emitted a text-end to close the block
+⋮----
+// Text content should still be present
+⋮----
+// There should be no text-start/text-end pairs between the two spec chunks
+// (the initial text-start from the upstream is forwarded, but no new empty ones)
+⋮----
+// No meaningful text content between the patches
+⋮----
+// Count text blocks: there should be at most 1 (the initial upstream one),
+// not extra empty ones inserted between patches
+⋮----
+// =============================================================================
+// createMixedStreamParser - fence mode
+// =============================================================================</file><file path="packages/core/src/types.ts">import { z } from &quot;zod&quot;;
+import type { ActionBinding } from &quot;./actions&quot;;
+⋮----
+/**
+ * Dynamic value - can be a literal or a `{ $state }` reference to the state model.
+ *
+ * Used in action params and validation args where values can either be
+ * hardcoded or resolved from state at runtime.
+ */
+export type DynamicValue&lt;T = unknown&gt; = T | { $state: string };
+⋮----
+/**
+ * Dynamic string value
+ */
+export type DynamicString = DynamicValue&lt;string&gt;;
+⋮----
+/**
+ * Dynamic number value
+ */
+export type DynamicNumber = DynamicValue&lt;number&gt;;
+⋮----
+/**
+ * Dynamic boolean value
+ */
+export type DynamicBoolean = DynamicValue&lt;boolean&gt;;
+⋮----
+/**
+ * Zod schema for dynamic values
+ */
+⋮----
+/**
+ * Base UI element structure for v2
+ */
+export interface UIElement&lt;
+  T extends string = string,
+  P = Record&lt;string, unknown&gt;,
+&gt; {
+  /** Component type from the catalog */
+  type: T;
+  /** Component props */
+  props: P;
+  /** Child element keys (flat structure) */
+  children?: string[];
+  /** Visibility condition */
+  visible?: VisibilityCondition;
+  /** Event bindings — maps event names to action bindings */
+  on?: Record&lt;string, ActionBinding | ActionBinding[]&gt;;
+  /** Repeat children once per item in a state array */
+  repeat?: { statePath: string; key?: string };
+  /**
+   * State watchers — maps JSON Pointer state paths to action bindings.
+   * When the value at a watched path changes, the bound actions fire.
+   * Useful for cascading dependencies (e.g. country → city option loading).
+   */
+  watch?: Record&lt;string, ActionBinding | ActionBinding[]&gt;;
+}
+⋮----
+/** Component type from the catalog */
+⋮----
+/** Component props */
+⋮----
+/** Child element keys (flat structure) */
+⋮----
+/** Visibility condition */
+⋮----
+/** Event bindings — maps event names to action bindings */
+⋮----
+/** Repeat children once per item in a state array */
+⋮----
+/**
+   * State watchers — maps JSON Pointer state paths to action bindings.
+   * When the value at a watched path changes, the bound actions fire.
+   * Useful for cascading dependencies (e.g. country → city option loading).
+   */
+⋮----
+/**
+ * Element with key and parentKey for use with flatToTree.
+ * When elements are in an array (not a keyed map), key and parentKey
+ * are needed to establish identity and parent-child relationships.
+ */
+export interface FlatElement&lt;
+  T extends string = string,
+  P = Record&lt;string, unknown&gt;,
+&gt; extends UIElement&lt;T, P&gt; {
+  /** Unique key identifying this element */
+  key: string;
+  /** Parent element key (null for root) */
+  parentKey?: string | null;
+}
+⋮----
+/** Unique key identifying this element */
+⋮----
+/** Parent element key (null for root) */
+⋮----
+/**
+ * Shared comparison operators for visibility conditions.
+ *
+ * Use at most ONE comparison operator per condition. If multiple are
+ * provided, only the first matching one is evaluated (precedence:
+ * eq &gt; neq &gt; gt &gt; gte &gt; lt &gt; lte). With no operator, truthiness is checked.
+ *
+ * `not` inverts the final result of whichever operator (or truthiness
+ * check) is used.
+ */
+type ComparisonOperators = {
+  eq?: unknown;
+  neq?: unknown;
+  gt?: number | { $state: string };
+  gte?: number | { $state: string };
+  lt?: number | { $state: string };
+  lte?: number | { $state: string };
+  not?: true;
+};
+⋮----
+/**
+ * A single state-based condition.
+ * Resolves `$state` to a value from the state model, then applies the operator.
+ * Without an operator, checks truthiness.
+ *
+ * When `not` is `true`, the result of the entire condition is inverted.
+ * For example `{ $state: &quot;/count&quot;, gt: 5, not: true }` means &quot;NOT greater than 5&quot;.
+ */
+export type StateCondition = { $state: string } &amp; ComparisonOperators;
+⋮----
+/**
+ * A condition that resolves `$item` to a field on the current repeat item.
+ * Only meaningful inside a `repeat` scope.
+ *
+ * Use `&quot;&quot;` to reference the whole item, or `&quot;field&quot;` for a specific field.
+ */
+export type ItemCondition = { $item: string } &amp; ComparisonOperators;
+⋮----
+/**
+ * A condition that resolves `$index` to the current repeat array index.
+ * Only meaningful inside a `repeat` scope.
+ */
+export type IndexCondition = { $index: true } &amp; ComparisonOperators;
+⋮----
+/** A single visibility condition (state, item, or index). */
+export type SingleCondition = StateCondition | ItemCondition | IndexCondition;
+⋮----
+/**
+ * AND wrapper — all child conditions must be true.
+ * This is the explicit form of the implicit array AND (`SingleCondition[]`).
+ * Unlike the implicit form, `$and` supports nested `$or` and `$and` conditions.
+ */
+export type AndCondition = { $and: VisibilityCondition[] };
+⋮----
+/**
+ * OR wrapper — at least one child condition must be true.
+ */
+export type OrCondition = { $or: VisibilityCondition[] };
+⋮----
+/**
+ * Visibility condition types.
+ * - `boolean` — always/never
+ * - `SingleCondition` — single condition (`$state`, `$item`, or `$index`)
+ * - `SingleCondition[]` — implicit AND (all must be true)
+ * - `AndCondition` — `{ $and: [...] }`, explicit AND (all must be true)
+ * - `OrCondition` — `{ $or: [...] }`, at least one must be true
+ */
+export type VisibilityCondition =
+  | boolean
+  | SingleCondition
+  | SingleCondition[]
+  | AndCondition
+  | OrCondition;
+⋮----
+/**
+ * Flat UI tree structure (optimized for LLM generation)
+ */
+export interface Spec {
+  /** Root element key */
+  root: string;
+  /** Flat map of elements by key */
+  elements: Record&lt;string, UIElement&gt;;
+  /** Optional initial state to seed the state model.
+   *  Components using statePath will read from / write to this state. */
+  state?: Record&lt;string, unknown&gt;;
+}
+⋮----
+/** Root element key */
+⋮----
+/** Flat map of elements by key */
+⋮----
+/** Optional initial state to seed the state model.
+   *  Components using statePath will read from / write to this state. */
+⋮----
+/**
+ * State model type
+ */
+export type StateModel = Record&lt;string, unknown&gt;;
+⋮----
+/**
+ * An abstract store that owns state and notifies subscribers on change.
+ *
+ * Consumers can supply their own implementation (backed by Redux, Zustand,
+ * XState, etc.) or use the built-in {@link createStateStore} for a simple
+ * in-memory store.
+ */
+export interface StateStore {
+  /** Read a value by JSON Pointer path. */
+  get: (path: string) =&gt; unknown;
+  /**
+   * Write a value by JSON Pointer path and notify subscribers.
+   * Equality is checked by reference (`===`), not deep comparison.
+   * Callers must pass a new object/array reference for changes to be detected.
+   */
+  set: (path: string, value: unknown) =&gt; void;
+  /**
+   * Write multiple values at once and notify subscribers (single notification).
+   * Each value is compared by reference (`===`); only paths whose value
+   * actually changed are applied.
+   */
+  update: (updates: Record&lt;string, unknown&gt;) =&gt; void;
+  /** Return the full state object (used by `useSyncExternalStore`). */
+  getSnapshot: () =&gt; StateModel;
+  /** Optional server snapshot for SSR (passed to `useSyncExternalStore`). Falls back to `getSnapshot` when omitted. */
+  getServerSnapshot?: () =&gt; StateModel;
+  /** Register a listener that is called on every state change. Returns an unsubscribe function. */
+  subscribe: (listener: () =&gt; void) =&gt; () =&gt; void;
+}
+⋮----
+/** Read a value by JSON Pointer path. */
+⋮----
+/**
+   * Write a value by JSON Pointer path and notify subscribers.
+   * Equality is checked by reference (`===`), not deep comparison.
+   * Callers must pass a new object/array reference for changes to be detected.
+   */
+⋮----
+/**
+   * Write multiple values at once and notify subscribers (single notification).
+   * Each value is compared by reference (`===`); only paths whose value
+   * actually changed are applied.
+   */
+⋮----
+/** Return the full state object (used by `useSyncExternalStore`). */
+⋮----
+/** Optional server snapshot for SSR (passed to `useSyncExternalStore`). Falls back to `getSnapshot` when omitted. */
+⋮----
+/** Register a listener that is called on every state change. Returns an unsubscribe function. */
+⋮----
+/**
+ * Component schema definition using Zod
+ */
+export type ComponentSchema = z.ZodType&lt;Record&lt;string, unknown&gt;&gt;;
+⋮----
+/**
+ * Validation mode for catalog validation
+ */
+export type ValidationMode = &quot;strict&quot; | &quot;warn&quot; | &quot;ignore&quot;;
+⋮----
+/**
+ * JSON patch operation types (RFC 6902)
+ */
+export type PatchOp = &quot;add&quot; | &quot;remove&quot; | &quot;replace&quot; | &quot;move&quot; | &quot;copy&quot; | &quot;test&quot;;
+⋮----
+/**
+ * JSON patch operation (RFC 6902)
+ */
+export interface JsonPatch {
+  op: PatchOp;
+  path: string;
+  /** Required for add, replace, test */
+  value?: unknown;
+  /** Required for move, copy (source location) */
+  from?: string;
+}
+⋮----
+/** Required for add, replace, test */
+⋮----
+/** Required for move, copy (source location) */
+⋮----
+/**
+ * Resolve a dynamic value against a state model
+ */
+export function resolveDynamicValue&lt;T&gt;(
+  value: DynamicValue&lt;T&gt;,
+  stateModel: StateModel,
+): T | undefined
+⋮----
+/**
+ * Unescape a JSON Pointer token per RFC 6901 Section 4.
+ * ~1 is decoded to / and ~0 is decoded to ~ (order matters).
+ */
+function unescapeJsonPointer(token: string): string
+⋮----
+/**
+ * Parse a JSON Pointer path into unescaped segments.
+ */
+export function parseJsonPointer(path: string): string[]
+⋮----
+/**
+ * Get a value from an object by JSON Pointer path (RFC 6901)
+ */
+export function getByPath(obj: unknown, path: string): unknown
+⋮----
+/**
+ * Check if a string is a numeric index
+ */
+function isNumericIndex(str: string): boolean
+⋮----
+/**
+ * Set a value in an object by JSON Pointer path (RFC 6901).
+ * Automatically creates arrays when the path segment is a numeric index.
+ */
+export function setByPath(
+  obj: Record&lt;string, unknown&gt;,
+  path: string,
+  value: unknown,
+): void
+⋮----
+/**
+ * Add a value per RFC 6902 &quot;add&quot; semantics.
+ * For objects: create-or-replace the member.
+ * For arrays: insert before the given index, or append if &quot;-&quot;.
+ */
+export function addByPath(
+  obj: Record&lt;string, unknown&gt;,
+  path: string,
+  value: unknown,
+): void
+⋮----
+/**
+ * Remove a value per RFC 6902 &quot;remove&quot; semantics.
+ * For objects: delete the property.
+ * For arrays: splice out the element at the given index.
+ */
+export function removeByPath(obj: Record&lt;string, unknown&gt;, path: string): void
+⋮----
+return; // path does not exist
+⋮----
+return; // path does not exist
+⋮----
+/**
+ * Deep equality check for RFC 6902 &quot;test&quot; operation.
+ */
+function deepEqual(a: unknown, b: unknown): boolean
+⋮----
+/**
+ * Find a form value from params and/or state.
+ * Useful in action handlers to locate form input values regardless of path format.
+ *
+ * Checks in order:
+ * 1. Direct param key (if not a path reference)
+ * 2. Param keys ending with the field name
+ * 3. State keys ending with the field name (dot notation)
+ * 4. State path using getByPath (slash notation)
+ *
+ * @example
+ * // Find &quot;name&quot; from params or state
+ * const name = findFormValue(&quot;name&quot;, params, state);
+ *
+ * // Will find from: params.name, params[&quot;form.name&quot;], state[&quot;form.name&quot;], or getByPath(state, &quot;name&quot;)
+ */
+export function findFormValue(
+  fieldName: string,
+  params?: Record&lt;string, unknown&gt;,
+  state?: Record&lt;string, unknown&gt;,
+): unknown
+⋮----
+// Check params first (but not if it looks like a state path reference)
+⋮----
+// If the value looks like a path reference (contains dots), skip it
+⋮----
+// Check param keys that end with the field name
+⋮----
+// Check state keys that end with the field name (handles any form naming)
+⋮----
+// Try getByPath with the raw field name
+⋮----
+// =============================================================================
+// SpecStream - Streaming format for progressively building specs
+// =============================================================================
+⋮----
+/**
+ * A SpecStream line - a single patch operation in the stream.
+ */
+export type SpecStreamLine = JsonPatch;
+⋮----
+/**
+ * Parse a single SpecStream line into a patch operation.
+ * Returns null if the line is invalid or empty.
+ *
+ * SpecStream is json-render&apos;s streaming format where each line is a JSON patch
+ * operation that progressively builds up the final spec.
+ */
+export function parseSpecStreamLine(line: string): SpecStreamLine | null
+⋮----
+/**
+ * Apply a single RFC 6902 JSON Patch operation to an object.
+ * Mutates the object in place.
+ *
+ * Supports all six RFC 6902 operations: add, remove, replace, move, copy, test.
+ *
+ * @throws {Error} If a &quot;test&quot; operation fails (value mismatch).
+ */
+export function applySpecStreamPatch&lt;T extends Record&lt;string, unknown&gt;&gt;(
+  obj: T,
+  patch: SpecStreamLine,
+): T
+⋮----
+// RFC 6902: target must exist. For streaming tolerance we set regardless.
+⋮----
+/**
+ * Apply a single RFC 6902 JSON Patch operation to a Spec.
+ * Mutates the spec in place and returns it.
+ *
+ * This is a typed convenience wrapper around `applySpecStreamPatch` that
+ * accepts a `Spec` directly without requiring a cast to `Record&lt;string, unknown&gt;`.
+ *
+ * Note: This mutates the spec. For React state updates, spread the result
+ * to create a new reference: `setSpec({ ...applySpecPatch(spec, patch) })`.
+ *
+ * @example
+ * let spec: Spec = { root: &quot;&quot;, elements: {} };
+ * applySpecPatch(spec, { op: &quot;add&quot;, path: &quot;/root&quot;, value: &quot;main&quot; });
+ */
+export function applySpecPatch(spec: Spec, patch: SpecStreamLine): Spec
+⋮----
+// =============================================================================
+// Nested-to-Flat Conversion
+// =============================================================================
+⋮----
+/**
+ * A nested spec node. This is the tree format that humans naturally write —
+ * each node has inline `children` as an array of child node objects rather
+ * than string keys.
+ */
+interface NestedNode {
+  type: string;
+  props: Record&lt;string, unknown&gt;;
+  children?: NestedNode[];
+  /** Any other top-level fields (visible, on, repeat, etc.) */
+  [key: string]: unknown;
+}
+⋮----
+/** Any other top-level fields (visible, on, repeat, etc.) */
+⋮----
+/**
+ * Convert a nested (tree-structured) spec into the flat `Spec` format used
+ * by json-render renderers.
+ *
+ * In the nested format each node has inline `children` as an array of child
+ * objects. This function walks the tree, assigns auto-generated keys
+ * (`el-0`, `el-1`, ...), and produces a flat `{ root, elements, state }` spec.
+ *
+ * The top-level `state` field (if present on the root node) is hoisted to
+ * `spec.state`.
+ *
+ * @example
+ * ```ts
+ * const nested = {
+ *   type: &quot;Card&quot;,
+ *   props: { title: &quot;Hello&quot; },
+ *   children: [
+ *     { type: &quot;Text&quot;, props: { content: &quot;World&quot; } },
+ *   ],
+ *   state: { count: 0 },
+ * };
+ * const spec = nestedToFlat(nested);
+ * // {
+ * //   root: &quot;el-0&quot;,
+ * //   elements: {
+ * //     &quot;el-0&quot;: { type: &quot;Card&quot;, props: { title: &quot;Hello&quot; }, children: [&quot;el-1&quot;] },
+ * //     &quot;el-1&quot;: { type: &quot;Text&quot;, props: { content: &quot;World&quot; }, children: [] },
+ * //   },
+ * //   state: { count: 0 },
+ * // }
+ * ```
+ */
+export function nestedToFlat(nested: Record&lt;string, unknown&gt;): Spec
+⋮----
+function walk(node: Record&lt;string, unknown&gt;): string
+⋮----
+// Recursively flatten children
+⋮----
+// Build the flat element, preserving extra fields (visible, on, repeat, etc.)
+// but excluding `state` which is hoisted to spec-level.
+⋮----
+// Copy extra fields (visible, on, repeat) but not state
+⋮----
+// Hoist state from root node if present
+⋮----
+/**
+ * Compile a SpecStream string into a JSON object.
+ * Each line should be a patch operation.
+ *
+ * @example
+ * const stream = `{&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/name&quot;,&quot;value&quot;:&quot;Alice&quot;}
+ * {&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/age&quot;,&quot;value&quot;:30}`;
+ * const result = compileSpecStream(stream);
+ * // { name: &quot;Alice&quot;, age: 30 }
+ */
+export function compileSpecStream&lt;
+  T extends Record&lt;string, unknown&gt; = Record&lt;string, unknown&gt;,
+&gt;(stream: string, initial: T =
+⋮----
+/**
+ * Streaming SpecStream compiler.
+ * Useful for processing SpecStream data as it streams in from AI.
+ *
+ * @example
+ * const compiler = createSpecStreamCompiler&lt;MySpec&gt;();
+ *
+ * // As chunks arrive:
+ * const { result, newPatches } = compiler.push(chunk);
+ * if (newPatches.length &gt; 0) {
+ *   updateUI(result);
+ * }
+ *
+ * // When done:
+ * const finalResult = compiler.getResult();
+ */
+export interface SpecStreamCompiler&lt;T&gt; {
+  /** Push a chunk of text. Returns the current result and any new patches applied. */
+  push(chunk: string): { result: T; newPatches: SpecStreamLine[] };
+  /** Get the current compiled result */
+  getResult(): T;
+  /** Get all patches that have been applied */
+  getPatches(): SpecStreamLine[];
+  /** Reset the compiler to initial state */
+  reset(initial?: Partial&lt;T&gt;): void;
+}
+⋮----
+/** Push a chunk of text. Returns the current result and any new patches applied. */
+push(chunk: string):
+/** Get the current compiled result */
+getResult(): T;
+/** Get all patches that have been applied */
+getPatches(): SpecStreamLine[];
+/** Reset the compiler to initial state */
+reset(initial?: Partial&lt;T&gt;): void;
+⋮----
+/**
+ * Create a streaming SpecStream compiler.
+ *
+ * SpecStream is json-render&apos;s streaming format. AI outputs patch operations
+ * line by line, and this compiler progressively builds the final spec.
+ *
+ * @example
+ * const compiler = createSpecStreamCompiler&lt;TimelineSpec&gt;();
+ *
+ * // Process streaming response
+ * const reader = response.body.getReader();
+ * while (true) {
+ *   const { done, value } = await reader.read();
+ *   if (done) break;
+ *
+ *   const { result, newPatches } = compiler.push(decoder.decode(value));
+ *   if (newPatches.length &gt; 0) {
+ *     setSpec(result); // Update UI with partial result
+ *   }
+ * }
+ */
+export function createSpecStreamCompiler&lt;T = Record&lt;string, unknown&gt;&gt;(
+  initial: Partial&lt;T&gt; = {},
+): SpecStreamCompiler&lt;T&gt;
+⋮----
+// Process complete lines
+⋮----
+buffer = lines.pop() || &quot;&quot;; // Keep incomplete line in buffer
+⋮----
+// Return a shallow copy to trigger re-renders
+⋮----
+getResult(): T
+⋮----
+// Process any remaining buffer
+⋮----
+getPatches(): SpecStreamLine[]
+⋮----
+reset(newInitial: Partial&lt;T&gt; =
+⋮----
+// =============================================================================
+// Mixed Stream Parser — for chat + GenUI (text interleaved with JSONL patches)
+// =============================================================================
+⋮----
+/**
+ * Callbacks for the mixed stream parser.
+ */
+export interface MixedStreamCallbacks {
+  /** Called when a JSONL patch line is parsed */
+  onPatch: (patch: SpecStreamLine) =&gt; void;
+  /** Called when a text (non-JSONL) line is received */
+  onText: (text: string) =&gt; void;
+}
+⋮----
+/** Called when a JSONL patch line is parsed */
+⋮----
+/** Called when a text (non-JSONL) line is received */
+⋮----
+/**
+ * A stateful parser for mixed streams that contain both text and JSONL patches.
+ * Used in chat + GenUI scenarios where an LLM responds with conversational text
+ * interleaved with json-render JSONL patch operations.
+ */
+export interface MixedStreamParser {
+  /** Push a chunk of streamed data. Calls onPatch/onText for each complete line. */
+  push(chunk: string): void;
+  /** Flush any remaining buffered content. Call when the stream ends. */
+  flush(): void;
+}
+⋮----
+/** Push a chunk of streamed data. Calls onPatch/onText for each complete line. */
+push(chunk: string): void;
+/** Flush any remaining buffered content. Call when the stream ends. */
+flush(): void;
+⋮----
+/**
+ * Create a parser for mixed text + JSONL streams.
+ *
+ * In chat + GenUI scenarios, an LLM streams a response that contains both
+ * conversational text and json-render JSONL patch lines. This parser buffers
+ * incoming chunks, splits them into lines, and classifies each line as either
+ * a JSONL patch (via `parseSpecStreamLine`) or plain text.
+ *
+ * @example
+ * const parser = createMixedStreamParser({
+ *   onText: (text) =&gt; appendToMessage(text),
+ *   onPatch: (patch) =&gt; applySpecPatch(spec, patch),
+ * });
+ *
+ * // As chunks arrive from the stream:
+ * for await (const chunk of stream) {
+ *   parser.push(chunk);
+ * }
+ * parser.flush();
+ */
+export function createMixedStreamParser(
+  callbacks: MixedStreamCallbacks,
+): MixedStreamParser
+⋮----
+function processLine(line: string): void
+⋮----
+// Fence detection
+⋮----
+// Outside fence: heuristic mode
+⋮----
+push(chunk: string): void
+⋮----
+// Process complete lines
+⋮----
+buffer = lines.pop() || &quot;&quot;; // Keep incomplete line in buffer
+⋮----
+flush(): void
+⋮----
+// =============================================================================
+// AI SDK Stream Transform
+// =============================================================================
+⋮----
+/**
+ * Minimal chunk shape compatible with the AI SDK&apos;s `UIMessageChunk`.
+ *
+ * Defined here so that `@json-render/core` has no dependency on the `ai`
+ * package. The discriminated union covers the three text-related chunk types
+ * the transform inspects; all other chunk types pass through via the fallback.
+ */
+export type StreamChunk =
+  | { type: &quot;text-start&quot;; id: string; [k: string]: unknown }
+  | { type: &quot;text-delta&quot;; id: string; delta: string; [k: string]: unknown }
+  | { type: &quot;text-end&quot;; id: string; [k: string]: unknown }
+  | { type: string; [k: string]: unknown };
+⋮----
+/** The opening fence for a spec block (e.g. ` ```spec `). */
+⋮----
+/** The closing fence for a spec block. */
+⋮----
+/**
+ * Creates a `TransformStream` that intercepts AI SDK UI message stream chunks
+ * and classifies text content as either prose or json-render JSONL patches.
+ *
+ * Two classification modes:
+ *
+ * 1. **Fence mode** (preferred): Lines between ` ```spec ` and ` ``` ` are
+ *    parsed as JSONL patches. Fence delimiters are swallowed (not emitted).
+ * 2. **Heuristic mode** (backward compat): Outside of fences, lines starting
+ *    with `{` are buffered and tested with `parseSpecStreamLine`. Valid patches
+ *    are emitted as {@link SPEC_DATA_PART_TYPE} parts; everything else is
+ *    flushed as text.
+ *
+ * Non-text chunks (tool events, step markers, etc.) are passed through unchanged.
+ *
+ * @example
+ * ```ts
+ * import { createJsonRenderTransform } from &quot;@json-render/core&quot;;
+ * import { createUIMessageStream, createUIMessageStreamResponse } from &quot;ai&quot;;
+ *
+ * const stream = createUIMessageStream({
+ *   execute: async ({ writer }) =&gt; {
+ *     writer.merge(
+ *       result.toUIMessageStream().pipeThrough(createJsonRenderTransform()),
+ *     );
+ *   },
+ * });
+ * return createUIMessageStreamResponse({ stream });
+ * ```
+ */
+export function createJsonRenderTransform(): TransformStream&lt;
+  StreamChunk,
+  StreamChunk
+&gt; {
+  let lineBuffer = &quot;&quot;;
+  let currentTextId = &quot;&quot;;
+  // Whether the current incomplete line might be JSONL (starts with &apos;{&apos;)
+  let buffering = false;
+  // Whether we are inside a ```spec fence
+  let inSpecFence = false;
+  // Whether we are currently inside a text block (between text-start/text-end).
+  // Used to split text blocks around spec data so the AI SDK creates separate
+  // text parts, preserving interleaving of prose and UI in message.parts.
+  let inTextBlock = false;
+  let textIdCounter = 0;
+
+  /** Close the current text block if one is open. */
+  function closeTextBlock(
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+// Whether the current incomplete line might be JSONL (starts with &apos;{&apos;)
+⋮----
+// Whether we are inside a ```spec fence
+⋮----
+// Whether we are currently inside a text block (between text-start/text-end).
+// Used to split text blocks around spec data so the AI SDK creates separate
+// text parts, preserving interleaving of prose and UI in message.parts.
+⋮----
+/** Close the current text block if one is open. */
+function closeTextBlock(
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+/** Ensure a text block is open, starting a new one if needed. */
+function ensureTextBlock(
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+/** Emit a text-delta, opening a text block first if necessary. */
+function emitTextDelta(
+    delta: string,
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+function emitPatch(
+    patch: SpecStreamLine,
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+function flushBuffer(
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+// Inside a fence, everything is spec data
+⋮----
+// Non-patch lines inside the fence are silently dropped
+⋮----
+// Was buffered but isn&apos;t JSONL — flush as text
+⋮----
+// Whitespace-only buffer — forward as-is (preserves blank lines)
+⋮----
+function processCompleteLine(
+    line: string,
+    controller: TransformStreamDefaultController&lt;StreamChunk&gt;,
+)
+⋮----
+// --- Fence detection ---
+⋮----
+return; // Swallow the opening fence
+⋮----
+return; // Swallow the closing fence
+⋮----
+// Inside a fence: parse as spec data
+⋮----
+// --- Outside fence: heuristic mode ---
+⋮----
+// Empty line — forward for markdown paragraph breaks
+⋮----
+transform(chunk, controller)
+⋮----
+// Line complete — classify and emit
+⋮----
+// Outside fence, emit newline; inside fence, swallow it
+⋮----
+// Start of a new line — decide whether to buffer or stream
+⋮----
+// Buffer: inside fence (everything), or heuristic mode ({), or potential fence (`)
+⋮----
+flush(controller)
+⋮----
+/**
+ * The key registered in `AppDataParts` for json-render specs.
+ * The AI SDK automatically prefixes this with `&quot;data-&quot;` on the wire,
+ * so the actual stream chunk type is `&quot;data-spec&quot;` (see {@link SPEC_DATA_PART_TYPE}).
+ *
+ * @example
+ * ```ts
+ * import { SPEC_DATA_PART, type SpecDataPart } from &quot;@json-render/core&quot;;
+ * type AppDataParts = { [SPEC_DATA_PART]: SpecDataPart };
+ * ```
+ */
+⋮----
+/**
+ * The wire-format type string as it appears in stream chunks and message parts.
+ * This is `&quot;data-&quot;` + {@link SPEC_DATA_PART} — i.e. `&quot;data-spec&quot;`.
+ *
+ * Use this constant when filtering message parts or enqueuing stream chunks.
+ */
+⋮----
+/**
+ * Discriminated union for the payload of a {@link SPEC_DATA_PART_TYPE} SSE part.
+ *
+ * - `&quot;patch&quot;`: A single RFC 6902 JSON Patch operation (streaming, progressive UI).
+ * - `&quot;flat&quot;`: A complete flat spec with `root`, `elements`, and optional `state`.
+ * - `&quot;nested&quot;`: A complete nested spec (tree structure — schema depends on catalog).
+ */
+export type SpecDataPart =
+  | { type: &quot;patch&quot;; patch: JsonPatch }
+  | { type: &quot;flat&quot;; spec: Spec }
+  | { type: &quot;nested&quot;; spec: Record&lt;string, unknown&gt; };
+⋮----
+/**
+ * Convenience wrapper that pipes an AI SDK UI message stream through the
+ * json-render transform, classifying text as prose or JSONL patches.
+ *
+ * Eliminates the need for manual `pipeThrough(createJsonRenderTransform())`
+ * and the associated type cast.
+ *
+ * @example
+ * ```ts
+ * import { pipeJsonRender } from &quot;@json-render/core&quot;;
+ *
+ * const stream = createUIMessageStream({
+ *   execute: async ({ writer }) =&gt; {
+ *     writer.merge(pipeJsonRender(result.toUIMessageStream()));
+ *   },
+ * });
+ * return createUIMessageStreamResponse({ stream });
+ * ```
+ */
+export function pipeJsonRender&lt;T = StreamChunk&gt;(
+  stream: ReadableStream&lt;T&gt;,
+): ReadableStream&lt;T&gt;</file><file path="packages/core/src/validation.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import {
+  builtInValidationFunctions,
+  runValidationCheck,
+  runValidation,
+  check,
+} from &quot;./validation&quot;;
+⋮----
+enabled: { $state: &quot;/enabled&quot;, eq: true }, // False because /enabled is not set
+⋮----
+enabled: { $state: &quot;/enabled&quot; }, // True because /enabled is truthy
+⋮----
+// =============================================================================
+// Deep arg resolution in runValidationCheck
+// =============================================================================</file><file path="packages/core/src/validation.ts">import { z } from &quot;zod&quot;;
+import type { DynamicValue, StateModel, VisibilityCondition } from &quot;./types&quot;;
+import { DynamicValueSchema, resolveDynamicValue } from &quot;./types&quot;;
+import { VisibilityConditionSchema, evaluateVisibility } from &quot;./visibility&quot;;
+import { resolvePropValue } from &quot;./props&quot;;
+⋮----
+/**
+ * Validation check definition
+ */
+export interface ValidationCheck {
+  /** Validation type (built-in or from catalog) */
+  type: string;
+  /** Additional arguments for the validation */
+  args?: Record&lt;string, DynamicValue&gt;;
+  /** Error message to display if check fails */
+  message: string;
+}
+⋮----
+/** Validation type (built-in or from catalog) */
+⋮----
+/** Additional arguments for the validation */
+⋮----
+/** Error message to display if check fails */
+⋮----
+/**
+ * Validation configuration for a field
+ */
+export interface ValidationConfig {
+  /** Array of checks to run */
+  checks?: ValidationCheck[];
+  /** When to run validation */
+  validateOn?: &quot;change&quot; | &quot;blur&quot; | &quot;submit&quot;;
+  /** Condition for when validation is enabled */
+  enabled?: VisibilityCondition;
+}
+⋮----
+/** Array of checks to run */
+⋮----
+/** When to run validation */
+⋮----
+/** Condition for when validation is enabled */
+⋮----
+/**
+ * Schema for validation check
+ */
+⋮----
+/**
+ * Schema for validation config
+ */
+⋮----
+/**
+ * Validation function signature
+ */
+export type ValidationFunction = (
+  value: unknown,
+  args?: Record&lt;string, unknown&gt;,
+) =&gt; boolean;
+⋮----
+/**
+ * Validation function definition in catalog
+ */
+export interface ValidationFunctionDefinition {
+  /** The validation function */
+  validate: ValidationFunction;
+  /** Description for AI */
+  description?: string;
+}
+⋮----
+/** The validation function */
+⋮----
+/** Description for AI */
+⋮----
+const matchesImpl: ValidationFunction = (
+  value: unknown,
+  args?: Record&lt;string, unknown&gt;,
+) =&gt;
+⋮----
+/**
+ * Built-in validation functions
+ */
+⋮----
+/**
+   * Check if value is not null, undefined, or empty string
+   */
+⋮----
+/**
+   * Check if value is a valid email address
+   */
+⋮----
+/**
+   * Check minimum string length
+   */
+⋮----
+/**
+   * Check maximum string length
+   */
+⋮----
+/**
+   * Check if string matches a regex pattern
+   */
+⋮----
+/**
+   * Check minimum numeric value
+   */
+⋮----
+/**
+   * Check maximum numeric value
+   */
+⋮----
+/**
+   * Check if value is a number
+   */
+⋮----
+/**
+   * Check if value is a valid URL
+   */
+⋮----
+/**
+   * Check if value matches another field
+   */
+⋮----
+/**
+   * Alias for matches with a more descriptive name for cross-field equality
+   */
+⋮----
+/**
+   * Check if value is less than another field&apos;s value.
+   * Supports numbers, strings (useful for ISO date comparison), and
+   * cross-type numeric coercion (e.g. string &quot;3&quot; vs number 5).
+   */
+⋮----
+/**
+   * Check if value is greater than another field&apos;s value.
+   * Supports numbers, strings (useful for ISO date comparison), and
+   * cross-type numeric coercion (e.g. string &quot;7&quot; vs number 5).
+   */
+⋮----
+/**
+   * Required only when a condition is met.
+   * Uses JS truthiness: 0, false, &quot;&quot;, null, and undefined are all
+   * treated as &quot;condition not met&quot; (field not required), matching
+   * the visibility system&apos;s bare-condition semantics.
+   */
+⋮----
+/**
+ * Validation result for a single check
+ */
+export interface ValidationCheckResult {
+  type: string;
+  valid: boolean;
+  message: string;
+}
+⋮----
+/**
+ * Full validation result for a field
+ */
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  checks: ValidationCheckResult[];
+}
+⋮----
+/**
+ * Context for running validation
+ */
+export interface ValidationContext {
+  /** Current value to validate */
+  value: unknown;
+  /** Full data model for resolving paths */
+  stateModel: StateModel;
+  /** Custom validation functions from catalog */
+  customFunctions?: Record&lt;string, ValidationFunction&gt;;
+}
+⋮----
+/** Current value to validate */
+⋮----
+/** Full data model for resolving paths */
+⋮----
+/** Custom validation functions from catalog */
+⋮----
+/**
+ * Run a single validation check
+ */
+export function runValidationCheck(
+  check: ValidationCheck,
+  ctx: ValidationContext,
+): ValidationCheckResult
+⋮----
+// Resolve args using resolvePropValue so nested $state refs (and any other
+// prop expressions) are handled consistently with the rest of the system.
+⋮----
+// Find the validation function
+⋮----
+valid: true, // Don&apos;t fail on unknown functions
+⋮----
+/**
+ * Run all validation checks for a field
+ */
+export function runValidation(
+  config: ValidationConfig,
+  ctx: ValidationContext,
+): ValidationResult
+⋮----
+// Check if validation is enabled
+⋮----
+// Run each check
+⋮----
+/**
+ * Helper to create validation checks
+ */</file><file path="packages/core/src/visibility.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import {
+  evaluateVisibility,
+  splitRepeatVisibility,
+  visibility,
+} from &quot;./visibility&quot;;
+⋮----
+// AND( OR(isAdmin, isModerator), tab=settings )
+⋮----
+// OR( AND(isAdmin, tab=settings), isSuperUser )</file><file path="packages/core/src/visibility.ts">import { z } from &quot;zod&quot;;
+import type {
+  VisibilityCondition,
+  StateCondition,
+  ItemCondition,
+  IndexCondition,
+  SingleCondition,
+  AndCondition,
+  OrCondition,
+  StateModel,
+} from &quot;./types&quot;;
+import { getByPath } from &quot;./types&quot;;
+⋮----
+// =============================================================================
+// Schemas
+// =============================================================================
+⋮----
+/**
+ * Schema for a single state condition.
+ */
+⋮----
+/**
+ * Visibility condition schema.
+ *
+ * Lazy because `OrCondition` can recursively contain `VisibilityCondition`.
+ */
+⋮----
+/**
+ * Strict variant for spec validation: rejects unknown keys, so malformed
+ * conditions (e.g. mixing $state and $item in one object) are caught at
+ * validation time instead of silently evaluating to hidden at runtime.
+ */
+/**
+ * True when a condition references the repeat-item scope ($item or $index)
+ * anywhere in its tree. Renderers use this to apply a repeat container&apos;s own
+ * visible condition as a per-item filter instead of evaluating it (and
+ * failing) outside the repeat scope.
+ */
+export function conditionUsesItemScope(
+  condition: VisibilityCondition | undefined,
+): boolean
+⋮----
+/**
+ * Splits a repeat container&apos;s visible condition into a container-level gate
+ * and a per-item filter. Top-level AND structures (arrays, $and) partition
+ * cleanly: conjuncts that reference $item/$index filter items, the rest gate
+ * the container. An $or that mixes scopes cannot be partitioned soundly and
+ * is applied entirely per item (state parts still evaluate correctly there;
+ * the container shell just cannot be hidden by it).
+ */
+export function splitRepeatVisibility(
+  condition: VisibilityCondition | undefined,
+):
+⋮----
+const partition = (parts: VisibilityCondition[]) =&gt;
+⋮----
+// Single item-scoped condition or an $or that mixes scopes.
+⋮----
+// =============================================================================
+// Context
+// =============================================================================
+⋮----
+/**
+ * Context for evaluating visibility conditions.
+ *
+ * `repeatItem` and `repeatIndex` are only present inside a `repeat` scope
+ * and enable `$item` / `$index` conditions.
+ */
+export interface VisibilityContext {
+  stateModel: StateModel;
+  /** The current repeat item (set inside a repeat scope). */
+  repeatItem?: unknown;
+  /** The current repeat array index (set inside a repeat scope). */
+  repeatIndex?: number;
+}
+⋮----
+/** The current repeat item (set inside a repeat scope). */
+⋮----
+/** The current repeat array index (set inside a repeat scope). */
+⋮----
+// =============================================================================
+// Evaluation
+// =============================================================================
+⋮----
+/**
+ * Resolve a comparison value. If it&apos;s a `{ $state }` reference, look it up;
+ * otherwise return the literal.
+ */
+function resolveComparisonValue(
+  value: unknown,
+  ctx: VisibilityContext,
+): unknown
+⋮----
+/**
+ * Type guards for condition sources.
+ */
+function isItemCondition(cond: SingleCondition): cond is ItemCondition
+⋮----
+function isIndexCondition(cond: SingleCondition): cond is IndexCondition
+⋮----
+/**
+ * Resolve the left-hand-side value of a condition based on its source.
+ */
+function resolveConditionValue(
+  cond: SingleCondition,
+  ctx: VisibilityContext,
+): unknown
+⋮----
+// StateCondition
+⋮----
+/**
+ * Evaluate a single condition against the context.
+ *
+ * When `not` is `true`, the final result is inverted — this applies to
+ * whichever operator is present (or to the truthiness check if no operator
+ * is given).  For example:
+ * - `{ $state: &quot;/x&quot;, not: true }` → `!Boolean(value)`
+ * - `{ $state: &quot;/x&quot;, gt: 5, not: true }` → `!(value &gt; 5)`
+ */
+function evaluateCondition(
+  cond: SingleCondition,
+  ctx: VisibilityContext,
+): boolean
+⋮----
+// Equality
+⋮----
+// Inequality
+⋮----
+// Greater than
+⋮----
+// Greater than or equal
+⋮----
+// Less than
+⋮----
+// Less than or equal
+⋮----
+// Truthiness (no operator)
+⋮----
+// `not` inverts the result of any condition
+⋮----
+/**
+ * Type guard for AndCondition
+ */
+function isAndCondition(
+  condition: VisibilityCondition,
+): condition is AndCondition
+⋮----
+/**
+ * Type guard for OrCondition
+ */
+function isOrCondition(
+  condition: VisibilityCondition,
+): condition is OrCondition
+⋮----
+/**
+ * Evaluate a visibility condition.
+ *
+ * - `undefined` → visible
+ * - `boolean` → that value
+ * - `SingleCondition` → evaluate single condition
+ * - `SingleCondition[]` → implicit AND (all must be true)
+ * - `AndCondition` → `{ $and: [...] }`, explicit AND
+ * - `OrCondition` → `{ $or: [...] }`, at least one must be true
+ */
+export function evaluateVisibility(
+  condition: VisibilityCondition | undefined,
+  ctx: VisibilityContext,
+): boolean
+⋮----
+// No condition = visible
+⋮----
+// Boolean literal
+⋮----
+// Array = implicit AND
+⋮----
+// Explicit AND condition
+⋮----
+// OR condition
+⋮----
+// Single condition
+⋮----
+// =============================================================================
+// Helpers
+// =============================================================================
+⋮----
+/**
+ * Helper to create visibility conditions.
+ */
+⋮----
+/** Always visible */
+⋮----
+/** Never visible */
+⋮----
+/** Visible when state path is truthy */
+⋮----
+/** Visible when state path is falsy */
+⋮----
+/** Equality check */
+⋮----
+/** Not equal check */
+⋮----
+/** Greater than */
+⋮----
+/** Greater than or equal */
+⋮----
+/** Less than */
+⋮----
+/** Less than or equal */
+⋮----
+/** AND multiple conditions */
+⋮----
+/** OR multiple conditions */</file><file path="packages/mcp/src/app.ts">/**
+ * Client-side (iframe) utilities for rendering json-render specs
+ * inside an MCP App view.
+ *
+ * This module is intended to run **inside the sandboxed iframe** that
+ * MCP hosts render. It connects to the host via the MCP Apps protocol,
+ * receives tool results containing json-render specs, and provides
+ * React hooks / helpers to render them.
+ *
+ * @example
+ * ```tsx
+ * import { useJsonRenderApp } from &quot;@json-render/mcp/app&quot;;
+ * import { Renderer } from &quot;@json-render/react&quot;;
+ *
+ * function McpAppView({ registry }) {
+ *   const { spec, loading } = useJsonRenderApp();
+ *   return &lt;Renderer spec={spec} registry={registry} loading={loading} /&gt;;
+ * }
+ * ```
+ *
+ * @packageDocumentation
+ */</file><file path="packages/mcp/src/build-app-html-entry.ts">/**
+ * Server-side utility for building self-contained MCP App HTML.
+ *
+ * This entry point does NOT depend on React and is safe to import
+ * in Node.js / server environments.
+ *
+ * @packageDocumentation
+ */</file><file path="packages/mcp/src/build-app-html.ts">/**
+ * Options for `buildAppHtml`.
+ */
+export interface BuildAppHtmlOptions {
+  /** Title for the HTML page. Defaults to `&quot;json-render&quot;`. */
+  title?: string;
+  /**
+   * Inline CSS to inject into the page `&lt;style&gt;` tag.
+   * Use this to include Tailwind output or custom styles.
+   */
+  css?: string;
+  /**
+   * Bundled JavaScript for the app entry point.
+   * This should be the output of a bundler (Vite, esbuild, etc.)
+   * that bundles your React app, registry, and the
+   * `useJsonRenderApp` hook into a single script.
+   */
+  js: string;
+  /**
+   * Additional `&lt;head&gt;` content (meta tags, font links, etc.).
+   */
+  head?: string;
+}
+⋮----
+/** Title for the HTML page. Defaults to `&quot;json-render&quot;`. */
+⋮----
+/**
+   * Inline CSS to inject into the page `&lt;style&gt;` tag.
+   * Use this to include Tailwind output or custom styles.
+   */
+⋮----
+/**
+   * Bundled JavaScript for the app entry point.
+   * This should be the output of a bundler (Vite, esbuild, etc.)
+   * that bundles your React app, registry, and the
+   * `useJsonRenderApp` hook into a single script.
+   */
+⋮----
+/**
+   * Additional `&lt;head&gt;` content (meta tags, font links, etc.).
+   */
+⋮----
+/**
+ * Build a self-contained HTML string for an MCP App UI resource.
+ *
+ * The resulting HTML is designed to be served as a `ui://` resource
+ * via `registerJsonRenderResource` or `createMcpApp`.
+ *
+ * Typically you&apos;d use a bundler (Vite + `vite-plugin-singlefile`, or
+ * esbuild) to produce the `js` and `css` strings, then pass them here.
+ *
+ * @example
+ * ```ts
+ * import { buildAppHtml } from &quot;@json-render/mcp/app&quot;;
+ * import { readFileSync } from &quot;node:fs&quot;;
+ *
+ * const html = buildAppHtml({
+ *   title: &quot;Dashboard&quot;,
+ *   js: readFileSync(&quot;dist/app.js&quot;, &quot;utf-8&quot;),
+ *   css: readFileSync(&quot;dist/app.css&quot;, &quot;utf-8&quot;),
+ * });
+ * ```
+ */
+export function buildAppHtml(options: BuildAppHtmlOptions): string
+⋮----
+function escapeHtml(str: string): string</file><file path="packages/mcp/src/index.ts"></file><file path="packages/mcp/src/server.ts">import { McpServer } from &quot;@modelcontextprotocol/sdk/server/mcp.js&quot;;
+import type {
+  CreateMcpAppOptions,
+  RegisterToolOptions,
+  RegisterResourceOptions,
+} from &quot;./types.js&quot;;
+⋮----
+/**
+ * Dynamically import the ext-apps server helpers to avoid CJS/ESM type
+ * mismatches at compile time while still getting the proper runtime
+ * `_meta.ui` normalization that hosts require.
+ */
+async function getExtApps()
+⋮----
+/**
+ * Register a json-render tool on an existing MCP server.
+ *
+ * Uses `registerAppTool` from `@modelcontextprotocol/ext-apps/server`
+ * so that MCP Apps-capable hosts (Claude, VS Code, Cursor, ChatGPT)
+ * see the `_meta.ui.resourceUri` in the tool listing and know to
+ * fetch and render the `ui://` resource as an interactive iframe.
+ *
+ * The tool accepts a json-render spec as input and returns it as text
+ * content, which the iframe receives via `ontoolresult`.
+ */
+export async function registerJsonRenderTool(
+  server: McpServer,
+  options: RegisterToolOptions,
+): Promise&lt;void&gt;
+⋮----
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+⋮----
+/**
+ * Register a json-render UI resource on an existing MCP server.
+ *
+ * The resource serves the self-contained HTML page that renders
+ * json-render specs received from tool results.
+ */
+export async function registerJsonRenderResource(
+  server: McpServer,
+  options: RegisterResourceOptions,
+): Promise&lt;void&gt;
+⋮----
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+⋮----
+/**
+ * Create a fully-configured MCP server that serves a json-render catalog
+ * as an MCP App.
+ *
+ * This is the main entry point for most users. It creates an `McpServer`,
+ * registers the render tool and UI resource, and returns the server
+ * ready for transport connection.
+ *
+ * @example
+ * ```ts
+ * import { createMcpApp } from &quot;@json-render/mcp&quot;;
+ *
+ * const server = createMcpApp({
+ *   name: &quot;My Dashboard&quot;,
+ *   version: &quot;1.0.0&quot;,
+ *   catalog: myCatalog,
+ *   html: myBundledHtml,
+ * });
+ *
+ * // Connect via stdio
+ * import { StdioServerTransport } from &quot;@modelcontextprotocol/sdk/server/stdio.js&quot;;
+ * await server.connect(new StdioServerTransport());
+ * ```
+ */
+export async function createMcpApp(
+  options: CreateMcpAppOptions,
+): Promise&lt;McpServer&gt;</file><file path="packages/mcp/src/types.ts">import type { Catalog } from &quot;@json-render/core&quot;;
+⋮----
+/**
+ * Options for creating an MCP App server backed by a json-render catalog.
+ */
+export interface CreateMcpAppOptions {
+  /** Display name for the MCP server shown in client UIs. */
+  name: string;
+  /** Semantic version of the MCP server. */
+  version: string;
+  /** The json-render catalog defining available components and actions. */
+  catalog: Catalog;
+  /**
+   * Pre-built HTML string for the UI resource.
+   * Generate this with `buildAppHtml` from `@json-render/mcp/app` or
+   * provide your own self-contained HTML page.
+   */
+  html: string;
+  /**
+   * Optional tool configuration overrides.
+   */
+  tool?: McpToolOptions;
+}
+⋮----
+/** Display name for the MCP server shown in client UIs. */
+⋮----
+/** Semantic version of the MCP server. */
+⋮----
+/** The json-render catalog defining available components and actions. */
+⋮----
+/**
+   * Pre-built HTML string for the UI resource.
+   * Generate this with `buildAppHtml` from `@json-render/mcp/app` or
+   * provide your own self-contained HTML page.
+   */
+⋮----
+/**
+   * Optional tool configuration overrides.
+   */
+⋮----
+/**
+ * Options for configuring the MCP tool that renders json-render specs.
+ */
+export interface McpToolOptions {
+  /** Tool name exposed to the LLM. Defaults to `&quot;render-ui&quot;`. */
+  name?: string;
+  /** Human-readable title. Defaults to `&quot;Render UI&quot;`. */
+  title?: string;
+  /** Tool description shown to the LLM. When omitted, a description is
+   *  auto-generated from the catalog prompt. */
+  description?: string;
+}
+⋮----
+/** Tool name exposed to the LLM. Defaults to `&quot;render-ui&quot;`. */
+⋮----
+/** Human-readable title. Defaults to `&quot;Render UI&quot;`. */
+⋮----
+/** Tool description shown to the LLM. When omitted, a description is
+   *  auto-generated from the catalog prompt. */
+⋮----
+/**
+ * Options for registering the MCP App tool.
+ */
+export interface RegisterToolOptions {
+  /** The json-render catalog. */
+  catalog: Catalog;
+  /** Tool name. */
+  name: string;
+  /** Tool title. */
+  title: string;
+  /** Tool description. */
+  description: string;
+  /** The `ui://` resource URI this tool&apos;s view is served from. */
+  resourceUri: string;
+}
+⋮----
+/** The json-render catalog. */
+⋮----
+/** Tool name. */
+⋮----
+/** Tool title. */
+⋮----
+/** Tool description. */
+⋮----
+/** The `ui://` resource URI this tool&apos;s view is served from. */
+⋮----
+/**
+ * Options for registering the MCP App UI resource.
+ */
+export interface RegisterResourceOptions {
+  /** The `ui://` resource URI. */
+  resourceUri: string;
+  /** Self-contained HTML string for the view. */
+  html: string;
+}
+⋮----
+/** The `ui://` resource URI. */
+⋮----
+/** Self-contained HTML string for the view. */</file><file path="packages/mcp/src/use-json-render-app.ts">import { useState, useEffect, useCallback, useRef } from &quot;react&quot;;
+import type { Spec } from &quot;@json-render/core&quot;;
+import { App } from &quot;@modelcontextprotocol/ext-apps&quot;;
+⋮----
+/**
+ * Options for the `useJsonRenderApp` hook.
+ */
+export interface UseJsonRenderAppOptions {
+  /** App name shown during initialization. Defaults to `&quot;json-render&quot;`. */
+  name?: string;
+  /** App version. Defaults to `&quot;1.0.0&quot;`. */
+  version?: string;
+}
+⋮----
+/** App name shown during initialization. Defaults to `&quot;json-render&quot;`. */
+⋮----
+/** App version. Defaults to `&quot;1.0.0&quot;`. */
+⋮----
+/**
+ * Return value of `useJsonRenderApp`.
+ */
+export interface UseJsonRenderAppReturn {
+  /** The current json-render spec (null until the first tool result). */
+  spec: Spec | null;
+  /** Whether the app is still connecting to the host. */
+  connecting: boolean;
+  /** Whether the app is connected to the host. */
+  connected: boolean;
+  /** Connection error, if any. */
+  error: Error | null;
+  /** Whether the spec is still being received / parsed. */
+  loading: boolean;
+  /** The underlying MCP App instance. */
+  app: App | null;
+  /**
+   * Call a tool on the MCP server and update the spec from the result.
+   * Useful for refresh / drill-down interactions.
+   */
+  callServerTool: (
+    name: string,
+    args?: Record&lt;string, unknown&gt;,
+  ) =&gt; Promise&lt;void&gt;;
+}
+⋮----
+/** The current json-render spec (null until the first tool result). */
+⋮----
+/** Whether the app is still connecting to the host. */
+⋮----
+/** Whether the app is connected to the host. */
+⋮----
+/** Connection error, if any. */
+⋮----
+/** Whether the spec is still being received / parsed. */
+⋮----
+/** The underlying MCP App instance. */
+⋮----
+/**
+   * Call a tool on the MCP server and update the spec from the result.
+   * Useful for refresh / drill-down interactions.
+   */
+⋮----
+interface ToolResultContent {
+  type: string;
+  text?: string;
+}
+⋮----
+function parseSpecFromToolResult(result: {
+  content?: ToolResultContent[];
+}): Spec | null
+⋮----
+/**
+ * React hook that connects to the MCP host, listens for tool results,
+ * and maintains the current json-render spec.
+ *
+ * Follows the official MCP Apps pattern: create an `App` instance,
+ * register the `ontoolresult` handler, then call `app.connect()`
+ * which internally creates a PostMessageTransport to the host.
+ */
+export function useJsonRenderApp(
+  options: UseJsonRenderAppOptions = {},
+): UseJsonRenderAppReturn
+⋮----
+// Let the App class handle transport creation internally,
+// matching the official MCP Apps quickstart pattern.
+⋮----
+// eslint-disable-next-line react-hooks/exhaustive-deps</file><file path="packages/react/src/contexts/actions.tsx">import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from &quot;react&quot;;
+import {
+  resolveAction,
+  executeAction,
+  nextActionDispatchId,
+  notifyActionDispatch,
+  notifyActionSettle,
+  type ActionBinding,
+  type ActionHandler,
+  type ActionConfirm,
+  type ResolvedAction,
+} from &quot;@json-render/core&quot;;
+import { useStateStore } from &quot;./state&quot;;
+import { useOptionalValidation } from &quot;./validation&quot;;
+⋮----
+/**
+ * Generate a unique ID for use with the &quot;$id&quot; token.
+ * Combines a timestamp with a random suffix for uniqueness.
+ */
+⋮----
+function generateUniqueId(): string
+⋮----
+/**
+ * Deep-resolve dynamic value references within an object.
+ *
+ * Supported tokens:
+ * - `{ $state: &quot;/statePath&quot; }` - read a value from state
+ * - `&quot;$id&quot;` (string) or `{ &quot;$id&quot;: true }` - generate a unique ID
+ *
+ * This allows pushState values to contain references to current state
+ * and auto-generated IDs.
+ */
+function deepResolveValue(
+  value: unknown,
+  get: (path: string) =&gt; unknown,
+): unknown
+⋮----
+// &quot;$id&quot; string token -&gt; generate unique ID
+⋮----
+// { $state: &quot;/foo&quot; } -&gt; read from state
+⋮----
+// { &quot;$id&quot;: true } -&gt; generate unique ID (single-key object)
+⋮----
+// Recurse into arrays
+⋮----
+// Recurse into plain objects
+⋮----
+/**
+ * Pending confirmation state
+ */
+export interface PendingConfirmation {
+  /** The resolved action */
+  action: ResolvedAction;
+  /** The action handler */
+  handler: ActionHandler;
+  /** Resolve callback */
+  resolve: () =&gt; void;
+  /** Reject callback */
+  reject: () =&gt; void;
+}
+⋮----
+/** The resolved action */
+⋮----
+/** The action handler */
+⋮----
+/** Resolve callback */
+⋮----
+/** Reject callback */
+⋮----
+/**
+ * Action context value
+ */
+export interface ActionContextValue {
+  /** Registered action handlers */
+  handlers: Record&lt;string, ActionHandler&gt;;
+  /** Currently loading action names */
+  loadingActions: Set&lt;string&gt;;
+  /** Pending confirmation dialog */
+  pendingConfirmation: PendingConfirmation | null;
+  /** Execute an action binding */
+  execute: (binding: ActionBinding) =&gt; Promise&lt;void&gt;;
+  /** Confirm the pending action */
+  confirm: () =&gt; void;
+  /** Cancel the pending action */
+  cancel: () =&gt; void;
+  /** Register an action handler */
+  registerHandler: (name: string, handler: ActionHandler) =&gt; void;
+}
+⋮----
+/** Registered action handlers */
+⋮----
+/** Currently loading action names */
+⋮----
+/** Pending confirmation dialog */
+⋮----
+/** Execute an action binding */
+⋮----
+/** Confirm the pending action */
+⋮----
+/** Cancel the pending action */
+⋮----
+/** Register an action handler */
+⋮----
+/**
+ * Props for ActionProvider
+ */
+export interface ActionProviderProps {
+  /** Initial action handlers */
+  handlers?: Record&lt;string, ActionHandler&gt;;
+  /** Navigation function */
+  navigate?: (path: string) =&gt; void;
+  children: ReactNode;
+}
+⋮----
+/** Initial action handlers */
+⋮----
+/** Navigation function */
+⋮----
+/**
+ * Provider for action execution
+ */
+export function ActionProvider({
+  handlers: initialHandlers = {},
+  navigate,
+  children,
+}: ActionProviderProps)
+⋮----
+// --- devtools / observer hooks ---
+⋮----
+// Built-in: setState updates the StateProvider state directly
+⋮----
+// Built-in: pushState appends an item to an array in state.
+// Supports dynamic values inside the value object via { $state: &quot;/...&quot; } syntax.
+⋮----
+// Optionally clear a state path after pushing (e.g. clear the input)
+⋮----
+// Built-in: removeState removes an item from an array in state by index.
+⋮----
+// Built-in: push navigates to a new screen by updating state.
+// Pushes the current screen onto /navStack and sets /currentScreen.
+⋮----
+// No current screen set yet -- push a sentinel so pop returns here
+⋮----
+// Built-in: pop navigates back to the previous screen.
+// Pops the last entry from /navStack and restores /currentScreen.
+⋮----
+// Built-in: validateForm triggers validateAll from the ValidationProvider
+// and writes the result to a state path (default: /formValidation).
+// IMPORTANT: validateAll() is synchronous — it runs all registered field
+// validations and returns immediately. This guarantees that the next action
+// in a sequential list (e.g. [validateForm, submitForm]) can read the
+// validation result from state without awaiting an extra tick.
+⋮----
+// If confirmation is required, show dialog
+⋮----
+// Execute immediately
+⋮----
+/**
+ * Hook to access action context
+ */
+export function useActions(): ActionContextValue
+⋮----
+/**
+ * Hook to execute an action binding
+ */
+export function useAction(binding: ActionBinding):
+⋮----
+/**
+ * Props for ConfirmDialog component
+ */
+export interface ConfirmDialogProps {
+  /** The confirmation config */
+  confirm: ActionConfirm;
+  /** Called when confirmed */
+  onConfirm: () =&gt; void;
+  /** Called when cancelled */
+  onCancel: () =&gt; void;
+}
+⋮----
+/** The confirmation config */
+⋮----
+/** Called when confirmed */
+⋮----
+/** Called when cancelled */
+⋮----
+/**
+ * Default confirmation dialog component
+ */</file><file path="packages/react/src/contexts/repeat-scope.tsx">import React, { createContext, useContext, type ReactNode } from &quot;react&quot;;
+⋮----
+/**
+ * Repeat scope value provided to child elements inside a repeated element.
+ */
+export interface RepeatScopeValue {
+  /** The current array item object */
+  item: unknown;
+  /** Index of the current item in the array */
+  index: number;
+  /** Absolute state path to the current array item (e.g. &quot;/todos/0&quot;) — used for statePath two-way binding */
+  basePath: string;
+}
+⋮----
+/** The current array item object */
+⋮----
+/** Index of the current item in the array */
+⋮----
+/** Absolute state path to the current array item (e.g. &quot;/todos/0&quot;) — used for statePath two-way binding */
+⋮----
+/**
+ * Provides repeat scope to child elements so $item and $index expressions resolve correctly.
+ */
+export function RepeatScopeProvider({
+  item,
+  index,
+  basePath,
+  children,
+}: RepeatScopeValue &amp;
+⋮----
+/**
+ * Read the current repeat scope (or null if not inside a repeated element).
+ */
+export function useRepeatScope(): RepeatScopeValue | null</file><file path="packages/react/src/contexts/state.test.tsx">import { describe, it, expect } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { renderHook, act } from &quot;@testing-library/react&quot;;
+import {
+  StateProvider,
+  useStateStore,
+  useStateValue,
+  useStateBinding,
+} from &quot;./state&quot;;</file><file path="packages/react/src/contexts/state.tsx"></file><file path="packages/react/src/contexts/validation.tsx">import React, {
+  createContext,
+  useContext,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from &quot;react&quot;;
+import {
+  runValidation,
+  type ValidationConfig,
+  type ValidationFunction,
+  type ValidationResult,
+} from &quot;@json-render/core&quot;;
+import { useStateStore } from &quot;./state&quot;;
+⋮----
+/**
+ * Field validation state
+ */
+export interface FieldValidationState {
+  /** Whether the field has been touched */
+  touched: boolean;
+  /** Whether the field has been validated */
+  validated: boolean;
+  /** Validation result */
+  result: ValidationResult | null;
+}
+⋮----
+/** Whether the field has been touched */
+⋮----
+/** Whether the field has been validated */
+⋮----
+/** Validation result */
+⋮----
+/**
+ * Validation context value
+ */
+export interface ValidationContextValue {
+  /** Custom validation functions from catalog */
+  customFunctions: Record&lt;string, ValidationFunction&gt;;
+  /** Validation state by field path */
+  fieldStates: Record&lt;string, FieldValidationState&gt;;
+  /** Validate a field */
+  validate: (path: string, config: ValidationConfig) =&gt; ValidationResult;
+  /** Mark field as touched */
+  touch: (path: string) =&gt; void;
+  /** Clear validation for a field */
+  clear: (path: string) =&gt; void;
+  /** Validate all fields */
+  validateAll: () =&gt; boolean;
+  /** Register field config */
+  registerField: (path: string, config: ValidationConfig) =&gt; void;
+}
+⋮----
+/** Custom validation functions from catalog */
+⋮----
+/** Validation state by field path */
+⋮----
+/** Validate a field */
+⋮----
+/** Mark field as touched */
+⋮----
+/** Clear validation for a field */
+⋮----
+/** Validate all fields */
+⋮----
+/** Register field config */
+⋮----
+/**
+ * Props for ValidationProvider
+ */
+export interface ValidationProviderProps {
+  /** Custom validation functions from catalog */
+  customFunctions?: Record&lt;string, ValidationFunction&gt;;
+  children: ReactNode;
+}
+⋮----
+/** Custom validation functions from catalog */
+⋮----
+/**
+ * Compare two DynamicValue args records shallowly.
+ * Values are primitives or { $state: string }, so shallow comparison suffices.
+ */
+function dynamicArgsEqual(
+  a: Record&lt;string, unknown&gt; | undefined,
+  b: Record&lt;string, unknown&gt; | undefined,
+): boolean
+⋮----
+// Handle { $state: string } objects
+⋮----
+/**
+ * Structural equality check for ValidationConfig.
+ */
+function validationConfigEqual(
+  a: ValidationConfig,
+  b: ValidationConfig,
+): boolean
+⋮----
+// Compare validateOn
+⋮----
+// Compare checks arrays
+⋮----
+/**
+ * Provider for validation
+ */
+export function ValidationProvider({
+  customFunctions = {},
+  children,
+}: ValidationProviderProps)
+⋮----
+// Mutable mirror of fieldStates for synchronous reads (e.g. reading errors
+// immediately after validateAll() before React flushes the batched setState).
+⋮----
+// Bail out (return same reference) if config is unchanged to avoid
+// infinite re-render loops when callers pass a fresh object each render.
+⋮----
+// Read from the store directly so validation sees values written in the
+// same synchronous handler (e.g. setValue then validate in onChange).
+// Using React state would return the stale pre-render snapshot.
+⋮----
+// Getter returns the mutable ref so callers that read fieldStates
+// synchronously after validateAll() see the latest values.
+get fieldStates()
+⋮----
+// fieldStates (React state) stays in deps so the context value object
+// is recreated on re-render, triggering downstream consumers.
+⋮----
+/**
+ * Hook to access validation context
+ */
+export function useValidation(): ValidationContextValue
+⋮----
+/**
+ * Non-throwing variant of useValidation.
+ * Returns null when no ValidationProvider is present.
+ */
+export function useOptionalValidation(): ValidationContextValue | null
+⋮----
+/**
+ * Hook to get validation state for a field
+ */
+export function useFieldValidation(
+  path: string,
+  config?: ValidationConfig,
+):
+⋮----
+// Register field on mount</file><file path="packages/react/src/contexts/visibility.test.tsx">import { describe, it, expect } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { renderHook } from &quot;@testing-library/react&quot;;
+import { VisibilityProvider, useVisibility, useIsVisible } from &quot;./visibility&quot;;
+import { StateProvider } from &quot;./state&quot;;
+⋮----
+const createWrapper =
+(data: Record&lt;string, unknown&gt; =</file><file path="packages/react/src/contexts/visibility.tsx">import React, {
+  createContext,
+  useContext,
+  useMemo,
+  type ReactNode,
+} from &quot;react&quot;;
+import {
+  evaluateVisibility,
+  type VisibilityCondition,
+  type VisibilityContext as CoreVisibilityContext,
+} from &quot;@json-render/core&quot;;
+import { useStateStore } from &quot;./state&quot;;
+⋮----
+/**
+ * Visibility context value
+ */
+export interface VisibilityContextValue {
+  /** Evaluate a visibility condition */
+  isVisible: (condition: VisibilityCondition | undefined) =&gt; boolean;
+  /** The underlying visibility context */
+  ctx: CoreVisibilityContext;
+}
+⋮----
+/** Evaluate a visibility condition */
+⋮----
+/** The underlying visibility context */
+⋮----
+/**
+ * Props for VisibilityProvider
+ */
+export interface VisibilityProviderProps {
+  children: ReactNode;
+}
+⋮----
+/**
+ * Provider for visibility evaluation
+ */
+export function VisibilityProvider(
+⋮----
+/**
+ * Hook to access visibility evaluation
+ */
+export function useVisibility(): VisibilityContextValue
+⋮----
+/**
+ * Hook to check if a condition is visible
+ */
+export function useIsVisible(
+  condition: VisibilityCondition | undefined,
+): boolean</file><file path="packages/react/src/catalog-types.ts">import type { ReactNode } from &quot;react&quot;;
+import type {
+  Catalog,
+  InferCatalogComponents,
+  InferCatalogActions,
+  InferComponentProps,
+  InferActionParams,
+  StateModel,
+} from &quot;@json-render/core&quot;;
+⋮----
+// =============================================================================
+// State Types
+// =============================================================================
+⋮----
+/**
+ * State setter function for updating application state
+ */
+export type SetState = (
+  updater: (prev: Record&lt;string, unknown&gt;) =&gt; Record&lt;string, unknown&gt;,
+) =&gt; void;
+⋮----
+// =============================================================================
+// Component Types
+// =============================================================================
+⋮----
+/**
+ * Handle returned by the `on()` function for a specific event.
+ * Provides metadata about the event binding and a method to fire it.
+ *
+ * @example
+ * ```ts
+ * const press = on(&quot;press&quot;);
+ * if (press.shouldPreventDefault) e.preventDefault();
+ * press.emit();
+ * ```
+ */
+export interface EventHandle {
+  /** Fire the event (resolve action bindings) */
+  emit: () =&gt; void;
+  /** Whether any binding requested preventDefault */
+  shouldPreventDefault: boolean;
+  /** Whether any handler is bound to this event */
+  bound: boolean;
+}
+⋮----
+/** Fire the event (resolve action bindings) */
+⋮----
+/** Whether any binding requested preventDefault */
+⋮----
+/** Whether any handler is bound to this event */
+⋮----
+/**
+ * Catalog-agnostic base type for component render function arguments.
+ * Use this when building reusable component libraries (e.g. `@json-render/shadcn`)
+ * that are not tied to a specific catalog.
+ *
+ * @example
+ * ```ts
+ * const Card = ({ props, children }: BaseComponentProps&lt;{ title?: string }&gt;) =&gt; (
+ *   &lt;div&gt;{props.title}{children}&lt;/div&gt;
+ * );
+ * ```
+ */
+export interface BaseComponentProps&lt;P = Record&lt;string, unknown&gt;&gt; {
+  props: P;
+  children?: ReactNode;
+  /** Simple event emitter (shorthand). Fires the event and returns void. */
+  emit: (event: string) =&gt; void;
+  /** Get an event handle with metadata. Use when you need shouldPreventDefault or bound checks. */
+  on: (event: string) =&gt; EventHandle;
+  /**
+   * Two-way binding paths resolved from `$bindState` / `$bindItem` expressions.
+   * Maps prop name → absolute state path for write-back.
+   */
+  bindings?: Record&lt;string, string&gt;;
+  loading?: boolean;
+}
+⋮----
+/** Simple event emitter (shorthand). Fires the event and returns void. */
+⋮----
+/** Get an event handle with metadata. Use when you need shouldPreventDefault or bound checks. */
+⋮----
+/**
+   * Two-way binding paths resolved from `$bindState` / `$bindItem` expressions.
+   * Maps prop name → absolute state path for write-back.
+   */
+⋮----
+/**
+ * Context passed to component render functions
+ * @example
+ * const Button: ComponentFn&lt;typeof catalog, &apos;Button&apos;&gt; = (ctx) =&gt; {
+ *   return &lt;button onClick={() =&gt; ctx.emit(&quot;press&quot;)}&gt;{ctx.props.label}&lt;/button&gt;
+ * }
+ */
+export interface ComponentContext&lt;
+  C extends Catalog,
+  K extends keyof InferCatalogComponents&lt;C&gt;,
+&gt; extends BaseComponentProps&lt;InferComponentProps&lt;C, K&gt;&gt; {}
+⋮----
+/**
+ * Component render function type for React
+ * @example
+ * const Button: ComponentFn&lt;typeof catalog, &apos;Button&apos;&gt; = ({ props, emit }) =&gt; (
+ *   &lt;button onClick={() =&gt; emit(&quot;press&quot;)}&gt;{props.label}&lt;/button&gt;
+ * );
+ */
+export type ComponentFn&lt;
+  C extends Catalog,
+  K extends keyof InferCatalogComponents&lt;C&gt;,
+&gt; = (ctx: ComponentContext&lt;C, K&gt;) =&gt; ReactNode;
+⋮----
+/**
+ * Registry of all component render functions for a catalog
+ * @example
+ * const components: Components&lt;typeof myCatalog&gt; = {
+ *   Button: ({ props }) =&gt; &lt;button&gt;{props.label}&lt;/button&gt;,
+ *   Input: ({ props }) =&gt; &lt;input placeholder={props.placeholder} /&gt;,
+ * };
+ */
+export type Components&lt;C extends Catalog&gt; = {
+  [K in keyof InferCatalogComponents&lt;C&gt;]: ComponentFn&lt;C, K&gt;;
+};
+⋮----
+// =============================================================================
+// Action Types
+// =============================================================================
+⋮----
+/**
+ * Action handler function type
+ * @example
+ * const viewCustomers: ActionFn&lt;typeof catalog, &apos;viewCustomers&apos;&gt; = async (params, setState) =&gt; {
+ *   const data = await fetch(&apos;/api/customers&apos;);
+ *   setState(prev =&gt; ({ ...prev, customers: data }));
+ * };
+ */
+export type ActionFn&lt;
+  C extends Catalog,
+  K extends keyof InferCatalogActions&lt;C&gt;,
+&gt; = (
+  params: InferActionParams&lt;C, K&gt; | undefined,
+  setState: SetState,
+  state: StateModel,
+) =&gt; Promise&lt;void&gt;;
+⋮----
+/**
+ * Registry of all action handlers for a catalog
+ * @example
+ * const actions: Actions&lt;typeof myCatalog&gt; = {
+ *   viewCustomers: async (params, setState) =&gt; { ... },
+ *   createCustomer: async (params, setState) =&gt; { ... },
+ * };
+ */
+export type Actions&lt;C extends Catalog&gt; = {
+  [K in keyof InferCatalogActions&lt;C&gt;]: ActionFn&lt;C, K&gt;;
+};
+⋮----
+/**
+ * True when the catalog declares at least one action, false otherwise.
+ * Used by defineRegistry to conditionally require the `actions` field.
+ */
+export type CatalogHasActions&lt;C extends Catalog&gt; = [
+  InferCatalogActions&lt;C&gt;,
+] extends [never]
+  ? false
+  : [keyof InferCatalogActions&lt;C&gt;] extends [never]
+    ? false
+    : true;</file><file path="packages/react/src/chained-actions.test.tsx">import { describe, it, expect } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { render, act, fireEvent, screen } from &quot;@testing-library/react&quot;;
+import type { Spec } from &quot;@json-render/core&quot;;
+import {
+  JSONUIProvider,
+  Renderer,
+  type ComponentRenderProps,
+} from &quot;./renderer&quot;;
+import { useStateStore } from &quot;./contexts/state&quot;;
+⋮----
+/**
+ * Minimal Button component that calls emit(&quot;press&quot;) on click.
+ */
+function Button(
+⋮----
+&lt;button data-testid=&quot;btn&quot; onClick=
+⋮----
+/**
+ * Text component that renders its `text` prop.
+ */
+function Text(
+⋮----
+/**
+ * Helper component that reads live state and exposes it via a data attribute
+ * so we can assert against the store after actions fire.
+ */
+function StateProbe()
+⋮----
+function App()</file><file path="packages/react/src/devtools-integration.test.tsx">import { describe, it, expect, beforeEach } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { render, fireEvent, act } from &quot;@testing-library/react&quot;;
+import {
+  registerActionObserver,
+  markDevtoolsActive,
+  type ActionDispatchInfo,
+  type ActionSettleInfo,
+  type Spec,
+} from &quot;@json-render/core&quot;;
+import {
+  JSONUIProvider,
+  Renderer,
+  type ComponentRenderProps,
+} from &quot;./renderer&quot;;
+⋮----
+/**
+ * These tests cover the two core hooks the devtools package relies on:
+ * - Action observer pipeline (React ActionProvider → notifyActionDispatch /
+ *   notifyActionSettle → registerActionObserver).
+ * - Element-tag wrapper gated by markDevtoolsActive.
+ *
+ * Asserting on the wiring here keeps the framework-agnostic adapter code in
+ * the devtools packages thin.
+ */
+⋮----
+function Button(
+⋮----
+&lt;button data-testid=
+⋮----
+// Wrap in act() so the resulting devtools-flag subscribers update
+// the React tree inside the testing batch boundary.</file><file path="packages/react/src/directives.test.tsx">import { describe, it, expect } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { render, screen } from &quot;@testing-library/react&quot;;
+import { z } from &quot;zod&quot;;
+import type { Spec } from &quot;@json-render/core&quot;;
+import { defineDirective, resolvePropValue } from &quot;@json-render/core&quot;;
+import {
+  JSONUIProvider,
+  Renderer,
+  type ComponentRenderProps,
+} from &quot;./renderer&quot;;
+⋮----
+function Text(
+⋮----
+resolve(value, ctx)</file><file path="packages/react/src/dynamic-forms.test.tsx">import { describe, it, expect, vi } from &quot;vitest&quot;;
+import React, { useState, useCallback, useMemo } from &quot;react&quot;;
+import { render, act, fireEvent, screen } from &quot;@testing-library/react&quot;;
+import type { Spec } from &quot;@json-render/core&quot;;
+import {
+  JSONUIProvider,
+  Renderer,
+  type ComponentRenderProps,
+} from &quot;./renderer&quot;;
+import { useStateStore } from &quot;./contexts/state&quot;;
+import { useFieldValidation } from &quot;./contexts/validation&quot;;
+import { useBoundProp } from &quot;./hooks&quot;;
+⋮----
+// =============================================================================
+// Stub components
+// =============================================================================
+⋮----
+function Button(
+⋮----
+&lt;button data-testid=&quot;btn&quot; onClick=
+⋮----
+function Text(
+⋮----
+function InputField({
+  element,
+  bindings,
+}: ComponentRenderProps&lt;{
+  label?: string;
+  value?: string;
+  checks?: Array&lt;{
+    type: string;
+    message: string;
+    args?: Record&lt;string, unknown&gt;;
+  }&gt;;
+}&gt;)
+⋮----
+onChange=
+⋮----
+/**
+ * Select stub that mirrors the real shadcn Select validation behavior:
+ * calls setValue then validate() synchronously in onValueChange.
+ */
+⋮----
+// =============================================================================
+// $computed expressions in rendering
+// =============================================================================
+⋮----
+// =============================================================================
+// $template expressions in rendering
+// =============================================================================
+⋮----
+// =============================================================================
+// Watchers
+// =============================================================================
+⋮----
+// no-op, just tracking the call
+⋮----
+// Add watcher as a child of a wrapper so both render
+⋮----
+// Use a Stack-like wrapper -- but since we only have Button/Text/Select
+// stubs, we need a container. Let&apos;s add a simple Stack stub.
+const Stack = ({
+      children,
+}: ComponentRenderProps&lt;Record&lt;string, unknown&gt;&gt;) =&gt;
+⋮----
+// Not called on initial render
+⋮----
+// Change the watched state path
+⋮----
+// =============================================================================
+// validateForm action
+// =============================================================================
+⋮----
+// Click submit with empty email
+⋮----
+// =============================================================================
+// Select validate-on-change timing (#151)
+// =============================================================================
+⋮----
+// Select &quot;US&quot; for the first time (from empty)
+⋮----
+// The value should be set in state
+⋮----
+// No validation error should appear -- &quot;US&quot; is non-empty
+⋮----
+// Select &quot;New York&quot; for the first time (from empty)
+⋮----
+// No validation error should appear</file><file path="packages/react/src/hooks.test.ts">import { describe, it, expect } from &quot;vitest&quot;;
+import { flatToTree, buildSpecFromParts, getTextFromParts } from &quot;./hooks&quot;;
+⋮----
+// Elements without parentKey should not become root (only null parentKey)
+// This tests the edge case
+⋮----
+// =============================================================================
+// buildSpecFromParts
+// =============================================================================
+⋮----
+// nestedToFlat generates keys like el-0, el-1
+⋮----
+// Start with a patch
+⋮----
+// Then a flat spec overwrites everything
+⋮----
+// Flat overwrites root and elements
+⋮----
+// =============================================================================
+// getTextFromParts
+// =============================================================================</file><file path="packages/react/src/hooks.ts">import { useState, useCallback, useRef, useEffect } from &quot;react&quot;;
+import type {
+  Spec,
+  UIElement,
+  FlatElement,
+  JsonPatch,
+  SpecDataPart,
+} from &quot;@json-render/core&quot;;
+import {
+  setByPath,
+  getByPath,
+  addByPath,
+  removeByPath,
+  createMixedStreamParser,
+  applySpecPatch,
+  nestedToFlat,
+  SPEC_DATA_PART_TYPE,
+} from &quot;@json-render/core&quot;;
+⋮----
+/**
+ * Token usage metadata from AI generation
+ */
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+⋮----
+/**
+ * Parse result for a single line -- either a patch or usage metadata
+ */
+type ParsedLine =
+  | { type: &quot;patch&quot;; patch: JsonPatch }
+  | { type: &quot;usage&quot;; usage: TokenUsage }
+  | null;
+⋮----
+/**
+ * Parse a single JSON line (patch or metadata)
+ */
+function parseLine(line: string): ParsedLine
+⋮----
+// Check for usage metadata
+⋮----
+/**
+ * Set a value at a spec path (for add/replace operations).
+ */
+function setSpecValue(newSpec: Spec, path: string, value: unknown): void
+⋮----
+const statePath = path.slice(&quot;/state&quot;.length); // e.g. &quot;/posts&quot;
+⋮----
+/**
+ * Remove a value at a spec path.
+ */
+function removeSpecValue(newSpec: Spec, path: string): void
+⋮----
+/**
+ * Get a value at a spec path.
+ */
+function getSpecValue(spec: Spec, path: string): unknown
+⋮----
+/**
+ * Apply an RFC 6902 JSON patch to the current spec.
+ * Supports add, remove, replace, move, copy, and test operations.
+ */
+function applyPatch(spec: Spec, patch: JsonPatch): Spec
+⋮----
+// test is a no-op for rendering purposes (validation only)
+⋮----
+/**
+ * Options for useUIStream
+ */
+export interface UseUIStreamOptions {
+  /** API endpoint */
+  api: string;
+  /** Callback when complete */
+  onComplete?: (spec: Spec) =&gt; void;
+  /** Callback on error */
+  onError?: (error: Error) =&gt; void;
+}
+⋮----
+/** API endpoint */
+⋮----
+/** Callback when complete */
+⋮----
+/** Callback on error */
+⋮----
+/**
+ * Return type for useUIStream
+ */
+export interface UseUIStreamReturn {
+  /** Current UI spec */
+  spec: Spec | null;
+  /** Whether currently streaming */
+  isStreaming: boolean;
+  /** Error if any */
+  error: Error | null;
+  /** Token usage from the last generation */
+  usage: TokenUsage | null;
+  /** Raw JSONL lines received from the stream (JSON patch lines) */
+  rawLines: string[];
+  /** Send a prompt to generate UI */
+  send: (prompt: string, context?: Record&lt;string, unknown&gt;) =&gt; Promise&lt;void&gt;;
+  /** Clear the current spec */
+  clear: () =&gt; void;
+}
+⋮----
+/** Current UI spec */
+⋮----
+/** Whether currently streaming */
+⋮----
+/** Error if any */
+⋮----
+/** Token usage from the last generation */
+⋮----
+/** Raw JSONL lines received from the stream (JSON patch lines) */
+⋮----
+/** Send a prompt to generate UI */
+⋮----
+/** Clear the current spec */
+⋮----
+/**
+ * Hook for streaming UI generation
+ */
+export function useUIStream({
+  api,
+  onComplete,
+  onError,
+}: UseUIStreamOptions): UseUIStreamReturn
+⋮----
+// Keep refs to callbacks so `send` doesn&apos;t recreate when consumers
+// pass inline arrow functions.
+⋮----
+// Abort any existing request
+⋮----
+// Start with previous spec if provided, otherwise empty spec
+⋮----
+// Try to parse JSON error response for better error messages
+⋮----
+// Ignore JSON parsing errors, use default message
+⋮----
+// Process complete lines
+⋮----
+// Process any remaining buffer
+⋮----
+// Cleanup on unmount
+⋮----
+/**
+ * Convert a flat element list to a Spec.
+ * Input elements use key/parentKey to establish identity and relationships.
+ * Output spec uses the map-based format where key is the map entry key
+ * and parent-child relationships are expressed through children arrays.
+ */
+export function flatToTree(elements: FlatElement[]): Spec
+⋮----
+// First pass: add all elements to map
+⋮----
+// Second pass: build parent-child relationships
+⋮----
+// =============================================================================
+// useBoundProp — Two-way binding helper for $bindState/$bindItem expressions
+// =============================================================================
+⋮----
+/**
+ * Hook for two-way bound props. Returns `[value, setValue]` where:
+ *
+ * - `value` is the already-resolved prop value (passed through from render props)
+ * - `setValue` writes back to the bound state path (no-op if not bound)
+ *
+ * Designed to work with the `bindings` map that the renderer provides when
+ * a prop uses `{ $bindState: &quot;/path&quot; }` or `{ $bindItem: &quot;field&quot; }`.
+ *
+ * @example
+ * ```tsx
+ * import { useBoundProp } from &quot;@json-render/react&quot;;
+ *
+ * const Input: ComponentRenderer = ({ props, bindings }) =&gt; {
+ *   const [value, setValue] = useBoundProp&lt;string&gt;(props.value, bindings?.value);
+ *   return &lt;input value={value ?? &quot;&quot;} onChange={(e) =&gt; setValue(e.target.value)} /&gt;;
+ * };
+ * ```
+ */
+export function useBoundProp&lt;T&gt;(
+  propValue: T | undefined,
+  bindingPath: string | undefined,
+): [T | undefined, (value: T) =&gt; void]
+⋮----
+// Import useStateStore lazily to avoid circular dependency issues.
+// The hook is always called inside a StateProvider so this is safe.
+⋮----
+// Re-export useStateStore access for useBoundProp without circular import
+import { useStateStore as useStateStoreFromContext } from &quot;./contexts/state&quot;;
+⋮----
+// =============================================================================
+// buildSpecFromParts — Derive Spec from AI SDK data parts
+// =============================================================================
+⋮----
+/**
+ * A single part from the AI SDK&apos;s `message.parts` array. This is a minimal
+ * structural type so that library helpers do not depend on the AI SDK.
+ * Fields are optional because different part types carry different data:
+ * - Text parts have `text`
+ * - Data parts have `data`
+ */
+export interface DataPart {
+  type: string;
+  text?: string;
+  data?: unknown;
+}
+⋮----
+/**
+ * Build a `Spec` by replaying all spec data parts from a message&apos;s
+ * parts array. Returns `null` if no spec data parts are present.
+ *
+ * This function is designed to work with the AI SDK&apos;s `UIMessage.parts` array.
+ * It picks out parts whose `type` is {@link SPEC_DATA_PART_TYPE} and processes them based
+ * on the payload&apos;s `type` discriminator:
+ *
+ * - `&quot;patch&quot;`: Applies the JSON Patch operation incrementally via `applySpecPatch`.
+ * - `&quot;flat&quot;`: Replaces the spec with the complete flat spec.
+ * - `&quot;nested&quot;`: Assigns the nested spec directly (future: nested-to-flat conversion).
+ *
+ * The function has no AI SDK dependency — it operates on a generic array of
+ * `{ type: string; data: unknown }` objects.
+ *
+ * @example
+ * ```tsx
+ * const spec = buildSpecFromParts(message.parts);
+ * if (spec) {
+ *   return &lt;MyRenderer spec={spec} /&gt;;
+ * }
+ * ```
+ */
+/**
+ * Type guard that validates a data part payload looks like a valid
+ * {@link SpecDataPart} before we cast it. Returns `false` (and the
+ * part is silently skipped) for malformed payloads.
+ */
+function isSpecDataPart(data: unknown): data is SpecDataPart
+⋮----
+export function buildSpecFromParts(parts: DataPart[]): Spec | null
+⋮----
+/**
+ * Extract and join all text content from a message&apos;s parts array.
+ *
+ * Filters for parts with `type === &quot;text&quot;`, trims each one, and joins them
+ * with double newlines so that text from separate agent steps renders as
+ * distinct paragraphs in markdown.
+ *
+ * Has no AI SDK dependency — operates on a generic `DataPart[]`.
+ *
+ * @example
+ * ```tsx
+ * const text = getTextFromParts(message.parts);
+ * if (text) {
+ *   return &lt;Streamdown&gt;{text}&lt;/Streamdown&gt;;
+ * }
+ * ```
+ */
+export function getTextFromParts(parts: DataPart[]): string
+⋮----
+// =============================================================================
+// useJsonRenderMessage — extract spec + text from message parts
+// =============================================================================
+⋮----
+/**
+ * Hook that extracts both the json-render spec and text content from a
+ * message&apos;s parts array. Combines `buildSpecFromParts` and `getTextFromParts`
+ * into a single call with memoized results.
+ *
+ * **Memoization behavior:** Results are recomputed only when the `parts` array
+ * reference changes **and** either the length differs or the last element is a
+ * different object. This is optimized for the typical AI SDK streaming pattern
+ * where parts are appended incrementally. Mid-array edits (e.g. replacing an
+ * earlier part without appending) may not trigger recomputation. If you need to
+ * force a recompute after such edits, pass a new array reference with a
+ * different last element.
+ *
+ * @example
+ * ```tsx
+ * import { useJsonRenderMessage } from &quot;@json-render/react&quot;;
+ *
+ * function MessageBubble({ message }) {
+ *   const { spec, text, hasSpec } = useJsonRenderMessage(message.parts);
+ *
+ *   return (
+ *     &lt;div&gt;
+ *       {text &amp;&amp; &lt;Markdown&gt;{text}&lt;/Markdown&gt;}
+ *       {hasSpec &amp;&amp; &lt;MyRenderer spec={spec} /&gt;}
+ *     &lt;/div&gt;
+ *   );
+ * }
+ * ```
+ */
+export function useJsonRenderMessage(parts: DataPart[])
+⋮----
+// Recompute only when parts actually change (by length + last element identity).
+// AI SDK typically appends to the parts array during streaming, so checking
+// length and the last element covers both &quot;new array reference with same
+// content&quot; (no recompute) and &quot;new part appended&quot; (recompute).
+⋮----
+// =============================================================================
+// useChatUI — Chat + GenUI hook
+// =============================================================================
+⋮----
+/**
+ * A single message in the chat, which may contain text, a rendered UI spec, or both.
+ */
+export interface ChatMessage {
+  /** Unique message ID */
+  id: string;
+  /** Who sent this message */
+  role: &quot;user&quot; | &quot;assistant&quot;;
+  /** Text content (conversational prose) */
+  text: string;
+  /** json-render Spec built from JSONL patches (null if no UI was generated) */
+  spec: Spec | null;
+}
+⋮----
+/** Unique message ID */
+⋮----
+/** Who sent this message */
+⋮----
+/** Text content (conversational prose) */
+⋮----
+/** json-render Spec built from JSONL patches (null if no UI was generated) */
+⋮----
+/**
+ * Options for useChatUI
+ */
+export interface UseChatUIOptions {
+  /** API endpoint that accepts `{ messages: Array&lt;{ role, content }&gt; }` and returns a text stream */
+  api: string;
+  /** Callback when streaming completes for a message */
+  onComplete?: (message: ChatMessage) =&gt; void;
+  /** Callback on error */
+  onError?: (error: Error) =&gt; void;
+}
+⋮----
+/** API endpoint that accepts `{ messages: Array&lt;{ role, content }&gt; }` and returns a text stream */
+⋮----
+/** Callback when streaming completes for a message */
+⋮----
+/** Callback on error */
+⋮----
+/**
+ * Return type for useChatUI
+ */
+export interface UseChatUIReturn {
+  /** All messages in the conversation */
+  messages: ChatMessage[];
+  /** Whether currently streaming an assistant response */
+  isStreaming: boolean;
+  /** Error from the last request, if any */
+  error: Error | null;
+  /** Send a user message */
+  send: (text: string) =&gt; Promise&lt;void&gt;;
+  /** Clear all messages and reset the conversation */
+  clear: () =&gt; void;
+}
+⋮----
+/** All messages in the conversation */
+⋮----
+/** Whether currently streaming an assistant response */
+⋮----
+/** Error from the last request, if any */
+⋮----
+/** Send a user message */
+⋮----
+/** Clear all messages and reset the conversation */
+⋮----
+function generateChatId(): string
+⋮----
+/**
+ * Hook for chat + GenUI experiences.
+ *
+ * Manages a multi-turn conversation where each assistant message can contain
+ * both conversational text and a json-render UI spec. The hook sends the full
+ * message history to the API endpoint, reads the streamed response, and
+ * separates text lines from JSONL patch lines using `createMixedStreamParser`.
+ *
+ * @example
+ * ```tsx
+ * const { messages, isStreaming, send, clear } = useChatUI({
+ *   api: &quot;/api/chat&quot;,
+ * });
+ *
+ * // Send a message
+ * await send(&quot;Compare weather in NYC and Tokyo&quot;);
+ *
+ * // Render messages
+ * {messages.map((msg) =&gt; (
+ *   &lt;div key={msg.id}&gt;
+ *     {msg.text &amp;&amp; &lt;p&gt;{msg.text}&lt;/p&gt;}
+ *     {msg.spec &amp;&amp; &lt;MyRenderer spec={msg.spec} /&gt;}
+ *   &lt;/div&gt;
+ * ))}
+ * ```
+ */
+export function useChatUI({
+  api,
+  onComplete,
+  onError,
+}: UseChatUIOptions): UseChatUIReturn
+⋮----
+// Keep a ref to the latest messages so `send` always reads the
+// current history, avoiding stale closure issues.
+⋮----
+// Keep refs to callbacks so `send` doesn&apos;t recreate when consumers
+// pass inline arrow functions.
+⋮----
+// Abort any existing request
+⋮----
+// Append user message and empty assistant placeholder
+⋮----
+// Build messages array for the API (full conversation history + new message).
+// Read from ref to always get the latest messages (avoids stale closure).
+⋮----
+// Mutable state for accumulating the assistant response
+⋮----
+// Ignore JSON parsing errors
+⋮----
+// Use createMixedStreamParser to classify lines
+⋮----
+onPatch(patch)
+onText(line)
+⋮----
+// Build final message for onComplete callback
+⋮----
+// Remove empty assistant message on error
+⋮----
+// Cleanup on unmount</file><file path="packages/react/src/index.ts">// Contexts
+⋮----
+// Schema (React&apos;s spec format)
+⋮----
+// Backward compatibility
+⋮----
+// Core types (re-exported for convenience)
+⋮----
+// Catalog-aware types for React
+⋮----
+// Renderer
+⋮----
+// Registry
+⋮----
+// createRenderer (higher-level, includes providers)
+⋮----
+// Low-level
+⋮----
+// Hooks</file><file path="packages/react/src/renderer.test.tsx">import { describe, it, expect } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { Renderer } from &quot;./renderer&quot;;
+⋮----
+const Fallback = ()</file><file path="packages/react/src/renderer.tsx">import React, {
+  type ComponentType,
+  type ErrorInfo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from &quot;react&quot;;
+import type {
+  UIElement,
+  Spec,
+  ActionBinding,
+  Catalog,
+  SchemaDefinition,
+  StateStore,
+  ComputedFunction,
+  DirectiveDefinition,
+  DirectiveRegistry,
+} from &quot;@json-render/core&quot;;
+import {
+  resolveElementProps,
+  resolveBindings,
+  resolveActionParam,
+  splitRepeatVisibility,
+  evaluateVisibility,
+  getByPath,
+  isDevtoolsActive,
+  subscribeDevtoolsActive,
+  createDirectiveRegistry,
+  type PropResolutionContext,
+  type VisibilityContext as CoreVisibilityContext,
+} from &quot;@json-render/core&quot;;
+import type {
+  Components,
+  Actions,
+  ActionFn,
+  SetState,
+  StateModel,
+  CatalogHasActions,
+  EventHandle,
+} from &quot;./catalog-types&quot;;
+import { useIsVisible, useVisibility } from &quot;./contexts/visibility&quot;;
+import { useActions } from &quot;./contexts/actions&quot;;
+import { useStateStore } from &quot;./contexts/state&quot;;
+import { StateProvider } from &quot;./contexts/state&quot;;
+import { VisibilityProvider } from &quot;./contexts/visibility&quot;;
+import { ActionProvider } from &quot;./contexts/actions&quot;;
+import { ValidationProvider } from &quot;./contexts/validation&quot;;
+import { ConfirmDialog } from &quot;./contexts/actions&quot;;
+import { RepeatScopeProvider, useRepeatScope } from &quot;./contexts/repeat-scope&quot;;
+⋮----
+/**
+ * Props passed to component renderers
+ */
+export interface ComponentRenderProps&lt;P = Record&lt;string, unknown&gt;&gt; {
+  /** The element being rendered */
+  element: UIElement&lt;string, P&gt;;
+  /** Rendered children */
+  children?: ReactNode;
+  /** Emit a named event. The renderer resolves the event to action binding(s) from the element&apos;s `on` field. Always provided by the renderer. */
+  emit: (event: string) =&gt; void;
+  /** Get an event handle with metadata (shouldPreventDefault, bound). Use when you need to inspect event bindings. */
+  on: (event: string) =&gt; EventHandle;
+  /**
+   * Two-way binding paths resolved from `$bindState` / `$bindItem` expressions.
+   * Maps prop name → absolute state path for write-back.
+   * Only present when at least one prop uses `{ $bindState: &quot;...&quot; }` or `{ $bindItem: &quot;...&quot; }`.
+   */
+  bindings?: Record&lt;string, string&gt;;
+  /** Whether the parent is loading */
+  loading?: boolean;
+}
+⋮----
+/** The element being rendered */
+⋮----
+/** Rendered children */
+⋮----
+/** Emit a named event. The renderer resolves the event to action binding(s) from the element&apos;s `on` field. Always provided by the renderer. */
+⋮----
+/** Get an event handle with metadata (shouldPreventDefault, bound). Use when you need to inspect event bindings. */
+⋮----
+/**
+   * Two-way binding paths resolved from `$bindState` / `$bindItem` expressions.
+   * Maps prop name → absolute state path for write-back.
+   * Only present when at least one prop uses `{ $bindState: &quot;...&quot; }` or `{ $bindItem: &quot;...&quot; }`.
+   */
+⋮----
+/** Whether the parent is loading */
+⋮----
+/**
+ * Component renderer type
+ */
+export type ComponentRenderer&lt;P = Record&lt;string, unknown&gt;&gt; = ComponentType&lt;
+  ComponentRenderProps&lt;P&gt;
+&gt;;
+⋮----
+/**
+ * Registry of component renderers
+ */
+export type ComponentRegistry = Record&lt;string, ComponentRenderer&lt;any&gt;&gt;;
+⋮----
+/**
+ * Props for the Renderer component
+ */
+export interface RendererProps {
+  /** The UI spec to render */
+  spec: Spec | null;
+  /** Component registry */
+  registry: ComponentRegistry;
+  /** Whether the spec is currently loading/streaming */
+  loading?: boolean;
+  /** Fallback component for unknown types */
+  fallback?: ComponentRenderer;
+}
+⋮----
+/** The UI spec to render */
+⋮----
+/** Component registry */
+⋮----
+/** Whether the spec is currently loading/streaming */
+⋮----
+/** Fallback component for unknown types */
+⋮----
+// ---------------------------------------------------------------------------
+// ElementErrorBoundary – catches rendering errors in individual elements so
+// a single bad component never crashes the whole page.
+// ---------------------------------------------------------------------------
+⋮----
+interface ElementErrorBoundaryProps {
+  elementType: string;
+  children: ReactNode;
+}
+⋮----
+interface ElementErrorBoundaryState {
+  hasError: boolean;
+}
+⋮----
+class ElementErrorBoundary extends React.Component&lt;
+⋮----
+constructor(props: ElementErrorBoundaryProps)
+⋮----
+static getDerivedStateFromError(): ElementErrorBoundaryState
+⋮----
+componentDidCatch(error: Error, info: ErrorInfo)
+⋮----
+render()
+⋮----
+// Render nothing – the element silently disappears rather than
+// crashing the entire application.
+⋮----
+// ---------------------------------------------------------------------------
+// FunctionsContext – provides $computed functions to the element tree
+// ---------------------------------------------------------------------------
+⋮----
+function useFunctions(): Record&lt;string, ComputedFunction&gt;
+⋮----
+// ---------------------------------------------------------------------------
+// DirectivesContext – provides custom directive registry to the element tree
+// ---------------------------------------------------------------------------
+⋮----
+function useDirectives(): DirectiveRegistry | undefined
+⋮----
+interface ElementRendererProps {
+  element: UIElement;
+  /** Spec key for this element. Used by the devtools picker. */
+  elementKey?: string;
+  spec: Spec;
+  registry: ComponentRegistry;
+  loading?: boolean;
+  fallback?: ComponentRenderer;
+}
+⋮----
+/** Spec key for this element. Used by the devtools picker. */
+⋮----
+/**
+ * Subscribe to whether any devtools is mounted so the renderer can add a
+ * `data-jr-key` wrapper for the picker. Trivially cheap when inactive.
+ */
+function useDevtoolsActive(): boolean
+⋮----
+/**
+ * Element renderer component.
+ * Memoized to prevent re-rendering all repeat children when state changes.
+ */
+⋮----
+// Build context with repeat scope, $computed functions, and custom directives
+⋮----
+// A repeat container whose own visible condition references $item/$index
+// outside any repeat scope is (partly) a per-item filter: models and humans
+// write {&quot;repeat&quot;: ..., &quot;visible&quot;: {&quot;$item&quot;: &quot;status&quot;, &quot;eq&quot;: &quot;todo&quot;}} to
+// mean a filtered list. AND-composed $state conjuncts still gate the
+// container itself so a false gate hides the shell, not just the items.
+⋮----
+// Evaluate visibility (now supports $item/$index inside repeat scopes)
+⋮----
+// Create emit function that resolves events to action bindings.
+// Must be called before any early return to satisfy Rules of Hooks.
+⋮----
+// Build a fresh context with live store state so that $state
+// references in later actions see mutations from earlier ones.
+⋮----
+// Create on() function that returns an EventHandle with metadata for a specific event.
+⋮----
+// Watch effect: fire actions when watched state paths change.
+// Must be called before any early return to satisfy Rules of Hooks.
+//
+// Two refs serve distinct roles:
+// - `stableWatchRef` (useMemo): holds the last emitted values object so we
+//   can return the same reference when watched values haven&apos;t changed,
+//   preventing the downstream useEffect from firing on unrelated state updates.
+// - `prevWatchValues` (useEffect): tracks the previous watched-values snapshot
+//   for change detection. Starts as `null` to skip the initial mount.
+⋮----
+// Skip the initial mount — only fire on changes
+⋮----
+// Don&apos;t render if not visible
+⋮----
+// Resolve $bindState/$bindItem expressions → bindings map (prop name → state path)
+⋮----
+// Resolve dynamic prop expressions ($state, $item, $index, $bindState, $bindItem, $cond/$then/$else)
+⋮----
+// Get the component renderer
+⋮----
+// ---- Render children (with repeat support) ----
+⋮----
+// When devtools is mounted, wrap each element in a transparent span so the
+// picker can map DOM nodes back to spec keys. `display: contents` avoids
+// most layout impact.
+⋮----
+// ---------------------------------------------------------------------------
+// RepeatChildren -- renders child elements once per item in a state array.
+// Used when an element has a `repeat` field.
+// ---------------------------------------------------------------------------
+⋮----
+// Per-item filter from the container&apos;s own $item/$index visible condition.
+// Original indices are preserved so item state paths still point at the
+// right array entry.
+⋮----
+// Use a stable key: prefer key field, fall back to index
+⋮----
+/**
+ * Main renderer component
+ */
+⋮----
+/**
+ * Props for JSONUIProvider
+ */
+⋮----
+/** Component registry */
+⋮----
+/**
+   * External store (controlled mode). When provided, `initialState` and
+   * `onStateChange` are ignored.
+   */
+⋮----
+/** Initial state model (uncontrolled mode) */
+⋮----
+/** Action handlers */
+⋮----
+/** Navigation function */
+⋮----
+/** Custom validation functions */
+⋮----
+/** Named functions for `$computed` expressions in props */
+⋮----
+/** Custom directives for user-defined `$`-prefixed dynamic values */
+⋮----
+/** Callback when state changes (uncontrolled mode) */
+⋮----
+/**
+ * Combined provider for all JSONUI contexts
+ */
+⋮----
+/**
+ * Renders the confirmation dialog when needed
+ */
+⋮----
+// ============================================================================
+// defineRegistry
+// ============================================================================
+⋮----
+/**
+ * Result returned by defineRegistry
+ */
+⋮----
+/** Component registry for `&lt;Renderer registry={...} /&gt;` */
+⋮----
+/**
+   * Create ActionProvider-compatible handlers.
+   * Accepts getter functions so handlers always read the latest state/setState
+   * (e.g. from React refs).
+   */
+⋮----
+/**
+   * Execute an action by name imperatively
+   * (for use outside the React tree, e.g. initial state loading).
+   */
+⋮----
+/**
+ * Options for defineRegistry.
+ *
+ * When the catalog declares actions, the `actions` field is required.
+ * When the catalog has no actions (or `actions: {}`), the field is optional.
+ */
+⋮----
+/**
+ * Create a registry from a catalog with components and/or actions.
+ *
+ * When the catalog declares actions, the `actions` field is required.
+ *
+ * @example
+ * ```tsx
+ * // Components only (catalog has no actions)
+ * const { registry } = defineRegistry(catalog, {
+ *   components: {
+ *     Card: ({ props, children }) =&gt; (
+ *       &lt;div className=&quot;card&quot;&gt;{props.title}{children}&lt;/div&gt;
+ *     ),
+ *   },
+ * });
+ *
+ * // Both (catalog declares actions)
+ * const { registry, handlers, executeAction } = defineRegistry(catalog, {
+ *   components: { ... },
+ *   actions: { ... },
+ * });
+ * ```
+ */
+⋮----
+// Build component registry
+⋮----
+// Build action helpers
+⋮----
+const handlers = (
+    getSetState: () =&gt; SetState | undefined,
+    getState: () =&gt; StateModel,
+): Record&lt;string, (params: Record&lt;string, unknown&gt;) =&gt; Promise&lt;void&gt;&gt; =&gt;
+⋮----
+const executeAction = async (
+    actionName: string,
+    params: Record&lt;string, unknown&gt; | undefined,
+    setState: SetState,
+    state: StateModel = {},
+): Promise&lt;void&gt; =&gt;
+⋮----
+/** @internal */
+⋮----
+/** @internal */
+⋮----
+// ============================================================================
+// NEW API
+// ============================================================================
+⋮----
+/**
+ * Props for renderers created with createRenderer
+ */
+⋮----
+/** The spec to render (AI-generated JSON) */
+⋮----
+/**
+   * External store (controlled mode). When provided, `state` and
+   * `onStateChange` are ignored.
+   */
+⋮----
+/** State context for dynamic values (uncontrolled mode) */
+⋮----
+/** Action handler */
+⋮----
+/** Callback when state changes (uncontrolled mode) */
+⋮----
+/** Named functions for `$computed` expressions in props */
+⋮----
+/** Custom directives for user-defined `$`-prefixed dynamic values */
+⋮----
+/** Whether the spec is currently loading/streaming */
+⋮----
+/** Fallback component for unknown types */
+⋮----
+/**
+ * Component map type - maps component names to React components
+ */
+⋮----
+/**
+ * Create a renderer from a catalog
+ *
+ * @example
+ * ```typescript
+ * const DashboardRenderer = createRenderer(dashboardCatalog, {
+ *   Card: ({ element, children }) =&gt; &lt;div className=&quot;card&quot;&gt;{children}&lt;/div&gt;,
+ *   Metric: ({ element }) =&gt; &lt;span&gt;{element.props.value}&lt;/span&gt;,
+ * });
+ *
+ * // Usage
+ * &lt;DashboardRenderer spec={aiGeneratedSpec} state={state} /&gt;
+ * ```
+ */
+⋮----
+// Convert component map to registry
+⋮----
+// Return the renderer component
+⋮----
+// Wrap onAction with a Proxy so any action name routes to the callback</file><file path="packages/react/src/repeat-filter.test.tsx">import { describe, it, expect } from &quot;vitest&quot;;
+import React from &quot;react&quot;;
+import { render, screen } from &quot;@testing-library/react&quot;;
+import type { Spec } from &quot;@json-render/core&quot;;
+import {
+  JSONUIProvider,
+  Renderer,
+  type ComponentRenderProps,
+} from &quot;./renderer&quot;;
+⋮----
+function Stack(
+⋮----
+function Text(
+⋮----
+function mount(spec: Spec)
+⋮----
+const mixedSpec = (showTasks: boolean): Spec =&gt; (</file><file path="packages/react/src/schema.ts">import { defineSchema } from &quot;@json-render/core&quot;;
+⋮----
+/**
+ * The schema for @json-render/react
+ *
+ * Defines:
+ * - Spec: A flat tree of elements with keys, types, props, and children references
+ * - Catalog: Components with props schemas, and optional actions
+ */
+⋮----
+// What the AI-generated SPEC looks like
+⋮----
+/** Root element key */
+⋮----
+/** Flat map of elements by key */
+⋮----
+/** Component type from catalog */
+⋮----
+/** Component props */
+⋮----
+/** Child element keys (flat reference) */
+⋮----
+/** Visibility condition */
+⋮----
+// What the CATALOG must provide
+⋮----
+/** Component definitions */
+⋮----
+/** Zod schema for component props */
+⋮----
+/** Slots for this component. Use [&apos;default&apos;] for children, or named slots like [&apos;header&apos;, &apos;footer&apos;] */
+⋮----
+/** Description for AI generation hints */
+⋮----
+/** Example prop values used in prompt examples (auto-generated from Zod schema if omitted) */
+⋮----
+/** Action definitions (optional) */
+⋮----
+/** Zod schema for action params */
+⋮----
+/** Description for AI generation hints */
+⋮----
+// Element integrity
+⋮----
+// Field placement
+⋮----
+// State and data
+⋮----
+// Design quality
+⋮----
+/**
+ * Type for the React schema
+ */
+export type ReactSchema = typeof schema;
+⋮----
+/**
+ * Infer the spec type from a catalog
+ */
+export type ReactSpec&lt;TCatalog&gt; = typeof schema extends {
+  createCatalog: (catalog: TCatalog) =&gt; { _specType: infer S };
+}
+  ? S
+  : never;
+⋮----
+// Backward compatibility aliases
+/** @deprecated Use `schema` instead */
+⋮----
+/** @deprecated Use `ReactSchema` instead */
+export type ElementTreeSchema = ReactSchema;
+/** @deprecated Use `ReactSpec` instead */
+export type ElementTreeSpec&lt;T&gt; = ReactSpec&lt;T&gt;;</file></files></repomix>

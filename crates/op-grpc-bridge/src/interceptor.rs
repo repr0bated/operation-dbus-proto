@@ -17,9 +17,7 @@ use tonic::transport::server::TcpConnectInfo;
 use tonic::{Request, Status};
 
 use crate::mutation_engine::MutationEngine;
-use crate::oracle_assertion::{
-    AssertionRejection, AssertionValidator, HumanPrincipalIdentity,
-};
+use crate::oracle_assertion::{AssertionRejection, AssertionValidator, HumanPrincipalIdentity};
 
 /// gRPC metadata key for the optional oracle identity assertion (OIA1 wire bytes).
 pub const ASSERTION_METADATA_KEY: &str = "x-oracle-identity-assertion-bin";
@@ -40,9 +38,7 @@ pub struct GhostbridgeIdentity {
 static ENGINE: RwLock<Option<Arc<MutationEngine>>> = RwLock::new(None);
 
 pub fn set_engine(engine: Arc<MutationEngine>) {
-    *ENGINE
-        .write()
-        .expect("engine lock poisoned") = Some(engine);
+    *ENGINE.write().expect("engine lock poisoned") = Some(engine);
 }
 
 /// Per-serving-instance interceptor carrying its own assertion validator.
@@ -107,9 +103,7 @@ pub fn make_registration_interceptor(
 
 /// Resolve the footprint/session pair for capability gating. Human principal
 /// identity shadows Ghostbridge when both are present.
-pub fn bridge_capability_identity(
-    extensions: &tonic::Extensions,
-) -> Option<GhostbridgeIdentity> {
+pub fn bridge_capability_identity(extensions: &tonic::Extensions) -> Option<GhostbridgeIdentity> {
     if let Some(human) = extensions.get::<HumanPrincipalIdentity>() {
         return Some(GhostbridgeIdentity {
             footprint: hex::encode(human.footprint),
@@ -193,10 +187,7 @@ fn verify_per_identity(
     trace_id: Option<&str>,
     request_footprint: &str,
 ) -> Option<Result<String, Status>> {
-    let engine = ENGINE
-        .read()
-        .expect("engine lock poisoned")
-        .clone()?;
+    let engine = ENGINE.read().expect("engine lock poisoned").clone()?;
     let session_id = pubkey.map(op_identity::session::derive_session_id);
     let args = match (&session_id, trace_id) {
         (Some(sid), _) => serde_json::json!({ "session_id": sid }),
@@ -376,22 +367,13 @@ pub(crate) mod tests {
         );
     }
 
-
     fn fresh_signed(
         issuer: &op_identity::oracle_assertion::DecoyIssuer,
         pubkey: &str,
         nonce: [u8; 16],
     ) -> op_identity::oracle_assertion::SignedAssertion {
         let now = chrono::Utc::now().timestamp();
-        signed_with_fields(
-            issuer,
-            pubkey,
-            test_ip(),
-            now - 5,
-            now + 300,
-            nonce,
-            None,
-        )
+        signed_with_fields(issuer, pubkey, test_ip(), now - 5, now + 300, nonce, None)
     }
 
     fn validator_for_tests() -> Arc<AssertionValidator> {
@@ -568,14 +550,10 @@ pub(crate) mod tests {
     pub async fn duplicate_assertion_metadata_values_reject_malformed_impl() {
         let mut gate = make_ghostbridge_interceptor(validator_for_tests());
         let mut req = request_with_connect_info(test_ip());
-        req.metadata_mut().append_bin(
-            ASSERTION_METADATA_KEY,
-            MetadataValue::from_bytes(b"OIA1"),
-        );
-        req.metadata_mut().append_bin(
-            ASSERTION_METADATA_KEY,
-            MetadataValue::from_bytes(b"OIA1"),
-        );
+        req.metadata_mut()
+            .append_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(b"OIA1"));
+        req.metadata_mut()
+            .append_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(b"OIA1"));
         let status = gate.call(req).unwrap_err();
         assert_eq!(status.code(), Code::Unauthenticated);
         assert!(status.message().contains("Malformed"));
@@ -623,16 +601,14 @@ pub(crate) mod tests {
             ex
         })
         .expect("identity");
-        assert!(
-            crate::grpc_server::enforce_bridge_capability_with_schema(
-                Some(&schema),
-                "human_principal",
-                "resolve_key",
-                Some("human_principal.read"),
-                Some(&identity),
-            )
-            .is_ok()
-        );
+        assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
+            Some(&schema),
+            "human_principal",
+            "resolve_key",
+            Some("human_principal.read"),
+            Some(&identity),
+        )
+        .is_ok());
     }
 
     /// VAL-BRIDGE-028
@@ -650,16 +626,14 @@ pub(crate) mod tests {
             footprint: footprint_hex,
             session_id: "human".to_string(),
         };
-        assert!(
-            crate::grpc_server::enforce_bridge_capability_with_schema(
-                Some(&schema),
-                "human_principal",
-                "resolve_key",
-                Some("human_principal.read"),
-                Some(&identity),
-            )
-            .is_err()
-        );
+        assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
+            Some(&schema),
+            "human_principal",
+            "resolve_key",
+            Some("human_principal.read"),
+            Some(&identity),
+        )
+        .is_err());
     }
 
     /// VAL-BRIDGE-029
@@ -687,16 +661,14 @@ pub(crate) mod tests {
         });
         let identity = bridge_capability_identity(&ex).expect("human wins");
         assert_eq!(identity.footprint, hex::encode(human_fp));
-        assert!(
-            crate::grpc_server::enforce_bridge_capability_with_schema(
-                Some(&schema),
-                "human_principal",
-                "resolve_key",
-                Some("human_principal.read"),
-                Some(&identity),
-            )
-            .is_ok()
-        );
+        assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
+            Some(&schema),
+            "human_principal",
+            "resolve_key",
+            Some("human_principal.read"),
+            Some(&identity),
+        )
+        .is_ok());
     }
 
     /// VAL-BRIDGE-036

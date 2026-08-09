@@ -458,8 +458,8 @@ pub mod tests {
     }
 
     fn write_trust_store(dir: &tempfile::TempDir, issuer: &DecoyIssuer) -> std::path::PathBuf {
-        let b64 = base64::engine::general_purpose::STANDARD
-            .encode(issuer.verifying_key().to_bytes());
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
         let json = format!(
             "{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}",
             issuer.key_id(),
@@ -573,8 +573,8 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn trust_store_malformed_json_fails_closed() {
         let issuer = test_issuer();
-        let good_b64 = base64::engine::general_purpose::STANDARD
-            .encode(issuer.verifying_key().to_bytes());
+        let good_b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
         let dir = tempfile::tempdir().expect("tempdir");
         let wrong_len = format!(
             "{{\"decoy_keys\": {{\"decoy-key-1\": \"{}\"}}}}",
@@ -620,11 +620,7 @@ pub mod tests {
             None,
         );
         let identity = validator
-            .validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100,
-            )
+            .validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("valid assertion");
         assert_eq!(identity.human_pubkey, pubkey);
         assert_eq!(identity.expires_at, signed.assertion.expires_at);
@@ -670,11 +666,7 @@ pub mod tests {
             Some("unknown-key"),
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::UnknownDecoyKey)
         );
     }
@@ -695,11 +687,7 @@ pub mod tests {
         );
         signed.signature[0] ^= 0x01;
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::BadSignature)
         );
 
@@ -732,7 +720,15 @@ pub mod tests {
         let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
-        let signed = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x05; 16], None);
+        let signed = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            issued,
+            expires,
+            [0x05; 16],
+            None,
+        );
         let wire = signed.to_wire();
         assert_eq!(
             validator.validate(&wire, Some(source_at(test_ip())), expires + 31),
@@ -760,16 +756,21 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                now
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), now),
             Err(AssertionRejection::NotYetValid)
         );
         validator
             .validate(
-                &signed_with_fields(&issuer, &pubkey, test_ip(), now + 30, now + 330, [0x07; 16], None).to_wire(),
+                &signed_with_fields(
+                    &issuer,
+                    &pubkey,
+                    test_ip(),
+                    now + 30,
+                    now + 330,
+                    [0x07; 16],
+                    None,
+                )
+                .to_wire(),
                 Some(source_at(test_ip())),
                 now,
             )
@@ -793,11 +794,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &over.to_wire(),
-                Some(source_at(test_ip())),
-                issued + 1
-            ),
+            validator.validate(&over.to_wire(), Some(source_at(test_ip())), issued + 1),
             Err(AssertionRejection::LifetimeTooLong)
         );
         let exact = signed_with_fields(
@@ -851,9 +848,17 @@ pub mod tests {
         // TTL passes without cache access — entry remains (no background purge).
         assert_eq!(cache.entry_count(), 1);
         // Next access at/after expiry+leeway purges and allows reuse.
-        assert!(cache.check_and_insert([0xCC; 16], expires_at + 1000, expires_at + CLOCK_LEEWAY_SECS));
+        assert!(cache.check_and_insert(
+            [0xCC; 16],
+            expires_at + 1000,
+            expires_at + CLOCK_LEEWAY_SECS
+        ));
         assert_eq!(cache.entry_count(), 1, "expired nonce purged on access");
-        assert!(cache.check_and_insert(nonce, expires_at + 1000, expires_at + CLOCK_LEEWAY_SECS + 1));
+        assert!(cache.check_and_insert(
+            nonce,
+            expires_at + 1000,
+            expires_at + CLOCK_LEEWAY_SECS + 1
+        ));
     }
 
     /// VAL-BRIDGE-013
@@ -949,11 +954,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::UnknownPrincipal)
         );
     }
@@ -987,7 +988,11 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(&signed2.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
+            validator.validate(
+                &signed2.to_wire(),
+                Some(source_at(test_ip())),
+                1_700_000_100
+            ),
             Err(AssertionRejection::RevokedPrincipal)
         );
     }
@@ -1012,11 +1017,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::RegistryUnavailable)
         );
     }
@@ -1084,11 +1085,7 @@ pub mod tests {
             Some("missing"),
         );
         assert_eq!(
-            validator.validate(
-                &inverted.to_wire(),
-                Some(source_at(test_ip())),
-                issued
-            ),
+            validator.validate(&inverted.to_wire(), Some(source_at(test_ip())), issued),
             Err(AssertionRejection::Malformed)
         );
 
@@ -1123,15 +1120,13 @@ pub mod tests {
             replay_nonce,
             None,
         );
-        validator
-            .replay_cache()
-            .check_and_insert(replay_nonce, expired.assertion.expires_at, issued + 1);
+        validator.replay_cache().check_and_insert(
+            replay_nonce,
+            expired.assertion.expires_at,
+            issued + 1,
+        );
         assert_eq!(
-            validator.validate(
-                &expired.to_wire(),
-                Some(source_at(test_ip())),
-                issued + 400
-            ),
+            validator.validate(&expired.to_wire(), Some(source_at(test_ip())), issued + 400),
             Err(AssertionRejection::Expired)
         );
 
@@ -1204,16 +1199,15 @@ pub mod tests {
             None,
         );
         let identity = validator
-            .validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100,
-            )
+            .validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("valid");
         assert_eq!(identity.expires_at, expires);
         assert_eq!(identity.principal_id, derive_principal_id(&pubkey));
         assert_eq!(identity.footprint, derive_human_footprint(&pubkey));
-        assert_ne!(identity.footprint, blake3::derive_key("op-identity human-principal v1", pubkey.as_bytes()));
+        assert_ne!(
+            identity.footprint,
+            blake3::derive_key("op-identity human-principal v1", pubkey.as_bytes())
+        );
         assert_ne!(identity.principal_id, derive_session_id(&pubkey));
     }
 
@@ -1263,11 +1257,7 @@ pub mod tests {
             None,
         );
         validator
-            .validate(
-                &first.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100,
-            )
+            .validate(&first.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("first");
         let second = signed_with_fields(
             &issuer,
@@ -1279,11 +1269,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &second.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&second.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::Replay)
         );
     }
@@ -1316,8 +1302,8 @@ pub mod tests {
 
     pub async fn corrupted_store_rejects_unknown_decoy_key_at_validate_impl() {
         let issuer = test_issuer();
-        let good_b64 = base64::engine::general_purpose::STANDARD
-            .encode(issuer.verifying_key().to_bytes());
+        let good_b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
         let dir = tempfile::tempdir().expect("tempdir");
         let variants: Vec<Vec<u8>> = vec![
             br#"{"decoy_keys": []}"#.to_vec(),
@@ -1348,11 +1334,7 @@ pub mod tests {
             std::fs::write(&path, &bytes).expect("write");
             let validator = AssertionValidator::new(DecoyTrustStore::load_from_path(&path));
             assert_eq!(
-                validator.validate(
-                    &signed.to_wire(),
-                    Some(source_at(test_ip())),
-                    1_700_000_100
-                ),
+                validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
                 Err(AssertionRejection::UnknownDecoyKey),
                 "variant {idx}"
             );
@@ -1389,7 +1371,15 @@ pub mod tests {
         let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
-        let base = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x25; 16], None);
+        let base = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            issued,
+            expires,
+            [0x25; 16],
+            None,
+        );
         let wire = base.to_wire();
         validator
             .validate(&wire, Some(source_at(test_ip())), expires + 30)
@@ -1408,11 +1398,7 @@ pub mod tests {
             None,
         );
         validator
-            .validate(
-                &future.to_wire(),
-                Some(source_at(test_ip())),
-                issued,
-            )
+            .validate(&future.to_wire(), Some(source_at(test_ip())), issued)
             .expect("issued_at == now+30 passes");
         let future_bad = signed_with_fields(
             &issuer,
@@ -1424,11 +1410,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &future_bad.to_wire(),
-                Some(source_at(test_ip())),
-                issued
-            ),
+            validator.validate(&future_bad.to_wire(), Some(source_at(test_ip())), issued),
             Err(AssertionRejection::NotYetValid)
         );
     }
@@ -1447,11 +1429,7 @@ pub mod tests {
             Some("missing"),
         );
         assert_eq!(
-            validator.validate(
-                &inverted.to_wire(),
-                Some(source_at(test_ip())),
-                issued
-            ),
+            validator.validate(&inverted.to_wire(), Some(source_at(test_ip())), issued),
             Err(AssertionRejection::Malformed)
         );
         let mut inverted_bad_sig = signed_with_fields(
@@ -1492,11 +1470,7 @@ pub mod tests {
         );
         let validator = AssertionValidator::new(store);
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::UnknownDecoyKey)
         );
     }
@@ -1507,7 +1481,15 @@ pub mod tests {
         let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
-        let signed = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x2B; 16], None);
+        let signed = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            issued,
+            expires,
+            [0x2B; 16],
+            None,
+        );
         let wire = signed.to_wire();
         validator
             .validate(&wire, Some(source_at(test_ip())), issued + 1)
@@ -1547,18 +1529,10 @@ pub mod tests {
             None,
         );
         validator
-            .validate(
-                &assertion_a.to_wire(),
-                Some(source_at(ip_a)),
-                1_700_000_100,
-            )
+            .validate(&assertion_a.to_wire(), Some(source_at(ip_a)), 1_700_000_100)
             .expect("A from A");
         validator
-            .validate(
-                &assertion_b.to_wire(),
-                Some(source_at(ip_b)),
-                1_700_000_100,
-            )
+            .validate(&assertion_b.to_wire(), Some(source_at(ip_b)), 1_700_000_100)
             .expect("B from B");
         let assertion_a_swap = signed_with_fields(
             &issuer,
@@ -1677,7 +1651,8 @@ pub mod tests {
             Err(AssertionRejection::UnknownDecoyKey)
         );
 
-        let other_b64 = base64::engine::general_purpose::STANDARD.encode(other.verifying_key().to_bytes());
+        let other_b64 =
+            base64::engine::general_purpose::STANDARD.encode(other.verifying_key().to_bytes());
         std::fs::write(
             &path,
             format!("{{\"decoy_keys\": {{\"other-key\": \"{}\"}}}}", other_b64),
@@ -1697,12 +1672,13 @@ pub mod tests {
         keys.insert("other-key".to_string(), other.verifying_key());
         let validator_v2 = AssertionValidator::new(DecoyTrustStore::from_decoy_keys(keys));
         assert_eq!(
-            validator_v1.validate(
-                &signed_v1.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            )
-            .err(),
+            validator_v1
+                .validate(
+                    &signed_v1.to_wire(),
+                    Some(source_at(test_ip())),
+                    1_700_000_100
+                )
+                .err(),
             validator_v1
                 .validate(
                     &signed_v1.to_wire(),
@@ -1732,7 +1708,7 @@ pub mod tests {
             .validate(
                 &signed_other.to_wire(),
                 Some(source_at(test_ip())),
-                1_700_000_100
+                1_700_000_100,
             )
             .expect_err("unknown principal");
     }
@@ -1741,13 +1717,22 @@ pub mod tests {
         let dir1 = tempfile::tempdir().expect("tempdir1");
         let dir2 = tempfile::tempdir().expect("tempdir2");
         let issuer1 = test_issuer();
-        let issuer2 = DecoyIssuer::new(SigningKey::from_bytes(&[8u8; 32]), "decoy-key-2", Duration::from_secs(900));
+        let issuer2 = DecoyIssuer::new(
+            SigningKey::from_bytes(&[8u8; 32]),
+            "decoy-key-2",
+            Duration::from_secs(900),
+        );
         write_trust_store(&dir1, &issuer1);
         let path2 = dir2.path().join("decoy-trust.json");
-        let b64 = base64::engine::general_purpose::STANDARD.encode(issuer2.verifying_key().to_bytes());
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer2.verifying_key().to_bytes());
         std::fs::write(
             &path2,
-            format!("{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}", issuer2.key_id(), b64),
+            format!(
+                "{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}",
+                issuer2.key_id(),
+                b64
+            ),
         )
         .expect("write2");
         let path1 = dir1.path().join("decoy-trust.json");
@@ -1758,5 +1743,4 @@ pub mod tests {
         assert!(v2.trust_store().contains_key("decoy-key-2"));
         assert!(!v2.trust_store().contains_key("decoy-key-1"));
     }
-
 }

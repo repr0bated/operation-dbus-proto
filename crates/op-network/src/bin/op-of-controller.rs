@@ -18,9 +18,8 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use op_network::{
-    attach_controller_safe, del_controller, ensure_fallback_normal,
-    get_datapath_health, set_controller, set_fail_mode, OpenFlowController,
-    OpenFlowControllerHandle,
+    attach_controller_safe, del_controller, ensure_fallback_normal, get_datapath_health,
+    set_controller, set_fail_mode, OpenFlowController, OpenFlowControllerHandle,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -151,9 +150,17 @@ async fn main() -> Result<()> {
                 for e in &entries {
                     controller = controller.add_static_flow(&e.to_string());
                 }
-                info!("Loaded {} static flow(s) from {}", entries.len(), static_flows_path);
+                info!(
+                    "Loaded {} static flow(s) from {}",
+                    entries.len(),
+                    static_flows_path
+                );
             }
-            Err(e) => tracing::warn!("Failed to parse static flows {}: {:#}", static_flows_path, e),
+            Err(e) => tracing::warn!(
+                "Failed to parse static flows {}: {:#}",
+                static_flows_path,
+                e
+            ),
         },
         Err(_) => info!("No static flows file at {} (skipping)", static_flows_path),
     }

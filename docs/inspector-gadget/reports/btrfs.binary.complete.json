@@ -1,0 +1,781 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "btrfs_plugin.rs",
+  "plugin": {
+    "name": "btrfs_plugin",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "BtrfsState",
+    "fields": {
+      "config": {
+        "rust_type": "JsonValue",
+        "description": "Configuration.",
+        "subid": "obs.software.plugin.btrfs.config@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "dr_status": {
+        "rust_type": "JsonValue",
+        "description": "DR status.",
+        "subid": "obs.software.plugin.btrfs.dr-status@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "send_state": {
+        "rust_type": "JsonValue",
+        "description": "Send/receive state.",
+        "subid": "obs.software.plugin.btrfs.send-state@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "snapshots": {
+        "rust_type": "JsonValue",
+        "description": "Snapshots list.",
+        "subid": "obs.software.plugin.btrfs.snapshots@v1",
+        "has_serde_default": true,
+        "optional": false
+      },
+      "status": {
+        "rust_type": "String",
+        "description": "Runtime status.",
+        "subid": "obs.software.plugin.btrfs.status@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "string"
+      },
+      "subvolumes": {
+        "rust_type": "JsonValue",
+        "description": "Subvolumes list.",
+        "subid": "obs.software.plugin.btrfs.subvolumes@v1",
+        "has_serde_default": true,
+        "optional": false
+      }
+    },
+    "nested_types": {
+      "BalanceStartInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "BalanceStatusInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "CreateSubvolumeInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeleteSubvolumeInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeviceAddInput": {
+        "device": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeviceRemoveInput": {
+        "device": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "FilesystemDfInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "FilesystemUsageInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ListSubvolumesInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ScrubStartInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ScrubStatusInput": {
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "SnapshotInput": {
+        "destination": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "readonly": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "source": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 16,
+    "warn": 51,
+    "hint": 23,
+    "findings": [
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CreateSubvolumeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CreateSubvolumeInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateSubvolumeInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateSubvolumeInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateSubvolumeInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeleteSubvolumeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DeleteSubvolumeInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteSubvolumeInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeleteSubvolumeInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteSubvolumeInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SnapshotInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SnapshotInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SnapshotInput.source",
+        "message": "field `source` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SnapshotInput.source",
+        "message": "field `source` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SnapshotInput.source",
+        "message": "consider #[serde(default)] on `source` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SnapshotInput.destination",
+        "message": "field `destination` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SnapshotInput.destination",
+        "message": "field `destination` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SnapshotInput.destination",
+        "message": "consider #[serde(default)] on `destination` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SnapshotInput.readonly",
+        "message": "field `readonly` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SnapshotInput.readonly",
+        "message": "field `readonly` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListSubvolumesInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListSubvolumesInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListSubvolumesInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ListSubvolumesInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListSubvolumesInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ScrubStartInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ScrubStartInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ScrubStartInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ScrubStartInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ScrubStartInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ScrubStatusInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ScrubStatusInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ScrubStatusInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ScrubStatusInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ScrubStatusInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct BalanceStartInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct BalanceStartInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BalanceStartInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BalanceStartInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "BalanceStartInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct BalanceStatusInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct BalanceStatusInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "BalanceStatusInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "BalanceStatusInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "BalanceStatusInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct FilesystemDfInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct FilesystemDfInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FilesystemDfInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "FilesystemDfInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "FilesystemDfInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct FilesystemUsageInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct FilesystemUsageInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "FilesystemUsageInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "FilesystemUsageInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "FilesystemUsageInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeviceAddInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DeviceAddInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeviceAddInput.device",
+        "message": "field `device` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeviceAddInput.device",
+        "message": "field `device` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeviceAddInput.device",
+        "message": "consider #[serde(default)] on `device` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeviceAddInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeviceAddInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeviceAddInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeviceRemoveInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DeviceRemoveInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeviceRemoveInput.device",
+        "message": "field `device` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeviceRemoveInput.device",
+        "message": "field `device` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeviceRemoveInput.device",
+        "message": "consider #[serde(default)] on `device` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeviceRemoveInput.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeviceRemoveInput.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeviceRemoveInput.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct BtrfsState",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "BtrfsState.status",
+        "message": "`status` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "BtrfsState.subvolumes",
+        "message": "`subvolumes` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "BtrfsState.snapshots",
+        "message": "`snapshots` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "BtrfsState.send_state",
+        "message": "`send_state` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "BtrfsState.dr_status",
+        "message": "`dr_status` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "BtrfsState.config",
+        "message": "`config` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external CLI help-walk: source=/usr/bin/btrfs version=btrfs-progs v7.1 nodes=1 elements=7 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=6 introspected=7 missing_in_plugin=7 extra_in_plugin=6",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "cmd",
+        "message": "external surface has `cmd` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "flag.root.dry_run",
+        "message": "external surface has `flag.root.dry_run` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "flag.root.help",
+        "message": "external surface has `flag.root.help` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "flag.root.log",
+        "message": "external surface has `flag.root.log` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "flag.root.quiet",
+        "message": "external surface has `flag.root.quiet` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "flag.root.verbose",
+        "message": "external surface has `flag.root.verbose` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "flag.root.version",
+        "message": "external surface has `flag.root.version` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": null,
+    "surface_source": "/usr/bin/btrfs",
+    "files_by_kind": null,
+    "by_kind": null,
+    "element_path_count": 7,
+    "gaps": {
+      "surface_paths_total": 7,
+      "signal_paths_considered": 7,
+      "covered_approx": 0,
+      "missing_from_plugin": 7,
+      "missing_cli_commands": [
+        "cmd",
+        "flag.root.dry_run",
+        "flag.root.help",
+        "flag.root.log",
+        "flag.root.quiet",
+        "flag.root.verbose",
+        "flag.root.version"
+      ],
+      "missing_config_fields": [],
+      "missing_by_group": {
+        "cli_commands": 1,
+        "cli_flags": 6
+      },
+      "delegated_paths": [],
+      "missing_paths_sample": [
+        "cmd",
+        "flag.root.dry_run",
+        "flag.root.help",
+        "flag.root.log",
+        "flag.root.quiet",
+        "flag.root.verbose",
+        "flag.root.version"
+      ],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}
