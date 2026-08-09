@@ -41,6 +41,7 @@ members = [
     "crates/op-xray-daemon",
     "crates/op-mcp-shim",
     "crates/op-gemma",
+    "crates/op-gallery-gen",
     "crates/zeroclaw-gui",
     "crates/op-dbus-cli",
 ]
@@ -80,6 +81,7 @@ op-cozo-store = { path = "crates/op-cozo-store" }
 op-s6-systemctl = { path = "crates/op-s6-systemctl" }
 op-xray-daemon = { path = "crates/op-xray-daemon" }
 op-gemma = { path = "crates/op-gemma" }
+op-gallery-gen = { path = "crates/op-gallery-gen" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

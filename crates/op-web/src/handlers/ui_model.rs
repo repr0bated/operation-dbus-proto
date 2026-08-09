@@ -20,8 +20,11 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::convert::Infallible;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 // Deliberately renamed off the old "gemma"-prefixed paths (were independently
@@ -286,4 +289,171 @@ fn schema_hash_for(plugin: &str) -> Option<String> {
         .get(plugin)
         .and_then(|h| h.as_str())
         .map(|s| s.to_string())
+}
+
+// ── Gallery Generation API ─────────────────────────────────────────────────
+
+use axum::response::sse::{Event, Sse};
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref GEN_PROGRESS: Arc<op_gallery_gen::RunProgress> =
+        Arc::new(op_gallery_gen::RunProgress::new());
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GalleryGenConfig {
+    pub target_count: usize,
+    pub enable_mcp: bool,
+    pub enable_qdrant: bool,
+    pub operator_guidance: String,
+}
+
+/// POST /gallery-gen/start - Start a generation session
+pub async fn start_generation(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::Json(config): axum::Json<GalleryGenConfig>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Check if already running
+    if GEN_PROGRESS.running.load(Ordering::SeqCst) {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    // Assemble context from live blob catalog
+    let ctx = match op_gallery_gen::assemble_context(
+        config.enable_mcp,
+        config.enable_qdrant,
+        if config.operator_guidance.is_empty() {
+            None
+        } else {
+            Some(config.operator_guidance.clone())
+        },
+    ) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            tracing::error!("Failed to assemble generation context: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let plugin_count = ctx.schemas.len();
+    let catalog_hash = ctx.catalog_hash.clone();
+
+    // Build the run config
+    let run_config = op_gallery_gen::GalleryGenConfig {
+        target_count: config.target_count,
+        stable_core_max: 40,
+        zeroclaw_endpoint: "http://localhost:8082".to_string(),
+        enable_mcp: config.enable_mcp,
+        enable_qdrant: config.enable_qdrant,
+        max_turns: 10,
+    };
+
+    // Reset progress and mark as running
+    GEN_PROGRESS.reset(config.target_count);
+
+    // Create the gallery store for this run.
+    // InMemoryGalleryStore handles signature dedup and counting in-process.
+    // TODO: Replace with CatalogStore bridge when catalog is exposed via AppState or gRPC.
+    let store: Arc<dyn op_gallery_gen::GalleryStore> =
+        Arc::new(op_gallery_gen::InMemoryGalleryStore::new());
+
+    // Spawn the background generation task
+    let progress = Arc::clone(&GEN_PROGRESS);
+    tokio::spawn(async move {
+        match op_gallery_gen::run_gallery_fill(&run_config, ctx, store, progress.clone()).await {
+            Ok(count) => {
+                tracing::info!("Gallery generation completed: {} specs produced", count);
+            }
+            Err(e) => {
+                tracing::error!("Gallery generation failed: {}", e);
+                progress.finish();
+            }
+        }
+    });
+
+    let response = json!({
+        "status": "started",
+        "config": {
+            "target_count": config.target_count,
+            "enable_mcp": config.enable_mcp,
+            "enable_qdrant": config.enable_qdrant,
+        },
+        "context": {
+            "plugin_count": plugin_count,
+            "catalog_hash": catalog_hash,
+        }
+    });
+
+    Ok(axum::Json(response))
+}
+
+/// POST /gallery-gen/stop - Stop a running generation session
+pub async fn stop_generation(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    GEN_PROGRESS.stop_signal.store(true, Ordering::SeqCst);
+
+    let response = json!({
+        "status": "stopping"
+    });
+
+    Ok(axum::Json(response))
+}
+
+/// GET /gallery-gen/stream - SSE stream for generation progress
+pub async fn generation_stream(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = async_stream::stream! {
+        // Send initial status
+        yield Ok(Event::default().json_data(json!({
+            "type": "status",
+            "running": GEN_PROGRESS.running.load(Ordering::SeqCst),
+            "generated": GEN_PROGRESS.generated.load(Ordering::SeqCst),
+            "attempts": GEN_PROGRESS.attempts.load(Ordering::SeqCst),
+            "target": GEN_PROGRESS.target.load(Ordering::SeqCst),
+        })).unwrap());
+
+        // Keep connection alive with periodic updates
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+
+            let running = GEN_PROGRESS.running.load(Ordering::SeqCst);
+            let generated = GEN_PROGRESS.generated.load(Ordering::SeqCst);
+            let attempts = GEN_PROGRESS.attempts.load(Ordering::SeqCst);
+            let target = GEN_PROGRESS.target.load(Ordering::SeqCst);
+
+            if !running {
+                yield Ok(Event::default().json_data(json!({
+                    "type": "complete",
+                    "generated": generated,
+                    "attempts": attempts,
+                    "target": target,
+                })).unwrap());
+                break;
+            }
+
+            if GEN_PROGRESS.stop_signal.load(Ordering::SeqCst) && !running {
+                yield Ok(Event::default().json_data(json!({
+                    "type": "cancelled",
+                    "generated": generated,
+                    "attempts": attempts,
+                })).unwrap());
+                break;
+            }
+
+            // Send progress update
+            yield Ok(Event::default().json_data(json!({
+                "type": "progress",
+                "running": running,
+                "generated": generated,
+                "attempts": attempts,
+                "target": target,
+            })).unwrap());
+        }
+    };
+
+    Sse::new(stream)
 }
