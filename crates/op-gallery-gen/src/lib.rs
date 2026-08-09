@@ -20,7 +20,9 @@
 pub mod admission;
 pub mod context;
 pub mod inference;
+pub mod qdrant;
 pub mod run;
+pub mod session;
 pub mod tools;
 pub mod validator;
 

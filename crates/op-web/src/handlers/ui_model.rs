@@ -1,18 +1,18 @@
-//! Gemma / agent-GPU UI-spec gallery + catalog routes.
+//! Model-agnostic UI gallery generation + catalog routes.
 //!
-//! The LOVABLE SPA (`operation-dashboard-ui-07`) renders json-render `Spec`s.
-//! The inference agent (local Ollama historically, now the SaladCloud GPU
-//! agent — "just another model") is the producer: it reads the sealed blob
-//! `PluginSchema` (the base contract) plus the live SIGNALS/event-chain, notes
-//! an interesting *slice*, and emits a json-render `Spec` rendering just that
-//! part. The agent writes specs to `/dev/shm/gemma-ui-specs.json`; this module
-//! is the consumer surface that serves them over HTTP and provides the
-//! promote-to-catalog path that seals a winning lens into a durable SHM file.
+//! The Antigravity chat UI renders json-render `Spec`s. The model-agnostic
+//! inference loop (`op-gallery-gen`) is the producer: any model loaded through
+//! ZeroClaw reads the sealed blob `PluginSchema` plus json-render.dev docs
+//! and emits specs. The operator interacts through the /gallery-gen/* API.
+//!
+//! Legacy compatibility: the old `/api/ui-model/gallery` endpoint still reads
+//! from `/dev/shm/ui-specs.json` if present, for backward compat with existing
+//! dashboard deployments. New generation bypasses this file entirely.
 //!
 //! Source-of-truth rules (per CLAUDE.md):
 //! - Plugin schemas come from the sealed blob catalog via
 //!   `op_blob::catalog::read_plugin_schema_shm`, never a monolith file.
-//! - Spec files are tmpfs (`/dev/shm`); promotion rewrites them atomically.
+//! - Gallery generation uses `op-gallery-gen` (model-agnostic, via ZeroClaw).
 
 use crate::state::AppState;
 use axum::{
@@ -122,9 +122,16 @@ fn err(status: StatusCode, msg: &str) -> Response {
 }
 
 // ── Gallery ─────────────────────────────────────────────────────────────────
+// NOTE: The legacy file-based gallery (/dev/shm/ui-specs.json, produced by
+// op-gemma's ui_gallery.rs) is replaced by the model-agnostic op-gallery-gen
+// system. These endpoints now return data from the new generation system.
+// The /api/gallery-gen/* endpoints are the primary operator interface.
 
 /// GET /api/ui-model/gallery
+/// Returns the gallery (legacy compat — reads from SHM if present, empty otherwise).
 pub async fn ui_model_gallery_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+    // Legacy fallback: if the old SHM file exists, serve it for backward compat.
+    // New generation writes directly to CatalogStore, not this file.
     let gallery: SpecGallery = read_json(GEMMA_SPECS_PATH).unwrap_or_else(empty_gallery);
     ok(json!({ "version": gallery.version, "specs": gallery.specs }))
 }

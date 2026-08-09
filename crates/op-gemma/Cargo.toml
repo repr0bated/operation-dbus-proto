@@ -12,8 +12,6 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-op-blob = { workspace = true }
-op-state-store = { path = "../op-state-store" }
 
 [[bin]]
 name = "op-gemma"
