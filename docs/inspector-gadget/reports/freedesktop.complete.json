@@ -1,0 +1,901 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "freedesktop.rs",
+  "plugin": {
+    "name": "freedesktop",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "GetAllPropertiesInput",
+    "fields": {
+      "interface_name": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      }
+    },
+    "nested_types": {
+      "GetMachineIdInput": {},
+      "GetManagedObjectsInput": {},
+      "GetPropertyInput": {
+        "interface_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "property_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "IntrospectInput": {},
+      "PingInput": {},
+      "SetPropertyInput": {
+        "interface_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "property_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "value": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 9,
+    "warn": 64,
+    "hint": 9,
+    "findings": [
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: obs.software.freedesktop.machine_id.get@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "invalid_subid",
+        "location": null,
+        "message": "subid does not match required pattern: obs.software.freedesktop.managed_objects.get@v1",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetManagedObjectsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetManagedObjectsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetPropertyInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetPropertyInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetPropertyInput.interface_name",
+        "message": "field `interface_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetPropertyInput.interface_name",
+        "message": "field `interface_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetPropertyInput.interface_name",
+        "message": "consider #[serde(default)] on `interface_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetPropertyInput.property_name",
+        "message": "field `property_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetPropertyInput.property_name",
+        "message": "field `property_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetPropertyInput.property_name",
+        "message": "consider #[serde(default)] on `property_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetAllPropertiesInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetAllPropertiesInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetAllPropertiesInput.interface_name",
+        "message": "field `interface_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetAllPropertiesInput.interface_name",
+        "message": "field `interface_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetAllPropertiesInput.interface_name",
+        "message": "consider #[serde(default)] on `interface_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SetPropertyInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SetPropertyInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetPropertyInput.interface_name",
+        "message": "field `interface_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SetPropertyInput.interface_name",
+        "message": "field `interface_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetPropertyInput.interface_name",
+        "message": "consider #[serde(default)] on `interface_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetPropertyInput.property_name",
+        "message": "field `property_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SetPropertyInput.property_name",
+        "message": "field `property_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetPropertyInput.property_name",
+        "message": "consider #[serde(default)] on `property_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SetPropertyInput.value",
+        "message": "field `value` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SetPropertyInput.value",
+        "message": "field `value` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SetPropertyInput.value",
+        "message": "consider #[serde(default)] on `value` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct IntrospectInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct IntrospectInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct PingInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct PingInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetMachineIdInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetMachineIdInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_x_oscal_category",
+        "location": null,
+        "message": "no #[schemars(extend(\"x-oscal-category\" = \"…\"))] on a state struct — declare what the plugin IS",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_schema_fn",
+        "location": null,
+        "message": "no `*_schema()` function spotted — expected plugin_schema_from_json wrapper",
+        "severity": "warn"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/freedesktop-dbus.xml version=repomix nodes=0 elements=162 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=116 introspected=162 missing_in_plugin=162 extra_in_plugin=116",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error",
+        "message": "external surface has `enum.rs.Error` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.AccessDenied",
+        "message": "external surface has `enum.rs.Error.AccessDenied` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.AddressInUse",
+        "message": "external surface has `enum.rs.Error.AddressInUse` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.AdtAuditDataUnknown",
+        "message": "external surface has `enum.rs.Error.AdtAuditDataUnknown` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.AuthFailed",
+        "message": "external surface has `enum.rs.Error.AuthFailed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.BadAddress",
+        "message": "external surface has `enum.rs.Error.BadAddress` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.Disconnected",
+        "message": "external surface has `enum.rs.Error.Disconnected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.Failed",
+        "message": "external surface has `enum.rs.Error.Failed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.FileExists",
+        "message": "external surface has `enum.rs.Error.FileExists` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.FileNotFound",
+        "message": "external surface has `enum.rs.Error.FileNotFound` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.IOError",
+        "message": "external surface has `enum.rs.Error.IOError` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.InconsistentMessage",
+        "message": "external surface has `enum.rs.Error.InconsistentMessage` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.InteractiveAuthorizationRequired",
+        "message": "external surface has `enum.rs.Error.InteractiveAuthorizationRequired` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.InvalidArgs",
+        "message": "external surface has `enum.rs.Error.InvalidArgs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.InvalidFileContent",
+        "message": "external surface has `enum.rs.Error.InvalidFileContent` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.InvalidSignature",
+        "message": "external surface has `enum.rs.Error.InvalidSignature` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.LimitsExceeded",
+        "message": "external surface has `enum.rs.Error.LimitsExceeded` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.MatchRuleInvalid",
+        "message": "external surface has `enum.rs.Error.MatchRuleInvalid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.MatchRuleNotFound",
+        "message": "external surface has `enum.rs.Error.MatchRuleNotFound` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NameHasNoOwner",
+        "message": "external surface has `enum.rs.Error.NameHasNoOwner` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NoMemory",
+        "message": "external surface has `enum.rs.Error.NoMemory` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NoNetwork",
+        "message": "external surface has `enum.rs.Error.NoNetwork` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NoReply",
+        "message": "external surface has `enum.rs.Error.NoReply` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NoServer",
+        "message": "external surface has `enum.rs.Error.NoServer` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NotContainer",
+        "message": "external surface has `enum.rs.Error.NotContainer` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.NotSupported",
+        "message": "external surface has `enum.rs.Error.NotSupported` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.ObjectPathInUse",
+        "message": "external surface has `enum.rs.Error.ObjectPathInUse` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.PropertyReadOnly",
+        "message": "external surface has `enum.rs.Error.PropertyReadOnly` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SELinuxSecurityContextUnknown",
+        "message": "external surface has `enum.rs.Error.SELinuxSecurityContextUnknown` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.ServiceUnknown",
+        "message": "external surface has `enum.rs.Error.ServiceUnknown` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnChildExited",
+        "message": "external surface has `enum.rs.Error.SpawnChildExited` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnChildSignaled",
+        "message": "external surface has `enum.rs.Error.SpawnChildSignaled` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnConfigInvalid",
+        "message": "external surface has `enum.rs.Error.SpawnConfigInvalid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnExecFailed",
+        "message": "external surface has `enum.rs.Error.SpawnExecFailed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnFailed",
+        "message": "external surface has `enum.rs.Error.SpawnFailed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnFailedToSetup",
+        "message": "external surface has `enum.rs.Error.SpawnFailedToSetup` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnFileInvalid",
+        "message": "external surface has `enum.rs.Error.SpawnFileInvalid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnForkFailed",
+        "message": "external surface has `enum.rs.Error.SpawnForkFailed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnNoMemory",
+        "message": "external surface has `enum.rs.Error.SpawnNoMemory` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.Error.SpawnPermissionsInvalid",
+        "message": "external surface has `enum.rs.Error.SpawnPermissionsInvalid` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 122 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/freedesktop-dbus.xml",
+    "files_by_kind": {
+      "rust": 10,
+      "xml": 2
+    },
+    "by_kind": {
+      "rust": 160,
+      "xml": 2
+    },
+    "element_path_count": 162,
+    "gaps": {
+      "surface_paths_total": 162,
+      "signal_paths_considered": 159,
+      "covered_approx": 0,
+      "missing_from_plugin": 159,
+      "missing_cli_commands": [],
+      "missing_config_fields": [
+        "enum.rs.Error.AccessDenied",
+        "enum.rs.Error.AddressInUse",
+        "enum.rs.Error.AdtAuditDataUnknown",
+        "enum.rs.Error.AuthFailed",
+        "enum.rs.Error.BadAddress",
+        "enum.rs.Error.Disconnected",
+        "enum.rs.Error.Failed",
+        "enum.rs.Error.FileExists",
+        "enum.rs.Error.FileNotFound",
+        "enum.rs.Error.IOError",
+        "enum.rs.Error.InconsistentMessage",
+        "enum.rs.Error.InteractiveAuthorizationRequired",
+        "enum.rs.Error.InvalidArgs",
+        "enum.rs.Error.InvalidFileContent",
+        "enum.rs.Error.InvalidSignature",
+        "enum.rs.Error.LimitsExceeded",
+        "enum.rs.Error.MatchRuleInvalid",
+        "enum.rs.Error.MatchRuleNotFound",
+        "enum.rs.Error.NameHasNoOwner",
+        "enum.rs.Error.NoMemory",
+        "enum.rs.Error.NoNetwork",
+        "enum.rs.Error.NoReply",
+        "enum.rs.Error.NoServer",
+        "enum.rs.Error.NotContainer",
+        "enum.rs.Error.NotSupported",
+        "enum.rs.Error.ObjectPathInUse",
+        "enum.rs.Error.PropertyReadOnly",
+        "enum.rs.Error.SELinuxSecurityContextUnknown",
+        "enum.rs.Error.ServiceUnknown",
+        "enum.rs.Error.SpawnChildExited",
+        "enum.rs.Error.SpawnChildSignaled",
+        "enum.rs.Error.SpawnConfigInvalid",
+        "enum.rs.Error.SpawnExecFailed",
+        "enum.rs.Error.SpawnFailed",
+        "enum.rs.Error.SpawnFailedToSetup",
+        "enum.rs.Error.SpawnFileInvalid",
+        "enum.rs.Error.SpawnForkFailed",
+        "enum.rs.Error.SpawnNoMemory",
+        "enum.rs.Error.SpawnPermissionsInvalid",
+        "enum.rs.Error.SpawnServiceNotFound",
+        "enum.rs.Error.SpawnServiceNotValid",
+        "enum.rs.Error.TimedOut",
+        "enum.rs.Error.Timeout",
+        "enum.rs.Error.UnixProcessIdUnknown",
+        "enum.rs.Error.UnknownInterface",
+        "enum.rs.Error.UnknownMethod",
+        "enum.rs.Error.UnknownObject",
+        "enum.rs.Error.UnknownProperty",
+        "enum.rs.Error.ZBus",
+        "enum.rs.ReleaseNameReply.NonExistent",
+        "enum.rs.ReleaseNameReply.NotOwner",
+        "enum.rs.ReleaseNameReply.Released",
+        "enum.rs.RequestNameFlags.AllowReplacement",
+        "enum.rs.RequestNameFlags.DoNotQueue",
+        "enum.rs.RequestNameFlags.ReplaceExisting",
+        "enum.rs.RequestNameReply.AlreadyOwner",
+        "enum.rs.RequestNameReply.Exists",
+        "enum.rs.RequestNameReply.InQueue",
+        "enum.rs.RequestNameReply.PrimaryOwner",
+        "enum.rs.StartServiceReply.AlreadyRunning",
+        "enum.rs.StartServiceReply.Success",
+        "struct.rs.ConnectionCredentials.linux_security_label",
+        "struct.rs.ConnectionCredentials.process_fd",
+        "struct.rs.ConnectionCredentials.process_id",
+        "struct.rs.ConnectionCredentials.unix_group_ids",
+        "struct.rs.ConnectionCredentials.unix_user_id",
+        "struct.rs.ConnectionCredentials.windows_sid",
+        "struct.rs.ConnectionStats.bus_names",
+        "struct.rs.ConnectionStats.incoming_bytes",
+        "struct.rs.ConnectionStats.incoming_fds",
+        "struct.rs.ConnectionStats.incoming_messages",
+        "struct.rs.ConnectionStats.match_rules",
+        "struct.rs.ConnectionStats.outgoing_bytes",
+        "struct.rs.ConnectionStats.outgoing_fds",
+        "struct.rs.ConnectionStats.outgoing_messages",
+        "struct.rs.ConnectionStats.peak_bus_names",
+        "struct.rs.ConnectionStats.peak_incoming_bytes",
+        "struct.rs.ConnectionStats.peak_incoming_fds",
+        "struct.rs.ConnectionStats.peak_incoming_messages",
+        "struct.rs.ConnectionStats.peak_match_rules",
+        "struct.rs.ConnectionStats.peak_outgoing_bytes",
+        "struct.rs.ConnectionStats.peak_outgoing_fds",
+        "struct.rs.ConnectionStats.peak_outgoing_messages",
+        "struct.rs.ConnectionStats.rest",
+        "struct.rs.ConnectionStats.serial",
+        "struct.rs.ConnectionStats.unique_name",
+        "struct.rs.Error.AccessDenied.0",
+        "struct.rs.Error.AddressInUse.0",
+        "struct.rs.Error.AdtAuditDataUnknown.0",
+        "struct.rs.Error.AuthFailed.0",
+        "struct.rs.Error.BadAddress.0",
+        "struct.rs.Error.Disconnected.0",
+        "struct.rs.Error.Failed.0",
+        "struct.rs.Error.FileExists.0",
+        "struct.rs.Error.FileNotFound.0",
+        "struct.rs.Error.IOError.0",
+        "struct.rs.Error.InconsistentMessage.0",
+        "struct.rs.Error.InteractiveAuthorizationRequired.0",
+        "struct.rs.Error.InvalidArgs.0",
+        "struct.rs.Error.InvalidFileContent.0",
+        "struct.rs.Error.InvalidSignature.0",
+        "struct.rs.Error.LimitsExceeded.0",
+        "struct.rs.Error.MatchRuleInvalid.0",
+        "struct.rs.Error.MatchRuleNotFound.0",
+        "struct.rs.Error.NameHasNoOwner.0",
+        "struct.rs.Error.NoMemory.0",
+        "struct.rs.Error.NoNetwork.0",
+        "struct.rs.Error.NoReply.0",
+        "struct.rs.Error.NoServer.0",
+        "struct.rs.Error.NotContainer.0",
+        "struct.rs.Error.NotSupported.0",
+        "struct.rs.Error.ObjectPathInUse.0",
+        "struct.rs.Error.PropertyReadOnly.0",
+        "struct.rs.Error.SELinuxSecurityContextUnknown.0",
+        "struct.rs.Error.ServiceUnknown.0",
+        "struct.rs.Error.SpawnChildExited.0",
+        "struct.rs.Error.SpawnChildSignaled.0",
+        "struct.rs.Error.SpawnConfigInvalid.0",
+        "struct.rs.Error.SpawnExecFailed.0",
+        "struct.rs.Error.SpawnFailed.0",
+        "struct.rs.Error.SpawnFailedToSetup.0",
+        "struct.rs.Error.SpawnFileInvalid.0",
+        "struct.rs.Error.SpawnForkFailed.0",
+        "struct.rs.Error.SpawnNoMemory.0",
+        "struct.rs.Error.SpawnPermissionsInvalid.0",
+        "struct.rs.Error.SpawnServiceNotFound.0",
+        "struct.rs.Error.SpawnServiceNotValid.0",
+        "struct.rs.Error.TimedOut.0",
+        "struct.rs.Error.Timeout.0",
+        "struct.rs.Error.UnixProcessIdUnknown.0",
+        "struct.rs.Error.UnknownInterface.0",
+        "struct.rs.Error.UnknownMethod.0",
+        "struct.rs.Error.UnknownObject.0",
+        "struct.rs.Error.UnknownProperty.0",
+        "struct.rs.Error.ZBus.0",
+        "struct.rs.Stats.active_connections",
+        "struct.rs.Stats.bus_names",
+        "struct.rs.Stats.incomplete_connections",
+        "struct.rs.Stats.match_rules",
+        "struct.rs.Stats.peak_bus_names",
+        "struct.rs.Stats.peak_bus_names_per_connection",
+        "struct.rs.Stats.peak_match_rules",
+        "struct.rs.Stats.peak_match_rules_per_connection",
+        "struct.rs.Stats.rest",
+        "struct.rs.Stats.serial"
+      ],
+      "missing_by_group": {
+        "rust_enum": 66,
+        "rust_struct": 91,
+        "xml": 2
+      },
+      "delegated_paths": [],
+      "missing_paths_sample": [
+        "enum.rs.Error",
+        "enum.rs.Error.AccessDenied",
+        "enum.rs.Error.AddressInUse",
+        "enum.rs.Error.AdtAuditDataUnknown",
+        "enum.rs.Error.AuthFailed",
+        "enum.rs.Error.BadAddress",
+        "enum.rs.Error.Disconnected",
+        "enum.rs.Error.Failed",
+        "enum.rs.Error.FileExists",
+        "enum.rs.Error.FileNotFound",
+        "enum.rs.Error.IOError",
+        "enum.rs.Error.InconsistentMessage",
+        "enum.rs.Error.InteractiveAuthorizationRequired",
+        "enum.rs.Error.InvalidArgs",
+        "enum.rs.Error.InvalidFileContent",
+        "enum.rs.Error.InvalidSignature",
+        "enum.rs.Error.LimitsExceeded",
+        "enum.rs.Error.MatchRuleInvalid",
+        "enum.rs.Error.MatchRuleNotFound",
+        "enum.rs.Error.NameHasNoOwner",
+        "enum.rs.Error.NoMemory",
+        "enum.rs.Error.NoNetwork",
+        "enum.rs.Error.NoReply",
+        "enum.rs.Error.NoServer",
+        "enum.rs.Error.NotContainer",
+        "enum.rs.Error.NotSupported",
+        "enum.rs.Error.ObjectPathInUse",
+        "enum.rs.Error.PropertyReadOnly",
+        "enum.rs.Error.SELinuxSecurityContextUnknown",
+        "enum.rs.Error.ServiceUnknown",
+        "enum.rs.Error.SpawnChildExited",
+        "enum.rs.Error.SpawnChildSignaled",
+        "enum.rs.Error.SpawnConfigInvalid",
+        "enum.rs.Error.SpawnExecFailed",
+        "enum.rs.Error.SpawnFailed",
+        "enum.rs.Error.SpawnFailedToSetup",
+        "enum.rs.Error.SpawnFileInvalid",
+        "enum.rs.Error.SpawnForkFailed",
+        "enum.rs.Error.SpawnNoMemory",
+        "enum.rs.Error.SpawnPermissionsInvalid",
+        "enum.rs.Error.SpawnServiceNotFound",
+        "enum.rs.Error.SpawnServiceNotValid",
+        "enum.rs.Error.TimedOut",
+        "enum.rs.Error.Timeout",
+        "enum.rs.Error.UnixProcessIdUnknown",
+        "enum.rs.Error.UnknownInterface",
+        "enum.rs.Error.UnknownMethod",
+        "enum.rs.Error.UnknownObject",
+        "enum.rs.Error.UnknownProperty",
+        "enum.rs.Error.ZBus",
+        "enum.rs.ReleaseNameReply",
+        "enum.rs.ReleaseNameReply.NonExistent",
+        "enum.rs.ReleaseNameReply.NotOwner",
+        "enum.rs.ReleaseNameReply.Released",
+        "enum.rs.RequestNameFlags",
+        "enum.rs.RequestNameFlags.AllowReplacement",
+        "enum.rs.RequestNameFlags.DoNotQueue",
+        "enum.rs.RequestNameFlags.ReplaceExisting",
+        "enum.rs.RequestNameReply",
+        "enum.rs.RequestNameReply.AlreadyOwner",
+        "enum.rs.RequestNameReply.Exists",
+        "enum.rs.RequestNameReply.InQueue",
+        "enum.rs.RequestNameReply.PrimaryOwner",
+        "enum.rs.StartServiceReply",
+        "enum.rs.StartServiceReply.AlreadyRunning",
+        "enum.rs.StartServiceReply.Success",
+        "struct.rs.ConnectionCredentials",
+        "struct.rs.ConnectionCredentials.linux_security_label",
+        "struct.rs.ConnectionCredentials.process_fd",
+        "struct.rs.ConnectionCredentials.process_id",
+        "struct.rs.ConnectionCredentials.unix_group_ids",
+        "struct.rs.ConnectionCredentials.unix_user_id",
+        "struct.rs.ConnectionCredentials.windows_sid",
+        "struct.rs.ConnectionStats",
+        "struct.rs.ConnectionStats.bus_names",
+        "struct.rs.ConnectionStats.incoming_bytes",
+        "struct.rs.ConnectionStats.incoming_fds",
+        "struct.rs.ConnectionStats.incoming_messages",
+        "struct.rs.ConnectionStats.match_rules",
+        "struct.rs.ConnectionStats.outgoing_bytes",
+        "struct.rs.ConnectionStats.outgoing_fds",
+        "struct.rs.ConnectionStats.outgoing_messages",
+        "struct.rs.ConnectionStats.peak_bus_names",
+        "struct.rs.ConnectionStats.peak_incoming_bytes",
+        "struct.rs.ConnectionStats.peak_incoming_fds",
+        "struct.rs.ConnectionStats.peak_incoming_messages",
+        "struct.rs.ConnectionStats.peak_match_rules",
+        "struct.rs.ConnectionStats.peak_outgoing_bytes",
+        "struct.rs.ConnectionStats.peak_outgoing_fds",
+        "struct.rs.ConnectionStats.peak_outgoing_messages",
+        "struct.rs.ConnectionStats.rest",
+        "struct.rs.ConnectionStats.serial",
+        "struct.rs.ConnectionStats.unique_name",
+        "struct.rs.Error.AccessDenied.0",
+        "struct.rs.Error.AddressInUse.0",
+        "struct.rs.Error.AdtAuditDataUnknown.0",
+        "struct.rs.Error.AuthFailed.0",
+        "struct.rs.Error.BadAddress.0",
+        "struct.rs.Error.Disconnected.0",
+        "struct.rs.Error.Failed.0",
+        "struct.rs.Error.FileExists.0",
+        "struct.rs.Error.FileNotFound.0",
+        "struct.rs.Error.IOError.0",
+        "struct.rs.Error.InconsistentMessage.0",
+        "struct.rs.Error.InteractiveAuthorizationRequired.0",
+        "struct.rs.Error.InvalidArgs.0",
+        "struct.rs.Error.InvalidFileContent.0",
+        "struct.rs.Error.InvalidSignature.0",
+        "struct.rs.Error.LimitsExceeded.0",
+        "struct.rs.Error.MatchRuleInvalid.0",
+        "struct.rs.Error.MatchRuleNotFound.0",
+        "struct.rs.Error.NameHasNoOwner.0",
+        "struct.rs.Error.NoMemory.0",
+        "struct.rs.Error.NoNetwork.0",
+        "struct.rs.Error.NoReply.0",
+        "struct.rs.Error.NoServer.0",
+        "struct.rs.Error.NotContainer.0",
+        "struct.rs.Error.NotSupported.0",
+        "struct.rs.Error.ObjectPathInUse.0",
+        "struct.rs.Error.PropertyReadOnly.0",
+        "struct.rs.Error.SELinuxSecurityContextUnknown.0",
+        "struct.rs.Error.ServiceUnknown.0",
+        "struct.rs.Error.SpawnChildExited.0",
+        "struct.rs.Error.SpawnChildSignaled.0",
+        "struct.rs.Error.SpawnConfigInvalid.0",
+        "struct.rs.Error.SpawnExecFailed.0",
+        "struct.rs.Error.SpawnFailed.0",
+        "struct.rs.Error.SpawnFailedToSetup.0",
+        "struct.rs.Error.SpawnFileInvalid.0",
+        "struct.rs.Error.SpawnForkFailed.0",
+        "struct.rs.Error.SpawnNoMemory.0",
+        "struct.rs.Error.SpawnPermissionsInvalid.0",
+        "struct.rs.Error.SpawnServiceNotFound.0",
+        "struct.rs.Error.SpawnServiceNotValid.0",
+        "struct.rs.Error.TimedOut.0",
+        "struct.rs.Error.Timeout.0",
+        "struct.rs.Error.UnixProcessIdUnknown.0",
+        "struct.rs.Error.UnknownInterface.0",
+        "struct.rs.Error.UnknownMethod.0",
+        "struct.rs.Error.UnknownObject.0",
+        "struct.rs.Error.UnknownProperty.0",
+        "struct.rs.Error.ZBus.0",
+        "struct.rs.Introspectable",
+        "struct.rs.ObjectManager",
+        "struct.rs.Peer",
+        "struct.rs.Properties",
+        "struct.rs.Stats",
+        "struct.rs.Stats.active_connections",
+        "struct.rs.Stats.bus_names",
+        "struct.rs.Stats.incomplete_connections",
+        "struct.rs.Stats.match_rules",
+        "struct.rs.Stats.peak_bus_names",
+        "struct.rs.Stats.peak_bus_names_per_connection",
+        "struct.rs.Stats.peak_match_rules",
+        "struct.rs.Stats.peak_match_rules_per_connection",
+        "struct.rs.Stats.rest",
+        "struct.rs.Stats.serial",
+        "xml.broker.dbus-specification",
+        "xml.dbus.dbus-specification"
+      ],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

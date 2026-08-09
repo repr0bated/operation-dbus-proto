@@ -167,8 +167,9 @@ fn resolve_file(path: &Path) -> Result<CoverageInputs> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("read introspect file {}", path.display()))?;
 
-    if looks_like_repomix(path, &text) || (path.extension().and_then(|e| e.to_str()) == Some("xml")
-        && text.contains("<file path="))
+    if looks_like_repomix(path, &text)
+        || (path.extension().and_then(|e| e.to_str()) == Some("xml")
+            && text.contains("<file path="))
     {
         eprintln!("introspect repomix: {}", path.display());
         let surface = introspect_repomix(path, &text)?;
@@ -191,8 +192,8 @@ fn resolve_file(path: &Path) -> Result<CoverageInputs> {
         });
     }
 
-    let value: Value = serde_json::from_str(&text)
-        .with_context(|| format!("parse JSON {}", path.display()))?;
+    let value: Value =
+        serde_json::from_str(&text).with_context(|| format!("parse JSON {}", path.display()))?;
 
     // BinarySurface dump from a prior run
     if value.get("element_paths").is_some() && value.get("nodes").is_some() {

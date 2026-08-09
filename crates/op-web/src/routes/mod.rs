@@ -130,6 +130,19 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/ui-model/plugins",
             get(handlers::ui_model::ui_model_list_plugins_handler),
         )
+        // Gallery generation API (model-agnostic)
+        .route(
+            "/gallery-gen/start",
+            post(handlers::ui_model::start_generation),
+        )
+        .route(
+            "/gallery-gen/stop",
+            post(handlers::ui_model::stop_generation),
+        )
+        .route(
+            "/gallery-gen/stream",
+            get(handlers::ui_model::generation_stream),
+        )
         .route("/chat/sessions", get(handlers::chat::list_sessions_handler))
         .route(
             "/chat/sessions",

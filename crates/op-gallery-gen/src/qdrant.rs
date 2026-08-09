@@ -243,7 +243,10 @@ impl GalleryQdrantClient {
             .error_for_status()
             .context("Qdrant search returned error")?;
 
-        let resp_json: Value = resp.json().await.context("failed to parse search response")?;
+        let resp_json: Value = resp
+            .json()
+            .await
+            .context("failed to parse search response")?;
 
         let results = resp_json
             .get("result")
@@ -253,15 +256,9 @@ impl GalleryQdrantClient {
                     .filter_map(|point| {
                         let payload = point.get("payload")?;
                         Some(SemanticSearchResult {
-                            plugin_id: payload
-                                .get("plugin_id")?
-                                .as_str()?
-                                .to_string(),
+                            plugin_id: payload.get("plugin_id")?.as_str()?.to_string(),
                             fragment: payload.get("text")?.as_str()?.to_string(),
-                            domain_tag: payload
-                                .get("domain_tag")?
-                                .as_str()?
-                                .to_string(),
+                            domain_tag: payload.get("domain_tag")?.as_str()?.to_string(),
                             score: point.get("score")?.as_f64()? as f32,
                         })
                     })
@@ -303,7 +300,10 @@ impl GalleryQdrantClient {
             .error_for_status()
             .context("Voyage API returned error")?;
 
-        let resp_json: Value = response.json().await.context("failed to parse embedding response")?;
+        let resp_json: Value = response
+            .json()
+            .await
+            .context("failed to parse embedding response")?;
 
         resp_json
             .get("data")
@@ -311,7 +311,11 @@ impl GalleryQdrantClient {
             .and_then(|arr| arr.first())
             .and_then(|item| item.get("embedding"))
             .and_then(|e| e.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                    .collect()
+            })
             .context("failed to extract embedding vector from Voyage response")
     }
 }
@@ -321,11 +325,10 @@ fn chunk_schemas(schemas: &[crate::context::SchemaPayload]) -> Vec<SchemaFragmen
     let mut fragments = Vec::new();
 
     for schema in schemas {
-        let domain_tag = DomainTag::from_category(
-            schema.category.as_deref().unwrap_or("uncategorized"),
-        )
-        .as_str()
-        .to_string();
+        let domain_tag =
+            DomainTag::from_category(schema.category.as_deref().unwrap_or("uncategorized"))
+                .as_str()
+                .to_string();
 
         // Summary fragment
         let summary = format!(
@@ -396,8 +399,7 @@ fn voyage_key_from_file() -> Result<String, std::env::VarError> {
         })
         .ok_or(std::env::VarError::NotPresent)?;
 
-    let contents =
-        std::fs::read_to_string(&path).map_err(|_| std::env::VarError::NotPresent)?;
+    let contents = std::fs::read_to_string(&path).map_err(|_| std::env::VarError::NotPresent)?;
 
     contents
         .lines()

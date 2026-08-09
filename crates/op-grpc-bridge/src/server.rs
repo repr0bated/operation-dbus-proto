@@ -100,7 +100,11 @@ impl ServerConfig {
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
-                .or_else(|| std::env::var("GRPC_BIND").ok().filter(|s| !s.trim().is_empty()))
+                .or_else(|| {
+                    std::env::var("GRPC_BIND")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                })
                 .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string()),
             tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR")
                 .ok()
@@ -456,7 +460,10 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::from_std(listener)?;
         info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
         let app = build_axum_app(loader.clone(), operation_server.clone());
-        let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>());
+        let server = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        );
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 

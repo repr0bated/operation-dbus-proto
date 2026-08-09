@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{PluginSchema, SideEffect};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -401,39 +401,11 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
     fn schema(&self) -> Option<PluginSchema> {
         let root = serde_json::to_value(schemars::schema_for!(OpenFlowObfuscationConfig))
             .expect("schemars schema serializes to JSON");
-        let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        let schema = super::schemars_adapter::plugin_schema_from_json(
             "openflow_obfuscation",
             "1.0.0",
             "OpenFlow traffic obfuscation configuration",
             &root,
-        );
-
-        // Add D-Bus methods for OpenFlow obfuscation - https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
-        schema.methods.insert(
-            "obfuscate_flow".to_string(),
-            super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                ObfuscateFlowInput,
-                super::plugin_scaffold_helpers::AckOutput,
-            >(
-                "ObfuscateFlow",
-                SideEffect::Mutation,
-                false,
-                "openflow_obfuscation.write",
-                "mut.network.openflow.obfuscation.obfuscate@v1",
-            ),
-        );
-        schema.methods.insert(
-            "deobfuscate_flow".to_string(),
-            super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                DeobfuscateFlowInput,
-                super::plugin_scaffold_helpers::AckOutput,
-            >(
-                "DeobfuscateFlow",
-                SideEffect::Mutation,
-                false,
-                "openflow_obfuscation.write",
-                "mut.network.openflow.obfuscation.deobfuscate@v1",
-            ),
         );
 
         Some(schema)

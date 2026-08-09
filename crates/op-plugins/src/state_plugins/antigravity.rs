@@ -668,6 +668,10 @@ pub struct AntigravityState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.endpoints@v1"))]
     pub endpoints: Endpoints,
+    /// Inspector Gadget fields discovered from the installed Antigravity IDE.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.inspector-fields@v1"))]
+    pub inspector_fields: inspector_gadget_generated::InspectorGadgetFields,
     /// Shared LLM projection fields (flattened to the top level).
     #[serde(flatten)]
     #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.llm-projection@v1"))]
@@ -691,7 +695,7 @@ impl AntigravityPlugin {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
     }
 
-    pub(crate) fn current_state() -> AntigravityState {
+    pub fn current_state() -> AntigravityState {
         let project_id = Self::env_or("GOOGLE_CLOUD_PROJECT", "secure-bonbon-337711");
         let location = Self::env_or("GOOGLE_CLOUD_LOCATION", "us-central1");
         let use_vertexai = Self::env_or("GOOGLE_GENAI_USE_VERTEXAI", "true");
@@ -768,6 +772,7 @@ impl AntigravityPlugin {
             llm_plugin: default_llm_plugin(),
             provider_route: default_provider_route(),
             selected_model: String::new(),
+            inspector_fields: Default::default(),
             projection: LlmProjection {
                 providers: vec![
                     Provider {
@@ -1320,7 +1325,122 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
         ),
     );
 
+    inspector_gadget_generated::register_methods(&mut schema);
     schema
+}
+
+/// Execute the original Antigravity methods or a Repomix-discovered IDE CLI method.
+pub fn dispatch_antigravity_method(
+    method: &str,
+    json_args: &str,
+    state: &AntigravityState,
+) -> Result<JsonValue> {
+    match method {
+        "get_auth_status" => Ok(serde_json::json!({ "auth": &state.auth })),
+        "get_usage_report" => Ok(serde_json::json!({ "usage": &state.usage })),
+        "configure_safety" => {
+            let args: JsonValue = serde_json::from_str(json_args)?;
+            let mut settings = state.safety_settings.clone();
+            for setting in &mut settings {
+                let key = match setting.category.as_str() {
+                    "HARM_CATEGORY_HARASSMENT" => "harassment",
+                    "HARM_CATEGORY_HATE_SPEECH" => "hate_speech",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT" => "sexually_explicit",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT" => "dangerous",
+                    "HARM_CATEGORY_CIVIC_INTEGRITY" => "civic_integrity",
+                    _ => continue,
+                };
+                if let Some(value) = args.get(key).and_then(JsonValue::as_str) {
+                    setting.threshold = value.to_string();
+                }
+            }
+            Ok(serde_json::json!({ "safety_settings": settings }))
+        }
+        other => dispatch_generated_antigravity_cli(other, json_args),
+    }
+}
+
+fn dispatch_generated_antigravity_cli(method: &str, json_args: &str) -> Result<JsonValue> {
+    let candidate = inspector_gadget_generated::METHOD_CANDIDATES
+        .iter()
+        .find(|candidate| candidate.name == method)
+        .ok_or_else(|| anyhow::anyhow!("undeclared antigravity method: {method}"))?;
+    let command = generated_antigravity_cli_tokens(candidate.repomix_path);
+    anyhow::ensure!(
+        !command.is_empty(),
+        "{method} has no Antigravity CLI mapping"
+    );
+    let parsed: JsonValue = serde_json::from_str(json_args)?;
+    let options = parsed
+        .get("options")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let binary = std::env::var("ANTIGRAVITY_IDE_CLI")
+        .unwrap_or_else(|_| "/opt/antigravity-ide/bin/antigravity-ide".to_string());
+    let mut process = std::process::Command::new(&binary);
+    process.args(&command);
+    append_antigravity_cli_options(&mut process, options)?;
+    let output = process.output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    anyhow::ensure!(
+        output.status.success(),
+        "{method} exited with {}: {}",
+        output.status,
+        stderr
+    );
+    Ok(serde_json::json!({
+        "message": if stdout.is_empty() { stderr } else { stdout },
+        "changed": candidate.side_effect == "mutation"
+    }))
+}
+
+fn generated_antigravity_cli_tokens(path: &str) -> Vec<String> {
+    if let Some(command) = path.strip_prefix("cmd.") {
+        return command
+            .split('.')
+            .map(|part| part.replace('_', "-"))
+            .collect();
+    }
+    if let Some(flag) = path
+        .strip_prefix("flag.")
+        .and_then(|value| value.rsplit('.').next())
+    {
+        return vec![format!("--{}", flag.replace('_', "-"))];
+    }
+    Vec::new()
+}
+
+fn append_antigravity_cli_options(
+    process: &mut std::process::Command,
+    options: serde_json::Map<String, JsonValue>,
+) -> Result<()> {
+    for (key, value) in options {
+        if key == "value" || key == "argument" {
+            process.arg(
+                value
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("{key} must be a string"))?,
+            );
+            continue;
+        }
+        anyhow::ensure!(
+            !key.is_empty()
+                && key
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+            "invalid CLI option name: {key}"
+        );
+        let value = value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{key} must be a string"))?;
+        process.arg(format!("--{}", key.replace('_', "-")));
+        if !value.is_empty() {
+            process.arg(value);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1388,6 +1508,17 @@ mod tests {
             validate_subid(&subid).expect("invalid subid: {subid}");
         }
     }
+
+    #[test]
+    fn every_generated_method_has_an_ide_cli_mapping() {
+        for candidate in inspector_gadget_generated::METHOD_CANDIDATES {
+            assert!(
+                !generated_antigravity_cli_tokens(candidate.repomix_path).is_empty(),
+                "{} has no CLI mapping",
+                candidate.name
+            );
+        }
+    }
 }
 
 // Self-registration: the plugin registry discovers this via inventory
@@ -1395,3 +1526,359 @@ mod tests {
 inventory::submit! {
     crate::default_registry::PluginReg::new("antigravity", |_ctx| std::sync::Arc::new(AntigravityPlugin::new()))
 }
+
+// ── Inspector Gadget + Repomix generated candidates ───────────────────────
+// Generated against PLUGIN-RENDER-CONTRACT.md. The original plugin above is
+// preserved. Review ownership, concrete types, defaults, side effects, and
+// runtime dispatch before flattening these candidates into the live state/schema.
+#[allow(dead_code)]
+pub mod inspector_gadget_generated {
+    use serde::{Deserialize, Serialize};
+
+    /// Repomix-discovered fields not represented by the input plugin.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.inspector-candidates.schema@v1"))]
+    pub struct InspectorGadgetFields {
+        /// Discovered from Repomix path `flag.root.disable_chromium_sandbox`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.disable-chromium-sandbox@v1"))]
+        pub disable_chromium_sandbox: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.disable_extension`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.disable-extension@v1"))]
+        pub disable_extension: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.disable_extensions`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.disable-extensions@v1"))]
+        pub disable_extensions: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.disable_gpu`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.disable-gpu@v1"))]
+        pub disable_gpu: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.disable_lcd_text`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.disable-lcd-text@v1"))]
+        pub disable_lcd_text: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.enable_proposed_api`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.enable-proposed-api@v1"))]
+        pub enable_proposed_api: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.extensions_dir`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.extensions-dir@v1"))]
+        pub extensions_dir: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.inspect_brk_extensions`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.inspect-brk-extensions@v1"))]
+        pub inspect_brk_extensions: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.inspect_extensions`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.inspect-extensions@v1"))]
+        pub inspect_extensions: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.locale`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.locale@v1"))]
+        pub locale: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.log`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.log@v1"))]
+        pub log: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.pre_release`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.pre-release@v1"))]
+        pub pre_release: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.prof_startup`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.prof-startup@v1"))]
+        pub prof_startup: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.profile`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.profile@v1"))]
+        pub profile: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.remove`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.remove@v1"))]
+        pub remove: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.transient`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.transient@v1"))]
+        pub transient: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.user_data_dir`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.user-data-dir@v1"))]
+        pub user_data_dir: Option<String>,
+
+        /// Discovered from Repomix path `flag.root.verbose`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.verbose@v1"))]
+        pub verbose: Option<String>,
+    }
+
+    /// Metadata needed when promoting a generated typed method into `schema.methods`.
+    pub struct MethodCandidate {
+        pub name: &'static str,
+        pub side_effect: &'static str,
+        pub idempotent: bool,
+        pub required_capability: &'static str,
+        pub subid: &'static str,
+        pub repomix_path: &'static str,
+    }
+
+    /// Typed input candidate for `install_extension` discovered at `flag.root.install_extension`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct InstallExtensionInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct InstallExtensionOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    /// Typed input candidate for `list_extensions` discovered at `flag.root.list_extensions`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct ListExtensionsInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ListExtensionsOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    /// Typed input candidate for `show_versions` discovered at `flag.root.show_versions`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct ShowVersionsInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct ShowVersionsOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    /// Typed input candidate for `sync` discovered at `flag.root.sync`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct SyncInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct SyncOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    /// Typed input candidate for `telemetry` discovered at `flag.root.telemetry`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct TelemetryInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct TelemetryOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    /// Typed input candidate for `uninstall_extension` discovered at `flag.root.uninstall_extension`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct UninstallExtensionInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct UninstallExtensionOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    /// Typed input candidate for `update_extensions` discovered at `flag.root.update_extensions`.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    pub struct UpdateExtensionsInput {
+        /// String-valued options discovered from the external surface.
+        #[serde(default)]
+        pub options: std::collections::BTreeMap<String, String>,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct UpdateExtensionsOutput {
+        /// Human-readable operation result.
+        pub message: String,
+        pub changed: bool,
+    }
+
+    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[
+        MethodCandidate {
+            name: "install_extension",
+            side_effect: "mutation",
+            idempotent: false,
+            required_capability: "antigravity.write",
+            subid: "mut.software.antigravity.install-extension@v1",
+            repomix_path: "flag.root.install_extension",
+        },
+        MethodCandidate {
+            name: "list_extensions",
+            side_effect: "read",
+            idempotent: true,
+            required_capability: "antigravity.read",
+            subid: "obs.software.antigravity.list-extensions@v1",
+            repomix_path: "flag.root.list_extensions",
+        },
+        MethodCandidate {
+            name: "show_versions",
+            side_effect: "mutation",
+            idempotent: false,
+            required_capability: "antigravity.write",
+            subid: "mut.software.antigravity.show-versions@v1",
+            repomix_path: "flag.root.show_versions",
+        },
+        MethodCandidate {
+            name: "sync",
+            side_effect: "mutation",
+            idempotent: false,
+            required_capability: "antigravity.write",
+            subid: "mut.software.antigravity.sync@v1",
+            repomix_path: "flag.root.sync",
+        },
+        MethodCandidate {
+            name: "telemetry",
+            side_effect: "mutation",
+            idempotent: false,
+            required_capability: "antigravity.write",
+            subid: "mut.software.antigravity.telemetry@v1",
+            repomix_path: "flag.root.telemetry",
+        },
+        MethodCandidate {
+            name: "uninstall_extension",
+            side_effect: "mutation",
+            idempotent: false,
+            required_capability: "antigravity.write",
+            subid: "mut.software.antigravity.uninstall-extension@v1",
+            repomix_path: "flag.root.uninstall_extension",
+        },
+        MethodCandidate {
+            name: "update_extensions",
+            side_effect: "mutation",
+            idempotent: false,
+            required_capability: "antigravity.write",
+            subid: "mut.software.antigravity.update-extensions@v1",
+            repomix_path: "flag.root.update_extensions",
+        },
+    ];
+
+    /// Promote every generated method into the sealed plugin schema.
+    pub(super) fn register_methods(schema: &mut op_state_store::PluginSchema) {
+        use super::super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+        schema.methods.insert(
+            "install_extension".to_string(),
+            method_decl_from_schemars_with_output::<InstallExtensionInput, InstallExtensionOutput>(
+                "install_extension",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "antigravity.write",
+                "mut.software.antigravity.install-extension@v1",
+            ),
+        );
+        schema.methods.insert(
+            "list_extensions".to_string(),
+            method_decl_from_schemars_with_output::<ListExtensionsInput, ListExtensionsOutput>(
+                "list_extensions",
+                op_state_store::SideEffect::Read,
+                true,
+                "antigravity.read",
+                "obs.software.antigravity.list-extensions@v1",
+            ),
+        );
+        schema.methods.insert(
+            "show_versions".to_string(),
+            method_decl_from_schemars_with_output::<ShowVersionsInput, ShowVersionsOutput>(
+                "show_versions",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "antigravity.write",
+                "mut.software.antigravity.show-versions@v1",
+            ),
+        );
+        schema.methods.insert(
+            "sync".to_string(),
+            method_decl_from_schemars_with_output::<SyncInput, SyncOutput>(
+                "sync",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "antigravity.write",
+                "mut.software.antigravity.sync@v1",
+            ),
+        );
+        schema.methods.insert(
+            "telemetry".to_string(),
+            method_decl_from_schemars_with_output::<TelemetryInput, TelemetryOutput>(
+                "telemetry",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "antigravity.write",
+                "mut.software.antigravity.telemetry@v1",
+            ),
+        );
+        schema.methods.insert(
+            "uninstall_extension".to_string(),
+            method_decl_from_schemars_with_output::<
+                UninstallExtensionInput,
+                UninstallExtensionOutput,
+            >(
+                "uninstall_extension",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "antigravity.write",
+                "mut.software.antigravity.uninstall-extension@v1",
+            ),
+        );
+        schema.methods.insert(
+            "update_extensions".to_string(),
+            method_decl_from_schemars_with_output::<UpdateExtensionsInput, UpdateExtensionsOutput>(
+                "update_extensions",
+                op_state_store::SideEffect::Mutation,
+                false,
+                "antigravity.write",
+                "mut.software.antigravity.update-extensions@v1",
+            ),
+        );
+    }
+}
+
+// Promotion checklist (Fable contract):
+// 1. Move owned fields into the plugin State struct with concrete Rust types.
+// 2. Replace method placeholders with dedicated typed Input/Output fields.
+// 3. Register with method_decl_from_schemars_with_output and correct SideEffect.
+// 4. Register every subid, implement dispatch, and add schema/subid tests.
+// 5. Re-run op-plugin-lint; only then replace the original plugin file.

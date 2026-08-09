@@ -139,6 +139,9 @@ pub struct QdrantState {
     pub cluster_status: Option<serde_json::Value>,
     #[serde(default)]
     pub telemetry: Option<serde_json::Value>,
+    /// Uncapped fields discovered from the authoritative Qdrant sources.
+    #[serde(default)]
+    pub inspector_fields: inspector_gadget_generated::InspectorGadgetFields,
 }
 
 // ── Method input types ───────────────────────────────────────────────────────
@@ -308,6 +311,7 @@ impl QdrantPlugin {
             }],
             cluster_status: None,
             telemetry: None,
+            inspector_fields: inspector_gadget_generated::InspectorGadgetFields::default(),
         }
     }
 }
@@ -539,3 +543,67 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
 inventory::submit! {
     crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(QdrantPlugin::new()))
 }
+
+// ── Inspector Gadget + Repomix generated candidates ───────────────────────
+// Generated against PLUGIN-RENDER-CONTRACT.md. The original plugin above is
+// preserved. Review ownership, concrete types, defaults, side effects, and
+// runtime dispatch before flattening these candidates into the live state/schema.
+#[allow(dead_code)]
+mod inspector_gadget_generated {
+    use serde::{Deserialize, Serialize};
+
+    /// Repomix-discovered fields not represented by the input plugin.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.qdrant.inspector-candidates.schema@v1"))]
+    pub struct InspectorGadgetFields {
+        /// Discovered from Repomix path `struct.rs.CollectionPath.collection_name`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.collection-name@v1"))]
+        pub collection_name: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.CollectionShardPath.shard`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.shard@v1"))]
+        pub shard: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.CollectionShardSnapshotPath.snapshot`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.snapshot@v1"))]
+        pub snapshot: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.CollectionSnapshotPath.snapshot_name`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.snapshot-name@v1"))]
+        pub snapshot_name: Option<String>,
+
+        /// Discovered from Repomix path `struct.rs.InternalUpdateResult.op_num`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.op-num@v1"))]
+        pub op_num: Option<String>,
+    }
+
+    /// Metadata needed when promoting a generated typed method into `schema.methods`.
+    pub struct MethodCandidate {
+        pub name: &'static str,
+        pub side_effect: &'static str,
+        pub idempotent: bool,
+        pub required_capability: &'static str,
+        pub subid: &'static str,
+        pub repomix_path: &'static str,
+        pub command: &'static [&'static str],
+    }
+
+    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[];
+
+    /// Promote every generated method into the sealed plugin schema.
+    pub(super) fn register_methods(schema: &mut op_state_store::PluginSchema) {
+        use super::super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    }
+}
+
+// Promotion checklist (Fable contract):
+// 1. Move owned fields into the plugin State struct with concrete Rust types.
+// 2. Replace method placeholders with dedicated typed Input/Output fields.
+// 3. Register with method_decl_from_schemars_with_output and correct SideEffect.
+// 4. Register every subid, implement dispatch, and add schema/subid tests.
+// 5. Re-run op-plugin-lint; only then replace the original plugin file.

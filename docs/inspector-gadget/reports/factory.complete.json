@@ -1,0 +1,199 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "factory.rs",
+  "plugin": {
+    "name": "factory",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": null,
+    "fields": {},
+    "nested_types": {},
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 2,
+    "warn": 19,
+    "hint": 2,
+    "findings": [
+      {
+        "code": "missing_schemars_struct",
+        "location": null,
+        "message": "no #[derive(schemars::JsonSchema)] structs found — the struct IS the schema",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_x_oscal_category",
+        "location": null,
+        "message": "no #[schemars(extend(\"x-oscal-category\" = \"…\"))] on a state struct — declare what the plugin IS",
+        "severity": "fail"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/factory.xml version=repomix nodes=0 elements=16 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=113 introspected=16 missing_in_plugin=16 extra_in_plugin=113",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.examples.settings.settings-bash-sandbox.<parse_error>",
+        "message": "external surface has `json.examples.settings.settings-bash-sandbox.<parse_error>` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.examples.settings.settings-lax.<parse_error>",
+        "message": "external surface has `json.examples.settings.settings-lax.<parse_error>` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.examples.settings.settings-strict.<parse_error>",
+        "message": "external surface has `json.examples.settings.settings-strict.<parse_error>` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.plugins.hookify.claude-plugin.plugin.<parse_error>",
+        "message": "external surface has `json.plugins.hookify.claude-plugin.plugin.<parse_error>` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "json.plugins.hookify.hooks.hooks.<parse_error>",
+        "message": "external surface has `json.plugins.hookify.hooks.hooks.<parse_error>` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.examples.hooks.bash_command_validator_example",
+        "message": "external surface has `py.examples.hooks.bash_command_validator_example` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.core.__init__",
+        "message": "external surface has `py.plugins.hookify.core.__init__` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.core.config_loader",
+        "message": "external surface has `py.plugins.hookify.core.config_loader` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.core.rule_engine",
+        "message": "external surface has `py.plugins.hookify.core.rule_engine` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.hooks.__init__",
+        "message": "external surface has `py.plugins.hookify.hooks.__init__` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.hooks.posttooluse",
+        "message": "external surface has `py.plugins.hookify.hooks.posttooluse` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.hooks.pretooluse",
+        "message": "external surface has `py.plugins.hookify.hooks.pretooluse` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.hooks.stop",
+        "message": "external surface has `py.plugins.hookify.hooks.stop` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.hooks.userpromptsubmit",
+        "message": "external surface has `py.plugins.hookify.hooks.userpromptsubmit` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.matchers.__init__",
+        "message": "external surface has `py.plugins.hookify.matchers.__init__` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "py.plugins.hookify.utils.__init__",
+        "message": "external surface has `py.plugins.hookify.utils.__init__` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/factory.xml",
+    "files_by_kind": {
+      "json": 5,
+      "python": 11
+    },
+    "by_kind": {
+      "json": 5,
+      "python": 11
+    },
+    "element_path_count": 16,
+    "gaps": {
+      "surface_paths_total": 16,
+      "signal_paths_considered": 11,
+      "covered_approx": 0,
+      "missing_from_plugin": 11,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {
+        "python": 11
+      },
+      "delegated_paths": [],
+      "missing_paths_sample": [
+        "py.examples.hooks.bash_command_validator_example",
+        "py.plugins.hookify.core.__init__",
+        "py.plugins.hookify.core.config_loader",
+        "py.plugins.hookify.core.rule_engine",
+        "py.plugins.hookify.hooks.__init__",
+        "py.plugins.hookify.hooks.posttooluse",
+        "py.plugins.hookify.hooks.pretooluse",
+        "py.plugins.hookify.hooks.stop",
+        "py.plugins.hookify.hooks.userpromptsubmit",
+        "py.plugins.hookify.matchers.__init__",
+        "py.plugins.hookify.utils.__init__"
+      ],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

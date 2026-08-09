@@ -1,0 +1,22 @@
+#!/bin/sh
+# Expose mail webmail to Xray through the shared Unix-socket fabric.
+exec 2>&1
+
+until incus list -f csv -c ns 2>/dev/null | grep -q '^mail-3tched,RUNNING$'; do
+    sleep 1
+done
+until ss -lnt 2>/dev/null | grep -q '188.68.58.237:80'; do
+    sleep 1
+done
+
+SOCK=/run/ghostbridge/mail-web.sock
+rm -f "$SOCK"
+trap 'rm -f "$SOCK"' EXIT INT TERM HUP
+
+socat "UNIX-LISTEN:$SOCK,fork,reuseaddr" TCP:188.68.58.237:80 &
+PID=$!
+until [ -S "$SOCK" ]; do
+    sleep 0.1
+done
+chmod 666 "$SOCK"
+wait "$PID"

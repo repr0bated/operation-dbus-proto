@@ -1,0 +1,5346 @@
+<repomix><file_summary>This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+The content has been processed where content has been formatted for parsing in xml style.<purpose>This file contains a packed representation of a subset of the repository&apos;s contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.</purpose><file_format>The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file</file_format><usage_guidelines>- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.</usage_guidelines><notes>- Some files may have been excluded based on .gitignore rules and Repomix&apos;s configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: specs-go/**, cmd/**, libcontainer/configs/**
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Content has been formatted for parsing in xml style
+- Files are sorted by Git change count (files with more changes are at the bottom)</notes></file_summary><directory_structure>[opencontainers__runtime-spec]/
+  specs-go/
+    features/
+      features.go
+    config.go
+    state.go
+    version.go
+
+[opencontainers__image-spec]/
+  specs-go/
+    v1/
+      annotations.go
+      config.go
+      descriptor.go
+      index.go
+      layout.go
+      manifest.go
+      mediatype.go
+    version.go
+    versioned.go
+
+[opencontainers__runc]/
+  libcontainer/
+    configs/
+      validate/
+        doc.go
+        intelrdt_test.go
+        intelrdt.go
+        rootless_test.go
+        rootless.go
+        validator_test.go
+        validator.go
+      config_linux_test.go
+      config_linux.go
+      config_test.go
+      config.go
+      configs_fuzzer.go
+      doc.go
+      intelrdt.go
+      memorypolicy.go
+      mount_linux.go
+      mount_unsupported.go
+      mount.go
+      namespaces_linux.go
+      namespaces_syscall_unsupported.go
+      namespaces_syscall.go
+      namespaces_unsupported.go
+      namespaces.go
+      netdevices.go
+      network.go
+      tocpuset_test.go</directory_structure><files>This section contains the contents of the repository&apos;s files.<file path="opencontainers__runtime-spec/specs-go/features/features.go">// Package features provides the Features struct.
+package features
+
+// Features represents the supported features of the runtime.
+type Features struct {
+	// OCIVersionMin is the minimum OCI Runtime Spec version recognized by the runtime, e.g., &quot;1.0.0&quot;.
+	OCIVersionMin string `json:&quot;ociVersionMin,omitempty&quot;`
+
+	// OCIVersionMax is the maximum OCI Runtime Spec version recognized by the runtime, e.g., &quot;1.0.2-dev&quot;.
+	OCIVersionMax string `json:&quot;ociVersionMax,omitempty&quot;`
+
+	// Hooks is the list of the recognized hook names, e.g., &quot;createRuntime&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any hook&quot;.
+	Hooks []string `json:&quot;hooks,omitempty&quot;`
+
+	// MountOptions is the list of the recognized mount options, e.g., &quot;ro&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any mount option&quot;.
+	// This list does not contain filesystem-specific options passed to mount(2) syscall as (const void *).
+	MountOptions []string `json:&quot;mountOptions,omitempty&quot;`
+
+	// Linux is specific to Linux.
+	Linux *Linux `json:&quot;linux,omitempty&quot;`
+
+	// Annotations contains implementation-specific annotation strings,
+	// such as the implementation version, and third-party extensions.
+	Annotations map[string]string `json:&quot;annotations,omitempty&quot;`
+
+	// PotentiallyUnsafeConfigAnnotations the list of the potential unsafe annotations
+	// that may appear in `config.json`.
+	//
+	// A value that ends with &quot;.&quot; is interpreted as a prefix of annotations.
+	PotentiallyUnsafeConfigAnnotations []string `json:&quot;potentiallyUnsafeConfigAnnotations,omitempty&quot;`
+}
+
+// Linux is specific to Linux.
+type Linux struct {
+	// Namespaces is the list of the recognized namespaces, e.g., &quot;mount&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any namespace&quot;.
+	Namespaces []string `json:&quot;namespaces,omitempty&quot;`
+
+	// Capabilities is the list of the recognized capabilities , e.g., &quot;CAP_SYS_ADMIN&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any capability&quot;.
+	Capabilities []string `json:&quot;capabilities,omitempty&quot;`
+
+	Cgroup          *Cgroup          `json:&quot;cgroup,omitempty&quot;`
+	Seccomp         *Seccomp         `json:&quot;seccomp,omitempty&quot;`
+	Apparmor        *Apparmor        `json:&quot;apparmor,omitempty&quot;`
+	Selinux         *Selinux         `json:&quot;selinux,omitempty&quot;`
+	IntelRdt        *IntelRdt        `json:&quot;intelRdt,omitempty&quot;`
+	MemoryPolicy    *MemoryPolicy    `json:&quot;memoryPolicy,omitempty&quot;`
+	MountExtensions *MountExtensions `json:&quot;mountExtensions,omitempty&quot;`
+	NetDevices      *NetDevices      `json:&quot;netDevices,omitempty&quot;`
+}
+
+// Cgroup represents the &quot;cgroup&quot; field.
+type Cgroup struct {
+	// V1 represents whether Cgroup v1 support is compiled in.
+	// Unrelated to whether the host uses cgroup v1 or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	V1 *bool `json:&quot;v1,omitempty&quot;`
+
+	// V2 represents whether Cgroup v2 support is compiled in.
+	// Unrelated to whether the host uses cgroup v2 or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	V2 *bool `json:&quot;v2,omitempty&quot;`
+
+	// Systemd represents whether systemd-cgroup support is compiled in.
+	// Unrelated to whether the host uses systemd or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Systemd *bool `json:&quot;systemd,omitempty&quot;`
+
+	// SystemdUser represents whether user-scoped systemd-cgroup support is compiled in.
+	// Unrelated to whether the host uses systemd or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	SystemdUser *bool `json:&quot;systemdUser,omitempty&quot;`
+
+	// Rdma represents whether RDMA cgroup support is compiled in.
+	// Unrelated to whether the host supports RDMA or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Rdma *bool `json:&quot;rdma,omitempty&quot;`
+}
+
+// Seccomp represents the &quot;seccomp&quot; field.
+type Seccomp struct {
+	// Enabled is true if seccomp support is compiled in.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Enabled *bool `json:&quot;enabled,omitempty&quot;`
+
+	// Actions is the list of the recognized actions, e.g., &quot;SCMP_ACT_NOTIFY&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any action&quot;.
+	Actions []string `json:&quot;actions,omitempty&quot;`
+
+	// Operators is the list of the recognized operators, e.g., &quot;SCMP_CMP_NE&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any operator&quot;.
+	Operators []string `json:&quot;operators,omitempty&quot;`
+
+	// Archs is the list of the recognized archs, e.g., &quot;SCMP_ARCH_X86_64&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no support for any arch&quot;.
+	Archs []string `json:&quot;archs,omitempty&quot;`
+
+	// KnownFlags is the list of the recognized filter flags, e.g., &quot;SECCOMP_FILTER_FLAG_LOG&quot;.
+	// Nil value means &quot;unknown&quot;, not &quot;no flags are recognized&quot;.
+	KnownFlags []string `json:&quot;knownFlags,omitempty&quot;`
+
+	// SupportedFlags is the list of the supported filter flags, e.g., &quot;SECCOMP_FILTER_FLAG_LOG&quot;.
+	// This list may be a subset of KnownFlags due to some flags
+	// not supported by the current kernel and/or libseccomp.
+	// Nil value means &quot;unknown&quot;, not &quot;no flags are supported&quot;.
+	SupportedFlags []string `json:&quot;supportedFlags,omitempty&quot;`
+}
+
+// Apparmor represents the &quot;apparmor&quot; field.
+type Apparmor struct {
+	// Enabled is true if AppArmor support is compiled in.
+	// Unrelated to whether the host supports AppArmor or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Enabled *bool `json:&quot;enabled,omitempty&quot;`
+}
+
+// Selinux represents the &quot;selinux&quot; field.
+type Selinux struct {
+	// Enabled is true if SELinux support is compiled in.
+	// Unrelated to whether the host supports SELinux or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Enabled *bool `json:&quot;enabled,omitempty&quot;`
+}
+
+// IntelRdt represents the &quot;intelRdt&quot; field.
+type IntelRdt struct {
+	// Enabled is true if Intel RDT support is compiled in.
+	// Unrelated to whether the host supports Intel RDT or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Enabled *bool `json:&quot;enabled,omitempty&quot;`
+	// Schemata is true if the &quot;linux.intelRdt.enableMonitoring&quot; field of the
+	// spec is implemented.
+	Schemata *bool `json:&quot;schemata,omitempty&quot;`
+	// Monitoring is true if the &quot;linux.intelRdt.enableMonitoring&quot; field of the
+	// spec is implemented.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Monitoring *bool `json:&quot;monitoring,omitempty&quot;`
+}
+
+// MemoryPolicy represents the &quot;memoryPolicy&quot; field.
+type MemoryPolicy struct {
+	// modes is the list of known memory policy modes, e.g., &quot;MPOL_INTERLEAVE&quot;.
+	Modes []string `json:&quot;modes,omitempty&quot;`
+	// flags is the list of known memory policy mode flags, e.g., &quot;MPOL_F_STATIC_NODES&quot;.
+	Flags []string `json:&quot;flags,omitempty&quot;`
+}
+
+// MountExtensions represents the &quot;mountExtensions&quot; field.
+type MountExtensions struct {
+	// IDMap represents the status of idmap mounts support.
+	IDMap *IDMap `json:&quot;idmap,omitempty&quot;`
+}
+
+type IDMap struct {
+	// Enabled represents whether idmap mounts supports is compiled in.
+	// Unrelated to whether the host supports it or not.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Enabled *bool `json:&quot;enabled,omitempty&quot;`
+}
+
+// NetDevices represents the &quot;netDevices&quot; field.
+type NetDevices struct {
+	// Enabled is true if network devices support is compiled in.
+	// Nil value means &quot;unknown&quot;, not &quot;false&quot;.
+	Enabled *bool `json:&quot;enabled,omitempty&quot;`
+}</file><file path="opencontainers__runtime-spec/specs-go/config.go">package specs
+
+import &quot;os&quot;
+
+// Spec is the base configuration for the container.
+type Spec struct {
+	// Version of the Open Container Initiative Runtime Specification with which the bundle complies.
+	Version string `json:&quot;ociVersion&quot;`
+	// Process configures the container process.
+	Process *Process `json:&quot;process,omitempty&quot;`
+	// Root configures the container&apos;s root filesystem.
+	Root *Root `json:&quot;root,omitempty&quot;`
+	// Hostname configures the container&apos;s hostname.
+	Hostname string `json:&quot;hostname,omitempty&quot;`
+	// Domainname configures the container&apos;s domainname.
+	Domainname string `json:&quot;domainname,omitempty&quot;`
+	// Mounts configures additional mounts (on top of Root).
+	Mounts []Mount `json:&quot;mounts,omitempty&quot;`
+	// Hooks configures callbacks for container lifecycle events.
+	Hooks *Hooks `json:&quot;hooks,omitempty&quot; platform:&quot;linux,solaris,zos&quot;`
+	// Annotations contains arbitrary metadata for the container.
+	Annotations map[string]string `json:&quot;annotations,omitempty&quot;`
+
+	// Linux is platform-specific configuration for Linux based containers.
+	Linux *Linux `json:&quot;linux,omitempty&quot; platform:&quot;linux&quot;`
+	// Solaris is platform-specific configuration for Solaris based containers.
+	Solaris *Solaris `json:&quot;solaris,omitempty&quot; platform:&quot;solaris&quot;`
+	// Windows is platform-specific configuration for Windows based containers.
+	Windows *Windows `json:&quot;windows,omitempty&quot; platform:&quot;windows&quot;`
+	// VM specifies configuration for virtual-machine-based containers.
+	VM *VM `json:&quot;vm,omitempty&quot; platform:&quot;vm&quot;`
+	// ZOS is platform-specific configuration for z/OS based containers.
+	ZOS *ZOS `json:&quot;zos,omitempty&quot; platform:&quot;zos&quot;`
+	// FreeBSD is platform-specific configuration for FreeBSD based containers.
+	FreeBSD *FreeBSD `json:&quot;freebsd,omitempty&quot; platform:&quot;freebsd&quot;`
+}
+
+// Scheduler represents the scheduling attributes for a process. It is based on
+// the Linux sched_setattr(2) syscall.
+type Scheduler struct {
+	// Policy represents the scheduling policy (e.g., SCHED_FIFO, SCHED_RR, SCHED_OTHER).
+	Policy LinuxSchedulerPolicy `json:&quot;policy&quot;`
+
+	// Nice is the nice value for the process, which affects its priority.
+	Nice int32 `json:&quot;nice,omitempty&quot;`
+
+	// Priority represents the static priority of the process.
+	Priority int32 `json:&quot;priority,omitempty&quot;`
+
+	// Flags is an array of scheduling flags.
+	Flags []LinuxSchedulerFlag `json:&quot;flags,omitempty&quot;`
+
+	// The following ones are used by the DEADLINE scheduler.
+
+	// Runtime is the amount of time in nanoseconds during which the process
+	// is allowed to run in a given period.
+	Runtime uint64 `json:&quot;runtime,omitempty&quot;`
+
+	// Deadline is the absolute deadline for the process to complete its execution.
+	Deadline uint64 `json:&quot;deadline,omitempty&quot;`
+
+	// Period is the length of the period in nanoseconds used for determining the process runtime.
+	Period uint64 `json:&quot;period,omitempty&quot;`
+}
+
+// Process contains information to start a specific application inside the container.
+type Process struct {
+	// Terminal creates an interactive terminal for the container.
+	Terminal bool `json:&quot;terminal,omitempty&quot;`
+	// ConsoleSize specifies the size of the console.
+	ConsoleSize *Box `json:&quot;consoleSize,omitempty&quot;`
+	// User specifies user information for the process.
+	User User `json:&quot;user&quot;`
+	// Args specifies the binary and arguments for the application to execute.
+	Args []string `json:&quot;args,omitempty&quot;`
+	// CommandLine specifies the full command line for the application to execute on Windows.
+	CommandLine string `json:&quot;commandLine,omitempty&quot; platform:&quot;windows&quot;`
+	// Env populates the process environment for the process.
+	Env []string `json:&quot;env,omitempty&quot;`
+	// Cwd is the current working directory for the process and must be
+	// relative to the container&apos;s root.
+	Cwd string `json:&quot;cwd&quot;`
+	// Capabilities are Linux capabilities that are kept for the process.
+	Capabilities *LinuxCapabilities `json:&quot;capabilities,omitempty&quot; platform:&quot;linux&quot;`
+	// Rlimits specifies rlimit options to apply to the process.
+	Rlimits []POSIXRlimit `json:&quot;rlimits,omitempty&quot; platform:&quot;linux,solaris,zos&quot;`
+	// NoNewPrivileges controls whether additional privileges could be gained by processes in the container.
+	NoNewPrivileges bool `json:&quot;noNewPrivileges,omitempty&quot; platform:&quot;linux,zos&quot;`
+	// ApparmorProfile specifies the apparmor profile for the container.
+	ApparmorProfile string `json:&quot;apparmorProfile,omitempty&quot; platform:&quot;linux&quot;`
+	// Specify an oom_score_adj for the container.
+	OOMScoreAdj *int `json:&quot;oomScoreAdj,omitempty&quot; platform:&quot;linux&quot;`
+	// Scheduler specifies the scheduling attributes for a process
+	Scheduler *Scheduler `json:&quot;scheduler,omitempty&quot; platform:&quot;linux&quot;`
+	// SelinuxLabel specifies the selinux context that the container process is run as.
+	SelinuxLabel string `json:&quot;selinuxLabel,omitempty&quot; platform:&quot;linux&quot;`
+	// IOPriority contains the I/O priority settings for the cgroup.
+	IOPriority *LinuxIOPriority `json:&quot;ioPriority,omitempty&quot; platform:&quot;linux&quot;`
+	// ExecCPUAffinity specifies CPU affinity for exec processes.
+	ExecCPUAffinity *CPUAffinity `json:&quot;execCPUAffinity,omitempty&quot; platform:&quot;linux&quot;`
+}
+
+// LinuxCapabilities specifies the list of allowed capabilities that are kept for a process.
+// https://man7.org/linux/man-pages/man7/capabilities.7.html
+type LinuxCapabilities struct {
+	// Bounding is the set of capabilities checked by the kernel.
+	Bounding []string `json:&quot;bounding,omitempty&quot; platform:&quot;linux&quot;`
+	// Effective is the set of capabilities checked by the kernel.
+	Effective []string `json:&quot;effective,omitempty&quot; platform:&quot;linux&quot;`
+	// Inheritable is the capabilities preserved across execve.
+	Inheritable []string `json:&quot;inheritable,omitempty&quot; platform:&quot;linux&quot;`
+	// Permitted is the limiting superset for effective capabilities.
+	Permitted []string `json:&quot;permitted,omitempty&quot; platform:&quot;linux&quot;`
+	// Ambient is the ambient set of capabilities that are kept.
+	Ambient []string `json:&quot;ambient,omitempty&quot; platform:&quot;linux&quot;`
+}
+
+// IOPriority represents I/O priority settings for the container&apos;s processes within the process group.
+type LinuxIOPriority struct {
+	Class    IOPriorityClass `json:&quot;class&quot;`
+	Priority int             `json:&quot;priority&quot;`
+}
+
+// IOPriorityClass represents an I/O scheduling class.
+type IOPriorityClass string
+
+// Possible values for IOPriorityClass.
+const (
+	IOPRIO_CLASS_RT   IOPriorityClass = &quot;IOPRIO_CLASS_RT&quot;
+	IOPRIO_CLASS_BE   IOPriorityClass = &quot;IOPRIO_CLASS_BE&quot;
+	IOPRIO_CLASS_IDLE IOPriorityClass = &quot;IOPRIO_CLASS_IDLE&quot;
+)
+
+// CPUAffinity specifies process&apos; CPU affinity.
+type CPUAffinity struct {
+	Initial string `json:&quot;initial,omitempty&quot;`
+	Final   string `json:&quot;final,omitempty&quot;`
+}
+
+// Box specifies dimensions of a rectangle. Used for specifying the size of a console.
+type Box struct {
+	// Height is the vertical dimension of a box.
+	Height uint `json:&quot;height&quot;`
+	// Width is the horizontal dimension of a box.
+	Width uint `json:&quot;width&quot;`
+}
+
+// User specifies specific user (and group) information for the container process.
+type User struct {
+	// UID is the user id.
+	UID uint32 `json:&quot;uid&quot; platform:&quot;linux,solaris,zos&quot;`
+	// GID is the group id.
+	GID uint32 `json:&quot;gid&quot; platform:&quot;linux,solaris,zos&quot;`
+	// Umask is the umask for the init process.
+	Umask *uint32 `json:&quot;umask,omitempty&quot; platform:&quot;linux,solaris,zos&quot;`
+	// AdditionalGids are additional group ids set for the container&apos;s process.
+	AdditionalGids []uint32 `json:&quot;additionalGids,omitempty&quot; platform:&quot;linux,solaris&quot;`
+	// Username is the user name.
+	Username string `json:&quot;username,omitempty&quot; platform:&quot;windows&quot;`
+}
+
+// Root contains information about the container&apos;s root filesystem on the host.
+type Root struct {
+	// Path is the absolute path to the container&apos;s root filesystem.
+	Path string `json:&quot;path&quot;`
+	// Readonly makes the root filesystem for the container readonly before the process is executed.
+	Readonly bool `json:&quot;readonly,omitempty&quot;`
+}
+
+// Mount specifies a mount for a container.
+type Mount struct {
+	// Destination is the absolute path where the mount will be placed in the container.
+	Destination string `json:&quot;destination&quot;`
+	// Type specifies the mount kind.
+	Type string `json:&quot;type,omitempty&quot; platform:&quot;linux,solaris,zos,freebsd&quot;`
+	// Source specifies the source path of the mount.
+	Source string `json:&quot;source,omitempty&quot;`
+	// Options are fstab style mount options.
+	Options []string `json:&quot;options,omitempty&quot;`
+
+	// UID/GID mappings used for changing file owners w/o calling chown, fs should support it.
+	// Every mount point could have its own mapping.
+	UIDMappings []LinuxIDMapping `json:&quot;uidMappings,omitempty&quot; platform:&quot;linux&quot;`
+	GIDMappings []LinuxIDMapping `json:&quot;gidMappings,omitempty&quot; platform:&quot;linux&quot;`
+}
+
+// Hook specifies a command that is run at a particular event in the lifecycle of a container
+type Hook struct {
+	Path    string   `json:&quot;path&quot;`
+	Args    []string `json:&quot;args,omitempty&quot;`
+	Env     []string `json:&quot;env,omitempty&quot;`
+	Timeout *int     `json:&quot;timeout,omitempty&quot;`
+}
+
+// Hooks specifies a command that is run in the container at a particular event in the lifecycle of a container
+// Hooks for container setup and teardown
+type Hooks struct {
+	// Prestart is Deprecated. Prestart is a list of hooks to be run before the container process is executed.
+	// It is called in the Runtime Namespace
+	//
+	// Deprecated: use [Hooks.CreateRuntime], [Hooks.CreateContainer], and
+	// [Hooks.StartContainer] instead, which allow more granular hook control
+	// during the create and start phase.
+	Prestart []Hook `json:&quot;prestart,omitempty&quot;`
+	// CreateRuntime is a list of hooks to be run after the container has been created but before pivot_root or any equivalent operation has been called
+	// It is called in the Runtime Namespace
+	CreateRuntime []Hook `json:&quot;createRuntime,omitempty&quot;`
+	// CreateContainer is a list of hooks to be run after the container has been created but before pivot_root or any equivalent operation has been called
+	// It is called in the Container Namespace
+	CreateContainer []Hook `json:&quot;createContainer,omitempty&quot;`
+	// StartContainer is a list of hooks to be run after the start operation is called but before the container process is started
+	// It is called in the Container Namespace
+	StartContainer []Hook `json:&quot;startContainer,omitempty&quot;`
+	// Poststart is a list of hooks to be run after the container process is started.
+	// It is called in the Runtime Namespace
+	Poststart []Hook `json:&quot;poststart,omitempty&quot;`
+	// Poststop is a list of hooks to be run after the container process exits.
+	// It is called in the Runtime Namespace
+	Poststop []Hook `json:&quot;poststop,omitempty&quot;`
+}
+
+// Linux contains platform-specific configuration for Linux based containers.
+type Linux struct {
+	// UIDMapping specifies user mappings for supporting user namespaces.
+	UIDMappings []LinuxIDMapping `json:&quot;uidMappings,omitempty&quot;`
+	// GIDMapping specifies group mappings for supporting user namespaces.
+	GIDMappings []LinuxIDMapping `json:&quot;gidMappings,omitempty&quot;`
+	// Sysctl are a set of key value pairs that are set for the container on start
+	Sysctl map[string]string `json:&quot;sysctl,omitempty&quot;`
+	// Resources contain cgroup information for handling resource constraints
+	// for the container
+	Resources *LinuxResources `json:&quot;resources,omitempty&quot;`
+	// CgroupsPath specifies the path to cgroups that are created and/or joined by the container.
+	// The path is expected to be relative to the cgroups mountpoint.
+	// If resources are specified, the cgroups at CgroupsPath will be updated based on resources.
+	CgroupsPath string `json:&quot;cgroupsPath,omitempty&quot;`
+	// Namespaces contains the namespaces that are created and/or joined by the container
+	Namespaces []LinuxNamespace `json:&quot;namespaces,omitempty&quot;`
+	// Devices are a list of device nodes that are created for the container
+	Devices []LinuxDevice `json:&quot;devices,omitempty&quot;`
+	// NetDevices are key-value pairs, keyed by network device name on the host, moved to the container&apos;s network namespace.
+	NetDevices map[string]LinuxNetDevice `json:&quot;netDevices,omitempty&quot;`
+	// Seccomp specifies the seccomp security settings for the container.
+	Seccomp *LinuxSeccomp `json:&quot;seccomp,omitempty&quot;`
+	// RootfsPropagation is the rootfs mount propagation mode for the container.
+	RootfsPropagation string `json:&quot;rootfsPropagation,omitempty&quot;`
+	// MaskedPaths masks over the provided paths inside the container.
+	MaskedPaths []string `json:&quot;maskedPaths,omitempty&quot;`
+	// ReadonlyPaths sets the provided paths as RO inside the container.
+	ReadonlyPaths []string `json:&quot;readonlyPaths,omitempty&quot;`
+	// MountLabel specifies the selinux context for the mounts in the container.
+	MountLabel string `json:&quot;mountLabel,omitempty&quot;`
+	// IntelRdt contains Intel Resource Director Technology (RDT) information for
+	// handling resource constraints and monitoring metrics (e.g., L3 cache, memory bandwidth) for the container
+	IntelRdt *LinuxIntelRdt `json:&quot;intelRdt,omitempty&quot;`
+	// MemoryPolicy contains NUMA memory policy for the container.
+	MemoryPolicy *LinuxMemoryPolicy `json:&quot;memoryPolicy,omitempty&quot;`
+	// Personality contains configuration for the Linux personality syscall
+	Personality *LinuxPersonality `json:&quot;personality,omitempty&quot;`
+	// TimeOffsets specifies the offset for supporting time namespaces.
+	TimeOffsets map[string]LinuxTimeOffset `json:&quot;timeOffsets,omitempty&quot;`
+}
+
+// LinuxNamespace is the configuration for a Linux namespace
+type LinuxNamespace struct {
+	// Type is the type of namespace
+	Type LinuxNamespaceType `json:&quot;type&quot;`
+	// Path is a path to an existing namespace persisted on disk that can be joined
+	// and is of the same type
+	Path string `json:&quot;path,omitempty&quot;`
+}
+
+// LinuxNamespaceType is one of the Linux namespaces
+type LinuxNamespaceType string
+
+const (
+	// PIDNamespace for isolating process IDs
+	PIDNamespace LinuxNamespaceType = &quot;pid&quot;
+	// NetworkNamespace for isolating network devices, stacks, ports, etc
+	NetworkNamespace LinuxNamespaceType = &quot;network&quot;
+	// MountNamespace for isolating mount points
+	MountNamespace LinuxNamespaceType = &quot;mount&quot;
+	// IPCNamespace for isolating System V IPC, POSIX message queues
+	IPCNamespace LinuxNamespaceType = &quot;ipc&quot;
+	// UTSNamespace for isolating hostname and NIS domain name
+	UTSNamespace LinuxNamespaceType = &quot;uts&quot;
+	// UserNamespace for isolating user and group IDs
+	UserNamespace LinuxNamespaceType = &quot;user&quot;
+	// CgroupNamespace for isolating cgroup hierarchies
+	CgroupNamespace LinuxNamespaceType = &quot;cgroup&quot;
+	// TimeNamespace for isolating the clocks
+	TimeNamespace LinuxNamespaceType = &quot;time&quot;
+)
+
+// LinuxIDMapping specifies UID/GID mappings
+type LinuxIDMapping struct {
+	// ContainerID is the starting UID/GID in the container
+	ContainerID uint32 `json:&quot;containerID&quot;`
+	// HostID is the starting UID/GID on the host to be mapped to &apos;ContainerID&apos;
+	HostID uint32 `json:&quot;hostID&quot;`
+	// Size is the number of IDs to be mapped
+	Size uint32 `json:&quot;size&quot;`
+}
+
+// LinuxTimeOffset specifies the offset for Time Namespace
+type LinuxTimeOffset struct {
+	// Secs is the offset of clock (in secs) in the container
+	Secs int64 `json:&quot;secs,omitempty&quot;`
+	// Nanosecs is the additional offset for Secs (in nanosecs)
+	Nanosecs uint32 `json:&quot;nanosecs,omitempty&quot;`
+}
+
+// POSIXRlimit type and restrictions
+type POSIXRlimit struct {
+	// Type of the rlimit to set
+	Type string `json:&quot;type&quot;`
+	// Hard is the hard limit for the specified type
+	Hard uint64 `json:&quot;hard&quot;`
+	// Soft is the soft limit for the specified type
+	Soft uint64 `json:&quot;soft&quot;`
+}
+
+// LinuxHugepageLimit structure corresponds to limiting kernel hugepages.
+// Default to reservation limits if supported. Otherwise fallback to page fault limits.
+type LinuxHugepageLimit struct {
+	// Pagesize is the hugepage size.
+	// Format: &quot;&lt;size&gt;&lt;unit-prefix&gt;B&apos; (e.g. 64KB, 2MB, 1GB, etc.).
+	Pagesize string `json:&quot;pageSize&quot;`
+	// Limit is the limit of &quot;hugepagesize&quot; hugetlb reservations (if supported) or usage.
+	Limit uint64 `json:&quot;limit&quot;`
+}
+
+// LinuxInterfacePriority for network interfaces
+type LinuxInterfacePriority struct {
+	// Name is the name of the network interface
+	Name string `json:&quot;name&quot;`
+	// Priority for the interface
+	Priority uint32 `json:&quot;priority&quot;`
+}
+
+// LinuxBlockIODevice holds major:minor format supported in blkio cgroup
+type LinuxBlockIODevice struct {
+	// Major is the device&apos;s major number.
+	Major int64 `json:&quot;major&quot;`
+	// Minor is the device&apos;s minor number.
+	Minor int64 `json:&quot;minor&quot;`
+}
+
+// LinuxWeightDevice struct holds a `major:minor weight` pair for weightDevice
+type LinuxWeightDevice struct {
+	LinuxBlockIODevice
+	// Weight is the bandwidth rate for the device.
+	Weight *uint16 `json:&quot;weight,omitempty&quot;`
+	// LeafWeight is the bandwidth rate for the device while competing with the cgroup&apos;s child cgroups, CFQ scheduler only
+	LeafWeight *uint16 `json:&quot;leafWeight,omitempty&quot;`
+}
+
+// LinuxThrottleDevice struct holds a `major:minor rate_per_second` pair
+type LinuxThrottleDevice struct {
+	LinuxBlockIODevice
+	// Rate is the IO rate limit per cgroup per device
+	Rate uint64 `json:&quot;rate&quot;`
+}
+
+// LinuxBlockIO for Linux cgroup &apos;blkio&apos; resource management
+type LinuxBlockIO struct {
+	// Specifies per cgroup weight
+	Weight *uint16 `json:&quot;weight,omitempty&quot;`
+	// Specifies tasks&apos; weight in the given cgroup while competing with the cgroup&apos;s child cgroups, CFQ scheduler only
+	LeafWeight *uint16 `json:&quot;leafWeight,omitempty&quot;`
+	// Weight per cgroup per device, can override BlkioWeight
+	WeightDevice []LinuxWeightDevice `json:&quot;weightDevice,omitempty&quot;`
+	// IO read rate limit per cgroup per device, bytes per second
+	ThrottleReadBpsDevice []LinuxThrottleDevice `json:&quot;throttleReadBpsDevice,omitempty&quot;`
+	// IO write rate limit per cgroup per device, bytes per second
+	ThrottleWriteBpsDevice []LinuxThrottleDevice `json:&quot;throttleWriteBpsDevice,omitempty&quot;`
+	// IO read rate limit per cgroup per device, IO per second
+	ThrottleReadIOPSDevice []LinuxThrottleDevice `json:&quot;throttleReadIOPSDevice,omitempty&quot;`
+	// IO write rate limit per cgroup per device, IO per second
+	ThrottleWriteIOPSDevice []LinuxThrottleDevice `json:&quot;throttleWriteIOPSDevice,omitempty&quot;`
+}
+
+// LinuxMemory for Linux cgroup &apos;memory&apos; resource management
+type LinuxMemory struct {
+	// Memory limit (in bytes).
+	Limit *int64 `json:&quot;limit,omitempty&quot;`
+	// Memory reservation or soft_limit (in bytes).
+	Reservation *int64 `json:&quot;reservation,omitempty&quot;`
+	// Total memory limit (memory + swap).
+	Swap *int64 `json:&quot;swap,omitempty&quot;`
+	// Kernel memory limit (in bytes).
+	//
+	// Deprecated: kernel-memory limits are not supported in cgroups v2, and
+	// were obsoleted in [kernel v5.4]. This field should no longer be used,
+	// as it may be ignored by runtimes.
+	//
+	// [kernel v5.4]: https://github.com/torvalds/linux/commit/0158115f702b0ba208ab0
+	Kernel *int64 `json:&quot;kernel,omitempty&quot;`
+	// Kernel memory limit for tcp (in bytes)
+	KernelTCP *int64 `json:&quot;kernelTCP,omitempty&quot;`
+	// How aggressive the kernel will swap memory pages.
+	Swappiness *uint64 `json:&quot;swappiness,omitempty&quot;`
+	// DisableOOMKiller disables the OOM killer for out of memory conditions
+	DisableOOMKiller *bool `json:&quot;disableOOMKiller,omitempty&quot;`
+	// Enables hierarchical memory accounting
+	UseHierarchy *bool `json:&quot;useHierarchy,omitempty&quot;`
+	// CheckBeforeUpdate enables checking if a new memory limit is lower
+	// than the current usage during update, and if so, rejecting the new
+	// limit.
+	CheckBeforeUpdate *bool `json:&quot;checkBeforeUpdate,omitempty&quot;`
+}
+
+// LinuxCPU for Linux cgroup &apos;cpu&apos; resource management
+type LinuxCPU struct {
+	// CPU shares (relative weight (ratio) vs. other cgroups with cpu shares).
+	Shares *uint64 `json:&quot;shares,omitempty&quot;`
+	// CPU hardcap limit (in usecs). Allowed cpu time in a given period.
+	Quota *int64 `json:&quot;quota,omitempty&quot;`
+	// CPU hardcap burst limit (in usecs). Allowed accumulated cpu time additionally for burst in a
+	// given period.
+	Burst *uint64 `json:&quot;burst,omitempty&quot;`
+	// CPU period to be used for hardcapping (in usecs).
+	Period *uint64 `json:&quot;period,omitempty&quot;`
+	// How much time realtime scheduling may use (in usecs).
+	RealtimeRuntime *int64 `json:&quot;realtimeRuntime,omitempty&quot;`
+	// CPU period to be used for realtime scheduling (in usecs).
+	RealtimePeriod *uint64 `json:&quot;realtimePeriod,omitempty&quot;`
+	// CPUs to use within the cpuset. Default is to use any CPU available.
+	Cpus string `json:&quot;cpus,omitempty&quot;`
+	// List of memory nodes in the cpuset. Default is to use any available memory node.
+	Mems string `json:&quot;mems,omitempty&quot;`
+	// cgroups are configured with minimum weight, 0: default behavior, 1: SCHED_IDLE.
+	Idle *int64 `json:&quot;idle,omitempty&quot;`
+}
+
+// LinuxPids for Linux cgroup &apos;pids&apos; resource management (Linux 4.3)
+type LinuxPids struct {
+	// Maximum number of PIDs. Default is &quot;no limit&quot;.
+	Limit *int64 `json:&quot;limit,omitempty&quot;`
+}
+
+// LinuxNetwork identification and priority configuration
+type LinuxNetwork struct {
+	// Set class identifier for container&apos;s network packets
+	ClassID *uint32 `json:&quot;classID,omitempty&quot;`
+	// Set priority of network traffic for container
+	Priorities []LinuxInterfacePriority `json:&quot;priorities,omitempty&quot;`
+}
+
+// LinuxRdma for Linux cgroup &apos;rdma&apos; resource management (Linux 4.11)
+type LinuxRdma struct {
+	// Maximum number of HCA handles that can be opened. Default is &quot;no limit&quot;.
+	HcaHandles *uint32 `json:&quot;hcaHandles,omitempty&quot;`
+	// Maximum number of HCA objects that can be created. Default is &quot;no limit&quot;.
+	HcaObjects *uint32 `json:&quot;hcaObjects,omitempty&quot;`
+}
+
+// LinuxResources has container runtime resource constraints
+type LinuxResources struct {
+	// Devices configures the device allowlist.
+	Devices []LinuxDeviceCgroup `json:&quot;devices,omitempty&quot;`
+	// Memory restriction configuration
+	Memory *LinuxMemory `json:&quot;memory,omitempty&quot;`
+	// CPU resource restriction configuration
+	CPU *LinuxCPU `json:&quot;cpu,omitempty&quot;`
+	// Task resource restriction configuration.
+	Pids *LinuxPids `json:&quot;pids,omitempty&quot;`
+	// BlockIO restriction configuration
+	BlockIO *LinuxBlockIO `json:&quot;blockIO,omitempty&quot;`
+	// Hugetlb limits (in bytes). Default to reservation limits if supported.
+	HugepageLimits []LinuxHugepageLimit `json:&quot;hugepageLimits,omitempty&quot;`
+	// Network restriction configuration
+	Network *LinuxNetwork `json:&quot;network,omitempty&quot;`
+	// Rdma resource restriction configuration.
+	// Limits are a set of key value pairs that define RDMA resource limits,
+	// where the key is device name and value is resource limits.
+	Rdma map[string]LinuxRdma `json:&quot;rdma,omitempty&quot;`
+	// Unified resources.
+	Unified map[string]string `json:&quot;unified,omitempty&quot;`
+}
+
+// LinuxDevice represents the mknod information for a Linux special device file
+type LinuxDevice struct {
+	// Path to the device.
+	Path string `json:&quot;path&quot;`
+	// Device type, block, char, etc.
+	Type string `json:&quot;type&quot;`
+	// Major is the device&apos;s major number.
+	Major int64 `json:&quot;major&quot;`
+	// Minor is the device&apos;s minor number.
+	Minor int64 `json:&quot;minor&quot;`
+	// FileMode permission bits for the device.
+	FileMode *os.FileMode `json:&quot;fileMode,omitempty&quot;`
+	// UID of the device.
+	UID *uint32 `json:&quot;uid,omitempty&quot;`
+	// Gid of the device.
+	GID *uint32 `json:&quot;gid,omitempty&quot;`
+}
+
+// LinuxNetDevice represents a single network device to be added to the container&apos;s network namespace
+type LinuxNetDevice struct {
+	// Name of the device in the container namespace
+	Name string `json:&quot;name,omitempty&quot;`
+}
+
+// LinuxDeviceCgroup represents a device rule for the devices specified to
+// the device controller
+type LinuxDeviceCgroup struct {
+	// Allow or deny
+	Allow bool `json:&quot;allow&quot;`
+	// Device type, block, char, etc.
+	Type string `json:&quot;type,omitempty&quot;`
+	// Major is the device&apos;s major number.
+	Major *int64 `json:&quot;major,omitempty&quot;`
+	// Minor is the device&apos;s minor number.
+	Minor *int64 `json:&quot;minor,omitempty&quot;`
+	// Cgroup access permissions format, rwm.
+	Access string `json:&quot;access,omitempty&quot;`
+}
+
+// LinuxPersonalityDomain refers to a personality domain.
+type LinuxPersonalityDomain string
+
+// LinuxPersonalityFlag refers to an additional personality flag. None are currently defined.
+type LinuxPersonalityFlag string
+
+// Define domain and flags for Personality
+const (
+	// PerLinux is the standard Linux personality
+	PerLinux LinuxPersonalityDomain = &quot;LINUX&quot;
+	// PerLinux32 sets personality to 32 bit
+	PerLinux32 LinuxPersonalityDomain = &quot;LINUX32&quot;
+)
+
+// LinuxPersonality represents the Linux personality syscall input
+type LinuxPersonality struct {
+	// Domain for the personality
+	Domain LinuxPersonalityDomain `json:&quot;domain&quot;`
+	// Additional flags
+	Flags []LinuxPersonalityFlag `json:&quot;flags,omitempty&quot;`
+}
+
+// Solaris contains platform-specific configuration for Solaris application containers.
+type Solaris struct {
+	// SMF FMRI which should go &quot;online&quot; before we start the container process.
+	Milestone string `json:&quot;milestone,omitempty&quot;`
+	// Maximum set of privileges any process in this container can obtain.
+	LimitPriv string `json:&quot;limitpriv,omitempty&quot;`
+	// The maximum amount of shared memory allowed for this container.
+	MaxShmMemory string `json:&quot;maxShmMemory,omitempty&quot;`
+	// Specification for automatic creation of network resources for this container.
+	Anet []SolarisAnet `json:&quot;anet,omitempty&quot;`
+	// Set limit on the amount of CPU time that can be used by container.
+	CappedCPU *SolarisCappedCPU `json:&quot;cappedCPU,omitempty&quot;`
+	// The physical and swap caps on the memory that can be used by this container.
+	CappedMemory *SolarisCappedMemory `json:&quot;cappedMemory,omitempty&quot;`
+}
+
+// SolarisCappedCPU allows users to set limit on the amount of CPU time that can be used by container.
+type SolarisCappedCPU struct {
+	Ncpus string `json:&quot;ncpus,omitempty&quot;`
+}
+
+// SolarisCappedMemory allows users to set the physical and swap caps on the memory that can be used by this container.
+type SolarisCappedMemory struct {
+	Physical string `json:&quot;physical,omitempty&quot;`
+	Swap     string `json:&quot;swap,omitempty&quot;`
+}
+
+// SolarisAnet provides the specification for automatic creation of network resources for this container.
+type SolarisAnet struct {
+	// Specify a name for the automatically created VNIC datalink.
+	Linkname string `json:&quot;linkname,omitempty&quot;`
+	// Specify the link over which the VNIC will be created.
+	Lowerlink string `json:&quot;lowerLink,omitempty&quot;`
+	// The set of IP addresses that the container can use.
+	Allowedaddr string `json:&quot;allowedAddress,omitempty&quot;`
+	// Specifies whether allowedAddress limitation is to be applied to the VNIC.
+	Configallowedaddr string `json:&quot;configureAllowedAddress,omitempty&quot;`
+	// The value of the optional default router.
+	Defrouter string `json:&quot;defrouter,omitempty&quot;`
+	// Enable one or more types of link protection.
+	Linkprotection string `json:&quot;linkProtection,omitempty&quot;`
+	// Set the VNIC&apos;s macAddress
+	Macaddress string `json:&quot;macAddress,omitempty&quot;`
+}
+
+// Windows defines the runtime configuration for Windows based containers, including Hyper-V containers.
+type Windows struct {
+	// LayerFolders contains a list of absolute paths to directories containing image layers.
+	LayerFolders []string `json:&quot;layerFolders&quot;`
+	// Devices are the list of devices to be mapped into the container.
+	Devices []WindowsDevice `json:&quot;devices,omitempty&quot;`
+	// Resources contains information for handling resource constraints for the container.
+	Resources *WindowsResources `json:&quot;resources,omitempty&quot;`
+	// CredentialSpec contains a JSON object describing a group Managed Service Account (gMSA) specification.
+	CredentialSpec interface{} `json:&quot;credentialSpec,omitempty&quot;`
+	// Servicing indicates if the container is being started in a mode to apply a Windows Update servicing operation.
+	Servicing bool `json:&quot;servicing,omitempty&quot;`
+	// IgnoreFlushesDuringBoot indicates if the container is being started in a mode where disk writes are not flushed during its boot process.
+	IgnoreFlushesDuringBoot bool `json:&quot;ignoreFlushesDuringBoot,omitempty&quot;`
+	// HyperV contains information for running a container with Hyper-V isolation.
+	HyperV *WindowsHyperV `json:&quot;hyperv,omitempty&quot;`
+	// Network restriction configuration.
+	Network *WindowsNetwork `json:&quot;network,omitempty&quot;`
+}
+
+// WindowsDevice represents information about a host device to be mapped into the container.
+type WindowsDevice struct {
+	// Device identifier: interface class GUID, etc.
+	ID string `json:&quot;id&quot;`
+	// Device identifier type: &quot;class&quot;, etc.
+	IDType string `json:&quot;idType&quot;`
+}
+
+// WindowsResources has container runtime resource constraints for containers running on Windows.
+type WindowsResources struct {
+	// Memory restriction configuration.
+	Memory *WindowsMemoryResources `json:&quot;memory,omitempty&quot;`
+	// CPU resource restriction configuration.
+	CPU *WindowsCPUResources `json:&quot;cpu,omitempty&quot;`
+	// Storage restriction configuration.
+	Storage *WindowsStorageResources `json:&quot;storage,omitempty&quot;`
+}
+
+// WindowsMemoryResources contains memory resource management settings.
+type WindowsMemoryResources struct {
+	// Memory limit in bytes.
+	Limit *uint64 `json:&quot;limit,omitempty&quot;`
+}
+
+// WindowsCPUResources contains CPU resource management settings.
+type WindowsCPUResources struct {
+	// Count is the number of CPUs available to the container. It represents the
+	// fraction of the configured processor `count` in a container in relation
+	// to the processors available in the host. The fraction ultimately
+	// determines the portion of processor cycles that the threads in a
+	// container can use during each scheduling interval, as the number of
+	// cycles per 10,000 cycles.
+	Count *uint64 `json:&quot;count,omitempty&quot;`
+	// Shares limits the share of processor time given to the container relative
+	// to other workloads on the processor. The processor `shares` (`weight` at
+	// the platform level) is a value between 0 and 10000.
+	Shares *uint16 `json:&quot;shares,omitempty&quot;`
+	// Maximum determines the portion of processor cycles that the threads in a
+	// container can use during each scheduling interval, as the number of
+	// cycles per 10,000 cycles. Set processor `maximum` to a percentage times
+	// 100.
+	Maximum *uint16 `json:&quot;maximum,omitempty&quot;`
+	// Set of CPUs to affinitize for this container.
+	Affinity []WindowsCPUGroupAffinity `json:&quot;affinity,omitempty&quot;`
+}
+
+// Similar to _GROUP_AFFINITY struct defined in
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/miniport/ns-miniport-_group_affinity
+type WindowsCPUGroupAffinity struct {
+	// CPU mask relative to this CPU group.
+	Mask uint64 `json:&quot;mask,omitempty&quot;`
+	// Processor group the mask refers to, as returned by GetLogicalProcessorInformationEx.
+	Group uint32 `json:&quot;group,omitempty&quot;`
+}
+
+// WindowsStorageResources contains storage resource management settings.
+type WindowsStorageResources struct {
+	// Specifies maximum Iops for the system drive.
+	Iops *uint64 `json:&quot;iops,omitempty&quot;`
+	// Specifies maximum bytes per second for the system drive.
+	Bps *uint64 `json:&quot;bps,omitempty&quot;`
+	// Sandbox size specifies the minimum size of the system drive in bytes.
+	SandboxSize *uint64 `json:&quot;sandboxSize,omitempty&quot;`
+}
+
+// WindowsNetwork contains network settings for Windows containers.
+type WindowsNetwork struct {
+	// List of HNS endpoints that the container should connect to.
+	EndpointList []string `json:&quot;endpointList,omitempty&quot;`
+	// Specifies if unqualified DNS name resolution is allowed.
+	AllowUnqualifiedDNSQuery bool `json:&quot;allowUnqualifiedDNSQuery,omitempty&quot;`
+	// Comma separated list of DNS suffixes to use for name resolution.
+	DNSSearchList []string `json:&quot;DNSSearchList,omitempty&quot;`
+	// Name (ID) of the container that we will share with the network stack.
+	NetworkSharedContainerName string `json:&quot;networkSharedContainerName,omitempty&quot;`
+	// name (ID) of the network namespace that will be used for the container.
+	NetworkNamespace string `json:&quot;networkNamespace,omitempty&quot;`
+}
+
+// WindowsHyperV contains information for configuring a container to run with Hyper-V isolation.
+type WindowsHyperV struct {
+	// UtilityVMPath is an optional path to the image used for the Utility VM.
+	UtilityVMPath string `json:&quot;utilityVMPath,omitempty&quot;`
+}
+
+// IOMems contains information about iomem addresses that should be passed to the VM.
+type IOMems struct {
+	// Guest Frame Number to map the iomem range. If GFN is not specified, the mapping will be done to the same Frame Number as was provided in FirstMFN.
+	FirstGFN *uint64 `json:&quot;firstGFN,omitempty&quot;`
+	// Physical page number of iomem regions.
+	FirstMFN *uint64 `json:&quot;firstMFN&quot;`
+	// Number of pages to be mapped.
+	NrMFNs *uint64 `json:&quot;nrMFNs&quot;`
+}
+
+// Hardware configuration for the VM image
+type HWConfig struct {
+	// Path to the container device-tree file that should be passed to the VM configuration.
+	DeviceTree string `json:&quot;deviceTree,omitempty&quot;`
+	// Number of virtual cpus for the VM.
+	VCPUs *uint32 `json:&quot;vcpus,omitempty&quot;`
+	// Maximum memory in bytes allocated to the VM.
+	Memory *uint64 `json:&quot;memory,omitempty&quot;`
+	// Host device tree nodes to passthrough to the VM.
+	DtDevs []string `json:&quot;dtdevs,omitempty&quot;`
+	// Allow auto-translated domains to access specific hardware I/O memory pages.
+	IOMems []IOMems `json:&quot;iomems,omitempty&quot;`
+	// Allows VM to access specific physical IRQs.
+	Irqs []uint32 `json:&quot;irqs,omitempty&quot;`
+}
+
+// VM contains information for virtual-machine-based containers.
+type VM struct {
+	// Hypervisor specifies hypervisor-related configuration for virtual-machine-based containers.
+	Hypervisor VMHypervisor `json:&quot;hypervisor,omitempty&quot;`
+	// Kernel specifies kernel-related configuration for virtual-machine-based containers.
+	Kernel VMKernel `json:&quot;kernel&quot;`
+	// Image specifies guest image related configuration for virtual-machine-based containers.
+	Image VMImage `json:&quot;image,omitempty&quot;`
+	// Hardware configuration that should be passed to the VM.
+	HwConfig *HWConfig `json:&quot;hwconfig,omitempty&quot;`
+}
+
+// VMHypervisor contains information about the hypervisor to use for a virtual machine.
+type VMHypervisor struct {
+	// Path is the host path to the hypervisor used to manage the virtual machine.
+	Path string `json:&quot;path&quot;`
+	// Parameters specifies parameters to pass to the hypervisor.
+	Parameters []string `json:&quot;parameters,omitempty&quot;`
+}
+
+// VMKernel contains information about the kernel to use for a virtual machine.
+type VMKernel struct {
+	// Path is the host path to the kernel used to boot the virtual machine.
+	Path string `json:&quot;path&quot;`
+	// Parameters specifies parameters to pass to the kernel.
+	Parameters []string `json:&quot;parameters,omitempty&quot;`
+	// InitRD is the host path to an initial ramdisk to be used by the kernel.
+	InitRD string `json:&quot;initrd,omitempty&quot;`
+}
+
+// VMImage contains information about the virtual machine root image.
+type VMImage struct {
+	// Path is the host path to the root image that the VM kernel would boot into.
+	Path string `json:&quot;path&quot;`
+	// Format is the root image format type (e.g. &quot;qcow2&quot;, &quot;raw&quot;, &quot;vhd&quot;, etc).
+	Format string `json:&quot;format&quot;`
+}
+
+// LinuxSeccomp represents syscall restrictions
+type LinuxSeccomp struct {
+	DefaultAction    LinuxSeccompAction `json:&quot;defaultAction&quot;`
+	DefaultErrnoRet  *uint              `json:&quot;defaultErrnoRet,omitempty&quot;`
+	Architectures    []Arch             `json:&quot;architectures,omitempty&quot;`
+	Flags            []LinuxSeccompFlag `json:&quot;flags,omitempty&quot;`
+	ListenerPath     string             `json:&quot;listenerPath,omitempty&quot;`
+	ListenerMetadata string             `json:&quot;listenerMetadata,omitempty&quot;`
+	Syscalls         []LinuxSyscall     `json:&quot;syscalls,omitempty&quot;`
+}
+
+// Arch used for additional architectures
+type Arch string
+
+// LinuxSeccompFlag is a flag to pass to seccomp(2).
+type LinuxSeccompFlag string
+
+const (
+	// LinuxSeccompFlagLog is a seccomp flag to request all returned
+	// actions except SECCOMP_RET_ALLOW to be logged. An administrator may
+	// override this filter flag by preventing specific actions from being
+	// logged via the /proc/sys/kernel/seccomp/actions_logged file. (since
+	// Linux 4.14)
+	LinuxSeccompFlagLog LinuxSeccompFlag = &quot;SECCOMP_FILTER_FLAG_LOG&quot;
+
+	// LinuxSeccompFlagSpecAllow can be used to disable Speculative Store
+	// Bypass mitigation. (since Linux 4.17)
+	LinuxSeccompFlagSpecAllow LinuxSeccompFlag = &quot;SECCOMP_FILTER_FLAG_SPEC_ALLOW&quot;
+
+	// LinuxSeccompFlagWaitKillableRecv can be used to switch to the wait
+	// killable semantics. (since Linux 5.19)
+	LinuxSeccompFlagWaitKillableRecv LinuxSeccompFlag = &quot;SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV&quot;
+)
+
+// Additional architectures permitted to be used for system calls
+// By default only the native architecture of the kernel is permitted
+const (
+	ArchX86         Arch = &quot;SCMP_ARCH_X86&quot;
+	ArchX86_64      Arch = &quot;SCMP_ARCH_X86_64&quot;
+	ArchX32         Arch = &quot;SCMP_ARCH_X32&quot;
+	ArchARM         Arch = &quot;SCMP_ARCH_ARM&quot;
+	ArchAARCH64     Arch = &quot;SCMP_ARCH_AARCH64&quot;
+	ArchMIPS        Arch = &quot;SCMP_ARCH_MIPS&quot;
+	ArchMIPS64      Arch = &quot;SCMP_ARCH_MIPS64&quot;
+	ArchMIPS64N32   Arch = &quot;SCMP_ARCH_MIPS64N32&quot;
+	ArchMIPSEL      Arch = &quot;SCMP_ARCH_MIPSEL&quot;
+	ArchMIPSEL64    Arch = &quot;SCMP_ARCH_MIPSEL64&quot;
+	ArchMIPSEL64N32 Arch = &quot;SCMP_ARCH_MIPSEL64N32&quot;
+	ArchPPC         Arch = &quot;SCMP_ARCH_PPC&quot;
+	ArchPPC64       Arch = &quot;SCMP_ARCH_PPC64&quot;
+	ArchPPC64LE     Arch = &quot;SCMP_ARCH_PPC64LE&quot;
+	ArchS390        Arch = &quot;SCMP_ARCH_S390&quot;
+	ArchS390X       Arch = &quot;SCMP_ARCH_S390X&quot;
+	ArchPARISC      Arch = &quot;SCMP_ARCH_PARISC&quot;
+	ArchPARISC64    Arch = &quot;SCMP_ARCH_PARISC64&quot;
+	ArchRISCV64     Arch = &quot;SCMP_ARCH_RISCV64&quot;
+	ArchLOONGARCH64 Arch = &quot;SCMP_ARCH_LOONGARCH64&quot;
+	ArchM68K        Arch = &quot;SCMP_ARCH_M68K&quot;
+	ArchSH          Arch = &quot;SCMP_ARCH_SH&quot;
+	ArchSHEB        Arch = &quot;SCMP_ARCH_SHEB&quot;
+)
+
+// LinuxSeccompAction taken upon Seccomp rule match
+type LinuxSeccompAction string
+
+// Define actions for Seccomp rules
+const (
+	ActKill        LinuxSeccompAction = &quot;SCMP_ACT_KILL&quot;
+	ActKillProcess LinuxSeccompAction = &quot;SCMP_ACT_KILL_PROCESS&quot;
+	ActKillThread  LinuxSeccompAction = &quot;SCMP_ACT_KILL_THREAD&quot;
+	ActTrap        LinuxSeccompAction = &quot;SCMP_ACT_TRAP&quot;
+	ActErrno       LinuxSeccompAction = &quot;SCMP_ACT_ERRNO&quot;
+	ActTrace       LinuxSeccompAction = &quot;SCMP_ACT_TRACE&quot;
+	ActAllow       LinuxSeccompAction = &quot;SCMP_ACT_ALLOW&quot;
+	ActLog         LinuxSeccompAction = &quot;SCMP_ACT_LOG&quot;
+	ActNotify      LinuxSeccompAction = &quot;SCMP_ACT_NOTIFY&quot;
+)
+
+// LinuxSeccompOperator used to match syscall arguments in Seccomp
+type LinuxSeccompOperator string
+
+// Define operators for syscall arguments in Seccomp
+const (
+	OpNotEqual     LinuxSeccompOperator = &quot;SCMP_CMP_NE&quot;
+	OpLessThan     LinuxSeccompOperator = &quot;SCMP_CMP_LT&quot;
+	OpLessEqual    LinuxSeccompOperator = &quot;SCMP_CMP_LE&quot;
+	OpEqualTo      LinuxSeccompOperator = &quot;SCMP_CMP_EQ&quot;
+	OpGreaterEqual LinuxSeccompOperator = &quot;SCMP_CMP_GE&quot;
+	OpGreaterThan  LinuxSeccompOperator = &quot;SCMP_CMP_GT&quot;
+	OpMaskedEqual  LinuxSeccompOperator = &quot;SCMP_CMP_MASKED_EQ&quot;
+)
+
+// LinuxSeccompArg used for matching specific syscall arguments in Seccomp
+type LinuxSeccompArg struct {
+	Index    uint                 `json:&quot;index&quot;`
+	Value    uint64               `json:&quot;value&quot;`
+	ValueTwo uint64               `json:&quot;valueTwo,omitempty&quot;`
+	Op       LinuxSeccompOperator `json:&quot;op&quot;`
+}
+
+// LinuxSyscall is used to match a syscall in Seccomp
+type LinuxSyscall struct {
+	Names    []string           `json:&quot;names&quot;`
+	Action   LinuxSeccompAction `json:&quot;action&quot;`
+	ErrnoRet *uint              `json:&quot;errnoRet,omitempty&quot;`
+	Args     []LinuxSeccompArg  `json:&quot;args,omitempty&quot;`
+}
+
+// LinuxIntelRdt has container runtime resource constraints for Intel RDT CAT and MBA
+// features and flags enabling Intel RDT CMT and MBM features.
+// Intel RDT features are available in Linux 4.14 and newer kernel versions.
+type LinuxIntelRdt struct {
+	// The identity for RDT Class of Service
+	ClosID string `json:&quot;closID,omitempty&quot;`
+
+	// Schemata specifies the complete schemata to be written as is to the
+	// schemata file in resctrl fs. Each element represents a single line in the schemata file.
+	// NOTE: This will overwrite schemas specified in the L3CacheSchema and/or
+	// MemBwSchema fields.
+	Schemata []string `json:&quot;schemata,omitempty&quot;`
+
+	// The schema for L3 cache id and capacity bitmask (CBM)
+	// Format: &quot;L3:&lt;cache_id0&gt;=&lt;cbm0&gt;;&lt;cache_id1&gt;=&lt;cbm1&gt;;...&quot;
+	// NOTE: Should not be specified if Schemata is non-empty.
+	L3CacheSchema string `json:&quot;l3CacheSchema,omitempty&quot;`
+
+	// The schema of memory bandwidth per L3 cache id
+	// Format: &quot;MB:&lt;cache_id0&gt;=bandwidth0;&lt;cache_id1&gt;=bandwidth1;...&quot;
+	// The unit of memory bandwidth is specified in &quot;percentages&quot; by
+	// default, and in &quot;MBps&quot; if MBA Software Controller is enabled.
+	// NOTE: Should not be specified if Schemata is non-empty.
+	MemBwSchema string `json:&quot;memBwSchema,omitempty&quot;`
+
+	// EnableMonitoring enables resctrl monitoring for the container. This will
+	// create a dedicated resctrl monitoring group for the container.
+	EnableMonitoring bool `json:&quot;enableMonitoring,omitempty&quot;`
+}
+
+// LinuxMemoryPolicy represents input for the set_mempolicy syscall.
+type LinuxMemoryPolicy struct {
+	// Mode for the set_mempolicy syscall.
+	Mode MemoryPolicyModeType `json:&quot;mode&quot;`
+
+	// Nodes representing the nodemask for the set_mempolicy syscall in comma separated ranges format.
+	// Format: &quot;&lt;node0&gt;-&lt;node1&gt;,&lt;node2&gt;,&lt;node3&gt;-&lt;node4&gt;,...&quot;
+	Nodes string `json:&quot;nodes,omitempty&quot;`
+
+	// Flags for the set_mempolicy syscall.
+	Flags []MemoryPolicyFlagType `json:&quot;flags,omitempty&quot;`
+}
+
+// ZOS contains platform-specific configuration for z/OS based containers.
+type ZOS struct {
+	// Namespaces contains the namespaces that are created and/or joined by the container
+	Namespaces []ZOSNamespace `json:&quot;namespaces,omitempty&quot;`
+}
+
+// ZOSNamespace is the configuration for a z/OS namespace
+type ZOSNamespace struct {
+	// Type is the type of namespace
+	Type ZOSNamespaceType `json:&quot;type&quot;`
+	// Path is a path to an existing namespace persisted on disk that can be joined
+	// and is of the same type
+	Path string `json:&quot;path,omitempty&quot;`
+}
+
+// ZOSNamespaceType is one of the z/OS namespaces
+type ZOSNamespaceType string
+
+const (
+	// PIDNamespace for isolating process IDs
+	ZOSPIDNamespace ZOSNamespaceType = &quot;pid&quot;
+	// MountNamespace for isolating mount points
+	ZOSMountNamespace ZOSNamespaceType = &quot;mount&quot;
+	// IPCNamespace for isolating System V IPC, POSIX message queues
+	ZOSIPCNamespace ZOSNamespaceType = &quot;ipc&quot;
+	// UTSNamespace for isolating hostname and NIS domain name
+	ZOSUTSNamespace ZOSNamespaceType = &quot;uts&quot;
+)
+
+type MemoryPolicyModeType string
+
+const (
+	MpolDefault            MemoryPolicyModeType = &quot;MPOL_DEFAULT&quot;
+	MpolBind               MemoryPolicyModeType = &quot;MPOL_BIND&quot;
+	MpolInterleave         MemoryPolicyModeType = &quot;MPOL_INTERLEAVE&quot;
+	MpolWeightedInterleave MemoryPolicyModeType = &quot;MPOL_WEIGHTED_INTERLEAVE&quot;
+	MpolPreferred          MemoryPolicyModeType = &quot;MPOL_PREFERRED&quot;
+	MpolPreferredMany      MemoryPolicyModeType = &quot;MPOL_PREFERRED_MANY&quot;
+	MpolLocal              MemoryPolicyModeType = &quot;MPOL_LOCAL&quot;
+)
+
+type MemoryPolicyFlagType string
+
+const (
+	MpolFNumaBalancing MemoryPolicyFlagType = &quot;MPOL_F_NUMA_BALANCING&quot;
+	MpolFRelativeNodes MemoryPolicyFlagType = &quot;MPOL_F_RELATIVE_NODES&quot;
+	MpolFStaticNodes   MemoryPolicyFlagType = &quot;MPOL_F_STATIC_NODES&quot;
+)
+
+// LinuxSchedulerPolicy represents different scheduling policies used with the Linux Scheduler
+type LinuxSchedulerPolicy string
+
+const (
+	// SchedOther is the default scheduling policy
+	SchedOther LinuxSchedulerPolicy = &quot;SCHED_OTHER&quot;
+	// SchedFIFO is the First-In-First-Out scheduling policy
+	SchedFIFO LinuxSchedulerPolicy = &quot;SCHED_FIFO&quot;
+	// SchedRR is the Round-Robin scheduling policy
+	SchedRR LinuxSchedulerPolicy = &quot;SCHED_RR&quot;
+	// SchedBatch is the Batch scheduling policy
+	SchedBatch LinuxSchedulerPolicy = &quot;SCHED_BATCH&quot;
+	// SchedISO is the Isolation scheduling policy
+	SchedISO LinuxSchedulerPolicy = &quot;SCHED_ISO&quot;
+	// SchedIdle is the Idle scheduling policy
+	SchedIdle LinuxSchedulerPolicy = &quot;SCHED_IDLE&quot;
+	// SchedDeadline is the Deadline scheduling policy
+	SchedDeadline LinuxSchedulerPolicy = &quot;SCHED_DEADLINE&quot;
+)
+
+// LinuxSchedulerFlag represents the flags used by the Linux Scheduler.
+type LinuxSchedulerFlag string
+
+const (
+	// SchedFlagResetOnFork represents the reset on fork scheduling flag
+	SchedFlagResetOnFork LinuxSchedulerFlag = &quot;SCHED_FLAG_RESET_ON_FORK&quot;
+	// SchedFlagReclaim represents the reclaim scheduling flag
+	SchedFlagReclaim LinuxSchedulerFlag = &quot;SCHED_FLAG_RECLAIM&quot;
+	// SchedFlagDLOverrun represents the deadline overrun scheduling flag
+	SchedFlagDLOverrun LinuxSchedulerFlag = &quot;SCHED_FLAG_DL_OVERRUN&quot;
+	// SchedFlagKeepPolicy represents the keep policy scheduling flag
+	SchedFlagKeepPolicy LinuxSchedulerFlag = &quot;SCHED_FLAG_KEEP_POLICY&quot;
+	// SchedFlagKeepParams represents the keep parameters scheduling flag
+	SchedFlagKeepParams LinuxSchedulerFlag = &quot;SCHED_FLAG_KEEP_PARAMS&quot;
+	// SchedFlagUtilClampMin represents the utilization clamp minimum scheduling flag
+	SchedFlagUtilClampMin LinuxSchedulerFlag = &quot;SCHED_FLAG_UTIL_CLAMP_MIN&quot;
+	// SchedFlagUtilClampMax represents the utilization clamp maximum scheduling flag
+	SchedFlagUtilClampMax LinuxSchedulerFlag = &quot;SCHED_FLAG_UTIL_CLAMP_MAX&quot;
+)
+
+// FreeBSD contains platform-specific configuration for FreeBSD based containers.
+type FreeBSD struct {
+	// Devices which are accessible in the container
+	Devices []FreeBSDDevice `json:&quot;devices,omitempty&quot;`
+	// Jail definition for this container
+	Jail *FreeBSDJail `json:&quot;jail,omitempty&quot;`
+}
+
+type FreeBSDDevice struct {
+	// Path to the device, relative to /dev.
+	Path string `json:&quot;path&quot;`
+	// FileMode permission bits for the device.
+	Mode *os.FileMode `json:&quot;mode,omitempty&quot;`
+}
+
+// FreeBSDJail describes how to configure the container&apos;s jail
+type FreeBSDJail struct {
+	// Parent jail name - this can be used to share a single vnet
+	// across several containers
+	Parent string `json:&quot;parent,omitempty&quot;`
+	// Whether to use parent UTS names or override in the container
+	Host FreeBSDSharing `json:&quot;host,omitempty&quot;`
+	// IPv4 address sharing for the container
+	Ip4 FreeBSDSharing `json:&quot;ip4,omitempty&quot;`
+	// IPv4 addresses for the container
+	Ip4Addr []string `json:&quot;ip4Addr,omitempty&quot;`
+	// IPv6 address sharing for the container
+	Ip6 FreeBSDSharing `json:&quot;ip6,omitempty&quot;`
+	// IPv6 addresses for the container
+	Ip6Addr []string `json:&quot;ip6Addr,omitempty&quot;`
+	// Which network stack to use for the container
+	Vnet FreeBSDSharing `json:&quot;vnet,omitempty&quot;`
+	// If set, Ip4Addr and Ip6Addr addresses will be added to this interface
+	Interface string `json:&quot;interface,omitempty&quot;`
+	// List interfaces to be moved to the container&apos;s vnet
+	VnetInterfaces []string `json:&quot;vnetInterfaces,omitempty&quot;`
+	// SystemV IPC message sharing for the container
+	SysVMsg FreeBSDSharing `json:&quot;sysvmsg,omitempty&quot;`
+	// SystemV semaphore message sharing for the container
+	SysVSem FreeBSDSharing `json:&quot;sysvsem,omitempty&quot;`
+	// SystemV memory sharing for the container
+	SysVShm FreeBSDSharing `json:&quot;sysvshm,omitempty&quot;`
+	// Mount visibility (see jail(8) for details)
+	EnforceStatfs *int `json:&quot;enforceStatfs,omitempty&quot;`
+	// Jail capabilities
+	Allow *FreeBSDJailAllow `json:&quot;allow,omitempty&quot;`
+}
+
+// These values are used to control access to features in the container, either
+// disabling the feature, sharing state with the parent or creating new private
+// state in the container.
+type FreeBSDSharing string
+
+const (
+	FreeBSDShareDisable FreeBSDSharing = &quot;disable&quot;
+	FreeBSDShareNew     FreeBSDSharing = &quot;new&quot;
+	FreeBSDShareInherit FreeBSDSharing = &quot;inherit&quot;
+)
+
+// FreeBSDJailAllow describes jail capabilities
+type FreeBSDJailAllow struct {
+	SetHostname   bool     `json:&quot;setHostname,omitempty&quot;`
+	RawSockets    bool     `json:&quot;rawSockets,omitempty&quot;`
+	Chflags       bool     `json:&quot;chflags,omitempty&quot;`
+	Mount         []string `json:&quot;mount,omitempty&quot;`
+	Quotas        bool     `json:&quot;quotas,omitempty&quot;`
+	SocketAf      bool     `json:&quot;socketAf,omitempty&quot;`
+	Mlock         bool     `json:&quot;mlock,omitempty&quot;`
+	ReservedPorts bool     `json:&quot;reservedPorts,omitempty&quot;`
+	Suser         bool     `json:&quot;suser,omitempty&quot;`
+}</file><file path="opencontainers__runtime-spec/specs-go/state.go">package specs
+
+// ContainerState represents the state of a container.
+type ContainerState string
+
+const (
+	// StateCreating indicates that the container is being created
+	StateCreating ContainerState = &quot;creating&quot;
+
+	// StateCreated indicates that the runtime has finished the create operation
+	StateCreated ContainerState = &quot;created&quot;
+
+	// StateRunning indicates that the container process has executed the
+	// user-specified program but has not exited
+	StateRunning ContainerState = &quot;running&quot;
+
+	// StateStopped indicates that the container process has exited
+	StateStopped ContainerState = &quot;stopped&quot;
+)
+
+// State holds information about the runtime state of the container.
+type State struct {
+	// Version is the version of the specification that is supported.
+	Version string `json:&quot;ociVersion&quot;`
+	// ID is the container ID
+	ID string `json:&quot;id&quot;`
+	// Status is the runtime status of the container.
+	Status ContainerState `json:&quot;status&quot;`
+	// Pid is the process ID for the container process.
+	Pid int `json:&quot;pid,omitempty&quot;`
+	// Bundle is the path to the container&apos;s bundle directory.
+	Bundle string `json:&quot;bundle&quot;`
+	// Annotations are key values associated with the container.
+	Annotations map[string]string `json:&quot;annotations,omitempty&quot;`
+}
+
+const (
+	// SeccompFdName is the name of the seccomp notify file descriptor.
+	SeccompFdName string = &quot;seccompFd&quot;
+)
+
+// ContainerProcessState holds information about the state of a container process.
+type ContainerProcessState struct {
+	// Version is the version of the specification that is supported.
+	Version string `json:&quot;ociVersion&quot;`
+	// Fds is a string array containing the names of the file descriptors passed.
+	// The index of the name in this array corresponds to index of the file
+	// descriptor in the `SCM_RIGHTS` array.
+	Fds []string `json:&quot;fds&quot;`
+	// Pid is the process ID as seen by the runtime.
+	Pid int `json:&quot;pid&quot;`
+	// Opaque metadata.
+	Metadata string `json:&quot;metadata,omitempty&quot;`
+	// State of the container.
+	State State `json:&quot;state&quot;`
+}</file><file path="opencontainers__runtime-spec/specs-go/version.go">package specs
+
+import &quot;fmt&quot;
+
+const (
+	// VersionMajor is for an API incompatible changes
+	VersionMajor = 1
+	// VersionMinor is for functionality in a backwards-compatible manner
+	VersionMinor = 3
+	// VersionPatch is for backwards-compatible bug fixes
+	VersionPatch = 0
+
+	// VersionDev indicates development branch. Releases will be empty string.
+	VersionDev = &quot;+dev&quot;
+)
+
+// Version is the specification version that the package types support.
+var Version = fmt.Sprintf(&quot;%d.%d.%d%s&quot;, VersionMajor, VersionMinor, VersionPatch, VersionDev)</file><file path="opencontainers__image-spec/specs-go/v1/annotations.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+const (
+	// AnnotationCreated is the annotation key for the date and time on which the image was built (date-time string as defined by RFC 3339).
+	AnnotationCreated = &quot;org.opencontainers.image.created&quot;
+
+	// AnnotationAuthors is the annotation key for the contact details of the people or organization responsible for the image (freeform string).
+	AnnotationAuthors = &quot;org.opencontainers.image.authors&quot;
+
+	// AnnotationURL is the annotation key for the URL to find more information on the image.
+	AnnotationURL = &quot;org.opencontainers.image.url&quot;
+
+	// AnnotationDocumentation is the annotation key for the URL to get documentation on the image.
+	AnnotationDocumentation = &quot;org.opencontainers.image.documentation&quot;
+
+	// AnnotationSource is the annotation key for the URL to get source code for building the image.
+	AnnotationSource = &quot;org.opencontainers.image.source&quot;
+
+	// AnnotationVersion is the annotation key for the version of the packaged software.
+	// The version MAY match a label or tag in the source code repository.
+	// The version MAY be Semantic versioning-compatible.
+	AnnotationVersion = &quot;org.opencontainers.image.version&quot;
+
+	// AnnotationRevision is the annotation key for the source control revision identifier for the packaged software.
+	AnnotationRevision = &quot;org.opencontainers.image.revision&quot;
+
+	// AnnotationVendor is the annotation key for the name of the distributing entity, organization or individual.
+	AnnotationVendor = &quot;org.opencontainers.image.vendor&quot;
+
+	// AnnotationLicenses is the annotation key for the license(s) under which contained software is distributed as an SPDX License Expression.
+	AnnotationLicenses = &quot;org.opencontainers.image.licenses&quot;
+
+	// AnnotationRefName is the annotation key for the name of the reference for a target.
+	// SHOULD only be considered valid when on descriptors on `index.json` within image layout.
+	AnnotationRefName = &quot;org.opencontainers.image.ref.name&quot;
+
+	// AnnotationTitle is the annotation key for the human-readable title of the image.
+	AnnotationTitle = &quot;org.opencontainers.image.title&quot;
+
+	// AnnotationDescription is the annotation key for the human-readable description of the software packaged in the image.
+	AnnotationDescription = &quot;org.opencontainers.image.description&quot;
+
+	// AnnotationBaseImageDigest is the annotation key for the digest of the image&apos;s base image.
+	AnnotationBaseImageDigest = &quot;org.opencontainers.image.base.digest&quot;
+
+	// AnnotationBaseImageName is the annotation key for the image reference of the image&apos;s base image.
+	AnnotationBaseImageName = &quot;org.opencontainers.image.base.name&quot;
+)</file><file path="opencontainers__image-spec/specs-go/v1/config.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+import (
+	&quot;time&quot;
+
+	digest &quot;github.com/opencontainers/go-digest&quot;
+)
+
+// ImageConfig defines the execution parameters which should be used as a base when running a container using an image.
+type ImageConfig struct {
+	// User defines the username or UID which the process in the container should run as.
+	User string `json:&quot;User,omitempty&quot;`
+
+	// ExposedPorts a set of ports to expose from a container running this image.
+	ExposedPorts map[string]struct{} `json:&quot;ExposedPorts,omitempty&quot;`
+
+	// Env is a list of environment variables to be used in a container.
+	Env []string `json:&quot;Env,omitempty&quot;`
+
+	// Entrypoint defines a list of arguments to use as the command to execute when the container starts.
+	Entrypoint []string `json:&quot;Entrypoint,omitempty&quot;`
+
+	// Cmd defines the default arguments to the entrypoint of the container.
+	Cmd []string `json:&quot;Cmd,omitempty&quot;`
+
+	// Volumes is a set of directories describing where the process is likely write data specific to a container instance.
+	Volumes map[string]struct{} `json:&quot;Volumes,omitempty&quot;`
+
+	// WorkingDir sets the current working directory of the entrypoint process in the container.
+	WorkingDir string `json:&quot;WorkingDir,omitempty&quot;`
+
+	// Labels contains arbitrary metadata for the container.
+	Labels map[string]string `json:&quot;Labels,omitempty&quot;`
+
+	// StopSignal contains the system call signal that will be sent to the container to exit.
+	StopSignal string `json:&quot;StopSignal,omitempty&quot;`
+
+	// ArgsEscaped
+	//
+	// Deprecated: This field is present only for legacy compatibility with
+	// Docker and should not be used by new image builders.  It is used by Docker
+	// for Windows images to indicate that the `Entrypoint` or `Cmd` or both,
+	// contains only a single element array, that is a pre-escaped, and combined
+	// into a single string `CommandLine`. If `true` the value in `Entrypoint` or
+	// `Cmd` should be used as-is to avoid double escaping.
+	// https://github.com/opencontainers/image-spec/pull/892
+	ArgsEscaped bool `json:&quot;ArgsEscaped,omitempty&quot;`
+}
+
+// RootFS describes a layer content addresses
+type RootFS struct {
+	// Type is the type of the rootfs.
+	Type string `json:&quot;type&quot;`
+
+	// DiffIDs is an array of layer content hashes (DiffIDs), in order from bottom-most to top-most.
+	DiffIDs []digest.Digest `json:&quot;diff_ids&quot;`
+}
+
+// History describes the history of a layer.
+type History struct {
+	// Created is the combined date and time at which the layer was created, formatted as defined by RFC 3339, section 5.6.
+	Created *time.Time `json:&quot;created,omitempty&quot;`
+
+	// CreatedBy is the command which created the layer.
+	CreatedBy string `json:&quot;created_by,omitempty&quot;`
+
+	// Author is the author of the build point.
+	Author string `json:&quot;author,omitempty&quot;`
+
+	// Comment is a custom message set when creating the layer.
+	Comment string `json:&quot;comment,omitempty&quot;`
+
+	// EmptyLayer is used to mark if the history item created a filesystem diff.
+	EmptyLayer bool `json:&quot;empty_layer,omitempty&quot;`
+}
+
+// Image is the JSON structure which describes some basic information about the image.
+// This provides the `application/vnd.oci.image.config.v1+json` mediatype when marshalled to JSON.
+type Image struct {
+	// Created is the combined date and time at which the image was created, formatted as defined by RFC 3339, section 5.6.
+	Created *time.Time `json:&quot;created,omitempty&quot;`
+
+	// Author defines the name and/or email address of the person or entity which created and is responsible for maintaining the image.
+	Author string `json:&quot;author,omitempty&quot;`
+
+	// Platform describes the platform which the image in the manifest runs on.
+	Platform
+
+	// Config defines the execution parameters which should be used as a base when running a container using the image.
+	Config ImageConfig `json:&quot;config,omitzero&quot;`
+
+	// RootFS references the layer content addresses used by the image.
+	RootFS RootFS `json:&quot;rootfs&quot;`
+
+	// History describes the history of each layer.
+	History []History `json:&quot;history,omitempty&quot;`
+}</file><file path="opencontainers__image-spec/specs-go/v1/descriptor.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+import digest &quot;github.com/opencontainers/go-digest&quot;
+
+// Descriptor describes the disposition of targeted content.
+// This structure provides `application/vnd.oci.descriptor.v1+json` mediatype
+// when marshalled to JSON.
+type Descriptor struct {
+	// MediaType is the media type of the object this schema refers to.
+	MediaType string `json:&quot;mediaType&quot;`
+
+	// Digest is the digest of the targeted content.
+	Digest digest.Digest `json:&quot;digest&quot;`
+
+	// Size specifies the size in bytes of the blob.
+	Size int64 `json:&quot;size&quot;`
+
+	// URLs specifies a list of URLs from which this object MAY be downloaded
+	URLs []string `json:&quot;urls,omitempty&quot;`
+
+	// Annotations contains arbitrary metadata relating to the targeted content.
+	Annotations map[string]string `json:&quot;annotations,omitempty&quot;`
+
+	// Data is an embedding of the targeted content. This is encoded as a base64
+	// string when marshalled to JSON (automatically, by encoding/json). If
+	// present, Data can be used directly to avoid fetching the targeted content.
+	Data []byte `json:&quot;data,omitempty&quot;`
+
+	// Platform describes the platform which the image in the manifest runs on.
+	//
+	// This should only be used when referring to a manifest.
+	Platform *Platform `json:&quot;platform,omitempty&quot;`
+
+	// ArtifactType is the IANA media type of this artifact.
+	ArtifactType string `json:&quot;artifactType,omitempty&quot;`
+}
+
+// Platform describes the platform which the image in the manifest runs on.
+type Platform struct {
+	// Architecture field specifies the CPU architecture, for example
+	// `amd64` or `ppc64le`.
+	Architecture string `json:&quot;architecture&quot;`
+
+	// OS specifies the operating system, for example `linux` or `windows`.
+	OS string `json:&quot;os&quot;`
+
+	// OSVersion is an optional field specifying the operating system
+	// version, for example on Windows `10.0.14393.1066`.
+	OSVersion string `json:&quot;os.version,omitempty&quot;`
+
+	// OSFeatures is an optional field specifying an array of strings,
+	// each listing a required OS feature (for example on Windows `win32k`).
+	OSFeatures []string `json:&quot;os.features,omitempty&quot;`
+
+	// Variant is an optional field specifying a variant of the CPU, for
+	// example `v7` to specify ARMv7 when architecture is `arm`.
+	Variant string `json:&quot;variant,omitempty&quot;`
+}
+
+// DescriptorEmptyJSON is the descriptor of a blob with content of `{}`.
+var DescriptorEmptyJSON = Descriptor{
+	MediaType: MediaTypeEmptyJSON,
+	Digest:    `sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a`,
+	Size:      2,
+	Data:      []byte(`{}`),
+}</file><file path="opencontainers__image-spec/specs-go/v1/index.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+import &quot;github.com/opencontainers/image-spec/specs-go&quot;
+
+// Index references manifests for various platforms.
+// This structure provides `application/vnd.oci.image.index.v1+json` mediatype when marshalled to JSON.
+type Index struct {
+	specs.Versioned
+
+	// MediaType specifies the type of this document data structure e.g. `application/vnd.oci.image.index.v1+json`
+	MediaType string `json:&quot;mediaType,omitempty&quot;`
+
+	// ArtifactType specifies the IANA media type of artifact when the manifest is used for an artifact.
+	ArtifactType string `json:&quot;artifactType,omitempty&quot;`
+
+	// Manifests references platform specific manifests.
+	Manifests []Descriptor `json:&quot;manifests&quot;`
+
+	// Subject is an optional link from the image manifest to another manifest forming an association between the image manifest and the other manifest.
+	Subject *Descriptor `json:&quot;subject,omitempty&quot;`
+
+	// Annotations contains arbitrary metadata for the image index.
+	Annotations map[string]string `json:&quot;annotations,omitempty&quot;`
+}</file><file path="opencontainers__image-spec/specs-go/v1/layout.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+const (
+	// ImageLayoutFile is the file name containing ImageLayout in an OCI Image Layout
+	ImageLayoutFile = &quot;oci-layout&quot;
+	// ImageLayoutVersion is the version of ImageLayout
+	ImageLayoutVersion = &quot;1.0.0&quot;
+	// ImageIndexFile is the file name of the entry point for references and descriptors in an OCI Image Layout
+	ImageIndexFile = &quot;index.json&quot;
+	// ImageBlobsDir is the directory name containing content addressable blobs in an OCI Image Layout
+	ImageBlobsDir = &quot;blobs&quot;
+)
+
+// ImageLayout is the structure in the &quot;oci-layout&quot; file, found in the root
+// of an OCI Image-layout directory.
+type ImageLayout struct {
+	Version string `json:&quot;imageLayoutVersion&quot;`
+}</file><file path="opencontainers__image-spec/specs-go/v1/manifest.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+import &quot;github.com/opencontainers/image-spec/specs-go&quot;
+
+// Manifest provides `application/vnd.oci.image.manifest.v1+json` mediatype structure when marshalled to JSON.
+type Manifest struct {
+	specs.Versioned
+
+	// MediaType specifies the type of this document data structure e.g. `application/vnd.oci.image.manifest.v1+json`
+	MediaType string `json:&quot;mediaType,omitempty&quot;`
+
+	// ArtifactType specifies the IANA media type of artifact when the manifest is used for an artifact.
+	ArtifactType string `json:&quot;artifactType,omitempty&quot;`
+
+	// Config references a configuration object for a container, by digest.
+	// The referenced configuration object is a JSON blob that the runtime uses to set up the container.
+	Config Descriptor `json:&quot;config&quot;`
+
+	// Layers is an indexed list of layers referenced by the manifest.
+	Layers []Descriptor `json:&quot;layers&quot;`
+
+	// Subject is an optional link from the image manifest to another manifest forming an association between the image manifest and the other manifest.
+	Subject *Descriptor `json:&quot;subject,omitempty&quot;`
+
+	// Annotations contains arbitrary metadata for the image manifest.
+	Annotations map[string]string `json:&quot;annotations,omitempty&quot;`
+}</file><file path="opencontainers__image-spec/specs-go/v1/mediatype.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package v1
+
+const (
+	// MediaTypeDescriptor specifies the media type for a content descriptor.
+	MediaTypeDescriptor = &quot;application/vnd.oci.descriptor.v1+json&quot;
+
+	// MediaTypeLayoutHeader specifies the media type for the oci-layout.
+	MediaTypeLayoutHeader = &quot;application/vnd.oci.layout.header.v1+json&quot;
+
+	// MediaTypeImageIndex specifies the media type for an image index.
+	MediaTypeImageIndex = &quot;application/vnd.oci.image.index.v1+json&quot;
+
+	// MediaTypeImageManifest specifies the media type for an image manifest.
+	MediaTypeImageManifest = &quot;application/vnd.oci.image.manifest.v1+json&quot;
+
+	// MediaTypeImageConfig specifies the media type for the image configuration.
+	MediaTypeImageConfig = &quot;application/vnd.oci.image.config.v1+json&quot;
+
+	// MediaTypeEmptyJSON specifies the media type for an unused blob containing the value &quot;{}&quot;.
+	MediaTypeEmptyJSON = &quot;application/vnd.oci.empty.v1+json&quot;
+)
+
+const (
+	// MediaTypeImageLayer is the media type used for layers referenced by the manifest.
+	MediaTypeImageLayer = &quot;application/vnd.oci.image.layer.v1.tar&quot;
+
+	// MediaTypeImageLayerGzip is the media type used for gzipped layers
+	// referenced by the manifest.
+	MediaTypeImageLayerGzip = &quot;application/vnd.oci.image.layer.v1.tar+gzip&quot;
+
+	// MediaTypeImageLayerZstd is the media type used for zstd compressed
+	// layers referenced by the manifest.
+	MediaTypeImageLayerZstd = &quot;application/vnd.oci.image.layer.v1.tar+zstd&quot;
+)
+
+// Non-distributable layer media-types.
+//
+// Deprecated: Non-distributable layers are deprecated, and not recommended
+// for future use. Implementations SHOULD NOT produce new non-distributable
+// layers.
+// https://github.com/opencontainers/image-spec/pull/965
+const (
+	// MediaTypeImageLayerNonDistributable is the media type for layers referenced by
+	// the manifest but with distribution restrictions.
+	//
+	// Deprecated: Non-distributable layers are deprecated, and not recommended
+	// for future use. Implementations SHOULD NOT produce new non-distributable
+	// layers.
+	// https://github.com/opencontainers/image-spec/pull/965
+	MediaTypeImageLayerNonDistributable = &quot;application/vnd.oci.image.layer.nondistributable.v1.tar&quot;
+
+	// MediaTypeImageLayerNonDistributableGzip is the media type for
+	// gzipped layers referenced by the manifest but with distribution
+	// restrictions.
+	//
+	// Deprecated: Non-distributable layers are deprecated, and not recommended
+	// for future use. Implementations SHOULD NOT produce new non-distributable
+	// layers.
+	// https://github.com/opencontainers/image-spec/pull/965
+	MediaTypeImageLayerNonDistributableGzip = &quot;application/vnd.oci.image.layer.nondistributable.v1.tar+gzip&quot;
+
+	// MediaTypeImageLayerNonDistributableZstd is the media type for zstd
+	// compressed layers referenced by the manifest but with distribution
+	// restrictions.
+	//
+	// Deprecated: Non-distributable layers are deprecated, and not recommended
+	// for future use. Implementations SHOULD NOT produce new non-distributable
+	// layers.
+	// https://github.com/opencontainers/image-spec/pull/965
+	MediaTypeImageLayerNonDistributableZstd = &quot;application/vnd.oci.image.layer.nondistributable.v1.tar+zstd&quot;
+)</file><file path="opencontainers__image-spec/specs-go/version.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package specs
+
+import &quot;fmt&quot;
+
+const (
+	// VersionMajor is for an API incompatible changes
+	VersionMajor = 1
+	// VersionMinor is for functionality in a backwards-compatible manner
+	VersionMinor = 1
+	// VersionPatch is for backwards-compatible bug fixes
+	VersionPatch = 1
+
+	// VersionDev indicates development branch. Releases will be empty string.
+	VersionDev = &quot;+dev&quot;
+)
+
+// Version is the specification version that the package types support.
+var Version = fmt.Sprintf(&quot;%d.%d.%d%s&quot;, VersionMajor, VersionMinor, VersionPatch, VersionDev)</file><file path="opencontainers__image-spec/specs-go/versioned.go">// Copyright the Open Container Initiative Contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package specs
+
+// Versioned provides a struct with the manifest schemaVersion and mediaType.
+// Incoming content with unknown schema version can be decoded against this
+// struct to check the version.
+type Versioned struct {
+	// SchemaVersion is the image manifest schema that this image follows
+	SchemaVersion int `json:&quot;schemaVersion&quot;`
+}</file><file path="opencontainers__runc/libcontainer/configs/validate/doc.go">// Package validate provides helpers for validating configuration.
+package validate</file><file path="opencontainers__runc/libcontainer/configs/validate/intelrdt_test.go">package validate
+
+import (
+	&quot;testing&quot;
+
+	&quot;github.com/opencontainers/runc/libcontainer/configs&quot;
+	&quot;github.com/opencontainers/runc/libcontainer/intelrdt&quot;
+)
+
+func TestValidateIntelRdt(t *testing.T) {
+	testCases := []struct {
+		name       string
+		rdtEnabled bool
+		catEnabled bool
+		mbaEnabled bool
+		config     *configs.IntelRdt
+		isErr      bool
+	}{
+		{
+			name: &quot;rdt not supported, no config&quot;,
+		},
+		{
+			name:   &quot;rdt not supported, with config&quot;,
+			config: &amp;configs.IntelRdt{},
+			isErr:  true,
+		},
+		{
+			name:       &quot;empty config&quot;,
+			rdtEnabled: true,
+			config:     &amp;configs.IntelRdt{},
+		},
+		{
+			name:       &quot;root clos&quot;,
+			rdtEnabled: true,
+			config: &amp;configs.IntelRdt{
+				ClosID: &quot;/&quot;,
+			},
+		},
+		{
+			name:       &quot;invalid ClosID (.)&quot;,
+			rdtEnabled: true,
+			config: &amp;configs.IntelRdt{
+				ClosID: &quot;.&quot;,
+			},
+			isErr: true,
+		},
+		{
+			name:       &quot;invalid ClosID (..)&quot;,
+			rdtEnabled: true,
+			config: &amp;configs.IntelRdt{
+				ClosID: &quot;..&quot;,
+			},
+			isErr: true,
+		},
+		{
+			name:       &quot;invalid ClosID (contains /)&quot;,
+			rdtEnabled: true,
+			config: &amp;configs.IntelRdt{
+				ClosID: &quot;foo/bar&quot;,
+			},
+			isErr: true,
+		},
+		{
+			name:       &quot;cat not supported&quot;,
+			rdtEnabled: true,
+			config: &amp;configs.IntelRdt{
+				L3CacheSchema: &quot;0=ff&quot;,
+			},
+			isErr: true,
+		},
+		{
+			name:       &quot;mba not supported&quot;,
+			rdtEnabled: true,
+			config: &amp;configs.IntelRdt{
+				MemBwSchema: &quot;0=100&quot;,
+			},
+			isErr: true,
+		},
+		{
+			name:       &quot;valid config&quot;,
+			rdtEnabled: true,
+			catEnabled: true,
+			mbaEnabled: true,
+			config: &amp;configs.IntelRdt{
+				ClosID:        &quot;clos-1&quot;,
+				L3CacheSchema: &quot;0=ff&quot;,
+				MemBwSchema:   &quot;0=100&quot;,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				intelRdtIsEnabled = intelrdt.IsEnabled
+				intelRdtIsCATEnabled = intelrdt.IsCATEnabled
+				intelRdtIsMBAEnabled = intelrdt.IsMBAEnabled
+			})
+			intelRdtIsEnabled = func() bool { return tc.rdtEnabled }
+			intelRdtIsCATEnabled = func() bool { return tc.catEnabled }
+			intelRdtIsMBAEnabled = func() bool { return tc.mbaEnabled }
+
+			config := &amp;configs.Config{
+				Rootfs:   &quot;/var&quot;,
+				IntelRdt: tc.config,
+			}
+
+			err := Validate(config)
+			if tc.isErr &amp;&amp; err == nil {
+				t.Error(&quot;expected error, got nil&quot;)
+			}
+			if !tc.isErr &amp;&amp; err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}</file><file path="opencontainers__runc/libcontainer/configs/validate/intelrdt.go">package validate
+
+import (
+	&quot;github.com/opencontainers/runc/libcontainer/intelrdt&quot;
+)
+
+// Allow mocking for TestValidateIntelRdt.
+var (
+	intelRdtIsEnabled    = intelrdt.IsEnabled
+	intelRdtIsCATEnabled = intelrdt.IsCATEnabled
+	intelRdtIsMBAEnabled = intelrdt.IsMBAEnabled
+)</file><file path="opencontainers__runc/libcontainer/configs/validate/rootless_test.go">package validate
+
+import (
+	&quot;testing&quot;
+
+	&quot;github.com/opencontainers/runc/libcontainer/configs&quot;
+)
+
+func rootlessEUIDConfig() *configs.Config {
+	return &amp;configs.Config{
+		Rootfs:          &quot;/var&quot;,
+		RootlessEUID:    true,
+		RootlessCgroups: true,
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWUSER},
+			},
+		),
+		UIDMappings: []configs.IDMap{
+			{
+				HostID:      1337,
+				ContainerID: 0,
+				Size:        1,
+			},
+		},
+		GIDMappings: []configs.IDMap{
+			{
+				HostID:      7331,
+				ContainerID: 0,
+				Size:        1,
+			},
+		},
+	}
+}
+
+func TestValidateRootlessEUID(t *testing.T) {
+	config := rootlessEUIDConfig()
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur: %+v&quot;, err)
+	}
+}
+
+/* rootlessEUIDMappings */
+
+func TestValidateRootlessEUIDUserns(t *testing.T) {
+	config := rootlessEUIDConfig()
+	config.Namespaces = nil
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur if user namespaces not set&quot;)
+	}
+}
+
+func TestValidateRootlessEUIDMappingUid(t *testing.T) {
+	config := rootlessEUIDConfig()
+	config.UIDMappings = nil
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur if no uid mappings provided&quot;)
+	}
+}
+
+func TestValidateNonZeroEUIDMappingGid(t *testing.T) {
+	config := rootlessEUIDConfig()
+	config.GIDMappings = nil
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur if no gid mappings provided&quot;)
+	}
+}
+
+/* rootlessEUIDMount() */
+
+func TestValidateRootlessEUIDMountUid(t *testing.T) {
+	config := rootlessEUIDConfig()
+	config.Mounts = []*configs.Mount{
+		{
+			Source:      &quot;devpts&quot;,
+			Destination: &quot;/dev/pts&quot;,
+			Device:      &quot;devpts&quot;,
+		},
+	}
+
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur when uid= not set in mount options: %+v&quot;, err)
+	}
+
+	config.Mounts[0].Data = &quot;uid=5&quot;
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur when setting uid=5 in mount options&quot;)
+	}
+
+	config.Mounts[0].Data = &quot;uid=0&quot;
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur when setting uid=0 in mount options: %+v&quot;, err)
+	}
+
+	config.Mounts[0].Data = &quot;uid=2&quot;
+	config.UIDMappings[0].Size = 10
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur when setting uid=2 in mount options and UIDMappings[0].size is 10&quot;)
+	}
+
+	config.Mounts[0].Data = &quot;uid=20&quot;
+	config.UIDMappings[0].Size = 10
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur when setting uid=20 in mount options and UIDMappings[0].size is 10&quot;)
+	}
+}
+
+func TestValidateRootlessEUIDMountGid(t *testing.T) {
+	config := rootlessEUIDConfig()
+	config.Mounts = []*configs.Mount{
+		{
+			Source:      &quot;devpts&quot;,
+			Destination: &quot;/dev/pts&quot;,
+			Device:      &quot;devpts&quot;,
+		},
+	}
+
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur when gid= not set in mount options: %+v&quot;, err)
+	}
+
+	config.Mounts[0].Data = &quot;gid=5&quot;
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur when setting gid=5 in mount options&quot;)
+	}
+
+	config.Mounts[0].Data = &quot;gid=0&quot;
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur when setting gid=0 in mount options: %+v&quot;, err)
+	}
+
+	config.Mounts[0].Data = &quot;gid=5&quot;
+	config.GIDMappings[0].Size = 10
+	if err := Validate(config); err != nil {
+		t.Errorf(&quot;Expected error to not occur when setting gid=5 in mount options and GIDMappings[0].size is 10&quot;)
+	}
+
+	config.Mounts[0].Data = &quot;gid=11&quot;
+	config.GIDMappings[0].Size = 10
+	if err := Validate(config); err == nil {
+		t.Errorf(&quot;Expected error to occur when setting gid=11 in mount options and GIDMappings[0].size is 10&quot;)
+	}
+}
+
+func BenchmarkRootlessEUIDMount(b *testing.B) {
+	config := rootlessEUIDConfig()
+	config.GIDMappings[0].Size = 10
+	config.Mounts = []*configs.Mount{
+		{
+			Source:      &quot;devpts&quot;,
+			Destination: &quot;/dev/pts&quot;,
+			Device:      &quot;devpts&quot;,
+			Data:        &quot;newinstance,ptmxmode=0666,mode=0620,uid=0,gid=5&quot;,
+		},
+	}
+
+	for b.Loop() {
+		err := rootlessEUIDMount(config)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}</file><file path="opencontainers__runc/libcontainer/configs/validate/rootless.go">package validate
+
+import (
+	&quot;errors&quot;
+	&quot;fmt&quot;
+	&quot;strconv&quot;
+	&quot;strings&quot;
+
+	&quot;github.com/opencontainers/runc/libcontainer/configs&quot;
+)
+
+// rootlessEUIDCheck makes sure that the config can be applied when runc
+// is being executed as a non-root user (euid != 0) in the current user namespace.
+func rootlessEUIDCheck(config *configs.Config) error {
+	if !config.RootlessEUID {
+		return nil
+	}
+	if err := rootlessEUIDMappings(config); err != nil {
+		return err
+	}
+	if err := rootlessEUIDMount(config); err != nil {
+		return err
+	}
+
+	// XXX: We currently can&apos;t verify the user config at all, because
+	//      configs.Config doesn&apos;t store the user-related configs. So this
+	//      has to be verified by setupUser() in init_linux.go.
+
+	return nil
+}
+
+func rootlessEUIDMappings(config *configs.Config) error {
+	if !config.Namespaces.Contains(configs.NEWUSER) {
+		return errors.New(&quot;rootless container requires user namespaces&quot;)
+	}
+	// We only require mappings if we are not joining another userns.
+	if config.Namespaces.IsPrivate(configs.NEWUSER) {
+		if len(config.UIDMappings) == 0 {
+			return errors.New(&quot;rootless containers requires at least one UID mapping&quot;)
+		}
+		if len(config.GIDMappings) == 0 {
+			return errors.New(&quot;rootless containers requires at least one GID mapping&quot;)
+		}
+	}
+	return nil
+}
+
+// rootlessEUIDMount verifies that all mounts have valid uid=/gid= options,
+// i.e. their arguments has proper ID mappings.
+func rootlessEUIDMount(config *configs.Config) error {
+	// XXX: We could whitelist allowed devices at this point, but I&apos;m not
+	//      convinced that&apos;s a good idea. The kernel is the best arbiter of
+	//      access control.
+
+	// Check that the options list doesn&apos;t contain any uid= or gid= entries
+	// that don&apos;t resolve to root.
+	for _, mount := range config.Mounts {
+		// Look for a common substring; skip further processing
+		// if there can&apos;t be any uid= or gid= options.
+		if !strings.Contains(mount.Data, &quot;id=&quot;) {
+			continue
+		}
+		for opt := range strings.SplitSeq(mount.Data, &quot;,&quot;) {
+			if str, ok := strings.CutPrefix(opt, &quot;uid=&quot;); ok {
+				uid, err := strconv.Atoi(str)
+				if err != nil {
+					// Ignore unknown mount options.
+					continue
+				}
+				if _, err := config.HostUID(uid); err != nil {
+					return fmt.Errorf(&quot;cannot specify %s mount option for rootless container: %w&quot;, opt, err)
+				}
+			} else if str, ok := strings.CutPrefix(opt, &quot;gid=&quot;); ok {
+				gid, err := strconv.Atoi(str)
+				if err != nil {
+					// Ignore unknown mount options.
+					continue
+				}
+				if _, err := config.HostGID(gid); err != nil {
+					return fmt.Errorf(&quot;cannot specify %s mount option for rootless container: %w&quot;, opt, err)
+				}
+			}
+		}
+	}
+
+	return nil
+}</file><file path="opencontainers__runc/libcontainer/configs/validate/validator_test.go">package validate
+
+import (
+	&quot;errors&quot;
+	&quot;os&quot;
+	&quot;path/filepath&quot;
+	&quot;strings&quot;
+	&quot;testing&quot;
+
+	&quot;github.com/opencontainers/runc/libcontainer/configs&quot;
+	&quot;github.com/opencontainers/runtime-spec/specs-go&quot;
+	&quot;golang.org/x/sys/unix&quot;
+)
+
+func TestValidate(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;Expected error to not occur: %+v&quot;, err)
+	}
+}
+
+func TestValidateWithInvalidRootfs(t *testing.T) {
+	dir := &quot;rootfs&quot;
+	if err := os.Symlink(&quot;/var&quot;, dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dir)
+
+	config := &amp;configs.Config{
+		Rootfs: dir,
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateNetworkWithoutNETNamespace(t *testing.T) {
+	network := &amp;configs.Network{Type: &quot;loopback&quot;}
+	config := &amp;configs.Config{
+		Rootfs:     &quot;/var&quot;,
+		Namespaces: []configs.Namespace{},
+		Networks:   []*configs.Network{network},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateNetworkRoutesWithoutNETNamespace(t *testing.T) {
+	route := &amp;configs.Route{Gateway: &quot;255.255.255.0&quot;}
+	config := &amp;configs.Config{
+		Rootfs:     &quot;/var&quot;,
+		Namespaces: []configs.Namespace{},
+		Routes:     []*configs.Route{route},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateHostname(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:   &quot;/var&quot;,
+		Hostname: &quot;runc&quot;,
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWUTS},
+			},
+		),
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;Expected error to not occur: %+v&quot;, err)
+	}
+}
+
+func TestValidateUTS(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:     &quot;/var&quot;,
+		Domainname: &quot;runc&quot;,
+		Hostname:   &quot;runc&quot;,
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWUTS},
+			},
+		),
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;Expected error to not occur: %+v&quot;, err)
+	}
+}
+
+func TestValidateUTSWithoutUTSNamespace(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:   &quot;/var&quot;,
+		Hostname: &quot;runc&quot;,
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+
+	config = &amp;configs.Config{
+		Rootfs:     &quot;/var&quot;,
+		Domainname: &quot;runc&quot;,
+	}
+
+	err = Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateSecurityWithMaskPaths(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:    &quot;/var&quot;,
+		MaskPaths: []string{&quot;/proc/kcore&quot;},
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWNS},
+			},
+		),
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;Expected error to not occur: %+v&quot;, err)
+	}
+}
+
+func TestValidateSecurityWithROPaths(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:        &quot;/var&quot;,
+		ReadonlyPaths: []string{&quot;/proc/sys&quot;},
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWNS},
+			},
+		),
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;Expected error to not occur: %+v&quot;, err)
+	}
+}
+
+func TestValidateSecurityWithoutNEWNS(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:        &quot;/var&quot;,
+		MaskPaths:     []string{&quot;/proc/kcore&quot;},
+		ReadonlyPaths: []string{&quot;/proc/sys&quot;},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateUserNamespace(t *testing.T) {
+	if _, err := os.Stat(&quot;/proc/self/ns/user&quot;); errors.Is(err, os.ErrNotExist) {
+		t.Skip(&quot;Test requires userns.&quot;)
+	}
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWUSER},
+			},
+		),
+		UIDMappings: []configs.IDMap{{HostID: 0, ContainerID: 123, Size: 100}},
+		GIDMappings: []configs.IDMap{{HostID: 0, ContainerID: 123, Size: 100}},
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;expected error to not occur %+v&quot;, err)
+	}
+}
+
+func TestValidateUsernsMappingWithoutNamespace(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:      &quot;/var&quot;,
+		UIDMappings: []configs.IDMap{{HostID: 0, ContainerID: 123, Size: 100}},
+		GIDMappings: []configs.IDMap{{HostID: 0, ContainerID: 123, Size: 100}},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateTimeNamespace(t *testing.T) {
+	if _, err := os.Stat(&quot;/proc/self/ns/time&quot;); errors.Is(err, os.ErrNotExist) {
+		t.Skip(&quot;Test requires timens.&quot;)
+	}
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWTIME},
+			},
+		),
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;expected error to not occur %+v&quot;, err)
+	}
+}
+
+func TestValidateTimeNamespaceWithBothPathAndTimeOffset(t *testing.T) {
+	if _, err := os.Stat(&quot;/proc/self/ns/time&quot;); errors.Is(err, os.ErrNotExist) {
+		t.Skip(&quot;Test requires timens.&quot;)
+	}
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWTIME, Path: &quot;/proc/1/ns/time&quot;},
+			},
+		),
+		TimeOffsets: map[string]specs.LinuxTimeOffset{
+			&quot;boottime&quot;:  {Secs: 150, Nanosecs: 314159},
+			&quot;monotonic&quot;: {Secs: 512, Nanosecs: 271818},
+		},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateTimeOffsetsWithoutTimeNamespace(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		TimeOffsets: map[string]specs.LinuxTimeOffset{
+			&quot;boottime&quot;:  {Secs: 150, Nanosecs: 314159},
+			&quot;monotonic&quot;: {Secs: 512, Nanosecs: 271818},
+		},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+// TestConvertSysctlVariableToDotsSeparator tests whether the sysctl variable
+// can be correctly converted to a dot as a separator.
+func TestConvertSysctlVariableToDotsSeparator(t *testing.T) {
+	type testCase struct {
+		in  string
+		out string
+	}
+	valid := []testCase{
+		{in: &quot;kernel.shm_rmid_forced&quot;, out: &quot;kernel.shm_rmid_forced&quot;},
+		{in: &quot;kernel/shm_rmid_forced&quot;, out: &quot;kernel.shm_rmid_forced&quot;},
+		{in: &quot;net.ipv4.conf.eno2/100.rp_filter&quot;, out: &quot;net.ipv4.conf.eno2/100.rp_filter&quot;},
+		{in: &quot;net/ipv4/conf/eno2.100/rp_filter&quot;, out: &quot;net.ipv4.conf.eno2/100.rp_filter&quot;},
+		{in: &quot;net/ipv4/ip_local_port_range&quot;, out: &quot;net.ipv4.ip_local_port_range&quot;},
+		{in: &quot;kernel/msgmax&quot;, out: &quot;kernel.msgmax&quot;},
+		{in: &quot;kernel/sem&quot;, out: &quot;kernel.sem&quot;},
+	}
+
+	for _, test := range valid {
+		convertSysctlVal := convertSysctlVariableToDotsSeparator(test.in)
+		if convertSysctlVal != test.out {
+			t.Errorf(&quot;The sysctl variable was not converted correctly. got: %s, want: %s&quot;, convertSysctlVal, test.out)
+		}
+	}
+}
+
+func TestValidateSysctl(t *testing.T) {
+	sysctl := map[string]string{
+		&quot;fs.mqueue.ctl&quot;:                    &quot;ctl&quot;,
+		&quot;fs/mqueue/ctl&quot;:                    &quot;ctl&quot;,
+		&quot;net.ctl&quot;:                          &quot;ctl&quot;,
+		&quot;net/ctl&quot;:                          &quot;ctl&quot;,
+		&quot;net.ipv4.conf.eno2/100.rp_filter&quot;: &quot;ctl&quot;,
+		&quot;kernel.ctl&quot;:                       &quot;ctl&quot;,
+		&quot;kernel/ctl&quot;:                       &quot;ctl&quot;,
+	}
+
+	for k, v := range sysctl {
+		config := &amp;configs.Config{
+			Rootfs: &quot;/var&quot;,
+			Sysctl: map[string]string{k: v},
+		}
+
+		err := Validate(config)
+		if err == nil {
+			t.Error(&quot;Expected error to occur but it was nil&quot;)
+		}
+	}
+}
+
+func TestValidateValidSysctl(t *testing.T) {
+	sysctl := map[string]string{
+		&quot;fs.mqueue.ctl&quot;:                    &quot;ctl&quot;,
+		&quot;fs/mqueue/ctl&quot;:                    &quot;ctl&quot;,
+		&quot;net.ctl&quot;:                          &quot;ctl&quot;,
+		&quot;net/ctl&quot;:                          &quot;ctl&quot;,
+		&quot;net.ipv4.conf.eno2/100.rp_filter&quot;: &quot;ctl&quot;,
+		&quot;kernel.msgmax&quot;:                    &quot;ctl&quot;,
+		&quot;kernel/msgmax&quot;:                    &quot;ctl&quot;,
+	}
+
+	for k, v := range sysctl {
+		config := &amp;configs.Config{
+			Rootfs: &quot;/var&quot;,
+			Sysctl: map[string]string{k: v},
+			Namespaces: []configs.Namespace{
+				{
+					Type: configs.NEWNET,
+				},
+				{
+					Type: configs.NEWIPC,
+				},
+			},
+		}
+
+		err := Validate(config)
+		if err != nil {
+			t.Errorf(&quot;Expected error to not occur with {%s=%s} but got: %q&quot;, k, v, err)
+		}
+	}
+}
+
+func TestValidateSysctlWithSameNs(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Sysctl: map[string]string{&quot;net.ctl&quot;: &quot;ctl&quot;},
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{
+					Type: configs.NEWNET,
+					Path: &quot;/proc/self/ns/net&quot;,
+				},
+			},
+		),
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateSysctlWithBindHostNetNS(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip(&quot;requires root&quot;)
+	}
+
+	const selfnet = &quot;/proc/self/ns/net&quot;
+
+	file := filepath.Join(t.TempDir(), &quot;default&quot;)
+	fd, err := os.Create(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(file)
+	fd.Close()
+
+	if err := unix.Mount(selfnet, file, &quot;bind&quot;, unix.MS_BIND, &quot;&quot;); err != nil {
+		t.Fatalf(&quot;can&apos;t bind-mount %s to %s: %s&quot;, selfnet, file, err)
+	}
+	defer func() {
+		_ = unix.Unmount(file, unix.MNT_DETACH)
+	}()
+
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Sysctl: map[string]string{&quot;net.ctl&quot;: &quot;ctl&quot;, &quot;net.foo&quot;: &quot;bar&quot;},
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{
+					Type: configs.NEWNET,
+					Path: file,
+				},
+			},
+		),
+	}
+
+	if err := Validate(config); err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateSysctlWithoutNETNamespace(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs:     &quot;/var&quot;,
+		Sysctl:     map[string]string{&quot;net.ctl&quot;: &quot;ctl&quot;},
+		Namespaces: []configs.Namespace{},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestValidateMounts(t *testing.T) {
+	testCases := []struct {
+		isErr bool
+		dest  string
+	}{
+		{isErr: false, dest: &quot;not/an/abs/path&quot;},
+		{isErr: false, dest: &quot;./rel/path&quot;},
+		{isErr: false, dest: &quot;./rel/path&quot;},
+		{isErr: false, dest: &quot;../../path&quot;},
+		{isErr: false, dest: &quot;/abs/path&quot;},
+		{isErr: false, dest: &quot;/abs/but/../unclean&quot;},
+	}
+
+	for _, tc := range testCases {
+		config := &amp;configs.Config{
+			Rootfs: &quot;/var&quot;,
+			Mounts: []*configs.Mount{
+				{Destination: tc.dest},
+			},
+		}
+
+		err := Validate(config)
+		if tc.isErr &amp;&amp; err == nil {
+			t.Errorf(&quot;mount dest: %s, expected error, got nil&quot;, tc.dest)
+		}
+		if !tc.isErr &amp;&amp; err != nil {
+			t.Errorf(&quot;mount dest: %s, expected nil, got error %v&quot;, tc.dest, err)
+		}
+	}
+}
+
+func TestValidateBindMounts(t *testing.T) {
+	testCases := []struct {
+		isErr bool
+		flags int
+		data  string
+	}{
+		{isErr: false, flags: 0, data: &quot;&quot;},
+		{isErr: false, flags: unix.MS_RDONLY | unix.MS_NOSYMFOLLOW, data: &quot;&quot;},
+
+		{isErr: true, flags: 0, data: &quot;idmap&quot;},
+		{isErr: true, flags: unix.MS_RDONLY, data: &quot;custom_ext4_flag&quot;},
+		{isErr: true, flags: unix.MS_NOATIME, data: &quot;rw=foobar&quot;},
+	}
+
+	for _, tc := range testCases {
+		for _, bind := range []string{&quot;bind&quot;, &quot;rbind&quot;} {
+			bindFlag := map[string]int{
+				&quot;bind&quot;:  unix.MS_BIND,
+				&quot;rbind&quot;: unix.MS_BIND | unix.MS_REC,
+			}[bind]
+
+			config := &amp;configs.Config{
+				Rootfs: &quot;/var&quot;,
+				Mounts: []*configs.Mount{
+					{
+						Destination: &quot;/&quot;,
+						Flags:       tc.flags | bindFlag,
+						Data:        tc.data,
+					},
+				},
+			}
+
+			err := Validate(config)
+			if tc.isErr &amp;&amp; err == nil {
+				t.Errorf(&quot;%s mount flags:0x%x data:%v, expected error, got nil&quot;, bind, tc.flags, tc.data)
+			}
+			if !tc.isErr &amp;&amp; err != nil {
+				t.Errorf(&quot;%s mount flags:0x%x data:%v, expected nil, got error %v&quot;, bind, tc.flags, tc.data, err)
+			}
+		}
+	}
+}
+
+func TestValidateIDMapMounts(t *testing.T) {
+	mapping := []configs.IDMap{
+		{
+			ContainerID: 0,
+			HostID:      10000,
+			Size:        1,
+		},
+	}
+
+	testCases := []struct {
+		name   string
+		isErr  bool
+		config *configs.Config
+	}{
+		{
+			name:  &quot;idmap non-bind mount&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/dev/sda1&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Device:      &quot;ext4&quot;,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;idmap option non-bind mount&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/dev/sda1&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Device:      &quot;ext4&quot;,
+						IDMapping:   &amp;configs.MountIDMapping{},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;ridmap option non-bind mount&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/dev/sda1&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Device:      &quot;ext4&quot;,
+						IDMapping: &amp;configs.MountIDMapping{
+							Recursive: true,
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;idmap mount no uid mapping&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;idmap mount no gid mapping&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;rootless idmap mount&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				RootlessEUID: true,
+				UIDMappings:  mapping,
+				GIDMappings:  mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;idmap mounts without abs source path&quot;,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;./rel/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;idmap mounts without abs dest path&quot;,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;./rel/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;simple idmap mount&quot;,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/another-abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;idmap mount with more flags&quot;,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/another-abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND | unix.MS_RDONLY,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;idmap mount without userns mappings&quot;,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;idmap mounts with different userns and mount mappings&quot;,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: []configs.IDMap{
+								{
+									ContainerID: 10,
+									HostID:      10,
+									Size:        1,
+								},
+							},
+							GIDMappings: mapping,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: &quot;idmap mounts with different userns and mount mappings&quot;,
+			config: &amp;configs.Config{
+				UIDMappings: mapping,
+				GIDMappings: mapping,
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							UIDMappings: mapping,
+							GIDMappings: []configs.IDMap{
+								{
+									ContainerID: 10,
+									HostID:      10,
+									Size:        1,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;mount with &apos;idmap&apos; option but no mappings&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping:   &amp;configs.MountIDMapping{},
+					},
+				},
+			},
+		},
+		{
+			name:  &quot;mount with &apos;ridmap&apos; option but no mappings&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Mounts: []*configs.Mount{
+					{
+						Source:      &quot;/abs/path/&quot;,
+						Destination: &quot;/abs/path/&quot;,
+						Flags:       unix.MS_BIND,
+						IDMapping: &amp;configs.MountIDMapping{
+							Recursive: true,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := tc.config
+			config.Rootfs = &quot;/var&quot;
+
+			err := mountsStrict(config)
+			if tc.isErr &amp;&amp; err == nil {
+				t.Error(&quot;expected error, got nil&quot;)
+			}
+
+			if !tc.isErr &amp;&amp; err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestValidateScheduler(t *testing.T) {
+	testCases := []struct {
+		isErr     bool
+		policy    string
+		niceValue int32
+		priority  int32
+		runtime   uint64
+		deadline  uint64
+		period    uint64
+	}{
+		{isErr: true, niceValue: 0},
+		{isErr: false, policy: &quot;SCHED_OTHER&quot;, niceValue: 19},
+		{isErr: false, policy: &quot;SCHED_OTHER&quot;, niceValue: -20},
+		{isErr: true, policy: &quot;SCHED_OTHER&quot;, niceValue: 20},
+		{isErr: true, policy: &quot;SCHED_OTHER&quot;, niceValue: -21},
+		{isErr: true, policy: &quot;SCHED_OTHER&quot;, priority: 100},
+		{isErr: false, policy: &quot;SCHED_FIFO&quot;, priority: 100},
+		{isErr: true, policy: &quot;SCHED_FIFO&quot;, runtime: 20},
+		{isErr: true, policy: &quot;SCHED_BATCH&quot;, deadline: 30},
+		{isErr: true, policy: &quot;SCHED_IDLE&quot;, period: 40},
+		{isErr: true, policy: &quot;SCHED_DEADLINE&quot;, priority: 100},
+		{isErr: false, policy: &quot;SCHED_DEADLINE&quot;, runtime: 200},
+		{isErr: false, policy: &quot;SCHED_DEADLINE&quot;, deadline: 300},
+		{isErr: false, policy: &quot;SCHED_DEADLINE&quot;, period: 400},
+		{isErr: true, policy: &quot;SCHED_OTHER&quot;, niceValue: 20},
+		{isErr: true, policy: &quot;SCHED_OTHER&quot;, niceValue: -21},
+		{isErr: false, policy: &quot;SCHED_FIFO&quot;, priority: 100, niceValue: 100},
+	}
+
+	for _, tc := range testCases {
+		scheduler := configs.Scheduler{
+			Policy:   specs.LinuxSchedulerPolicy(tc.policy),
+			Nice:     tc.niceValue,
+			Priority: tc.priority,
+			Runtime:  tc.runtime,
+			Deadline: tc.deadline,
+			Period:   tc.period,
+		}
+		config := &amp;configs.Config{
+			Rootfs:    &quot;/var&quot;,
+			Scheduler: &amp;scheduler,
+		}
+
+		err := Validate(config)
+		if tc.isErr &amp;&amp; err == nil {
+			t.Errorf(&quot;scheduler: %d, expected error, got nil&quot;, tc.niceValue)
+		}
+		if !tc.isErr &amp;&amp; err != nil {
+			t.Errorf(&quot;scheduler: %d, expected nil, got error %v&quot;, tc.niceValue, err)
+		}
+	}
+}
+
+func TestValidateIOPriority(t *testing.T) {
+	testCases := []struct {
+		isErr    bool
+		priority int
+		class    specs.IOPriorityClass
+	}{
+		{isErr: false, priority: 0, class: specs.IOPRIO_CLASS_IDLE},
+		{isErr: false, priority: 7, class: specs.IOPRIO_CLASS_RT},
+		{isErr: false, priority: 3, class: specs.IOPRIO_CLASS_BE},
+		// Invalid priority.
+		{isErr: true, priority: -1, class: specs.IOPRIO_CLASS_BE},
+		// Invalid class.
+		{isErr: true, priority: 3, class: specs.IOPriorityClass(&quot;IOPRIO_CLASS_WOW&quot;)},
+	}
+
+	for _, tc := range testCases {
+		ioPriroty := configs.IOPriority{
+			Priority: tc.priority,
+			Class:    tc.class,
+		}
+		config := &amp;configs.Config{
+			Rootfs:     &quot;/var&quot;,
+			IOPriority: &amp;ioPriroty,
+		}
+
+		err := Validate(config)
+		if tc.isErr &amp;&amp; err == nil {
+			t.Errorf(&quot;iopriority: %d, expected error, got nil&quot;, tc.priority)
+		}
+		if !tc.isErr &amp;&amp; err != nil {
+			t.Errorf(&quot;iopriority: %d, expected nil, got error %v&quot;, tc.priority, err)
+		}
+	}
+}
+
+func TestValidateNetDevices(t *testing.T) {
+	testCases := []struct {
+		name   string
+		isErr  bool
+		config *configs.Config
+	}{
+		{
+			name: &quot;network device with configured network namespace&quot;,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{
+						{
+							Type: configs.NEWNET,
+							Path: &quot;/var/run/netns/blue&quot;,
+						},
+					},
+				),
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {},
+				},
+			},
+		},
+		{
+			name: &quot;network device rename&quot;,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{
+						{
+							Type: configs.NEWNET,
+							Path: &quot;/var/run/netns/blue&quot;,
+						},
+					},
+				),
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {
+						Name: &quot;c0&quot;,
+					},
+				},
+			},
+		},
+		{
+			name: &quot;network device network namespace created by runc&quot;,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{
+						{
+							Type: configs.NEWNET,
+						},
+					},
+				),
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {},
+				},
+			},
+		},
+		{
+			name:  &quot;network device network namespace empty&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{},
+				),
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {},
+				},
+			},
+		},
+		{
+			name:  &quot;network device rootless EUID&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{
+						{
+							Type: configs.NEWNET,
+							Path: &quot;/var/run/netns/blue&quot;,
+						},
+					},
+				),
+				RootlessEUID: true,
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {},
+				},
+			},
+		},
+		{
+			name:  &quot;network device rootless&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{
+						{
+							Type: configs.NEWNET,
+							Path: &quot;/var/run/netns/blue&quot;,
+						},
+					},
+				),
+				RootlessCgroups: true,
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {},
+				},
+			},
+		},
+		{
+			name:  &quot;network device bad name&quot;,
+			isErr: true,
+			config: &amp;configs.Config{
+				Namespaces: configs.Namespaces(
+					[]configs.Namespace{
+						{
+							Type: configs.NEWNET,
+							Path: &quot;/var/run/netns/blue&quot;,
+						},
+					},
+				),
+				NetDevices: map[string]*configs.LinuxNetDevice{
+					&quot;eth0&quot;: {
+						Name: &quot;eth0/&quot;,
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := tc.config
+			config.Rootfs = &quot;/var&quot;
+
+			err := Validate(config)
+			if tc.isErr &amp;&amp; err == nil {
+				t.Error(&quot;expected error, got nil&quot;)
+			}
+
+			if !tc.isErr &amp;&amp; err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestValidateUserSysctlWithUserNamespace(t *testing.T) {
+	if _, err := os.Stat(&quot;/proc/self/ns/user&quot;); errors.Is(err, os.ErrNotExist) {
+		t.Skip(&quot;Test requires userns.&quot;)
+	}
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Sysctl: map[string]string{&quot;user.max_inotify_watches&quot;: &quot;8192&quot;},
+		Namespaces: configs.Namespaces(
+			[]configs.Namespace{
+				{Type: configs.NEWUSER},
+			},
+		),
+		UIDMappings: []configs.IDMap{{HostID: 0, ContainerID: 123, Size: 100}},
+		GIDMappings: []configs.IDMap{{HostID: 0, ContainerID: 123, Size: 100}},
+	}
+
+	err := Validate(config)
+	if err != nil {
+		t.Errorf(&quot;Expected error to not occur with user.* sysctl and NEWUSER namespace: %+v&quot;, err)
+	}
+}
+
+func TestValidateUserSysctlWithoutUserNamespace(t *testing.T) {
+	config := &amp;configs.Config{
+		Rootfs: &quot;/var&quot;,
+		Sysctl: map[string]string{&quot;user.max_inotify_watches&quot;: &quot;8192&quot;},
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Error(&quot;Expected error to occur with user.* sysctl without NEWUSER namespace but it was nil&quot;)
+	}
+}
+
+func TestDevValidName(t *testing.T) {
+	testCases := []struct {
+		name  string
+		valid bool
+	}{
+		{name: &quot;&quot;, valid: false},
+		{name: &quot;a&quot;, valid: true},
+		{name: strings.Repeat(&quot;a&quot;, unix.IFNAMSIZ), valid: true},
+		{name: strings.Repeat(&quot;a&quot;, unix.IFNAMSIZ+1), valid: false},
+		{name: &quot;.&quot;, valid: false},
+		{name: &quot;..&quot;, valid: false},
+		{name: &quot;dev/null&quot;, valid: false},
+		{name: &quot;valid:name&quot;, valid: false},
+		{name: &quot;valid name&quot;, valid: false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if devValidName(tc.name) != tc.valid {
+				t.Fatalf(&quot;name %q, expected valid: %v&quot;, tc.name, tc.valid)
+			}
+		})
+	}
+}</file><file path="opencontainers__runc/libcontainer/configs/validate/validator.go">package validate
+
+import (
+	&quot;errors&quot;
+	&quot;fmt&quot;
+	&quot;os&quot;
+	&quot;path/filepath&quot;
+	&quot;strings&quot;
+	&quot;sync&quot;
+
+	&quot;github.com/opencontainers/cgroups&quot;
+	&quot;github.com/opencontainers/runc/libcontainer/configs&quot;
+	&quot;github.com/opencontainers/runtime-spec/specs-go&quot;
+	selinux &quot;github.com/opencontainers/selinux/go-selinux&quot;
+	&quot;github.com/sirupsen/logrus&quot;
+	&quot;golang.org/x/sys/unix&quot;
+)
+
+type check func(config *configs.Config) error
+
+func Validate(config *configs.Config) error {
+	checks := []check{
+		cgroupsCheck,
+		rootfs,
+		network,
+		netdevices,
+		uts,
+		security,
+		namespaces,
+		sysctl,
+		intelrdtCheck,
+		rootlessEUIDCheck,
+		mountsStrict,
+		scheduler,
+		ioPriority,
+		memoryPolicy,
+	}
+	for _, c := range checks {
+		if err := c(config); err != nil {
+			return err
+		}
+	}
+	// Relaxed validation rules for backward compatibility
+	warns := []check{
+		mountsWarn,
+	}
+	for _, c := range warns {
+		if err := c(config); err != nil {
+			logrus.WithError(err).Warn(&quot;configuration&quot;)
+		}
+	}
+	return nil
+}
+
+// rootfs validates if the rootfs is an absolute path and is not a symlink
+// to the container&apos;s root filesystem.
+func rootfs(config *configs.Config) error {
+	if _, err := os.Stat(config.Rootfs); err != nil {
+		return fmt.Errorf(&quot;invalid rootfs: %w&quot;, err)
+	}
+	cleaned, err := filepath.Abs(config.Rootfs)
+	if err != nil {
+		return fmt.Errorf(&quot;invalid rootfs: %w&quot;, err)
+	}
+	if cleaned, err = filepath.EvalSymlinks(cleaned); err != nil {
+		return fmt.Errorf(&quot;invalid rootfs: %w&quot;, err)
+	}
+	if filepath.Clean(config.Rootfs) != cleaned {
+		return errors.New(&quot;invalid rootfs: not an absolute path, or a symlink&quot;)
+	}
+	return nil
+}
+
+// https://elixir.bootlin.com/linux/v6.12/source/net/core/dev.c#L1066
+func devValidName(name string) bool {
+	if len(name) == 0 || len(name) &gt; unix.IFNAMSIZ {
+		return false
+	}
+	if name == &quot;.&quot; || name == &quot;..&quot; {
+		return false
+	}
+	if strings.ContainsAny(name, &quot;/: &quot;) {
+		return false
+	}
+	return true
+}
+
+func netdevices(config *configs.Config) error {
+	if len(config.NetDevices) == 0 {
+		return nil
+	}
+	if !config.Namespaces.Contains(configs.NEWNET) {
+		return errors.New(&quot;unable to move network devices without a NET namespace&quot;)
+	}
+
+	if config.RootlessEUID || config.RootlessCgroups {
+		return errors.New(&quot;network devices are not supported for rootless containers&quot;)
+	}
+
+	for name, netdev := range config.NetDevices {
+		if !devValidName(name) {
+			return fmt.Errorf(&quot;invalid network device name %q&quot;, name)
+		}
+		if netdev.Name != &quot;&quot; &amp;&amp; !devValidName(netdev.Name) {
+			return fmt.Errorf(&quot;invalid network device name %q&quot;, netdev.Name)
+		}
+	}
+	return nil
+}
+
+func network(config *configs.Config) error {
+	if !config.Namespaces.Contains(configs.NEWNET) {
+		if len(config.Networks) &gt; 0 || len(config.Routes) &gt; 0 {
+			return errors.New(&quot;unable to apply network settings without a private NET namespace&quot;)
+		}
+	}
+	return nil
+}
+
+func uts(config *configs.Config) error {
+	if config.Hostname != &quot;&quot; &amp;&amp; !config.Namespaces.Contains(configs.NEWUTS) {
+		return errors.New(&quot;unable to set hostname without a private UTS namespace&quot;)
+	}
+	if config.Domainname != &quot;&quot; &amp;&amp; !config.Namespaces.Contains(configs.NEWUTS) {
+		return errors.New(&quot;unable to set domainname without a private UTS namespace&quot;)
+	}
+	return nil
+}
+
+func security(config *configs.Config) error {
+	// restrict sys without mount namespace
+	if (len(config.MaskPaths) &gt; 0 || len(config.ReadonlyPaths) &gt; 0) &amp;&amp;
+		!config.Namespaces.Contains(configs.NEWNS) {
+		return errors.New(&quot;unable to restrict sys entries without a private MNT namespace&quot;)
+	}
+	if config.ProcessLabel != &quot;&quot; &amp;&amp; !selinux.GetEnabled() {
+		return errors.New(&quot;selinux label is specified in config, but selinux is disabled or not supported&quot;)
+	}
+
+	return nil
+}
+
+func namespaces(config *configs.Config) error {
+	if config.Namespaces.Contains(configs.NEWUSER) {
+		if _, err := os.Stat(&quot;/proc/self/ns/user&quot;); errors.Is(err, os.ErrNotExist) {
+			return errors.New(&quot;user namespaces aren&apos;t enabled in the kernel&quot;)
+		}
+		hasPath := config.Namespaces.PathOf(configs.NEWUSER) != &quot;&quot;
+		hasMappings := config.UIDMappings != nil || config.GIDMappings != nil
+		if !hasPath &amp;&amp; !hasMappings {
+			return errors.New(&quot;user namespaces enabled, but no namespace path to join nor mappings to apply specified&quot;)
+		}
+		// The hasPath &amp;&amp; hasMappings validation case is handled in specconv --
+		// we cache the mappings in Config during specconv in the hasPath case,
+		// so we cannot do that validation here.
+	} else {
+		if config.UIDMappings != nil || config.GIDMappings != nil {
+			return errors.New(&quot;user namespace mappings specified, but user namespace isn&apos;t enabled in the config&quot;)
+		}
+	}
+
+	if config.Namespaces.Contains(configs.NEWCGROUP) {
+		if _, err := os.Stat(&quot;/proc/self/ns/cgroup&quot;); errors.Is(err, os.ErrNotExist) {
+			return errors.New(&quot;cgroup namespaces aren&apos;t enabled in the kernel&quot;)
+		}
+	}
+
+	if config.Namespaces.Contains(configs.NEWTIME) {
+		if _, err := os.Stat(&quot;/proc/self/timens_offsets&quot;); errors.Is(err, os.ErrNotExist) {
+			return errors.New(&quot;time namespaces aren&apos;t enabled in the kernel&quot;)
+		}
+		hasPath := config.Namespaces.PathOf(configs.NEWTIME) != &quot;&quot;
+		hasOffsets := config.TimeOffsets != nil
+		if hasPath &amp;&amp; hasOffsets {
+			return errors.New(&quot;time namespace enabled, but both namespace path and time offsets specified -- you may only provide one&quot;)
+		}
+	} else {
+		if config.TimeOffsets != nil {
+			return errors.New(&quot;time namespace offsets specified, but time namespace isn&apos;t enabled in the config&quot;)
+		}
+	}
+
+	return nil
+}
+
+// convertSysctlVariableToDotsSeparator can return sysctl variables in dots separator format.
+// The &apos;/&apos; separator is also accepted in place of a &apos;.&apos;.
+// Convert the sysctl variables to dots separator format for validation.
+// More info: sysctl(8), sysctl.d(5).
+//
+// For example:
+// Input sysctl variable &quot;net/ipv4/conf/eno2.100.rp_filter&quot;
+// will return the converted value &quot;net.ipv4.conf.eno2/100.rp_filter&quot;
+func convertSysctlVariableToDotsSeparator(val string) string {
+	if val == &quot;&quot; {
+		return val
+	}
+	firstSepIndex := strings.IndexAny(val, &quot;./&quot;)
+	if firstSepIndex == -1 || val[firstSepIndex] == &apos;.&apos; {
+		return val
+	}
+
+	f := func(r rune) rune {
+		switch r {
+		case &apos;.&apos;:
+			return &apos;/&apos;
+		case &apos;/&apos;:
+			return &apos;.&apos;
+		}
+		return r
+	}
+	return strings.Map(f, val)
+}
+
+// sysctl validates that the specified sysctl keys are valid or not.
+// /proc/sys isn&apos;t completely namespaced and depending on which namespaces
+// are specified, a subset of sysctls are permitted.
+func sysctl(config *configs.Config) error {
+	validSysctlMap := map[string]bool{
+		&quot;kernel.msgmax&quot;:          true,
+		&quot;kernel.msgmnb&quot;:          true,
+		&quot;kernel.msgmni&quot;:          true,
+		&quot;kernel.sem&quot;:             true,
+		&quot;kernel.shmall&quot;:          true,
+		&quot;kernel.shmmax&quot;:          true,
+		&quot;kernel.shmmni&quot;:          true,
+		&quot;kernel.shm_rmid_forced&quot;: true,
+	}
+
+	var (
+		netOnce    sync.Once
+		hostnet    bool
+		hostnetErr error
+	)
+
+	for s := range config.Sysctl {
+		s := convertSysctlVariableToDotsSeparator(s)
+		if validSysctlMap[s] || strings.HasPrefix(s, &quot;fs.mqueue.&quot;) {
+			if config.Namespaces.Contains(configs.NEWIPC) {
+				continue
+			} else {
+				return fmt.Errorf(&quot;sysctl %q is not allowed in the hosts ipc namespace&quot;, s)
+			}
+		}
+		if strings.HasPrefix(s, &quot;net.&quot;) {
+			// Is container using host netns?
+			// Here &quot;host&quot; means &quot;current&quot;, not &quot;initial&quot;.
+			netOnce.Do(func() {
+				if !config.Namespaces.Contains(configs.NEWNET) {
+					hostnet = true
+					return
+				}
+				path := config.Namespaces.PathOf(configs.NEWNET)
+				if path == &quot;&quot; {
+					// own netns, so hostnet = false
+					return
+				}
+				hostnet, hostnetErr = isHostNetNS(path)
+			})
+			if hostnetErr != nil {
+				return fmt.Errorf(&quot;invalid netns path: %w&quot;, hostnetErr)
+			}
+			if hostnet {
+				return fmt.Errorf(&quot;sysctl %q not allowed in host network namespace&quot;, s)
+			}
+			continue
+		}
+		if config.Namespaces.Contains(configs.NEWUTS) {
+			switch s {
+			case &quot;kernel.domainname&quot;:
+				// This is namespaced and there&apos;s no explicit OCI field for it.
+				continue
+			case &quot;kernel.hostname&quot;:
+				// This is namespaced but there&apos;s a conflicting (dedicated) OCI field for it.
+				return fmt.Errorf(&quot;sysctl %q is not allowed as it conflicts with the OCI %q field&quot;, s, &quot;hostname&quot;)
+			}
+		}
+
+		if strings.HasPrefix(s, &quot;user.&quot;) {
+
+			// while it is technically true that a non-userns
+			// container can write to /proc/sys/user on behalf of
+			// the init_user_ns, it was not previously supported,
+			// and doesn&apos;t guarantee that someone else spawns a
+			// different container and writes there, changing the
+			// values. in particular, setting something like
+			// max_user_namespaces to non-zero could be a vector to
+			// use 0-days where the admin had previously disabled
+			// them.
+			//
+			// additionally, this setting affects other host
+			// processes that are not container related.
+			//
+			// so let&apos;s refuse this unless we know for sure it
+			// won&apos;t touch anything else.
+			if !config.Namespaces.Contains(configs.NEWUSER) {
+				return fmt.Errorf(&quot;setting ucounts without a user namespace not allowed: %v&quot;, s)
+			}
+			continue
+		}
+
+		return fmt.Errorf(&quot;sysctl %q is not in a separate kernel namespace&quot;, s)
+	}
+
+	return nil
+}
+
+func intelrdtCheck(config *configs.Config) error {
+	if config.IntelRdt == nil {
+		return nil
+	}
+	if !intelRdtIsEnabled() {
+		return fmt.Errorf(&quot;intelRdt is specified in config, but Intel RDT is not enabled&quot;)
+	}
+
+	switch clos := config.IntelRdt.ClosID; {
+	case clos == &quot;.&quot;, clos == &quot;..&quot;, len(clos) &gt; 1 &amp;&amp; strings.Contains(clos, &quot;/&quot;):
+		return fmt.Errorf(&quot;invalid intelRdt.ClosID %q&quot;, clos)
+	}
+	if !intelRdtIsCATEnabled() &amp;&amp; config.IntelRdt.L3CacheSchema != &quot;&quot; {
+		return errors.New(&quot;intelRdt.l3CacheSchema is specified in config, but Intel RDT/CAT is not enabled&quot;)
+	}
+	if !intelRdtIsMBAEnabled() &amp;&amp; config.IntelRdt.MemBwSchema != &quot;&quot; {
+		return errors.New(&quot;intelRdt.memBwSchema is specified in config, but Intel RDT/MBA is not enabled&quot;)
+	}
+
+	return nil
+}
+
+func cgroupsCheck(config *configs.Config) error {
+	c := config.Cgroups
+	if c == nil {
+		return nil
+	}
+
+	if (c.Name != &quot;&quot; || c.Parent != &quot;&quot;) &amp;&amp; c.Path != &quot;&quot; {
+		return fmt.Errorf(&quot;cgroup: either Path or Name and Parent should be used, got %+v&quot;, c)
+	}
+
+	r := c.Resources
+	if r == nil {
+		return nil
+	}
+
+	if !cgroups.IsCgroup2UnifiedMode() &amp;&amp; r.Unified != nil {
+		return cgroups.ErrV1NoUnified
+	}
+
+	if cgroups.IsCgroup2UnifiedMode() {
+		_, err := cgroups.ConvertMemorySwapToCgroupV2Value(r.MemorySwap, r.Memory)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func checkBindOptions(m *configs.Mount) error {
+	if !m.IsBind() {
+		return nil
+	}
+	// We must reject bind-mounts that also have filesystem-specific mount
+	// options, because the kernel will completely ignore these flags and we
+	// cannot set them per-mountpoint.
+	//
+	// It should be noted that (due to how the kernel caches superblocks), data
+	// options could also silently ignored for other filesystems even when
+	// doing a fresh mount, but there is no real way to avoid this (and it
+	// matches how everything else works). There have been proposals to make it
+	// possible for userspace to detect this caching, but this wouldn&apos;t help
+	// runc because the behaviour wouldn&apos;t even be desirable for most users.
+	if m.Data != &quot;&quot; {
+		return errors.New(&quot;bind mounts cannot have any filesystem-specific options applied&quot;)
+	}
+	return nil
+}
+
+func checkIDMapMounts(config *configs.Config, m *configs.Mount) error {
+	// Make sure MOUNT_ATTR_IDMAP is not set on any of our mounts. This
+	// attribute is handled differently to all other attributes (through
+	// m.IDMapping), so make sure we never store it in the actual config. This
+	// really shouldn&apos;t ever happen.
+	if m.RecAttr != nil &amp;&amp; (m.RecAttr.Attr_set|m.RecAttr.Attr_clr)&amp;unix.MOUNT_ATTR_IDMAP != 0 {
+		return errors.New(&quot;mount configuration cannot contain recAttr for MOUNT_ATTR_IDMAP&quot;)
+	}
+	if !m.IsIDMapped() {
+		return nil
+	}
+	if !m.IsBind() {
+		return errors.New(&quot;id-mapped mounts are only supported for bind-mounts&quot;)
+	}
+	if config.RootlessEUID {
+		return errors.New(&quot;id-mapped mounts are not supported for rootless containers&quot;)
+	}
+	if m.IDMapping.UserNSPath == &quot;&quot; {
+		if len(m.IDMapping.UIDMappings) == 0 || len(m.IDMapping.GIDMappings) == 0 {
+			return errors.New(&quot;id-mapped mounts must have both uid and gid mappings specified&quot;)
+		}
+	} else {
+		if m.IDMapping.UIDMappings != nil || m.IDMapping.GIDMappings != nil {
+			// should never happen
+			return errors.New(&quot;[internal error] id-mapped mounts cannot have both userns_path and uid and gid mappings specified&quot;)
+		}
+	}
+	return nil
+}
+
+func mountsWarn(config *configs.Config) error {
+	for _, m := range config.Mounts {
+		if !filepath.IsAbs(m.Destination) {
+			return fmt.Errorf(&quot;mount %+v: relative destination path is **deprecated**, using it as relative to /&quot;, m)
+		}
+	}
+	return nil
+}
+
+func mountsStrict(config *configs.Config) error {
+	for _, m := range config.Mounts {
+		if err := checkBindOptions(m); err != nil {
+			return fmt.Errorf(&quot;invalid mount %+v: %w&quot;, m, err)
+		}
+		if err := checkIDMapMounts(config, m); err != nil {
+			return fmt.Errorf(&quot;invalid mount %+v: %w&quot;, m, err)
+		}
+	}
+	return nil
+}
+
+func isHostNetNS(path string) (bool, error) {
+	const currentProcessNetns = &quot;/proc/self/ns/net&quot;
+
+	var st1, st2 unix.Stat_t
+
+	if err := unix.Stat(currentProcessNetns, &amp;st1); err != nil {
+		return false, &amp;os.PathError{Op: &quot;stat&quot;, Path: currentProcessNetns, Err: err}
+	}
+	if err := unix.Stat(path, &amp;st2); err != nil {
+		return false, &amp;os.PathError{Op: &quot;stat&quot;, Path: path, Err: err}
+	}
+
+	return (st1.Dev == st2.Dev) &amp;&amp; (st1.Ino == st2.Ino), nil
+}
+
+// scheduler is to validate scheduler configs according to https://man7.org/linux/man-pages/man2/sched_setattr.2.html
+func scheduler(config *configs.Config) error {
+	s := config.Scheduler
+	if s == nil {
+		return nil
+	}
+	if s.Policy == &quot;&quot; {
+		return errors.New(&quot;scheduler policy is required&quot;)
+	}
+	if s.Policy == specs.SchedOther || s.Policy == specs.SchedBatch {
+		if s.Nice &lt; -20 || s.Nice &gt; 19 {
+			return fmt.Errorf(&quot;invalid scheduler.nice: %d when scheduler.policy is %s&quot;, s.Nice, string(s.Policy))
+		}
+	}
+	if s.Priority != 0 &amp;&amp; (s.Policy != specs.SchedFIFO &amp;&amp; s.Policy != specs.SchedRR) {
+		return errors.New(&quot;scheduler.priority can only be specified for SchedFIFO or SchedRR policy&quot;)
+	}
+	if s.Policy != specs.SchedDeadline &amp;&amp; (s.Runtime != 0 || s.Deadline != 0 || s.Period != 0) {
+		return errors.New(&quot;scheduler runtime/deadline/period can only be specified for SchedDeadline policy&quot;)
+	}
+	return nil
+}
+
+func ioPriority(config *configs.Config) error {
+	if config.IOPriority == nil {
+		return nil
+	}
+	priority := config.IOPriority.Priority
+	if priority &lt; 0 || priority &gt; 7 {
+		return fmt.Errorf(&quot;invalid ioPriority.Priority: %d&quot;, priority)
+	}
+
+	switch class := config.IOPriority.Class; class {
+	case specs.IOPRIO_CLASS_RT, specs.IOPRIO_CLASS_BE, specs.IOPRIO_CLASS_IDLE:
+		// Valid class, do nothing.
+	default:
+		return fmt.Errorf(&quot;invalid ioPriority.Class: %q&quot;, class)
+	}
+
+	return nil
+}
+
+func memoryPolicy(config *configs.Config) error {
+	mpol := config.MemoryPolicy
+	if mpol == nil {
+		return nil
+	}
+	switch mpol.Mode {
+	case unix.MPOL_DEFAULT, unix.MPOL_LOCAL:
+		if mpol.Nodes != nil &amp;&amp; mpol.Nodes.Count() != 0 {
+			return fmt.Errorf(&quot;memory policy mode requires 0 nodes but got %d&quot;, mpol.Nodes.Count())
+		}
+	case unix.MPOL_BIND, unix.MPOL_INTERLEAVE,
+		unix.MPOL_PREFERRED_MANY, unix.MPOL_WEIGHTED_INTERLEAVE:
+		if mpol.Nodes == nil || mpol.Nodes.Count() == 0 {
+			return fmt.Errorf(&quot;memory policy mode requires at least one node but got 0&quot;)
+		}
+	case unix.MPOL_PREFERRED:
+		// Zero or more nodes are allowed by the kernel.
+	default:
+		return fmt.Errorf(&quot;invalid memory policy mode: %d&quot;, mpol.Mode)
+	}
+	return nil
+}</file><file path="opencontainers__runc/libcontainer/configs/config_linux_test.go">package configs
+
+import (
+	&quot;testing&quot;
+)
+
+var HookNameList = []HookName{Prestart, CreateRuntime, CreateContainer, StartContainer, Poststart, Poststop}
+
+func TestRemoveNamespace(t *testing.T) {
+	ns := Namespaces{
+		{Type: NEWNET},
+	}
+	if !ns.Remove(NEWNET) {
+		t.Fatal(&quot;NEWNET was not removed&quot;)
+	}
+	if len(ns) != 0 {
+		t.Fatalf(&quot;namespaces should have 0 items but reports %d&quot;, len(ns))
+	}
+}
+
+func TestHostRootUIDNoUSERNS(t *testing.T) {
+	config := &amp;Config{
+		Namespaces: Namespaces{},
+	}
+	uid, err := config.HostRootUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != 0 {
+		t.Fatalf(&quot;expected uid 0 with no USERNS but received %d&quot;, uid)
+	}
+}
+
+func TestHostRootUIDWithUSERNS(t *testing.T) {
+	config := &amp;Config{
+		Namespaces: Namespaces{{Type: NEWUSER}},
+		UIDMappings: []IDMap{
+			{
+				ContainerID: 0,
+				HostID:      1000,
+				Size:        1,
+			},
+		},
+	}
+	uid, err := config.HostRootUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != 1000 {
+		t.Fatalf(&quot;expected uid 1000 with no USERNS but received %d&quot;, uid)
+	}
+}
+
+func TestHostRootGIDNoUSERNS(t *testing.T) {
+	config := &amp;Config{
+		Namespaces: Namespaces{},
+	}
+	uid, err := config.HostRootGID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != 0 {
+		t.Fatalf(&quot;expected gid 0 with no USERNS but received %d&quot;, uid)
+	}
+}
+
+func TestHostRootGIDWithUSERNS(t *testing.T) {
+	config := &amp;Config{
+		Namespaces: Namespaces{{Type: NEWUSER}},
+		GIDMappings: []IDMap{
+			{
+				ContainerID: 0,
+				HostID:      1000,
+				Size:        1,
+			},
+		},
+	}
+	uid, err := config.HostRootGID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != 1000 {
+		t.Fatalf(&quot;expected gid 1000 with no USERNS but received %d&quot;, uid)
+	}
+}</file><file path="opencontainers__runc/libcontainer/configs/config_linux.go">package configs
+
+import (
+	&quot;errors&quot;
+	&quot;fmt&quot;
+	&quot;math&quot;
+)
+
+var (
+	errNoUIDMap = errors.New(&quot;user namespaces enabled, but no uid mappings found&quot;)
+	errNoGIDMap = errors.New(&quot;user namespaces enabled, but no gid mappings found&quot;)
+)
+
+// Please check https://man7.org/linux/man-pages/man2/personality.2.html for const details.
+// https://raw.githubusercontent.com/torvalds/linux/master/include/uapi/linux/personality.h
+const (
+	PerLinux   = 0x0000
+	PerLinux32 = 0x0008
+)
+
+type LinuxPersonality struct {
+	// Domain for the personality
+	// can only contain values &quot;LINUX&quot; and &quot;LINUX32&quot;
+	Domain int `json:&quot;domain&quot;`
+}
+
+// HostUID gets the translated uid for the process on host which could be
+// different when user namespaces are enabled.
+func (c *Config) HostUID(containerID int) (int, error) {
+	if c.Namespaces.Contains(NEWUSER) {
+		if len(c.UIDMappings) == 0 {
+			return -1, errNoUIDMap
+		}
+		id, found := c.hostIDFromMapping(int64(containerID), c.UIDMappings)
+		if !found {
+			return -1, fmt.Errorf(&quot;user namespaces enabled, but no mapping found for uid %d&quot;, containerID)
+		}
+		// If we are a 32-bit binary running on a 64-bit system, it&apos;s possible
+		// the mapped user is too large to store in an int, which means we
+		// cannot do the mapping. We can&apos;t just return an int64, because
+		// os.Setuid() takes an int.
+		if id &gt; math.MaxInt {
+			return -1, fmt.Errorf(&quot;mapping for uid %d (host id %d) is larger than native integer size (%d)&quot;, containerID, id, math.MaxInt)
+		}
+		return int(id), nil
+	}
+	// Return unchanged id.
+	return containerID, nil
+}
+
+// HostRootUID gets the root uid for the process on host which could be non-zero
+// when user namespaces are enabled.
+func (c *Config) HostRootUID() (int, error) {
+	return c.HostUID(0)
+}
+
+// HostGID gets the translated gid for the process on host which could be
+// different when user namespaces are enabled.
+func (c *Config) HostGID(containerID int) (int, error) {
+	if c.Namespaces.Contains(NEWUSER) {
+		if len(c.GIDMappings) == 0 {
+			return -1, errNoGIDMap
+		}
+		id, found := c.hostIDFromMapping(int64(containerID), c.GIDMappings)
+		if !found {
+			return -1, fmt.Errorf(&quot;user namespaces enabled, but no mapping found for gid %d&quot;, containerID)
+		}
+		// If we are a 32-bit binary running on a 64-bit system, it&apos;s possible
+		// the mapped user is too large to store in an int, which means we
+		// cannot do the mapping. We can&apos;t just return an int64, because
+		// os.Setgid() takes an int.
+		if id &gt; math.MaxInt {
+			return -1, fmt.Errorf(&quot;mapping for gid %d (host id %d) is larger than native integer size (%d)&quot;, containerID, id, math.MaxInt)
+		}
+		return int(id), nil
+	}
+	// Return unchanged id.
+	return containerID, nil
+}
+
+// HostRootGID gets the root gid for the process on host which could be non-zero
+// when user namespaces are enabled.
+func (c *Config) HostRootGID() (int, error) {
+	return c.HostGID(0)
+}
+
+// Utility function that gets a host ID for a container ID from user namespace map
+// if that ID is present in the map.
+func (c *Config) hostIDFromMapping(containerID int64, uMap []IDMap) (int64, bool) {
+	for _, m := range uMap {
+		if (containerID &gt;= m.ContainerID) &amp;&amp; (containerID &lt;= (m.ContainerID + m.Size - 1)) {
+			hostID := m.HostID + (containerID - m.ContainerID)
+			return hostID, true
+		}
+	}
+	return -1, false
+}</file><file path="opencontainers__runc/libcontainer/configs/config_test.go">package configs_test
+
+import (
+	&quot;encoding/json&quot;
+	&quot;fmt&quot;
+	&quot;os&quot;
+	&quot;reflect&quot;
+	&quot;testing&quot;
+	&quot;time&quot;
+
+	&quot;github.com/opencontainers/runc/libcontainer/configs&quot;
+	&quot;github.com/opencontainers/runtime-spec/specs-go&quot;
+)
+
+func TestUnmarshalHooks(t *testing.T) {
+	timeout := time.Second
+
+	hookCmd := configs.NewCommandHook(&amp;configs.Command{
+		Path:    &quot;/var/vcap/hooks/hook&quot;,
+		Args:    []string{&quot;--pid=123&quot;},
+		Env:     []string{&quot;FOO=BAR&quot;},
+		Dir:     &quot;/var/vcap&quot;,
+		Timeout: &amp;timeout,
+	})
+
+	hookJson, err := json.Marshal(hookCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, hookName := range configs.HookNameList {
+		hooks := configs.Hooks{}
+		err = hooks.UnmarshalJSON(fmt.Appendf(nil, `{&quot;%s&quot; :[%s]}`, hookName, hookJson))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(hooks[hookName], configs.HookList{hookCmd}) {
+			t.Errorf(&quot;Expected %s to equal %+v but it was %+v&quot;, hookName, hookCmd, hooks[hookName])
+		}
+	}
+}
+
+func TestUnmarshalHooksWithInvalidData(t *testing.T) {
+	hook := configs.Hooks{}
+	err := hook.UnmarshalJSON([]byte(`{invalid-json}`))
+	if err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}
+
+func TestMarshalHooks(t *testing.T) {
+	timeout := time.Second
+
+	hookCmd := configs.NewCommandHook(&amp;configs.Command{
+		Path:    &quot;/var/vcap/hooks/hook&quot;,
+		Args:    []string{&quot;--pid=123&quot;},
+		Env:     []string{&quot;FOO=BAR&quot;},
+		Dir:     &quot;/var/vcap&quot;,
+		Timeout: &amp;timeout,
+	})
+
+	hook := configs.Hooks{
+		configs.Prestart:        configs.HookList{hookCmd},
+		configs.CreateRuntime:   configs.HookList{hookCmd},
+		configs.CreateContainer: configs.HookList{hookCmd},
+		configs.StartContainer:  configs.HookList{hookCmd},
+		configs.Poststart:       configs.HookList{hookCmd},
+		configs.Poststop:        configs.HookList{hookCmd},
+	}
+	hooks, err := hook.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Note Marshal seems to output fields in alphabetical order
+	hookCmdJson := `[{&quot;path&quot;:&quot;/var/vcap/hooks/hook&quot;,&quot;args&quot;:[&quot;--pid=123&quot;],&quot;env&quot;:[&quot;FOO=BAR&quot;],&quot;dir&quot;:&quot;/var/vcap&quot;,&quot;timeout&quot;:1000000000}]`
+	h := fmt.Sprintf(`{&quot;createContainer&quot;:%[1]s,&quot;createRuntime&quot;:%[1]s,&quot;poststart&quot;:%[1]s,&quot;poststop&quot;:%[1]s,&quot;prestart&quot;:%[1]s,&quot;startContainer&quot;:%[1]s}`, hookCmdJson)
+	if string(hooks) != h {
+		t.Errorf(&quot;Expected hooks %s to equal %s&quot;, string(hooks), h)
+	}
+}
+
+func TestMarshalUnmarshalHooks(t *testing.T) {
+	timeout := time.Second
+
+	hookCmd := configs.NewCommandHook(&amp;configs.Command{
+		Path:    &quot;/var/vcap/hooks/hook&quot;,
+		Args:    []string{&quot;--pid=123&quot;},
+		Env:     []string{&quot;FOO=BAR&quot;},
+		Dir:     &quot;/var/vcap&quot;,
+		Timeout: &amp;timeout,
+	})
+
+	hook := configs.Hooks{
+		configs.Prestart:        configs.HookList{hookCmd},
+		configs.CreateRuntime:   configs.HookList{hookCmd},
+		configs.CreateContainer: configs.HookList{hookCmd},
+		configs.StartContainer:  configs.HookList{hookCmd},
+		configs.Poststart:       configs.HookList{hookCmd},
+		configs.Poststop:        configs.HookList{hookCmd},
+	}
+	hooks, err := hook.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	umMhook := configs.Hooks{}
+	err = umMhook.UnmarshalJSON(hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(umMhook, hook) {
+		t.Errorf(&quot;Expected hooks to be equal after mashaling -&gt; unmarshaling them: %+v, %+v&quot;, umMhook, hook)
+	}
+}
+
+func TestMarshalHooksWithUnexpectedType(t *testing.T) {
+	fHook := configs.NewFunctionHook(func(*specs.State) error {
+		return nil
+	})
+	hook := configs.Hooks{
+		configs.CreateRuntime: configs.HookList{fHook},
+	}
+	hooks, err := hook.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := `{&quot;createContainer&quot;:null,&quot;createRuntime&quot;:null,&quot;poststart&quot;:null,&quot;poststop&quot;:null,&quot;prestart&quot;:null,&quot;startContainer&quot;:null}`
+	if string(hooks) != h {
+		t.Errorf(&quot;Expected hooks %s to equal %s&quot;, string(hooks), h)
+	}
+}
+
+func TestFuncHookRun(t *testing.T) {
+	state := &amp;specs.State{
+		Version: &quot;1&quot;,
+		ID:      &quot;1&quot;,
+		Status:  &quot;created&quot;,
+		Pid:     1,
+		Bundle:  &quot;/bundle&quot;,
+	}
+
+	fHook := configs.NewFunctionHook(func(s *specs.State) error {
+		if !reflect.DeepEqual(state, s) {
+			return fmt.Errorf(&quot;expected state %+v to equal %+v&quot;, state, s)
+		}
+		return nil
+	})
+
+	err := fHook.Run(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommandHookRun(t *testing.T) {
+	state := &amp;specs.State{
+		Version: &quot;1&quot;,
+		ID:      &quot;1&quot;,
+		Status:  &quot;created&quot;,
+		Pid:     1,
+		Bundle:  &quot;/bundle&quot;,
+	}
+
+	stateJson, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verifyCommandTemplate := `#!/bin/sh
+if [ &quot;$1&quot; != &quot;testarg&quot; ]; then
+	echo &quot;Bad value for $1. Expected &apos;testarg&apos;, found &apos;$1&apos;&quot;
+	exit 1
+fi
+if [ -z &quot;$FOO&quot; ] || [ &quot;$FOO&quot; != BAR ]; then
+	echo &quot;Bad value for FOO. Expected &apos;BAR&apos;, found &apos;$FOO&apos;&quot;
+	exit 1
+fi
+expectedJson=%q
+read JSON
+if [ &quot;$JSON&quot; != &quot;$expectedJson&quot; ]; then
+	echo &quot;Bad JSON received. Expected &apos;$expectedJson&apos;, found &apos;$JSON&apos;&quot;
+	exit 1
+fi
+exit 0
+	`
+	verifyCommand := fmt.Sprintf(verifyCommandTemplate, stateJson)
+	filename := &quot;/tmp/runc-hooktest.sh&quot;
+	os.Remove(filename)
+	if err := os.WriteFile(filename, []byte(verifyCommand), 0o700); err != nil {
+		t.Fatalf(&quot;Failed to create tmp file: %v&quot;, err)
+	}
+	defer os.Remove(filename)
+
+	cmdHook := configs.NewCommandHook(&amp;configs.Command{
+		Path: filename,
+		Args: []string{filename, &quot;testarg&quot;},
+		Env:  []string{&quot;FOO=BAR&quot;},
+		Dir:  &quot;/&quot;,
+	})
+
+	if err := cmdHook.Run(state); err != nil {
+		t.Errorf(&quot;Want no error, got: %+v&quot;, err)
+	}
+}
+
+func TestCommandHookRunTimeout(t *testing.T) {
+	state := &amp;specs.State{
+		Version: &quot;1&quot;,
+		ID:      &quot;1&quot;,
+		Status:  &quot;created&quot;,
+		Pid:     1,
+		Bundle:  &quot;/bundle&quot;,
+	}
+	timeout := 100 * time.Millisecond
+
+	cmdHook := configs.NewCommandHook(&amp;configs.Command{
+		Path:    &quot;/bin/sleep&quot;,
+		Args:    []string{&quot;/bin/sleep&quot;, &quot;1&quot;},
+		Timeout: &amp;timeout,
+	})
+
+	if err := cmdHook.Run(state); err == nil {
+		t.Error(&quot;Expected error to occur but it was nil&quot;)
+	}
+}</file><file path="opencontainers__runc/libcontainer/configs/config.go">// Package configs provides various container-related configuration types
+// used by libcontainer.
+package configs
+
+import (
+	&quot;bytes&quot;
+	&quot;encoding/json&quot;
+	&quot;errors&quot;
+	&quot;fmt&quot;
+	&quot;os/exec&quot;
+	&quot;strconv&quot;
+	&quot;strings&quot;
+	&quot;time&quot;
+	&quot;unsafe&quot;
+
+	&quot;github.com/sirupsen/logrus&quot;
+	&quot;golang.org/x/sys/unix&quot;
+
+	&quot;github.com/opencontainers/cgroups&quot;
+	devices &quot;github.com/opencontainers/cgroups/devices/config&quot;
+	&quot;github.com/opencontainers/runtime-spec/specs-go&quot;
+)
+
+type Rlimit struct {
+	Type int    `json:&quot;type&quot;`
+	Hard uint64 `json:&quot;hard&quot;`
+	Soft uint64 `json:&quot;soft&quot;`
+}
+
+// IDMap represents UID/GID Mappings for User Namespaces.
+type IDMap struct {
+	ContainerID int64 `json:&quot;container_id&quot;`
+	HostID      int64 `json:&quot;host_id&quot;`
+	Size        int64 `json:&quot;size&quot;`
+}
+
+// Seccomp represents syscall restrictions
+// By default, only the native architecture of the kernel is allowed to be used
+// for syscalls. Additional architectures can be added by specifying them in
+// Architectures.
+type Seccomp struct {
+	DefaultAction    Action                   `json:&quot;default_action&quot;`
+	Architectures    []string                 `json:&quot;architectures&quot;`
+	Flags            []specs.LinuxSeccompFlag `json:&quot;flags&quot;`
+	Syscalls         []*Syscall               `json:&quot;syscalls&quot;`
+	DefaultErrnoRet  *uint                    `json:&quot;default_errno_ret&quot;`
+	ListenerPath     string                   `json:&quot;listener_path,omitempty&quot;`
+	ListenerMetadata string                   `json:&quot;listener_metadata,omitempty&quot;`
+}
+
+// Action is taken upon rule match in Seccomp
+type Action int
+
+const (
+	Kill Action = iota + 1
+	Errno
+	Trap
+	Allow
+	Trace
+	Log
+	Notify
+	KillThread
+	KillProcess
+)
+
+// Operator is a comparison operator to be used when matching syscall arguments in Seccomp
+type Operator int
+
+const (
+	EqualTo Operator = iota + 1
+	NotEqualTo
+	GreaterThan
+	GreaterThanOrEqualTo
+	LessThan
+	LessThanOrEqualTo
+	MaskEqualTo
+)
+
+// Arg is a rule to match a specific syscall argument in Seccomp
+type Arg struct {
+	Index    uint     `json:&quot;index&quot;`
+	Value    uint64   `json:&quot;value&quot;`
+	ValueTwo uint64   `json:&quot;value_two&quot;`
+	Op       Operator `json:&quot;op&quot;`
+}
+
+// Syscall is a rule to match a syscall in Seccomp
+type Syscall struct {
+	Name     string `json:&quot;name&quot;`
+	Action   Action `json:&quot;action&quot;`
+	ErrnoRet *uint  `json:&quot;errnoRet&quot;`
+	Args     []*Arg `json:&quot;args&quot;`
+}
+
+// Config defines configuration options for executing a process inside a contained environment.
+type Config struct {
+	// NoPivotRoot will use MS_MOVE and a chroot to jail the process into the container&apos;s rootfs
+	// This is a common option when the container is running in ramdisk.
+	NoPivotRoot bool `json:&quot;no_pivot_root,omitempty&quot;`
+
+	// ParentDeathSignal specifies the signal that is sent to the container&apos;s process in the case
+	// that the parent process dies.
+	ParentDeathSignal int `json:&quot;parent_death_signal,omitempty&quot;`
+
+	// Path to a directory containing the container&apos;s root filesystem.
+	Rootfs string `json:&quot;rootfs&quot;`
+
+	// Umask is the umask to use inside of the container.
+	Umask *uint32 `json:&quot;umask,omitempty&quot;`
+
+	// Readonlyfs will remount the container&apos;s rootfs as readonly where only externally mounted
+	// bind mounts are writable.
+	Readonlyfs bool `json:&quot;readonlyfs,omitempty&quot;`
+
+	// Specifies the mount propagation flags to be applied to /.
+	RootPropagation int `json:&quot;rootPropagation,omitempty&quot;`
+
+	// Mounts specify additional source and destination paths that will be mounted inside the container&apos;s
+	// rootfs and mount namespace if specified.
+	Mounts []*Mount `json:&quot;mounts&quot;`
+
+	// The device nodes that should be automatically created within the container upon container start.  Note, make sure that the node is marked as allowed in the cgroup as well!
+	Devices []*devices.Device `json:&quot;devices&quot;`
+
+	// NetDevices are key-value pairs, keyed by network device name, moved to the container&apos;s network namespace.
+	NetDevices map[string]*LinuxNetDevice `json:&quot;netDevices,omitempty&quot;`
+
+	MountLabel string `json:&quot;mount_label,omitempty&quot;`
+
+	// Hostname optionally sets the container&apos;s hostname if provided.
+	Hostname string `json:&quot;hostname,omitempty&quot;`
+
+	// Domainname optionally sets the container&apos;s domainname if provided.
+	Domainname string `json:&quot;domainname,omitempty&quot;`
+
+	// Namespaces specifies the container&apos;s namespaces that it should setup when cloning the init process
+	// If a namespace is not provided that namespace is shared from the container&apos;s parent process.
+	Namespaces Namespaces `json:&quot;namespaces&quot;`
+
+	// Capabilities specify the capabilities to keep when executing the process inside the container
+	// All capabilities not specified will be dropped from the processes capability mask.
+	Capabilities *Capabilities `json:&quot;capabilities,omitempty&quot;`
+
+	// Networks specifies the container&apos;s network setup to be created.
+	Networks []*Network `json:&quot;networks,omitempty&quot;`
+
+	// Routes can be specified to create entries in the route table as the container is started.
+	Routes []*Route `json:&quot;routes,omitempty&quot;`
+
+	// Cgroups specifies specific cgroup settings for the various subsystems that the container is
+	// placed into to limit the resources the container has available.
+	Cgroups *cgroups.Cgroup `json:&quot;cgroups&quot;`
+
+	// AppArmorProfile specifies the profile to apply to the process running in the container and is
+	// change at the time the process is executed.
+	AppArmorProfile string `json:&quot;apparmor_profile,omitempty&quot;`
+
+	// ProcessLabel specifies the label to apply to the process running in the container.  It is
+	// commonly used by selinux.
+	ProcessLabel string `json:&quot;process_label,omitempty&quot;`
+
+	// Rlimits specifies the resource limits, such as max open files, to set in the container
+	// If Rlimits are not set, the container will inherit rlimits from the parent process.
+	Rlimits []Rlimit `json:&quot;rlimits,omitempty&quot;`
+
+	// OomScoreAdj specifies the adjustment to be made by the kernel when calculating oom scores
+	// for a process. Valid values are between the range [-1000, &apos;1000&apos;], where processes with
+	// higher scores are preferred for being killed. If it is unset then we don&apos;t touch the current
+	// value.
+	// More information about kernel oom score calculation here: https://lwn.net/Articles/317814/
+	OomScoreAdj *int `json:&quot;oom_score_adj,omitempty&quot;`
+
+	// UIDMappings is an array of User ID mappings for User Namespaces.
+	UIDMappings []IDMap `json:&quot;uid_mappings,omitempty&quot;`
+
+	// GIDMappings is an array of Group ID mappings for User Namespaces.
+	GIDMappings []IDMap `json:&quot;gid_mappings,omitempty&quot;`
+
+	// MaskPaths specifies paths within the container&apos;s rootfs to mask over with a bind
+	// mount pointing to /dev/null as to prevent reads of the file.
+	MaskPaths []string `json:&quot;mask_paths,omitempty&quot;`
+
+	// ReadonlyPaths specifies paths within the container&apos;s rootfs to remount as read-only
+	// so that these files prevent any writes.
+	ReadonlyPaths []string `json:&quot;readonly_paths,omitempty&quot;`
+
+	// Sysctl is a map of properties and their values. It is the equivalent of using
+	// sysctl -w my.property.name value in Linux.
+	Sysctl map[string]string `json:&quot;sysctl,omitempty&quot;`
+
+	// Seccomp allows actions to be taken whenever a syscall is made within the container.
+	// A number of rules are given, each having an action to be taken if a syscall matches it.
+	// A default action to be taken if no rules match is also given.
+	Seccomp *Seccomp `json:&quot;seccomp,omitempty&quot;`
+
+	// NoNewPrivileges controls whether processes in the container can gain additional privileges.
+	NoNewPrivileges bool `json:&quot;no_new_privileges,omitempty&quot;`
+
+	// Hooks are a collection of actions to perform at various container lifecycle events.
+	// CommandHooks are serialized to JSON, but other hooks are not.
+	Hooks Hooks `json:&quot;Hooks,omitempty&quot;`
+
+	// Version is the version of opencontainer specification that is supported.
+	Version string `json:&quot;version&quot;`
+
+	// Labels are user defined metadata that is stored in the config and populated on the state
+	Labels []string `json:&quot;labels&quot;`
+
+	// NoNewKeyring will not allocated a new session keyring for the container.  It will use the
+	// callers keyring in this case.
+	NoNewKeyring bool `json:&quot;no_new_keyring,omitempty&quot;`
+
+	// IntelRdt specifies settings for Intel RDT group that the container is placed into
+	// to limit the resources (e.g., L3 cache, memory bandwidth) the container has available
+	IntelRdt *IntelRdt `json:&quot;intel_rdt,omitempty&quot;`
+
+	// MemoryPolicy specifies NUMA memory policy for the container.
+	MemoryPolicy *LinuxMemoryPolicy `json:&quot;memory_policy,omitempty&quot;`
+
+	// RootlessEUID is set when the runc was launched with non-zero EUID.
+	// Note that RootlessEUID is set to false when launched with EUID=0 in userns.
+	// When RootlessEUID is set, runc creates a new userns for the container.
+	// (config.json needs to contain userns settings)
+	RootlessEUID bool `json:&quot;rootless_euid,omitempty&quot;`
+
+	// RootlessCgroups is set when unlikely to have the full access to cgroups.
+	// When RootlessCgroups is set, cgroups errors are ignored.
+	RootlessCgroups bool `json:&quot;rootless_cgroups,omitempty&quot;`
+
+	// TimeOffsets specifies the offset for supporting time namespaces.
+	TimeOffsets map[string]specs.LinuxTimeOffset `json:&quot;time_offsets,omitempty&quot;`
+
+	// Scheduler represents the scheduling attributes for a process.
+	Scheduler *Scheduler `json:&quot;scheduler,omitempty&quot;`
+
+	// Personality contains configuration for the Linux personality syscall.
+	Personality *LinuxPersonality `json:&quot;personality,omitempty&quot;`
+
+	// IOPriority is the container&apos;s I/O priority.
+	IOPriority *IOPriority `json:&quot;io_priority,omitempty&quot;`
+
+	// ExecCPUAffinity is CPU affinity for a non-init process to be run in the container.
+	ExecCPUAffinity *CPUAffinity `json:&quot;exec_cpu_affinity,omitempty&quot;`
+}
+
+// Scheduler is based on the Linux sched_setattr(2) syscall.
+type Scheduler = specs.Scheduler
+
+// ToSchedAttr is to convert *configs.Scheduler to *unix.SchedAttr.
+func ToSchedAttr(scheduler *Scheduler) (*unix.SchedAttr, error) {
+	var policy uint32
+	switch scheduler.Policy {
+	case specs.SchedOther:
+		policy = 0
+	case specs.SchedFIFO:
+		policy = 1
+	case specs.SchedRR:
+		policy = 2
+	case specs.SchedBatch:
+		policy = 3
+	case specs.SchedISO:
+		policy = 4
+	case specs.SchedIdle:
+		policy = 5
+	case specs.SchedDeadline:
+		policy = 6
+	default:
+		return nil, fmt.Errorf(&quot;invalid scheduler policy: %s&quot;, scheduler.Policy)
+	}
+
+	var flags uint64
+	for _, flag := range scheduler.Flags {
+		switch flag {
+		case specs.SchedFlagResetOnFork:
+			flags |= 0x01
+		case specs.SchedFlagReclaim:
+			flags |= 0x02
+		case specs.SchedFlagDLOverrun:
+			flags |= 0x04
+		case specs.SchedFlagKeepPolicy:
+			flags |= 0x08
+		case specs.SchedFlagKeepParams:
+			flags |= 0x10
+		case specs.SchedFlagUtilClampMin:
+			flags |= 0x20
+		case specs.SchedFlagUtilClampMax:
+			flags |= 0x40
+		default:
+			return nil, fmt.Errorf(&quot;invalid scheduler flag: %s&quot;, flag)
+		}
+	}
+
+	return &amp;unix.SchedAttr{
+		Size:     unix.SizeofSchedAttr,
+		Policy:   policy,
+		Flags:    flags,
+		Nice:     scheduler.Nice,
+		Priority: uint32(scheduler.Priority),
+		Runtime:  scheduler.Runtime,
+		Deadline: scheduler.Deadline,
+		Period:   scheduler.Period,
+	}, nil
+}
+
+type IOPriority = specs.LinuxIOPriority
+
+type CPUAffinity struct {
+	Initial, Final *unix.CPUSet
+}
+
+// ToCPUSet parses a string in list format into a unix.CPUSet, e.g. &quot;0-3,5,7-9&quot;.
+func ToCPUSet(str string) (*unix.CPUSet, error) {
+	if str == &quot;&quot; {
+		return nil, nil
+	}
+	s := new(unix.CPUSet)
+
+	// Since (*CPUset).Set silently ignores too high CPU values,
+	// find out what the maximum is, and return an error.
+	maxCPU := uint64(unsafe.Sizeof(*s) * 8)
+	toInt := func(v string) (int, error) {
+		ret, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return 0, err
+		}
+		if ret &gt;= maxCPU {
+			return 0, fmt.Errorf(&quot;values larger than %d are not supported&quot;, maxCPU-1)
+		}
+		return int(ret), nil
+	}
+
+	for r := range strings.SplitSeq(str, &quot;,&quot;) {
+		// Allow extra spaces around.
+		r = strings.TrimSpace(r)
+		// Allow empty elements (extra commas).
+		if r == &quot;&quot; {
+			continue
+		}
+		if r0, r1, found := strings.Cut(r, &quot;-&quot;); found {
+			start, err := toInt(r0)
+			if err != nil {
+				return nil, err
+			}
+			end, err := toInt(r1)
+			if err != nil {
+				return nil, err
+			}
+			if start &gt; end {
+				return nil, errors.New(&quot;invalid range: &quot; + r)
+			}
+			for i := start; i &lt;= end; i++ {
+				s.Set(i)
+			}
+		} else {
+			val, err := toInt(r)
+			if err != nil {
+				return nil, err
+			}
+			s.Set(val)
+		}
+	}
+	if s.Count() == 0 {
+		return nil, fmt.Errorf(&quot;no members found in set %q&quot;, str)
+	}
+
+	return s, nil
+}
+
+// ConvertCPUAffinity converts [specs.CPUAffinity] to [CPUAffinity].
+func ConvertCPUAffinity(sa *specs.CPUAffinity) (*CPUAffinity, error) {
+	if sa == nil {
+		return nil, nil
+	}
+	initial, err := ToCPUSet(sa.Initial)
+	if err != nil {
+		return nil, fmt.Errorf(&quot;bad CPUAffinity.Initial: %w&quot;, err)
+	}
+	final, err := ToCPUSet(sa.Final)
+	if err != nil {
+		return nil, fmt.Errorf(&quot;bad CPUAffinity.Final: %w&quot;, err)
+	}
+	if initial == nil &amp;&amp; final == nil {
+		return nil, nil
+	}
+
+	return &amp;CPUAffinity{
+		Initial: initial,
+		Final:   final,
+	}, nil
+}
+
+type (
+	HookName string
+	HookList []Hook
+	Hooks    map[HookName]HookList
+)
+
+const (
+	// Prestart commands are executed after the container namespaces are created,
+	// but before the user supplied command is executed from init.
+	// Note: This hook is now deprecated
+	// Prestart commands are called in the Runtime namespace.
+	Prestart HookName = &quot;prestart&quot;
+
+	// CreateRuntime commands MUST be called as part of the create operation after
+	// the runtime environment has been created but before the pivot_root has been executed.
+	// CreateRuntime is called immediately after the deprecated Prestart hook.
+	// CreateRuntime commands are called in the Runtime Namespace.
+	CreateRuntime HookName = &quot;createRuntime&quot;
+
+	// CreateContainer commands MUST be called as part of the create operation after
+	// the runtime environment has been created but before the pivot_root has been executed.
+	// CreateContainer commands are called in the Container namespace.
+	CreateContainer HookName = &quot;createContainer&quot;
+
+	// StartContainer commands MUST be called as part of the start operation and before
+	// the container process is started.
+	// StartContainer commands are called in the Container namespace.
+	StartContainer HookName = &quot;startContainer&quot;
+
+	// Poststart commands are executed after the container init process starts.
+	// Poststart commands are called in the Runtime Namespace.
+	Poststart HookName = &quot;poststart&quot;
+
+	// Poststop commands are executed after the container init process exits.
+	// Poststop commands are called in the Runtime Namespace.
+	Poststop HookName = &quot;poststop&quot;
+)
+
+// HasHook checks if config has any hooks with any given names configured.
+func (c *Config) HasHook(names ...HookName) bool {
+	if c.Hooks == nil {
+		return false
+	}
+	for _, h := range names {
+		if len(c.Hooks[h]) &gt; 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// KnownHookNames returns the known hook names.
+// Used by `runc features`.
+func KnownHookNames() []string {
+	return []string{
+		string(Prestart), // deprecated
+		string(CreateRuntime),
+		string(CreateContainer),
+		string(StartContainer),
+		string(Poststart),
+		string(Poststop),
+	}
+}
+
+type Capabilities struct {
+	// Bounding is the set of capabilities checked by the kernel.
+	Bounding []string `json:&quot;Bounding,omitempty&quot;`
+	// Effective is the set of capabilities checked by the kernel.
+	Effective []string `json:&quot;Effective,omitempty&quot;`
+	// Inheritable is the capabilities preserved across execve.
+	Inheritable []string `json:&quot;Inheritable,omitempty&quot;`
+	// Permitted is the limiting superset for effective capabilities.
+	Permitted []string `json:&quot;Permitted,omitempty&quot;`
+	// Ambient is the ambient set of capabilities that are kept.
+	Ambient []string `json:&quot;Ambient,omitempty&quot;`
+}
+
+func (hooks *Hooks) UnmarshalJSON(b []byte) error {
+	var state map[HookName][]CommandHook
+
+	if err := json.Unmarshal(b, &amp;state); err != nil {
+		return err
+	}
+
+	*hooks = Hooks{}
+	for n, commandHooks := range state {
+		if len(commandHooks) == 0 {
+			continue
+		}
+
+		(*hooks)[n] = HookList{}
+		for _, h := range commandHooks {
+			(*hooks)[n] = append((*hooks)[n], h)
+		}
+	}
+
+	return nil
+}
+
+func (hooks *Hooks) MarshalJSON() ([]byte, error) {
+	serialize := func(hooks []Hook) (serializableHooks []CommandHook) {
+		for _, hook := range hooks {
+			switch chook := hook.(type) {
+			case CommandHook:
+				serializableHooks = append(serializableHooks, chook)
+			default:
+				logrus.Warnf(&quot;cannot serialize hook of type %T, skipping&quot;, hook)
+			}
+		}
+
+		return serializableHooks
+	}
+
+	return json.Marshal(map[string]any{
+		&quot;prestart&quot;:        serialize((*hooks)[Prestart]),
+		&quot;createRuntime&quot;:   serialize((*hooks)[CreateRuntime]),
+		&quot;createContainer&quot;: serialize((*hooks)[CreateContainer]),
+		&quot;startContainer&quot;:  serialize((*hooks)[StartContainer]),
+		&quot;poststart&quot;:       serialize((*hooks)[Poststart]),
+		&quot;poststop&quot;:        serialize((*hooks)[Poststop]),
+	})
+}
+
+// Run executes all hooks for the given hook name.
+func (hooks Hooks) Run(name HookName, state *specs.State) error {
+	list := hooks[name]
+	for i, h := range list {
+		if err := h.Run(state); err != nil {
+			return fmt.Errorf(&quot;error running %s hook #%d: %w&quot;, name, i, err)
+		}
+	}
+
+	return nil
+}
+
+// SetDefaultEnv sets the environment for those CommandHook entries
+// that do not have one set.
+func (hooks HookList) SetDefaultEnv(env []string) {
+	for _, h := range hooks {
+		if ch, ok := h.(CommandHook); ok &amp;&amp; len(ch.Env) == 0 {
+			ch.Env = env
+		}
+	}
+}
+
+type Hook interface {
+	// Run executes the hook with the provided state.
+	Run(*specs.State) error
+}
+
+// NewFunctionHook will call the provided function when the hook is run.
+func NewFunctionHook(f func(*specs.State) error) FuncHook {
+	return FuncHook{
+		run: f,
+	}
+}
+
+type FuncHook struct {
+	run func(*specs.State) error
+}
+
+func (f FuncHook) Run(s *specs.State) error {
+	return f.run(s)
+}
+
+type Command struct {
+	Path    string         `json:&quot;path&quot;`
+	Args    []string       `json:&quot;args&quot;`
+	Env     []string       `json:&quot;env&quot;`
+	Dir     string         `json:&quot;dir&quot;`
+	Timeout *time.Duration `json:&quot;timeout&quot;`
+}
+
+// NewCommandHook will execute the provided command when the hook is run.
+func NewCommandHook(cmd *Command) CommandHook {
+	return CommandHook{
+		Command: cmd,
+	}
+}
+
+type CommandHook struct {
+	*Command
+}
+
+func (c *Command) Run(s *specs.State) error {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Cmd{
+		Path:   c.Path,
+		Args:   c.Args,
+		Env:    c.Env,
+		Stdin:  bytes.NewReader(b),
+		Stdout: &amp;stdout,
+		Stderr: &amp;stderr,
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	errC := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			err = fmt.Errorf(&quot;%w, stdout: %s, stderr: %s&quot;, err, stdout.String(), stderr.String())
+		}
+		errC &lt;- err
+	}()
+	var timerCh &lt;-chan time.Time
+	if c.Timeout != nil {
+		timer := time.NewTimer(*c.Timeout)
+		defer timer.Stop()
+		timerCh = timer.C
+	}
+	select {
+	case err := &lt;-errC:
+		return err
+	case &lt;-timerCh:
+		_ = cmd.Process.Kill()
+		&lt;-errC
+		return fmt.Errorf(&quot;hook ran past specified timeout of %.1fs&quot;, c.Timeout.Seconds())
+	}
+}</file><file path="opencontainers__runc/libcontainer/configs/configs_fuzzer.go">//go:build gofuzz
+
+package configs
+
+func FuzzUnmarshalJSON(data []byte) int {
+	hooks := Hooks{}
+	_ = hooks.UnmarshalJSON(data)
+	return 1
+}</file><file path="opencontainers__runc/libcontainer/configs/doc.go">// Package configs defines the structures and constants used for configuring a container
+package configs</file><file path="opencontainers__runc/libcontainer/configs/intelrdt.go">package configs
+
+type IntelRdt struct {
+	// The identity for RDT Class of Service
+	ClosID string `json:&quot;closID,omitempty&quot;`
+
+	// Schemata is a generic field to specify schemata file in the resctrl
+	// filesystem. Each element represents one line written to the schemata file.
+	Schemata []string `json:&quot;schemata,omitempty&quot;`
+
+	// The schema for L3 cache id and capacity bitmask (CBM)
+	// Format: &quot;L3:&lt;cache_id0&gt;=&lt;cbm0&gt;;&lt;cache_id1&gt;=&lt;cbm1&gt;;...&quot;
+	L3CacheSchema string `json:&quot;l3_cache_schema,omitempty&quot;`
+
+	// The schema of memory bandwidth per L3 cache id
+	// Format: &quot;MB:&lt;cache_id0&gt;=bandwidth0;&lt;cache_id1&gt;=bandwidth1;...&quot;
+	// The unit of memory bandwidth is specified in &quot;percentages&quot; by
+	// default, and in &quot;MBps&quot; if MBA Software Controller is enabled.
+	MemBwSchema string `json:&quot;memBwSchema,omitempty&quot;`
+
+	// Create a monitoring group for the container.
+	EnableMonitoring bool `json:&quot;enableMonitoring,omitempty&quot;`
+}</file><file path="opencontainers__runc/libcontainer/configs/memorypolicy.go">package configs
+
+import &quot;golang.org/x/sys/unix&quot;
+
+// LinuxMemoryPolicy contains memory policy configuration.
+type LinuxMemoryPolicy struct {
+	// Mode specifies memory policy mode without mode flags. See
+	// set_mempolicy() documentation for details.
+	Mode int `json:&quot;mode,omitempty&quot;`
+	// Flags contains mode flags.
+	Flags int `json:&quot;flags,omitempty&quot;`
+	// Nodes contains NUMA nodes to which the mode applies.
+	Nodes *unix.CPUSet `json:&quot;nodes,omitempty&quot;`
+}</file><file path="opencontainers__runc/libcontainer/configs/mount_linux.go">package configs
+
+import &quot;golang.org/x/sys/unix&quot;
+
+type MountIDMapping struct {
+	// Recursive indicates if the mapping needs to be recursive.
+	Recursive bool `json:&quot;recursive,omitempty&quot;`
+
+	// UserNSPath is a path to a user namespace that indicates the necessary
+	// id-mappings for MOUNT_ATTR_IDMAP. If set to non-&quot;&quot;, UIDMappings and
+	// GIDMappings must be set to nil.
+	UserNSPath string `json:&quot;userns_path,omitempty&quot;`
+
+	// UIDMappings is the uid mapping set for this mount, to be used with
+	// MOUNT_ATTR_IDMAP.
+	UIDMappings []IDMap `json:&quot;uid_mappings,omitempty&quot;`
+
+	// GIDMappings is the gid mapping set for this mount, to be used with
+	// MOUNT_ATTR_IDMAP.
+	GIDMappings []IDMap `json:&quot;gid_mappings,omitempty&quot;`
+}
+
+type Mount struct {
+	// Source path for the mount.
+	Source string `json:&quot;source&quot;`
+
+	// Destination path for the mount inside the container.
+	Destination string `json:&quot;destination&quot;`
+
+	// Device the mount is for.
+	Device string `json:&quot;device&quot;`
+
+	// Mount flags.
+	Flags int `json:&quot;flags,omitempty&quot;`
+
+	// Mount flags that were explicitly cleared in the configuration (meaning
+	// the user explicitly requested that these flags *not* be set).
+	ClearedFlags int `json:&quot;cleared_flags,omitempty&quot;`
+
+	// Propagation flags.
+	PropagationFlags []int `json:&quot;propagation_flags,omitempty&quot;`
+
+	// Mount data applied to the mount.
+	Data string `json:&quot;data,omitempty&quot;`
+
+	// Relabel field is ignored.
+	//
+	// Deprecated: do not use. This field will be removed in runc 1.7.
+	Relabel string `json:&quot;-&quot;`
+
+	// RecAttr represents mount properties to be applied recursively (AT_RECURSIVE), see mount_setattr(2).
+	RecAttr *unix.MountAttr `json:&quot;rec_attr,omitempty&quot;`
+
+	// Extensions are additional flags that are specific to runc.
+	Extensions int `json:&quot;extensions,omitempty&quot;`
+
+	// Mapping is the MOUNT_ATTR_IDMAP configuration for the mount. If non-nil,
+	// the mount is configured to use MOUNT_ATTR_IDMAP-style id mappings.
+	IDMapping *MountIDMapping `json:&quot;id_mapping,omitempty&quot;`
+}
+
+func (m *Mount) IsBind() bool {
+	return m.Flags&amp;unix.MS_BIND != 0
+}
+
+func (m *Mount) IsIDMapped() bool {
+	return m.IDMapping != nil
+}</file><file path="opencontainers__runc/libcontainer/configs/mount_unsupported.go">//go:build !linux
+
+package configs
+
+type Mount struct{}
+
+func (m *Mount) IsBind() bool {
+	return false
+}</file><file path="opencontainers__runc/libcontainer/configs/mount.go">package configs
+
+const (
+	// EXT_COPYUP is a directive to copy up the contents of a directory when
+	// a tmpfs is mounted over it.
+	EXT_COPYUP = 1 &lt;&lt; iota //nolint:golint,revive // ignore &quot;don&apos;t use ALL_CAPS&quot; warning
+)</file><file path="opencontainers__runc/libcontainer/configs/namespaces_linux.go">package configs
+
+import (
+	&quot;fmt&quot;
+	&quot;os&quot;
+	&quot;slices&quot;
+	&quot;sync&quot;
+)
+
+const (
+	NEWNET    NamespaceType = &quot;NEWNET&quot;
+	NEWPID    NamespaceType = &quot;NEWPID&quot;
+	NEWNS     NamespaceType = &quot;NEWNS&quot;
+	NEWUTS    NamespaceType = &quot;NEWUTS&quot;
+	NEWIPC    NamespaceType = &quot;NEWIPC&quot;
+	NEWUSER   NamespaceType = &quot;NEWUSER&quot;
+	NEWCGROUP NamespaceType = &quot;NEWCGROUP&quot;
+	NEWTIME   NamespaceType = &quot;NEWTIME&quot;
+)
+
+var (
+	nsLock              sync.Mutex
+	supportedNamespaces = make(map[NamespaceType]bool)
+)
+
+// NsName converts the namespace type to its filename
+func NsName(ns NamespaceType) string {
+	switch ns {
+	case NEWNET:
+		return &quot;net&quot;
+	case NEWNS:
+		return &quot;mnt&quot;
+	case NEWPID:
+		return &quot;pid&quot;
+	case NEWIPC:
+		return &quot;ipc&quot;
+	case NEWUSER:
+		return &quot;user&quot;
+	case NEWUTS:
+		return &quot;uts&quot;
+	case NEWCGROUP:
+		return &quot;cgroup&quot;
+	case NEWTIME:
+		return &quot;time&quot;
+	}
+	return &quot;&quot;
+}
+
+// IsNamespaceSupported returns whether a namespace is available or
+// not
+func IsNamespaceSupported(ns NamespaceType) bool {
+	nsLock.Lock()
+	defer nsLock.Unlock()
+	supported, ok := supportedNamespaces[ns]
+	if ok {
+		return supported
+	}
+	nsFile := NsName(ns)
+	// if the namespace type is unknown, just return false
+	if nsFile == &quot;&quot; {
+		return false
+	}
+	// We don&apos;t need to use /proc/thread-self here because the list of
+	// namespace types is unrelated to the thread. This lets us avoid having to
+	// do runtime.LockOSThread.
+	_, err := os.Stat(&quot;/proc/self/ns/&quot; + nsFile)
+	// a namespace is supported if it exists and we have permissions to read it
+	supported = err == nil
+	supportedNamespaces[ns] = supported
+	return supported
+}
+
+func NamespaceTypes() []NamespaceType {
+	return []NamespaceType{
+		NEWUSER, // Keep user NS always first, don&apos;t move it.
+		NEWIPC,
+		NEWUTS,
+		NEWNET,
+		NEWPID,
+		NEWNS,
+		NEWCGROUP,
+		NEWTIME,
+	}
+}
+
+// Namespace defines configuration for each namespace.  It specifies an
+// alternate path that is able to be joined via setns.
+type Namespace struct {
+	Type NamespaceType `json:&quot;type&quot;`
+	Path string        `json:&quot;path,omitempty&quot;`
+}
+
+func (n *Namespace) GetPath(pid int) string {
+	return fmt.Sprintf(&quot;/proc/%d/ns/%s&quot;, pid, NsName(n.Type))
+}
+
+func (n *Namespaces) Remove(t NamespaceType) bool {
+	i := n.index(t)
+	if i == -1 {
+		return false
+	}
+	*n = slices.Delete((*n), i, i+1)
+	return true
+}
+
+func (n *Namespaces) Add(t NamespaceType, path string) {
+	i := n.index(t)
+	if i == -1 {
+		*n = append(*n, Namespace{Type: t, Path: path})
+		return
+	}
+	(*n)[i].Path = path
+}
+
+func (n *Namespaces) index(t NamespaceType) int {
+	for i, ns := range *n {
+		if ns.Type == t {
+			return i
+		}
+	}
+	return -1
+}
+
+func (n *Namespaces) Contains(t NamespaceType) bool {
+	return n.index(t) != -1
+}
+
+func (n *Namespaces) PathOf(t NamespaceType) string {
+	i := n.index(t)
+	if i == -1 {
+		return &quot;&quot;
+	}
+	return (*n)[i].Path
+}</file><file path="opencontainers__runc/libcontainer/configs/namespaces_syscall_unsupported.go">//go:build !linux &amp;&amp; !windows
+
+package configs
+
+func (n *Namespace) Syscall() int {
+	panic(&quot;No namespace syscall support&quot;)
+}
+
+// CloneFlags parses the container&apos;s Namespaces options to set the correct
+// flags on clone, unshare. This function returns flags only for new namespaces.
+func (n *Namespaces) CloneFlags() uintptr {
+	panic(&quot;No namespace syscall support&quot;)
+}</file><file path="opencontainers__runc/libcontainer/configs/namespaces_syscall.go">//go:build linux
+
+package configs
+
+import &quot;golang.org/x/sys/unix&quot;
+
+func (n *Namespace) Syscall() int {
+	return namespaceInfo[n.Type]
+}
+
+var namespaceInfo = map[NamespaceType]int{
+	NEWNET:    unix.CLONE_NEWNET,
+	NEWNS:     unix.CLONE_NEWNS,
+	NEWUSER:   unix.CLONE_NEWUSER,
+	NEWIPC:    unix.CLONE_NEWIPC,
+	NEWUTS:    unix.CLONE_NEWUTS,
+	NEWPID:    unix.CLONE_NEWPID,
+	NEWCGROUP: unix.CLONE_NEWCGROUP,
+	NEWTIME:   unix.CLONE_NEWTIME,
+}
+
+// CloneFlags parses the container&apos;s Namespaces options to set the correct
+// flags on clone, unshare. This function returns flags only for new namespaces.
+func (n *Namespaces) CloneFlags() uintptr {
+	var flag int
+	for _, v := range *n {
+		if v.Path != &quot;&quot; {
+			continue
+		}
+		flag |= namespaceInfo[v.Type]
+	}
+	return uintptr(flag)
+}
+
+// IsPrivate tells whether the namespace of type t is configured as private
+// (i.e. it exists and is not shared).
+func (n Namespaces) IsPrivate(t NamespaceType) bool {
+	for _, v := range n {
+		if v.Type == t {
+			return v.Path == &quot;&quot;
+		}
+	}
+	// Not found, so implicitly sharing a parent namespace.
+	return false
+}</file><file path="opencontainers__runc/libcontainer/configs/namespaces_unsupported.go">//go:build !linux
+
+package configs
+
+// Namespace defines configuration for each namespace.  It specifies an
+// alternate path that is able to be joined via setns.
+type Namespace struct{}</file><file path="opencontainers__runc/libcontainer/configs/namespaces.go">package configs
+
+type NamespaceType string
+
+type Namespaces []Namespace</file><file path="opencontainers__runc/libcontainer/configs/netdevices.go">package configs
+
+// LinuxNetDevice represents a single network device to be added to the container&apos;s network namespace.
+type LinuxNetDevice struct {
+	// Name of the device in the container namespace.
+	Name string `json:&quot;name,omitempty&quot;`
+}</file><file path="opencontainers__runc/libcontainer/configs/network.go">package configs
+
+// Network defines configuration for a container&apos;s networking stack
+//
+// The network configuration can be omitted from a container causing the
+// container to be setup with the host&apos;s networking stack
+type Network struct {
+	// Type sets the networks type, commonly veth and loopback.
+	Type string `json:&quot;type&quot;`
+
+	// Name of the network interface.
+	Name string `json:&quot;name,omitempty&quot;`
+
+	// The bridge to use.
+	Bridge string `json:&quot;bridge,omitempty&quot;`
+
+	// MacAddress contains the MAC address to set on the network interface.
+	MacAddress string `json:&quot;mac_address,omitempty&quot;`
+
+	// Address contains the IPv4 and mask to set on the network interface.
+	Address string `json:&quot;address,omitempty&quot;`
+
+	// Gateway sets the gateway address that is used as the default for the interface.
+	Gateway string `json:&quot;gateway,omitempty&quot;`
+
+	// IPv6Address contains the IPv6 and mask to set on the network interface.
+	IPv6Address string `json:&quot;ipv6_address,omitempty&quot;`
+
+	// IPv6Gateway sets the ipv6 gateway address that is used as the default for the interface.
+	IPv6Gateway string `json:&quot;ipv6_gateway,omitempty&quot;`
+
+	// Mtu sets the mtu value for the interface and will be mirrored on both the host and
+	// container&apos;s interfaces if a pair is created, specifically in the case of type veth
+	// Note: This does not apply to loopback interfaces.
+	Mtu int `json:&quot;mtu,omitempty&quot;`
+
+	// TxQueueLen sets the tx_queuelen value for the interface and will be mirrored on both the host and
+	// container&apos;s interfaces if a pair is created, specifically in the case of type veth
+	// Note: This does not apply to loopback interfaces.
+	TxQueueLen int `json:&quot;txqueuelen,omitempty&quot;`
+
+	// HostInterfaceName is a unique name of a veth pair that resides on in the host interface of the
+	// container.
+	HostInterfaceName string `json:&quot;host_interface_name,omitempty&quot;`
+
+	// HairpinMode specifies if hairpin NAT should be enabled on the virtual interface
+	// bridge port in the case of type veth
+	// Note: This is unsupported on some systems.
+	// Note: This does not apply to loopback interfaces.
+	HairpinMode bool `json:&quot;hairpin_mode,omitempty&quot;`
+}
+
+// Route defines a routing table entry.
+//
+// Routes can be specified to create entries in the routing table as the container
+// is started.
+//
+// All of destination, source, and gateway should be either IPv4 or IPv6.
+// One of the three options must be present, and omitted entries will use their
+// IP family default for the route table.  For IPv4 for example, setting the
+// gateway to 1.2.3.4 and the interface to eth0 will set up a standard
+// destination of 0.0.0.0(or *) when viewed in the route table.
+type Route struct {
+	// Destination specifies the destination IP address and mask in the CIDR form.
+	Destination string `json:&quot;destination,omitempty&quot;`
+
+	// Source specifies the source IP address and mask in the CIDR form.
+	Source string `json:&quot;source,omitempty&quot;`
+
+	// Gateway specifies the gateway IP address.
+	Gateway string `json:&quot;gateway,omitempty&quot;`
+
+	// InterfaceName specifies the device to set this route up for, for example eth0.
+	InterfaceName string `json:&quot;interface_name,omitempty&quot;`
+}</file><file path="opencontainers__runc/libcontainer/configs/tocpuset_test.go">package configs
+
+import (
+	&quot;testing&quot;
+
+	&quot;golang.org/x/sys/unix&quot;
+)
+
+func TestToCPUSet(t *testing.T) {
+	set := func(cpus ...int) *unix.CPUSet {
+		r := &amp;unix.CPUSet{}
+		for _, cpu := range cpus {
+			r.Set(cpu)
+		}
+		return r
+	}
+
+	testCases := []struct {
+		in    string
+		out   *unix.CPUSet
+		isErr bool
+	}{
+		{in: &quot;&quot;}, // Empty means unset.
+
+		// Valid cases.
+		{in: &quot;0&quot;, out: &amp;unix.CPUSet{1}},
+		{in: &quot;1&quot;, out: &amp;unix.CPUSet{2}},
+		{in: &quot;0-1&quot;, out: &amp;unix.CPUSet{3}},
+		{in: &quot;0,1&quot;, out: &amp;unix.CPUSet{3}},
+		{in: &quot;,0,1,&quot;, out: &amp;unix.CPUSet{3}},
+		{in: &quot;0-3&quot;, out: &amp;unix.CPUSet{0x0f}},
+		{in: &quot;0,1,2-3&quot;, out: &amp;unix.CPUSet{0x0f}},
+		{in: &quot;4-7&quot;, out: &amp;unix.CPUSet{0xf0}},
+		{in: &quot;0-7&quot;, out: &amp;unix.CPUSet{0xff}},
+		{in: &quot;0-15&quot;, out: &amp;unix.CPUSet{0xffff}},
+		{in: &quot;16&quot;, out: &amp;unix.CPUSet{0x10000}},
+		// Extra whitespace in between ranges are OK.
+		{in: &quot;1, 2, 1-2&quot;, out: &amp;unix.CPUSet{6}},
+		{in: &quot;    , 1   , 3  ,  5-7,    &quot;, out: &amp;unix.CPUSet{0xea}},
+		// Somewhat large values. The underlying type in unix.CPUSet
+		// can either be uint32 or uint64, so we have to use a helper.
+		{in: &quot;0-3,32-33&quot;, out: set(0, 1, 2, 3, 32, 33)},
+		{in: &quot;127-129, 1&quot;, out: set(1, 127, 128, 129)},
+		{in: &quot;1023&quot;, out: set(1023)},
+
+		// Error cases.
+		{in: &quot;-&quot;, isErr: true},
+		{in: &quot;1-&quot;, isErr: true},
+		{in: &quot;-3&quot;, isErr: true},
+		{in: &quot;,&quot;, isErr: true},
+		{in: &quot; &quot;, isErr: true},
+		// Bad range (start &gt; end).
+		{in: &quot;54-53&quot;, isErr: true},
+		// Extra spaces inside a range is not OK.
+		{in: &quot;1 - 2&quot;, isErr: true},
+		{in: &quot;1024&quot;, isErr: true}, // Too big for unix.CPUSet.
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.in, func(t *testing.T) {
+			out, err := ToCPUSet(tc.in)
+			t.Logf(&quot;ToCPUSet(%q) = %v (error: %v)&quot;, tc.in, out, err)
+			// Check the error.
+			if tc.isErr {
+				if err == nil {
+					t.Error(&quot;want error, got nil&quot;)
+				}
+				return // No more checks.
+			}
+			if err != nil {
+				t.Fatalf(&quot;want no error, got %v&quot;, err)
+			}
+			// Check the value.
+			if tc.out == nil {
+				if out != nil {
+					t.Fatalf(&quot;want nil, got %v&quot;, out)
+				}
+				return // No more checks.
+			}
+			if out == nil {
+				t.Fatalf(&quot;want %v, got nil&quot;, tc.out)
+			}
+			if *out != *tc.out {
+				t.Errorf(&quot;case %q: want %v, got %v&quot;, tc.in, tc.out, out)
+			}
+		})
+	}
+}</file></files></repomix>

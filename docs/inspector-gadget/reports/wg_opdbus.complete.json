@@ -1,0 +1,906 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "wg_opdbus.rs",
+  "plugin": {
+    "name": "wg_opdbus",
+    "category": "network",
+    "version": "1.0.0",
+    "description": "Hypervisor WireGuard identity interface for op-dbus",
+    "display_name": "A.N.N.A. Scribe WireGuard Identity",
+    "state_root": "WgOpdbusState",
+    "fields": {
+      "config_path": {
+        "rust_type": "Option<String>",
+        "description": "",
+        "subid": "src.network.wg-opdbus.config@v1",
+        "has_serde_default": true,
+        "optional": true,
+        "json_type": "string"
+      },
+      "excluded_plugins": {
+        "rust_type": "Vec<String>",
+        "description": "",
+        "subid": "obs.network.wg-opdbus.wgcf-present@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "identity_role": {
+        "rust_type": "Option<String>",
+        "description": "",
+        "subid": "src.network.wg-opdbus.identity-role@v1",
+        "has_serde_default": true,
+        "optional": true,
+        "json_type": "string"
+      },
+      "interface": {
+        "rust_type": "Option<WireGuardInterface>",
+        "description": "",
+        "subid": "src.network.wg-opdbus.interface-binding@v1",
+        "has_serde_default": true,
+        "optional": true
+      },
+      "netmaker_plugin": {
+        "rust_type": "Option<String>",
+        "description": "",
+        "subid": "obs.network.wg-opdbus.netmaker-separate@v1",
+        "has_serde_default": true,
+        "optional": true,
+        "json_type": "string"
+      },
+      "route_targets": {
+        "rust_type": "Vec<String>",
+        "description": "",
+        "subid": "src.network.wg-opdbus.routes@v1",
+        "has_serde_default": true,
+        "optional": false,
+        "json_type": "array"
+      },
+      "wireguard_plugin": {
+        "rust_type": "Option<String>",
+        "description": "",
+        "subid": "src.network.wg-opdbus.wireguard-plugin@v1",
+        "has_serde_default": true,
+        "optional": true,
+        "json_type": "string"
+      }
+    },
+    "nested_types": {
+      "CreateInterfaceInput": {
+        "config_path": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "excluded_plugins": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "identity_role": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "interface": {
+          "rust_type": "WireGuardInterface",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "netmaker_plugin": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "route_targets": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        },
+        "wireguard_plugin": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "GetStatusInput": {
+        "interface_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "wireguard_plugin": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "WgOpdbusStatusOutput": {
+        "config_path": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "excluded_plugins": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "identity_role": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "interface": {
+          "rust_type": "Option<WireGuardInterface>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true
+        },
+        "netmaker_plugin": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "route_targets": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "wireguard_plugin": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {
+      "create_interface": {
+        "name": "create_interface",
+        "input_type": "CreateInterfaceInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": true,
+        "required_capability": "wg_opdbus.invoke",
+        "subid": "mut.network.wg-opdbus.interface.create@v1",
+        "args": {
+          "properties": {
+            "config_path": {
+              "type": "string"
+            },
+            "excluded_plugins": {
+              "type": "array"
+            },
+            "identity_role": {
+              "type": "string"
+            },
+            "interface": {
+              "type": "object",
+              "x-rust-type": "WireGuardInterface"
+            },
+            "netmaker_plugin": {
+              "type": "string"
+            },
+            "route_targets": {
+              "type": "array"
+            },
+            "wireguard_plugin": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface",
+            "wireguard_plugin"
+          ],
+          "title": "CreateInterfaceInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "get_status": {
+        "name": "get_status",
+        "input_type": "GetStatusInput",
+        "output_type": "WgOpdbusStatusOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "wg_opdbus.read",
+        "subid": "obs.network.wg-opdbus.status.get@v1",
+        "args": {
+          "properties": {
+            "interface_name": {
+              "type": "string"
+            },
+            "wireguard_plugin": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "interface_name",
+            "wireguard_plugin"
+          ],
+          "title": "GetStatusInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "config_path": {
+              "type": "string"
+            },
+            "excluded_plugins": {
+              "type": "array"
+            },
+            "identity_role": {
+              "type": "string"
+            },
+            "interface": {
+              "type": "object",
+              "x-rust-type": "Option<WireGuardInterface>"
+            },
+            "netmaker_plugin": {
+              "type": "string"
+            },
+            "route_targets": {
+              "type": "array"
+            },
+            "wireguard_plugin": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "excluded_plugins",
+            "route_targets"
+          ],
+          "title": "WgOpdbusStatusOutput",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "audit": {
+    "ok": false,
+    "fail": 16,
+    "warn": 70,
+    "hint": 11,
+    "findings": [
+      {
+        "code": "missing_struct_doc",
+        "location": "struct WgOpdbusState",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.wireguard_plugin",
+        "message": "field `wireguard_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.interface",
+        "message": "field `interface` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.config_path",
+        "message": "field `config_path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.identity_role",
+        "message": "field `identity_role` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.route_targets",
+        "message": "field `route_targets` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.netmaker_plugin",
+        "message": "field `netmaker_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "WgOpdbusState.netmaker_plugin",
+        "message": "`netmaker_plugin` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusState.excluded_plugins",
+        "message": "field `excluded_plugins` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "suggest_readonly_obs",
+        "location": "WgOpdbusState.excluded_plugins",
+        "message": "`excluded_plugins` is obs.* — consider #[schemars(extend(\"readOnly\" = true))] if display-only",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CreateInterfaceInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.wireguard_plugin",
+        "message": "field `wireguard_plugin` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.wireguard_plugin",
+        "message": "field `wireguard_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateInterfaceInput.wireguard_plugin",
+        "message": "consider #[serde(default)] on `wireguard_plugin` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.interface",
+        "message": "field `interface` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateInterfaceInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.config_path",
+        "message": "field `config_path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.config_path",
+        "message": "field `config_path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.identity_role",
+        "message": "field `identity_role` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.identity_role",
+        "message": "field `identity_role` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.route_targets",
+        "message": "field `route_targets` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.route_targets",
+        "message": "field `route_targets` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.netmaker_plugin",
+        "message": "field `netmaker_plugin` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.netmaker_plugin",
+        "message": "field `netmaker_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateInterfaceInput.excluded_plugins",
+        "message": "field `excluded_plugins` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateInterfaceInput.excluded_plugins",
+        "message": "field `excluded_plugins` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetStatusInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusInput.wireguard_plugin",
+        "message": "field `wireguard_plugin` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusInput.wireguard_plugin",
+        "message": "field `wireguard_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusInput.wireguard_plugin",
+        "message": "consider #[serde(default)] on `wireguard_plugin` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusInput.interface_name",
+        "message": "field `interface_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusInput.interface_name",
+        "message": "field `interface_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusInput.interface_name",
+        "message": "consider #[serde(default)] on `interface_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct WgOpdbusStatusOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.wireguard_plugin",
+        "message": "field `wireguard_plugin` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.wireguard_plugin",
+        "message": "field `wireguard_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.interface",
+        "message": "field `interface` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.config_path",
+        "message": "field `config_path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.config_path",
+        "message": "field `config_path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.identity_role",
+        "message": "field `identity_role` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.identity_role",
+        "message": "field `identity_role` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.route_targets",
+        "message": "field `route_targets` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.route_targets",
+        "message": "field `route_targets` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "WgOpdbusStatusOutput.route_targets",
+        "message": "consider #[serde(default)] on `route_targets` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.netmaker_plugin",
+        "message": "field `netmaker_plugin` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.netmaker_plugin",
+        "message": "field `netmaker_plugin` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "WgOpdbusStatusOutput.excluded_plugins",
+        "message": "field `excluded_plugins` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "WgOpdbusStatusOutput.excluded_plugins",
+        "message": "field `excluded_plugins` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "WgOpdbusStatusOutput.excluded_plugins",
+        "message": "consider #[serde(default)] on `excluded_plugins` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/wireguard.xml version=repomix nodes=0 elements=101 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=9 introspected=101 missing_in_plugin=101 extra_in_plugin=9",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.TunError",
+        "message": "external surface has `enum.rs.TunError` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.TunError.Disconnected",
+        "message": "external surface has `enum.rs.TunError.Disconnected` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError",
+        "message": "external surface has `enum.rs.WireGuardError` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.ConnectionExpired",
+        "message": "external surface has `enum.rs.WireGuardError.ConnectionExpired` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.DestinationBufferTooSmall",
+        "message": "external surface has `enum.rs.WireGuardError.DestinationBufferTooSmall` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.DuplicateCounter",
+        "message": "external surface has `enum.rs.WireGuardError.DuplicateCounter` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.IncorrectPacketLength",
+        "message": "external surface has `enum.rs.WireGuardError.IncorrectPacketLength` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidAeadTag",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidAeadTag` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidCounter",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidCounter` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidMac",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidMac` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidPacket",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidPacket` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.InvalidTai64nTimestamp",
+        "message": "external surface has `enum.rs.WireGuardError.InvalidTai64nTimestamp` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.LockFailed",
+        "message": "external surface has `enum.rs.WireGuardError.LockFailed` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.NoCurrentSession",
+        "message": "external surface has `enum.rs.WireGuardError.NoCurrentSession` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.UnderLoad",
+        "message": "external surface has `enum.rs.WireGuardError.UnderLoad` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.UnexpectedPacket",
+        "message": "external surface has `enum.rs.WireGuardError.UnexpectedPacket` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongIndex",
+        "message": "external surface has `enum.rs.WireGuardError.WrongIndex` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongKey",
+        "message": "external surface has `enum.rs.WireGuardError.WrongKey` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongPacketType",
+        "message": "external surface has `enum.rs.WireGuardError.WrongPacketType` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "enum.rs.WireGuardError.WrongTai64nTimestamp",
+        "message": "external surface has `enum.rs.WireGuardError.WrongTai64nTimestamp` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.config.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.config.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.error.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.error.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.uapi.get.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.uapi.get.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.uapi.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.uapi.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.configuration.uapi.set.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.configuration.uapi.set.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.main.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.main.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.endpoint.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.endpoint.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.tun.dummy.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.tun.dummy.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.tun.void.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.tun.void.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.dummy.udp.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.dummy.udp.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.endpoint.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.endpoint.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.tun.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.tun.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.uapi.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.uapi.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.linux.udp.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.linux.udp.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.mod.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.tun.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.tun.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.WireGuard__wireguard-rs.src.platform.uapi.rs",
+        "message": "external surface has `file.WireGuard__wireguard-rs.src.platform.uapi.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 61 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/wireguard.xml",
+    "files_by_kind": {
+      "rust": 83
+    },
+    "by_kind": {
+      "rust": 101
+    },
+    "element_path_count": 101,
+    "gaps": {
+      "surface_paths_total": 101,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

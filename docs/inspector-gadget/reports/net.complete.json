@@ -1,0 +1,627 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "net.rs",
+  "plugin": {
+    "name": "net",
+    "category": "software",
+    "version": "0.0.0",
+    "description": "",
+    "state_root": "AddressConfig",
+    "fields": {
+      "ip": {
+        "rust_type": "String",
+        "description": "IP address.",
+        "subid": "exp.service.net.address.ip.declare@v1",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "prefix": {
+        "rust_type": "u8",
+        "description": "CIDR prefix length.",
+        "subid": "exp.service.net.address.prefix.declare@v1",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "integer"
+      }
+    },
+    "nested_types": {
+      "ApplyInterfaceInput": {
+        "interface": {
+          "rust_type": "InterfaceConfig",
+          "description": "Interface configuration to apply",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "DeleteOvsBridgeInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "Bridge name to delete",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "InterfaceConfig": {
+        "driver": {
+          "rust_type": "Option<String>",
+          "description": "L2 driver to use (e.g., \"openvswitch\", \"linux-bridge\").",
+          "subid": "exp.service.net.interface.driver.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "if_type": {
+          "rust_type": "InterfaceType",
+          "description": "Interface type (e.g., \"ovs-bridge\", \"ethernet\").",
+          "subid": "exp.service.net.interface.type.declare@v1",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "Interface name (e.g., \"ovsbr0\", \"mesh\").",
+          "subid": "exp.service.net.interface.name.declare@v1",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "tunable": {
+          "rust_type": "TunableConfig",
+          "description": "All tunable configuration in a single object.",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "Ipv4Config": {
+        "address": {
+          "rust_type": "Option<Vec<AddressConfig>>",
+          "description": "Static IPv4 addresses.",
+          "subid": "exp.service.net.ipv4.address.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "array"
+        },
+        "dhcp": {
+          "rust_type": "Option<bool>",
+          "description": "Whether DHCP is enabled for IPv4.",
+          "subid": "exp.service.net.ipv4.dhcp.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "boolean"
+        },
+        "dns": {
+          "rust_type": "Option<Vec<String>>",
+          "description": "IPv4 DNS servers.",
+          "subid": "exp.service.net.ipv4.dns.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "array"
+        },
+        "enabled": {
+          "rust_type": "bool",
+          "description": "Whether IPv4 is enabled.",
+          "subid": "exp.service.net.ipv4.enabled.declare@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "gateway": {
+          "rust_type": "Option<String>",
+          "description": "IPv4 default gateway.",
+          "subid": "exp.service.net.ipv4.gateway.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        }
+      },
+      "Ipv6Config": {
+        "dhcp": {
+          "rust_type": "Option<bool>",
+          "description": "Whether DHCP is enabled for IPv6.",
+          "subid": "exp.service.net.ipv6.dhcp.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "boolean"
+        },
+        "enabled": {
+          "rust_type": "bool",
+          "description": "Whether IPv6 is enabled.",
+          "subid": "exp.service.net.ipv6.enabled.declare@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "boolean"
+        }
+      },
+      "NetworkConfig": {
+        "interfaces": {
+          "rust_type": "Vec<InterfaceConfig>",
+          "description": "List of network interfaces.",
+          "subid": "exp.service.net.interfaces.render@v1",
+          "has_serde_default": true,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "TunableConfig": {
+        "controller": {
+          "rust_type": "Option<String>",
+          "description": "SDN controller (for OpenFlow).",
+          "subid": "exp.service.net.interface.controller.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "ipv4": {
+          "rust_type": "Option<Ipv4Config>",
+          "description": "IPv4 configuration.",
+          "subid": "exp.service.net.interface.ipv4.configure@v1",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "ipv6": {
+          "rust_type": "Option<Ipv6Config>",
+          "description": "IPv6 configuration.",
+          "subid": "exp.service.net.interface.ipv6.configure@v1",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "l3_driver": {
+          "rust_type": "Option<String>",
+          "description": "L3 driver for IP configuration (e.g., \"rtnetlink\", \"ovs-rpc\", \"systemd-networkd\").",
+          "subid": "exp.service.net.interface.l3-driver.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "ports": {
+          "rust_type": "Option<Vec<String>>",
+          "description": "Ports attached to this interface.",
+          "subid": "exp.service.net.interface.ports.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "array"
+        },
+        "properties": {
+          "rust_type": "Option<HashMap<String, Value>>",
+          "description": "Dynamic properties - introspection captures ALL hardware properties here. Examples: mtu, mac_addresses (array), speed, duplex, txqueuelen, etc.  APPEND-ONLY: Field names are permanent once added (by introspection or user). Values are mutable (ledger tracks all changes).",
+          "subid": "exp.service.net.interface.properties.collect@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "object"
+        },
+        "property_schema": {
+          "rust_type": "Option<Vec<String>>",
+          "description": "Property schema - tracks which fields exist (append-only set). Used for validation: new fields can be added, existing fields cannot be removed.",
+          "subid": "exp.service.net.interface.property-schema.declare@v1",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "array"
+        }
+      }
+    },
+    "methods": {}
+  },
+  "audit": {
+    "ok": false,
+    "fail": 3,
+    "warn": 52,
+    "hint": 10,
+    "findings": [
+      {
+        "code": "missing_struct_subid",
+        "location": "struct InterfaceConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "InterfaceConfig.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "InterfaceConfig.if_type",
+        "message": "consider #[serde(default)] on `if_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "InterfaceConfig.tunable",
+        "message": "field `tunable` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "InterfaceConfig.tunable",
+        "message": "consider #[serde(default)] on `tunable` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct TunableConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct Ipv4Config",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct Ipv4Config",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct Ipv6Config",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct Ipv6Config",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct AddressConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct AddressConfig",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddressConfig.ip",
+        "message": "consider #[serde(default)] on `ip` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "AddressConfig.prefix",
+        "message": "consider #[serde(default)] on `prefix` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ApplyInterfaceInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ApplyInterfaceInput.interface",
+        "message": "field `interface` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ApplyInterfaceInput.interface",
+        "message": "consider #[serde(default)] on `interface` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeleteOvsBridgeInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteOvsBridgeInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteOvsBridgeInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/netlink.xml version=repomix nodes=0 elements=81 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=173 introspected=81 missing_in_plugin=81 extra_in_plugin=173",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.buffer.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.buffer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.constants.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.constants.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.done.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.done.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.error.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.error.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.header.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.header.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.lib.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.lib.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.macros.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.macros.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.message.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.message.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.nla.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.nla.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.parsers.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.parsers.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.payload.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.payload.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__netlink-packet-core.src.traits.rs",
+        "message": "external surface has `file.rust-netlink__netlink-packet-core.src.traits.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.add.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.add.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.builder.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.builder.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.del.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.del.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.get.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.get.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.handle.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.addr.mod.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.addr.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.connection.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.connection.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.constants.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.constants.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.errors.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.errors.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.handle.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.lib.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.lib.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.add.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.add.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bond.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bond.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bond_port.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bond_port.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bridge.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bridge.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bridge_port.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bridge_port.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.bridge_vlan.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.bridge_vlan.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.builder.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.builder.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.del.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.del.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.dummy.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.dummy.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.get.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.get.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.handle.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.hsr.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.hsr.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.ip6tnl.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.ip6tnl.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.iptun.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.iptun.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.mac_vlan.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.mac_vlan.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.mac_vtap.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.mac_vtap.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.rust-netlink__rtnetlink.src.link.macsec.rs",
+        "message": "external surface has `file.rust-netlink__rtnetlink.src.link.macsec.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 41 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/netlink.xml",
+    "files_by_kind": {
+      "rust": 81
+    },
+    "by_kind": {
+      "rust": 81
+    },
+    "element_path_count": 81,
+    "gaps": {
+      "surface_paths_total": 81,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

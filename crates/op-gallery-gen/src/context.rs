@@ -65,8 +65,36 @@ pub struct SchemaPayload {
     /// OSCAL subids for traceability
     pub subids: HashMap<String, String>,
 
+    /// Authoritative UI routes declared by this plugin's `ui_surfaces` field.
+    #[serde(default)]
+    pub ui_surfaces: UiSurfaceProjection,
+
     /// Raw schema JSON (for tool responses)
     pub raw_json: serde_json::Value,
+}
+
+/// A plugin-owned UI projection. Empty routes mean gallery generation should
+/// retain its schema-derived fallback instead of inventing authoritative paths.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct UiSurfaceProjection {
+    pub subids: Vec<String>,
+    pub routes: Vec<UiSurfaceRoute>,
+    pub value_source: Option<String>,
+}
+
+impl UiSurfaceProjection {
+    pub fn is_authoritative(&self) -> bool {
+        !self.subids.is_empty() && !self.routes.is_empty()
+    }
+}
+
+/// Normalized route plus the original plugin-owned route object.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UiSurfaceRoute {
+    pub path: String,
+    pub name: Option<String>,
+    pub schema: Option<String>,
+    pub raw: serde_json::Value,
 }
 
 /// Field schema from a plugin.
@@ -80,6 +108,9 @@ pub struct FieldSchema {
 
     /// Default value if not specified
     pub default: Option<serde_json::Value>,
+
+    /// Example value supplied by the plugin schema.
+    pub example: Option<serde_json::Value>,
 
     /// Whether field is required
     pub required: bool,
@@ -199,6 +230,26 @@ impl GenerationContext {
         }
 
         parts.push("".to_string());
+        parts.push("## Authoritative UI Routes".to_string());
+        parts.push("Use plugin-declared routes exactly when present. For plugins without an authoritative ui_surfaces projection, derive a fallback layout from their fields and methods.".to_string());
+        for schema in &self.schemas {
+            if schema.ui_surfaces.is_authoritative() {
+                parts.push(format!(
+                    "- **{}** [{}]: {}",
+                    schema.name,
+                    schema.ui_surfaces.subids.join(", "),
+                    serde_json::to_string(&schema.ui_surfaces.routes)
+                        .unwrap_or_else(|_| "[]".into())
+                ));
+            } else {
+                parts.push(format!(
+                    "- **{}**: no authoritative routes; use schema-derived fallback",
+                    schema.name
+                ));
+            }
+        }
+
+        parts.push("".to_string());
         parts.push("## Component Catalog".to_string());
         parts.push(self.catalog_docs.clone());
         parts.push("".to_string());
@@ -260,6 +311,8 @@ impl SchemaPayload {
             })
             .unwrap_or_default();
 
+        let ui_surfaces = extract_ui_surfaces(&subids, fields.get("ui_surfaces"));
+
         Ok(Self {
             name,
             version,
@@ -268,9 +321,63 @@ impl SchemaPayload {
             fields,
             methods,
             subids,
+            ui_surfaces,
             raw_json: raw,
         })
     }
+}
+
+fn extract_ui_surfaces(
+    subids: &HashMap<String, String>,
+    field: Option<&FieldSchema>,
+) -> UiSurfaceProjection {
+    let mut projection = UiSurfaceProjection {
+        subids: subids
+            .values()
+            .filter(|subid| subid.ends_with(".ui-surfaces@v1"))
+            .cloned()
+            .collect(),
+        ..Default::default()
+    };
+    projection.subids.sort();
+    projection.subids.dedup();
+
+    let (value, source) = match field {
+        Some(field) if field.default.is_some() => (field.default.as_ref(), Some("default")),
+        Some(field) if field.example.is_some() => (field.example.as_ref(), Some("example")),
+        _ => (None, None),
+    };
+    projection.value_source = source.map(str::to_string);
+    projection.routes = value.map(extract_ui_surface_routes).unwrap_or_default();
+    projection
+}
+
+fn extract_ui_surface_routes(value: &serde_json::Value) -> Vec<UiSurfaceRoute> {
+    let candidates = value
+        .as_array()
+        .cloned()
+        .or_else(|| value.get("routes").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default();
+    candidates
+        .into_iter()
+        .filter_map(|raw| {
+            let path = raw
+                .get("path")
+                .or_else(|| raw.get("route"))
+                .or_else(|| raw.get("href"))
+                .and_then(|v| v.as_str())?
+                .to_string();
+            Some(UiSurfaceRoute {
+                path,
+                name: raw.get("name").and_then(|v| v.as_str()).map(str::to_string),
+                schema: raw
+                    .get("schema")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                raw,
+            })
+        })
+        .collect()
 }
 
 fn parse_fields(fields_val: Option<&serde_json::Value>) -> Result<HashMap<String, FieldSchema>> {
@@ -296,6 +403,7 @@ fn parse_field(val: &serde_json::Value) -> Result<FieldSchema> {
         .map(|s| s.to_string());
 
     let default = val.get("default").cloned();
+    let example = val.get("example").cloned();
     let required = val
         .get("required")
         .and_then(|r| r.as_bool())
@@ -316,6 +424,7 @@ fn parse_field(val: &serde_json::Value) -> Result<FieldSchema> {
         field_type,
         description,
         default,
+        example,
         required,
         read_only,
         constraints,
@@ -461,6 +570,34 @@ pub fn load_from_shm() -> Result<CatalogLoadResult> {
     load_from_dir(Path::new(op_blob::catalog::DEFAULT_SHM_DIR))
 }
 
+/// Infer a conventional base owner for compatibility-only companions.
+fn compatibility_base_id(plugin_id: &str) -> Option<&str> {
+    ["_chat", "_compat", "_bridge", "-chat", "-compat", "-bridge"]
+        .iter()
+        .find_map(|suffix| plugin_id.strip_suffix(suffix))
+        .filter(|base| !base.is_empty())
+}
+
+/// Resolve a compatibility companion only when its base owner is available.
+pub(crate) fn resolve_ui_plugin_id<'a>(
+    plugin_id: &'a str,
+    schemas: &'a [SchemaPayload],
+) -> &'a str {
+    if schemas
+        .iter()
+        .any(|schema| schema.name == plugin_id && schema.ui_surfaces.is_authoritative())
+    {
+        return plugin_id;
+    }
+    compatibility_base_id(plugin_id)
+        .filter(|base| {
+            schemas
+                .iter()
+                .any(|schema| schema.name == *base && schema.ui_surfaces.is_authoritative())
+        })
+        .unwrap_or(plugin_id)
+}
+
 /// Load all plugin schemas from a specific blob catalog directory.
 ///
 /// Useful for testing against a non-default directory.
@@ -520,6 +657,17 @@ pub fn load_from_dir(dir: &Path) -> Result<CatalogLoadResult> {
         }
     }
 
+    let authoritative_owners = schemas
+        .iter()
+        .filter(|schema| schema.ui_surfaces.is_authoritative())
+        .map(|schema| schema.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+    schemas.retain(|schema| {
+        schema.ui_surfaces.is_authoritative()
+            || compatibility_base_id(&schema.name)
+                .is_none_or(|base| !authoritative_owners.contains(base))
+    });
+
     tracing::info!(
         "Loaded {} plugin schemas ({} failed)",
         schemas.len(),
@@ -559,6 +707,8 @@ fn convert_plugin_schema(
     // Extract subids
     let subids = schema.subids.clone();
 
+    let ui_surfaces = extract_ui_surfaces(&subids, fields.get("ui_surfaces"));
+
     // Build raw JSON for tool responses (the full schema as serde_json::Value)
     let raw_json = serde_json::to_value(schema).unwrap_or_else(
         |_| serde_json::json!({ "name": plugin_id, "error": "serialization failed" }),
@@ -576,6 +726,7 @@ fn convert_plugin_schema(
         fields,
         methods,
         subids,
+        ui_surfaces,
         raw_json,
     })
 }
@@ -596,6 +747,7 @@ fn convert_field_schema(f: &op_state_store::FieldSchema) -> FieldSchema {
             Some(f.description.clone())
         },
         default: f.default.as_ref().map(|v| owned_value_to_serde(v)),
+        example: f.example.as_ref().map(|v| owned_value_to_serde(v)),
         required: f.required,
         read_only: f.read_only,
         constraints,
@@ -684,4 +836,139 @@ pub fn read_catalog_hash_from_shm() -> Option<String> {
     op_blob::catalog::ActiveReflectionCatalog::read_catalog_hash(Path::new(
         op_blob::catalog::DEFAULT_SHM_DIR,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ui_field(
+        default: Option<serde_json::Value>,
+        example: Option<serde_json::Value>,
+    ) -> FieldSchema {
+        FieldSchema {
+            field_type: FieldType::Array {
+                items: Box::new(FieldType::Object {
+                    properties: HashMap::new(),
+                }),
+            },
+            description: None,
+            default,
+            example,
+            required: false,
+            read_only: true,
+            constraints: None,
+            subid: None,
+        }
+    }
+
+    fn payload(name: &str, ui_surfaces: UiSurfaceProjection) -> SchemaPayload {
+        SchemaPayload {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            description: None,
+            category: None,
+            fields: HashMap::new(),
+            methods: HashMap::new(),
+            subids: HashMap::new(),
+            ui_surfaces,
+            raw_json: serde_json::json!({"name": name}),
+        }
+    }
+
+    #[test]
+    fn extracts_authoritative_routes_from_default_and_matching_subid() {
+        let subids = HashMap::from([
+            (
+                "ui_surfaces".into(),
+                "exp.service.factory.ui-surfaces@v1".into(),
+            ),
+            ("other".into(), "obs.service.factory.status@v1".into()),
+        ]);
+        let field = ui_field(
+            Some(serde_json::json!([
+                {"path": "/factory", "name": "Factory", "schema": "factory"},
+                {"route": "/factory/models", "name": "Models"}
+            ])),
+            None,
+        );
+        let projection = extract_ui_surfaces(&subids, Some(&field));
+        assert!(projection.is_authoritative());
+        assert_eq!(projection.value_source.as_deref(), Some("default"));
+        assert_eq!(projection.subids, ["exp.service.factory.ui-surfaces@v1"]);
+        assert_eq!(projection.routes[1].path, "/factory/models");
+    }
+
+    #[test]
+    fn uses_example_then_preserves_fallback_without_routes() {
+        let subids = HashMap::from([(
+            "ui_surfaces".into(),
+            "exp.service.demo.ui-surfaces@v1".into(),
+        )]);
+        let field = ui_field(
+            None,
+            Some(serde_json::json!({"routes": [{"href": "/demo"}]})),
+        );
+        let projection = extract_ui_surfaces(&subids, Some(&field));
+        assert_eq!(projection.value_source.as_deref(), Some("example"));
+        assert_eq!(projection.routes[0].path, "/demo");
+
+        let fallback = extract_ui_surfaces(&HashMap::new(), None);
+        assert!(!fallback.is_authoritative());
+        assert!(fallback.routes.is_empty());
+    }
+
+    #[test]
+    fn prompt_marks_authoritative_and_fallback_plugins() {
+        let projection = UiSurfaceProjection {
+            subids: vec!["exp.service.demo.ui-surfaces@v1".into()],
+            routes: vec![UiSurfaceRoute {
+                path: "/demo".into(),
+                name: Some("Demo".into()),
+                schema: Some("demo".into()),
+                raw: serde_json::json!({"path": "/demo"}),
+            }],
+            value_source: Some("default".into()),
+        };
+        let ctx = GenerationContext::new(
+            vec![
+                payload("demo", projection),
+                payload("plain", UiSurfaceProjection::default()),
+            ],
+            String::new(),
+        );
+        let prompt = ctx.build_system_message();
+        assert!(prompt.contains("exp.service.demo.ui-surfaces@v1"));
+        assert!(prompt.contains("/demo"));
+        assert!(prompt.contains("plain**: no authoritative routes"));
+    }
+
+    #[test]
+    fn compatibility_companion_resolves_only_when_base_exists() {
+        let projection = UiSurfaceProjection {
+            subids: vec!["exp.service.antigravity.ui-surfaces@v1".into()],
+            routes: vec![UiSurfaceRoute {
+                path: "/antigravity".into(),
+                name: None,
+                schema: None,
+                raw: serde_json::json!({"path": "/antigravity"}),
+            }],
+            value_source: Some("default".into()),
+        };
+        let schemas = vec![payload("antigravity", projection)];
+        assert_eq!(
+            resolve_ui_plugin_id("antigravity_chat", &schemas),
+            "antigravity"
+        );
+        assert_eq!(
+            resolve_ui_plugin_id("standalone_chat", &schemas),
+            "standalone_chat"
+        );
+
+        let no_routes = vec![payload("antigravity", UiSurfaceProjection::default())];
+        assert_eq!(
+            resolve_ui_plugin_id("antigravity_chat", &no_routes),
+            "antigravity_chat"
+        );
+    }
 }

@@ -966,7 +966,7 @@ impl MutationEngine {
             // shared container.sock transport; the transport owner is not
             // replaced during registration.
             if let Some(method) = &member_name {
-                if method == "createunixsocket" {
+                if method == "createunixsocket" || method == "bind" {
                     let (name, ports) = parse_socket_args(&value);
                     let result = self
                         .unix_socket
@@ -1236,6 +1236,34 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 dispatch_xray_method(method, &args).await?
             }
+            "unix_socket" if method == "bind" || method == "createunixsocket" => {
+                // The schema router calls dispatch_method_call directly.  Keep
+                // socket registration on this path so bind is not reduced to
+                // the generic echo result and the shared transport metadata is
+                // visible to subsequent readers.
+                let (name, ports) = parse_socket_args(&parsed_value);
+                let applied = self
+                    .unix_socket
+                    .create_unix_socket(name.clone(), ports.clone());
+                if !applied.success {
+                    return Err(anyhow::anyhow!(applied.errors.join("; ")));
+                }
+                let state = unix_socket_state_after_registration(&name, &ports);
+                self.update_state_cache("unix_socket".to_string(), state.clone())
+                    .await;
+                let state_json = serde_json::to_vec(&state)?;
+                op_core::projection_shm::write_projection("unix_socket", &state_json)
+                    .map_err(|e| anyhow::anyhow!("persist unix_socket bind state: {e}"))?;
+                serde_json::json!({
+                    "name": name,
+                    "path": op_plugins::state_plugins::unix_socket::SHARED_CONTAINER_SOCKET,
+                    "ports": ports,
+                    "protocol": parsed_value
+                        .get("protocol")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("grpc"),
+                })
+            }
             "identity_sled" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::identity_sled_dispatch::dispatch_identity_sled_method(self, method, &args)
@@ -1283,6 +1311,24 @@ impl MutationEngine {
                     method, &args,
                 )
                 .await?
+            }
+            "btrfs" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::btrfs_plugin::dispatch_btrfs_method(method, &args)
+                    .await?
+            }
+            "antigravity" => {
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::antigravity::AntigravityState>(
+                        "antigravity",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::antigravity::AntigravityPlugin::current_state,
+                    );
+                op_plugins::state_plugins::antigravity::dispatch_antigravity_method(
+                    method, json_args, &state,
+                )?
             }
             "zeroclaw" => {
                 let state = self
@@ -1918,7 +1964,7 @@ async fn dispatch_rovs_commands_method(
     match method {
         "create_bridge" => {
             let bridge_name = args
-                .get("bridge_name")
+                .get("name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
             ovsdb.create_bridge(bridge_name).await?;
@@ -1926,7 +1972,7 @@ async fn dispatch_rovs_commands_method(
         }
         "delete_bridge" => {
             let bridge_name = args
-                .get("bridge_name")
+                .get("name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
             ovsdb.delete_bridge(bridge_name).await?;
@@ -1934,11 +1980,11 @@ async fn dispatch_rovs_commands_method(
         }
         "add_port" => {
             let bridge_name = args
-                .get("bridge_name")
+                .get("bridge")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
             let port_name = args
-                .get("port_name")
+                .get("port")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
             ovsdb.add_port(bridge_name, port_name).await?;
@@ -1992,6 +2038,49 @@ async fn dispatch_ovsdb_bridge_method(
                 .ok_or_else(|| anyhow::anyhow!("operations required"))?
                 .clone();
             Ok(ovsdb.transact_simd(operations).await?)
+        }
+        "create_bridge" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            ovsdb.create_bridge(bridge_name).await?;
+            Ok(serde_json::json!({"created": bridge_name}))
+        }
+        "delete_bridge" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            ovsdb.delete_bridge(bridge_name).await?;
+            Ok(serde_json::json!({"deleted": bridge_name}))
+        }
+        "add_port" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let port_name = args
+                .get("port_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            ovsdb.add_port(bridge_name, port_name).await?;
+            Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
+        }
+        "remove_port" => {
+            let port_name = args
+                .get("port")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            ovsdb
+                .delete_port(
+                    args.get("bridge")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default(),
+                    port_name,
+                )
+                .await?;
+            Ok(serde_json::json!({"removed": port_name}))
         }
         _ => Err(anyhow::anyhow!(
             "ovsdb_bridge.{method} is schema-declared but has no runtime dispatcher"

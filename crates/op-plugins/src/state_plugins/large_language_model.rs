@@ -72,6 +72,10 @@ pub struct LargeLanguageModelState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.large-language-model.params@v1"))]
     pub params: GenerationParams,
+    /// Provider SDK fields discovered from the Anthropic and Google typed models.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.large-language-model.inspector-fields@v1"))]
+    pub inspector_fields: inspector_gadget_generated::InspectorGadgetFields,
 }
 
 pub struct LargeLanguageModelPlugin;
@@ -122,6 +126,7 @@ impl LargeLanguageModelPlugin {
                 max_tokens: Self::env_u32("LLM_MAX_TOKENS", 2048),
                 context_window: Self::env_u32("LLM_CONTEXT_WINDOW", 8192),
             },
+            inspector_fields: inspector_gadget_generated::InspectorGadgetFields::default(),
         }
     }
 
@@ -392,3 +397,92 @@ pub(crate) fn large_language_model_schema() -> PluginSchema {
 inventory::submit! {
     crate::default_registry::PluginReg::new("large_language_model", |_ctx| std::sync::Arc::new(LargeLanguageModelPlugin::new()))
 }
+
+// ── Inspector Gadget + Repomix generated candidates ───────────────────────
+// Generated against PLUGIN-RENDER-CONTRACT.md. The original plugin above is
+// preserved. Review ownership, concrete types, defaults, side effects, and
+// runtime dispatch before flattening these candidates into the live state/schema.
+#[allow(dead_code)]
+mod inspector_gadget_generated {
+    use serde::{Deserialize, Serialize};
+
+    /// Repomix-discovered fields not represented by the input plugin.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+    #[schemars(extend("x-oscal-subid" = "sch.software.large-language-model.inspector-candidates.schema@v1"))]
+    pub struct InspectorGadgetFields {
+        /// Discovered from Repomix path `py.anthropics__anthropic-sdk-python.src.anthropic.types.beta.beta_managed_agents_start_event.class.BetaManagedAgentsStartEvent.carry`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.carry@v1"))]
+        pub carry: Option<String>,
+
+        /// Discovered from Repomix path `py.anthropics__anthropic-sdk-python.src.anthropic.types.beta.beta_message.class.BetaMessage.Example`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.example@v1"))]
+        pub example: Option<String>,
+
+        /// Discovered from Repomix path `py.anthropics__anthropic-sdk-python.src.anthropic.types.beta.beta_refusal_stop_details.class.BetaRefusalStopDetails.Advisory`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.advisory@v1"))]
+        pub advisory: Option<String>,
+
+        /// Discovered from Repomix path `py.anthropics__anthropic-sdk-python.src.anthropic.types.beta.deployment_run_list_params.class.DeploymentRunListParams.Filter`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.filter@v1"))]
+        pub filter: Option<String>,
+
+        /// Discovered from Repomix path `py.anthropics__anthropic-sdk-python.src.anthropic.types.beta.message_count_tokens_params.class.MessageCountTokensParams.message`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.message@v1"))]
+        pub message: Option<u64>,
+
+        /// Discovered from Repomix path `py.googleapis__python-genai.google.genai._api_client.class.AiohttpTCPConnector.Args`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.args@v1"))]
+        pub args: Option<String>,
+
+        /// Discovered from Repomix path `py.googleapis__python-genai.google.genai._api_client.class.AiohttpTCPConnector.Returns`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.returns@v1"))]
+        pub returns: Option<String>,
+
+        /// Discovered from Repomix path `py.googleapis__python-genai.google.genai._api_client.class.EphemeralTokenAPIKeyError.options`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.options@v1"))]
+        pub options: Option<String>,
+
+        /// Discovered from Repomix path `py.googleapis__python-genai.google.genai.types.class.FunctionDeclaration.Note`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.note@v1"))]
+        pub note: Option<String>,
+
+        /// Discovered from Repomix path `py.googleapis__python-genai.google.genai.types.class.Metric.Raises`. Review before promotion.
+        #[serde(default)]
+        #[schemars(extend("x-oscal-subid" = "obs.software.large-language-model.raises@v1"))]
+        pub raises: Option<String>,
+    }
+
+    /// Metadata needed when promoting a generated typed method into `schema.methods`.
+    pub struct MethodCandidate {
+        pub name: &'static str,
+        pub side_effect: &'static str,
+        pub idempotent: bool,
+        pub required_capability: &'static str,
+        pub subid: &'static str,
+        pub repomix_path: &'static str,
+        pub command: &'static [&'static str],
+    }
+
+    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[];
+
+    /// Promote every generated method into the sealed plugin schema.
+    pub(super) fn register_methods(schema: &mut op_state_store::PluginSchema) {
+        use super::super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    }
+}
+
+// Promotion checklist (Fable contract):
+// 1. Move owned fields into the plugin State struct with concrete Rust types.
+// 2. Replace method placeholders with dedicated typed Input/Output fields.
+// 3. Register with method_decl_from_schemars_with_output and correct SideEffect.
+// 4. Register every subid, implement dispatch, and add schema/subid tests.
+// 5. Re-run op-plugin-lint; only then replace the original plugin file.

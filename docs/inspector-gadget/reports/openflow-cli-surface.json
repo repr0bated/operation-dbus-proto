@@ -1,0 +1,130 @@
+{
+  "binary": "/usr/bin/ovs-ofctl",
+  "version": "ovs-ofctl (Open vSwitch) 3.7.1",
+  "ssh": null,
+  "nodes": [
+    {
+      "path": [],
+      "usage": "",
+      "about": "ovs-ofctl: OpenFlow switch management utility",
+      "commands": [],
+      "flags": [
+        {
+          "name": "--detach",
+          "short": null,
+          "value_name": null,
+          "description": "run in background as daemon"
+        },
+        {
+          "name": "--monitor",
+          "short": null,
+          "value_name": null,
+          "description": "creates a process to monitor this daemon"
+        },
+        {
+          "name": "--no-chdir",
+          "short": null,
+          "value_name": null,
+          "description": "do not chdir to '/'"
+        },
+        {
+          "name": "--overwrite-pidfile",
+          "short": null,
+          "value_name": null,
+          "description": "with --pidfile, start even if already running"
+        },
+        {
+          "name": "--version",
+          "short": "-V",
+          "value_name": null,
+          "description": "display version information"
+        },
+        {
+          "name": "--protocols",
+          "short": "-O",
+          "value_name": null,
+          "description": "set allowed OpenFlow versions"
+        },
+        {
+          "name": "--verbose",
+          "short": "-v",
+          "value_name": null,
+          "description": "set maximum verbosity level"
+        },
+        {
+          "name": "--strict",
+          "short": null,
+          "value_name": null,
+          "description": "use strict match for flow commands"
+        },
+        {
+          "name": "--read-only",
+          "short": null,
+          "value_name": null,
+          "description": "do not execute read/write commands"
+        },
+        {
+          "name": "--readd",
+          "short": null,
+          "value_name": null,
+          "description": "replace flows that haven't changed"
+        },
+        {
+          "name": "--more",
+          "short": "-m",
+          "value_name": null,
+          "description": "be more verbose printing OpenFlow"
+        },
+        {
+          "name": "--timestamp",
+          "short": null,
+          "value_name": null,
+          "description": "(monitor, snoop) print timestamps"
+        },
+        {
+          "name": "--names",
+          "short": null,
+          "value_name": null,
+          "description": "show port names instead of numbers"
+        },
+        {
+          "name": "--no-names",
+          "short": null,
+          "value_name": null,
+          "description": "show port numbers, but not names"
+        },
+        {
+          "name": "--help",
+          "short": "-h",
+          "value_name": null,
+          "description": "display this help message"
+        },
+        {
+          "name": "--version",
+          "short": "-V",
+          "value_name": null,
+          "description": "display version information"
+        }
+      ],
+      "arguments": []
+    }
+  ],
+  "element_paths": [
+    "cmd",
+    "flag.root.detach",
+    "flag.root.help",
+    "flag.root.monitor",
+    "flag.root.more",
+    "flag.root.names",
+    "flag.root.no_chdir",
+    "flag.root.no_names",
+    "flag.root.overwrite_pidfile",
+    "flag.root.protocols",
+    "flag.root.read_only",
+    "flag.root.readd",
+    "flag.root.strict",
+    "flag.root.timestamp",
+    "flag.root.verbose",
+    "flag.root.version"
+  ]
+}

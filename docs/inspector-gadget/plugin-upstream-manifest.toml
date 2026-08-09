@@ -1,0 +1,76 @@
+# Inspector Gadget upstream ownership map.
+# Only repositories that provide an authoritative implementation, protocol,
+# schema, or CLI surface for an existing OP-DBUS plugin belong here.
+
+[[mapping]]
+plugins = ["json_render", "schema_renderer"]
+repos = ["vercel-labs__json-render", "json-schema-org__json-schema-spec", "GREsau__schemars", "oxidecomputer__typify"]
+kind = "renderer-and-schema"
+
+[[mapping]]
+plugins = ["mcp", "compact_mcp", "cognitive_mcp"]
+repos = ["modelcontextprotocol__modelcontextprotocol", "modelcontextprotocol__python-sdk", "modelcontextprotocol__typescript-sdk", "modelcontextprotocol__servers"]
+kind = "protocol-and-sdk"
+
+[[mapping]]
+plugins = ["large_language_model", "factory"]
+repos = ["anthropics__anthropic-sdk-python", "anthropics__claude-code", "googleapis__python-genai", "compl-ai__compl-ai"]
+kind = "provider-and-agent-surface"
+
+[[mapping]]
+plugins = ["antigravity"]
+repos = ["googleapis__python-genai", "googleapis__googleapis"]
+kind = "sdk-and-api"
+
+[[mapping]]
+plugins = ["btrfs"]
+repos = ["kdave__btrfs-progs"]
+kind = "cli-and-native-api"
+
+[[mapping]]
+plugins = ["incus"]
+repos = ["lxc__incus"]
+kind = "cli-and-rest-api"
+
+[[mapping]]
+plugins = ["qdrant"]
+repos = ["qdrant__qdrant", "qdrant__qdrant-client"]
+kind = "service-and-client-api"
+
+[[mapping]]
+plugins = ["openflow", "openflow_obfuscation", "ovsdb_bridge", "rovs_commands"]
+repos = ["openvswitch__ovs"]
+kind = "protocol-schema-and-cli"
+
+[[mapping]]
+plugins = ["net", "rtnetlink"]
+repos = ["rust-netlink__rtnetlink", "rust-netlink__netlink-packet-core", "NetworkManager__NetworkManager"]
+kind = "netlink-and-dbus-api"
+
+[[mapping]]
+plugins = ["wireguard", "wg_opdbus", "wgcf"]
+repos = ["WireGuard__wireguard-rs", "cloudflare__boringtun"]
+kind = "protocol-and-cli"
+
+[[mapping]]
+plugins = ["oci"]
+repos = ["opencontainers__runtime-spec", "opencontainers__image-spec", "opencontainers__runc", "containers__crun"]
+kind = "spec-and-cli"
+
+[[mapping]]
+plugins = ["freedesktop"]
+repos = ["dbus__dbus", "bus1__dbus-broker", "z-galaxy__zbus"]
+kind = "dbus-protocol"
+
+[[mapping]]
+plugins = ["oscal_subid_registry"]
+repos = ["usnistgov__OSCAL", "opencontrol__schemas", "OpenGovDataMirror__A_gsa_fedramp-automation"]
+kind = "schema-and-catalog"
+
+[[mapping]]
+plugins = ["config"]
+repos = ["cue-lang__cue", "nickel-lang__nickel"]
+kind = "configuration-schema"
+
+# Intentionally unmapped plugins are not guessed. They require a product-owned
+# upstream repository or a local binary/protocol capture before promotion.

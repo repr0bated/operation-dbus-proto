@@ -1,0 +1,368 @@
+<repomix><file_summary>This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+The content has been processed where content has been formatted for parsing in xml style, content has been compressed (code blocks are separated by ⋮---- delimiter).<purpose>This file contains a packed representation of a subset of the repository&apos;s contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.</purpose><file_format>The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file</file_format><usage_guidelines>- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.</usage_guidelines><notes>- Some files may have been excluded based on .gitignore rules and Repomix&apos;s configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: providers/**, src/complai/_cli/**, src/complai/_registry.py
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Content has been formatted for parsing in xml style
+- Content has been compressed - code blocks are separated by ⋮---- delimiter
+- Files are sorted by Git change count (files with more changes are at the bottom)</notes></file_summary><directory_structure>providers/
+  README.md
+src/
+  complai/
+    _cli/
+      __init__.py
+      eval.py
+      list.py
+      samples.py
+      utils.py
+    _registry.py</directory_structure><files>This section contains the contents of the repository&apos;s files.<file path="providers/README.md"># 🔌 Providers
+
+COMPL-AI supports the same set of model providers and backends as [Inspect](https://inspect.aisi.org.uk/models.html). 
+
+
+| Category         | Providers                                                                 |
+|------------------|---------------------------------------------------------------------------|
+| APIs             | OpenAI, Anthropic, Google, Grok, Mistral, DeepSeek, Perplexity            |
+| Cloud            | AWS Bedrock, Azure AI, Vertex                                                     |
+| Open (Hosted)    | Groq, Together AI, Fireworks AI, Cloudflare                               |
+| Open (Local)     | Hugging Face, vLLM, SGLang, Ollama, Llama-cpp-python, TransformerLens     |
+
+For more details, see [inspect.aisi.org.uk/models](https://inspect.aisi.org.uk/models.html) and [inspect.aisi.org.uk/providers](https://inspect.aisi.org.uk/providers.html).
+
+
+When using a provider for the first time, you may be prompted to install additional dependencies. Install using:
+```
+uv pip install &lt;package-name&gt;
+```
+
+
+## Local Models
+
+COMPL-AI supports the same local model endpoints as Inspect AI. At the time of writing, the following providers are supported:
+-  	Hugging Face `transformers`
+-   vLLM 
+-   SGLang
+-   Ollama
+-   Llama-cpp-python
+-   TransformerLens
+
+Check [the Inspect AI list](https://inspect.aisi.org.uk/providers.html) for the full list of supported models.
+
+### Hugging Face `transformers`
+
+Concurrency for REST API based models is managed using the `max_connections` option. The same option is used for transformers inference—up to `max_connections` calls to `generate()` will be batched together (note that batches will proceed at a smaller size if no new calls to `generate()` have occurred in the last 2 seconds).
+
+The default batch size for Hugging Face is 32, but you should tune your `max_connections` to maximise performance and ensure that batches don’t exceed available GPU memory. The Pipeline Batching section of the transformers documentation is a helpful guide to the ways batch size and performance interact.
+
+The PyTorch CUDA device will be used automatically if CUDA is available (as will the Mac OS mps device). If you want to override the device used, use the device model argument. For example:
+
+```
+complai eval hf/Qwen/Qwen3-8B -M device=cuda:0
+```
+
+
+In addition to using models from the Hugging Face Hub, the Hugging Face provider can also use local model weights and tokenizers (e.g., for a locally fine tuned model). Use `hf/local` along with the `model_path`, and (optionally) `tokenizer_path` arguments to select a local model. For example:
+
+```
+complai eval hf/local -M model_path=./my-model
+```
+
+
+### vLLM and SGLang
+The vLLM and SGLang backends are generally much faster than the Hugging Face provider as the libraries are designed entirely for inference speed whereas the Hugging Face library is more general purpose.
+
+If you want to use the vLLM or SGLang backend, COMPL-AI will automatically start a server for you in the background. To avoid repeated server starts (which can take several minutes for large models), you can start your own server and set the `VLLM_BASE_URL` and `VLLM_API_KEY` environment variables. For SGLang, use `SGLANG_BASE_URL` and `SGLANG_API_KEY`.
+
+Similar to the Hugging Face provider, you can also use local models with vLLM or SGLang. Use `vllm/local` or `sglang/local` along with the `model_path`, and (optionally) `tokenizer_path` arguments to select a local model. For example:
+
+```
+complai eval vllm/local -M model_path=./my-model
+```
+
+Note that some benchmarks in COMPL-AI use tool calling, which often requires model dependent configuration. For example, when using vLLM, make sure to supply the correct `tool-call-parser` model argument. For example: 
+
+```
+complai eval vllm/Qwen/Qwen3-8B -M tool-call-parser=hermes
+```
+
+See the [Tool Use](https://docs.vllm.ai/en/stable/features/tool_calling.html) section of the vLLM documentation for details. For SGLang, refer to the [Tool Parser](https://docs.sglang.ai/advanced_features/tool_parser.html) section.
+
+
+### Ollama and Llama-cpp-python
+If you want to use Ollama or Llama-cpp-python, you need to start the server manually.
+
+### OpenAI-compatible API endpoints
+If you want to use an OpenAI-compatible API endpoint, you can use it with the `openai-api` provider, which uses the following model naming convention:
+```
+openai-api/&lt;provider-name&gt;/&lt;model-name&gt;
+```
+COMPL-AI will read environment variables corresponding to the API key and base URL of your provider using the following convention (note that the provider name is capitalized):
+```
+&lt;PROVIDER_NAME&gt;_API_KEY
+&lt;PROVIDER_NAME&gt;_BASE_URL
+```
+Hyphens within provider names will be converted to underscores so they conform to the requirements of environment variable names. For example, if the provider is named awesome-models then the API key environment variable should be AWESOME_MODELS_API_KEY.
+
+Here is how you would access DeepSeek using the openai-api provider:
+```
+export DEEPSEEK_API_KEY=your-deepseek-api-key
+export DEEPSEEK_BASE_URL=https://api.deepseek.com
+complai eval openai-api/deepseek/deepseek-reasoner
+```
+
+You can enable the use of the Responses API with the `openai-api` provider by passing the `responses_api` model arg. For example:
+
+```
+complai eval openai-api/&lt;provider&gt;/&lt;model&gt; -M responses_api=true
+```</file><file path="src/complai/_cli/__init__.py">app = typer.Typer(rich_markup_mode=&quot;markdown&quot;)
+⋮----
+def main() -&gt; None</file><file path="src/complai/_cli/eval.py">&quot;&quot;&quot;Run tasks.&quot;&quot;&quot;
+# Get TaskInfo objects from task names
+parsed_task_filters = parse_cli_config(task_filter, None)
+task_infos: list[TaskInfo] = get_task_infos(
+⋮----
+# Apply display monkey patch
+⋮----
+# Parse args
+parsed_task_args = parse_task_args(task_args, task_config)
+parsed_model_args = parse_cli_config(model_args, model_config)
+parsed_generate_args = parse_cli_config(generate_args, generate_config)
+parsed_limit = parse_samples_limit(limit)
+parsed_sample_id = parse_sample_id(sample_id)
+⋮----
+# Add cache and batch to generate args if specified (passed via **kwargs to eval_set)
+⋮----
+# Validate model arguments
+⋮----
+# Define log directory
+log_dir = get_log_dir(model, log_dir)
+⋮----
+# Instantiate tasks with task-specific args
+⋮----
+instantiated_tasks = instantiate_tasks_from_infos(task_infos, parsed_task_args)</file><file path="src/complai/_cli/list.py">def list_command() -&gt; None
+⋮----
+&quot;&quot;&quot;List all available tasks.&quot;&quot;&quot;
+# Get all tasks
+tasks = get_complai_tasks()
+⋮----
+# Group tasks by technical requirement
+tasks_by_requirement: dict[str, list[TaskInfo]] = {}
+⋮----
+requirement = task.attribs[&quot;technical_requirement&quot;]
+⋮----
+# Print tasks grouped by technical requirement</file><file path="src/complai/_cli/samples.py">def _input_json(input: str | list[ChatMessage]) -&gt; str | list[dict[str, Any]]
+⋮----
+tasks = []
+⋮----
+short_name = spec.rsplit(&quot;/&quot;, 1)[-1].split(&quot;@&quot;, 1)[-1]
+⋮----
+&quot;&quot;&quot;Write samples as JSONL.&quot;&quot;&quot;
+task_infos: list[TaskInfo] = (
+⋮----
+parsed_task_args = parse_task_args(task_args, task_config)
+loaded_tasks = (
+named_tasks = list(zip((info.name for info in task_infos), loaded_tasks))
+⋮----
+parsed_limit = parse_samples_limit(limit)</file><file path="src/complai/_cli/utils.py">&quot;&quot;&quot;
+    Get all available tasks implemented in COMPL-AI.
+
+    Args:
+        filter (Callable[[TaskInfo], bool]): Filter to apply to the tasks.
+
+    Returns:
+        list[TaskInfo]: List of all available tasks.
+    &quot;&quot;&quot;
+⋮----
+&quot;&quot;&quot;
+    Get TaskInfo objects from a list of task names.
+
+    Args:
+        tasks_names (list[str]): List of task names to retrieve TaskInfo for. If empty,
+            all available tasks are returned.
+        tasks_to_skip (list[str]): List of task names to skip.
+        task_filter (dict[str, str] | None): Filter tasks by attribute (e.g. `-f technical_requirement=&apos;Capabilities, Performance, and Limitations&apos;`).
+
+    Raises:
+        typer.BadParameter: If one of the task names is not valid.
+
+    Returns:
+        list[TaskInfo]: List of TaskInfo objects for the specified tasks.
+    &quot;&quot;&quot;
+⋮----
+def filter(task: TaskInfo) -&gt; bool
+⋮----
+tasks_to_run = get_complai_tasks(filter=filter)
+⋮----
+# Warn about tasks that were not skipped
+⋮----
+# Raise error if tasks were not found or skipped
+not_found = set(task_names) - set(task.name for task in tasks_to_run)
+⋮----
+def parse_tasks(tasks: str | None) -&gt; list[str]
+⋮----
+&quot;&quot;&quot;
+    Parse task string into list of task names.
+
+    Args:
+        tasks (str | None): Comma-separated list of task names. If None, returns an empty list.
+
+    Returns:
+        list[str]: List of task names.
+    &quot;&quot;&quot;
+task_names = tasks.split(&quot;,&quot;) if tasks is not None else []
+⋮----
+&quot;&quot;&quot;
+    Get TaskInfo objects for the specified tasks.
+
+    Args:
+        tasks (str | None): Comma-separated list of task names. If None, all available tasks are returned.
+        tasks_to_skip (str | None): Comma-separated list of task names to skip. If None, no tasks are skipped.
+        task_filter (dict[str, str] | None): Filter tasks by attribute (e.g. `-f technical_requirement=&apos;Capabilities, Performance, and Limitations&apos;`).
+
+    Returns:
+        list[TaskInfo]: List of TaskInfo objects for the specified tasks.
+    &quot;&quot;&quot;
+task_names = parse_tasks(tasks)
+tasks_to_skip_names = parse_tasks(tasks_to_skip)
+⋮----
+&quot;&quot;&quot;
+    Parse per-task arguments from CLI and config file. CLI args take precedence over config file.
+
+    Args:
+        task_args: List of CLI task args in format &quot;task_name:key=value&quot;
+        task_config: Path to config file (JSON or YAML)
+
+    Returns:
+        Dict mapping task_name -&gt; args dict
+    &quot;&quot;&quot;
+result: dict[str, dict[str, Any]] = {}  # task_name -&gt; {key: value}
+⋮----
+# Parse config file
+⋮----
+config = resolve_args(task_config)
+⋮----
+result = config
+⋮----
+# Parse CLI args (override config file)
+⋮----
+# Split on first colon to get task_name and key=value part
+⋮----
+# Split on first equals to get key and value
+⋮----
+# Parse value
+⋮----
+value = yaml.safe_load(value_str)
+⋮----
+# Handle comma-separated values
+⋮----
+value_list = value.split(&quot;,&quot;)
+value = value_list if len(value_list) &gt; 1 else value_list[0]
+⋮----
+# Initialize task dict if not present
+⋮----
+# Set the value (CLI overrides config)
+⋮----
+def instantiate_task_from_info(task_info: TaskInfo, task_args: dict = {}) -&gt; Task
+⋮----
+&quot;&quot;&quot;
+    Instantiate a Task from a TaskInfo object and task args.
+
+    Args:
+        task_info: TaskInfo object.
+        task_args: Dictionary mapping task names to their specific args.
+
+    Returns:
+        Task: Instantiated Task object.
+    &quot;&quot;&quot;
+task_spec = f&quot;{task_info.file}@{task_info.name}&quot;
+⋮----
+&quot;&quot;&quot;
+    Instantiate tasks from TaskInfo objects with per-task args.
+
+    Args:
+        task_infos: List of TaskInfo objects.
+        task_args: Dictionary mapping task names to their specific args.
+
+    Returns:
+        list[Task]: List of instantiated Task objects.
+    &quot;&quot;&quot;
+tasks = []
+⋮----
+# Warn about args for tasks that aren&apos;t in the list of tasks to run
+tasks_to_run = {info.name for info in task_infos}
+extra_task_args = set(task_args.keys()) - tasks_to_run
+⋮----
+# Instantiate tasks
+⋮----
+start_time = perf_counter()
+⋮----
+task_start = perf_counter()
+args = task_args.get(info.name, {})
+task = instantiate_task_from_info(info, args)
+⋮----
+total_time = perf_counter() - start_time
+⋮----
+&quot;&quot;&quot;Validate model arguments.&quot;&quot;&quot;
+⋮----
+def patch_display_results() -&gt; None
+⋮----
+&quot;&quot;&quot;
+    Replace &quot;inspect eval-retry&quot; with &quot;complai eval-retry&quot; in display results.
+    Should be called before invoking inspect_ai.eval_retry().
+    &quot;&quot;&quot;
+⋮----
+original_task_interrupted = results.task_interrupted
+⋮----
+def custom_task_interrupted(profile, samples_completed):  # type: ignore
+⋮----
+result = original_task_interrupted(profile, samples_completed)
+⋮----
+text = segment[0]
+⋮----
+new_text = text.replace(
+⋮----
+def get_log_dir(model: str, base_log_dir: str) -&gt; str
+⋮----
+&quot;&quot;&quot;
+    Get the log directory for the model. If no log directory is provided,
+    use model and timestamp to create a unique log directory name.
+    &quot;&quot;&quot;
+model_name = &quot;_&quot;.join(model.split(&quot;/&quot;)[-2:])
+⋮----
+# Check if the log directory is of a previous run
+timestamp_pattern = (
+pattern = rf&quot;{model_name}_{timestamp_pattern}&quot;
+⋮----
+timestamp = (
+⋮----
+def bool_or_float(value: str) -&gt; bool | float
+⋮----
+&quot;&quot;&quot;Parses a string into a boolean or a float.&quot;&quot;&quot;
+⋮----
+def parse_samples_limit(limit: str | None) -&gt; int | tuple[int, int] | None
+⋮----
+limit_split = [int(r) for r in limit.split(&quot;-&quot;)]
+⋮----
+def parse_sample_id(sample_id: str | None) -&gt; list[str] | None
+⋮----
+@contextmanager
+def error_handler(debug: bool) -&gt; Iterator
+⋮----
+&quot;&quot;&quot;Context manager for error handling.&quot;&quot;&quot;
+⋮----
+error_msg = (</file><file path="src/complai/_registry.py"># ruff: noqa: F401</file></files></repomix>

@@ -347,9 +347,7 @@ async fn handle_connection(
     for flow_json in static_flows.iter() {
         match push_flow_add(&mut stream, flow_json, &port_map, &mut xid).await {
             Ok(_) => static_installed += 1,
-            Err(e) => log::warn!(
-                "OF controller: static flow install failed ({e:#}): {flow_json}"
-            ),
+            Err(e) => log::warn!("OF controller: static flow install failed ({e:#}): {flow_json}"),
         }
     }
     if static_installed > 0 {

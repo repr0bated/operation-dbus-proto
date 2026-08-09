@@ -1,0 +1,2538 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "qdrant.rs",
+  "plugin": {
+    "name": "qdrant",
+    "category": "data",
+    "version": "1.0.0",
+    "description": "Qdrant vector search engine — collections, vector config, HNSW, optimizers",
+    "display_name": "GB.Qdrant",
+    "state_root": "QdrantState",
+    "fields": {
+      "cluster_status": {
+        "rust_type": "Option<serde_json::Value>",
+        "description": "",
+        "has_serde_default": true,
+        "optional": true
+      },
+      "collections": {
+        "rust_type": "Vec<QdrantCollectionInfo>",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "array"
+      },
+      "commit": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "grpc_endpoint": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "http_endpoint": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "telemetry": {
+        "rust_type": "Option<serde_json::Value>",
+        "description": "",
+        "has_serde_default": true,
+        "optional": true
+      },
+      "title": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "version": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      }
+    },
+    "nested_types": {
+      "CreateCollectionInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "vectors_config": {
+          "rust_type": "serde_json::Value",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "CreatePayloadIndexInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "field_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "field_schema": {
+          "rust_type": "serde_json::Value",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        }
+      },
+      "CreateSnapshotInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeleteCollectionInput": {
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "DeletePointsInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "points": {
+          "rust_type": "Vec<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ListCollectionsInput": {},
+      "ListCollectionsOutput": {
+        "collections": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "ListSnapshotsInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ListSnapshotsOutput": {
+        "snapshots": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "QdrantCollectionConfig": {
+        "hnsw_config": {
+          "rust_type": "QdrantHnswConfig",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "metadata": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "optimizer_config": {
+          "rust_type": "QdrantOptimizersConfig",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "params": {
+          "rust_type": "QdrantCollectionParams",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "quantization_config": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "strict_mode_config": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "wal_config": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true
+        }
+      },
+      "QdrantCollectionInfo": {
+        "config": {
+          "rust_type": "QdrantCollectionConfig",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "indexed_vectors_count": {
+          "rust_type": "Option<u64>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "optimizer_status": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "payload_schema": {
+          "rust_type": "serde_json::Value",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "points_count": {
+          "rust_type": "Option<u64>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "segments_count": {
+          "rust_type": "u64",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "status": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "QdrantCollectionParams": {
+        "on_disk_payload": {
+          "rust_type": "Option<bool>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "boolean"
+        },
+        "read_fan_out_factor": {
+          "rust_type": "Option<u32>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "replication_factor": {
+          "rust_type": "Option<u32>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "shard_number": {
+          "rust_type": "Option<u32>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "sparse_vectors": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "vectors": {
+          "rust_type": "QdrantVectorParams",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false
+        },
+        "write_consistency_factor": {
+          "rust_type": "Option<u32>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        }
+      },
+      "QdrantHnswConfig": {
+        "ef_construct": {
+          "rust_type": "u32",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "full_scan_threshold": {
+          "rust_type": "u32",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "m": {
+          "rust_type": "u32",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "m0": {
+          "rust_type": "Option<u32>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "max_indexing_threads": {
+          "rust_type": "u32",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "on_disk": {
+          "rust_type": "Option<bool>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "boolean"
+        },
+        "payload_m": {
+          "rust_type": "Option<u32>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        }
+      },
+      "QdrantOptimizersConfig": {
+        "default_segment_number": {
+          "rust_type": "u32",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "deleted_threshold": {
+          "rust_type": "f64",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "number"
+        },
+        "flush_interval_sec": {
+          "rust_type": "u64",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "indexing_threshold": {
+          "rust_type": "Option<u64>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "integer"
+        },
+        "max_segment_size": {
+          "rust_type": "u64",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "vacuum_min_vector_number": {
+          "rust_type": "u64",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        }
+      },
+      "QdrantVectorParams": {
+        "datatype": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "distance": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "hnsw_config": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "multivector_config": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true
+        },
+        "on_disk": {
+          "rust_type": "Option<bool>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "boolean"
+        },
+        "quantization_config": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "size": {
+          "rust_type": "u64",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        }
+      },
+      "ScrollPointsInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "limit": {
+          "rust_type": "usize",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        }
+      },
+      "ScrollPointsOutput": {
+        "next_page_offset": {
+          "rust_type": "Option<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true
+        },
+        "points": {
+          "rust_type": "Vec<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "SearchPointsInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "limit": {
+          "rust_type": "usize",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "integer"
+        },
+        "vector": {
+          "rust_type": "Vec<f32>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "SearchPointsOutput": {
+        "results": {
+          "rust_type": "Vec<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "UpsertPointsInput": {
+        "collection_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "points": {
+          "rust_type": "Vec<serde_json::Value>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      }
+    },
+    "methods": {
+      "create_collection": {
+        "name": "create_collection",
+        "input_type": "CreateCollectionInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.data.qdrant.collection.create@v1",
+        "subid": "mut.data.qdrant.collection.create@v1",
+        "args": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "vectors_config": {
+              "type": "object",
+              "x-rust-type": "serde_json::Value"
+            }
+          },
+          "required": [
+            "name",
+            "vectors_config"
+          ],
+          "title": "CreateCollectionInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "create_payload_index": {
+        "name": "create_payload_index",
+        "input_type": "CreatePayloadIndexInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.data.qdrant.payload-index.create@v1",
+        "subid": "mut.data.qdrant.payload-index.create@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            },
+            "field_name": {
+              "type": "string"
+            },
+            "field_schema": {
+              "type": "object",
+              "x-rust-type": "serde_json::Value"
+            }
+          },
+          "required": [
+            "collection_name",
+            "field_name",
+            "field_schema"
+          ],
+          "title": "CreatePayloadIndexInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "create_snapshot": {
+        "name": "create_snapshot",
+        "input_type": "CreateSnapshotInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.data.qdrant.snapshot.create@v1",
+        "subid": "mut.data.qdrant.snapshot.create@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "collection_name"
+          ],
+          "title": "CreateSnapshotInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "delete_collection": {
+        "name": "delete_collection",
+        "input_type": "DeleteCollectionInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.data.qdrant.collection.delete@v1",
+        "subid": "mut.data.qdrant.collection.delete@v1",
+        "args": {
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "DeleteCollectionInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "delete_points": {
+        "name": "delete_points",
+        "input_type": "DeletePointsInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.data.qdrant.point.delete@v1",
+        "subid": "mut.data.qdrant.point.delete@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            },
+            "points": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "collection_name",
+            "points"
+          ],
+          "title": "DeletePointsInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      },
+      "list_collections": {
+        "name": "list_collections",
+        "input_type": "ListCollectionsInput",
+        "output_type": "ListCollectionsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "cap.data.qdrant.collection.list@v1",
+        "subid": "obs.data.qdrant.collection.list@v1",
+        "args": {
+          "properties": {},
+          "title": "ListCollectionsInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "collections": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "collections"
+          ],
+          "title": "ListCollectionsOutput",
+          "type": "object"
+        }
+      },
+      "list_snapshots": {
+        "name": "list_snapshots",
+        "input_type": "ListSnapshotsInput",
+        "output_type": "ListSnapshotsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "cap.data.qdrant.snapshot.list@v1",
+        "subid": "obs.data.qdrant.snapshot.list@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "collection_name"
+          ],
+          "title": "ListSnapshotsInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "snapshots": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "snapshots"
+          ],
+          "title": "ListSnapshotsOutput",
+          "type": "object"
+        }
+      },
+      "scroll_points": {
+        "name": "scroll_points",
+        "input_type": "ScrollPointsInput",
+        "output_type": "ScrollPointsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "cap.data.qdrant.point.scroll@v1",
+        "subid": "obs.data.qdrant.point.scroll@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "collection_name",
+            "limit"
+          ],
+          "title": "ScrollPointsInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "next_page_offset": {
+              "type": "object",
+              "x-rust-type": "Option<serde_json::Value>"
+            },
+            "points": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "points"
+          ],
+          "title": "ScrollPointsOutput",
+          "type": "object"
+        }
+      },
+      "search_points": {
+        "name": "search_points",
+        "input_type": "SearchPointsInput",
+        "output_type": "SearchPointsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "cap.data.qdrant.point.search@v1",
+        "subid": "obs.data.qdrant.point.search@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "vector": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "collection_name",
+            "limit",
+            "vector"
+          ],
+          "title": "SearchPointsInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "results": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "results"
+          ],
+          "title": "SearchPointsOutput",
+          "type": "object"
+        }
+      },
+      "upsert_points": {
+        "name": "upsert_points",
+        "input_type": "UpsertPointsInput",
+        "output_type": "AckOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.data.qdrant.point.upsert@v1",
+        "subid": "mut.data.qdrant.point.upsert@v1",
+        "args": {
+          "properties": {
+            "collection_name": {
+              "type": "string"
+            },
+            "points": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "collection_name",
+            "points"
+          ],
+          "title": "UpsertPointsInput",
+          "type": "object"
+        },
+        "returns": {
+          "description": "type `AckOutput` not found in this .rs (may live in common/)",
+          "properties": {},
+          "title": "AckOutput",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "audit": {
+    "ok": false,
+    "fail": 73,
+    "warn": 149,
+    "hint": 51,
+    "findings": [
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantCollectionInfo",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionInfo.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.status",
+        "message": "field `status` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.status",
+        "message": "field `status` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionInfo.status",
+        "message": "consider #[serde(default)] on `status` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.optimizer_status",
+        "message": "field `optimizer_status` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.optimizer_status",
+        "message": "field `optimizer_status` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionInfo.optimizer_status",
+        "message": "consider #[serde(default)] on `optimizer_status` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.points_count",
+        "message": "field `points_count` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.points_count",
+        "message": "field `points_count` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.indexed_vectors_count",
+        "message": "field `indexed_vectors_count` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.indexed_vectors_count",
+        "message": "field `indexed_vectors_count` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.segments_count",
+        "message": "field `segments_count` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.segments_count",
+        "message": "field `segments_count` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionInfo.segments_count",
+        "message": "consider #[serde(default)] on `segments_count` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.config",
+        "message": "field `config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.config",
+        "message": "field `config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionInfo.config",
+        "message": "consider #[serde(default)] on `config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionInfo.payload_schema",
+        "message": "field `payload_schema` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionInfo.payload_schema",
+        "message": "field `payload_schema` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionInfo.payload_schema",
+        "message": "consider #[serde(default)] on `payload_schema` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantCollectionConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.params",
+        "message": "field `params` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.params",
+        "message": "field `params` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionConfig.params",
+        "message": "consider #[serde(default)] on `params` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.hnsw_config",
+        "message": "field `hnsw_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.hnsw_config",
+        "message": "field `hnsw_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionConfig.hnsw_config",
+        "message": "consider #[serde(default)] on `hnsw_config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.optimizer_config",
+        "message": "field `optimizer_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.optimizer_config",
+        "message": "field `optimizer_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionConfig.optimizer_config",
+        "message": "consider #[serde(default)] on `optimizer_config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.quantization_config",
+        "message": "field `quantization_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.quantization_config",
+        "message": "field `quantization_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.wal_config",
+        "message": "field `wal_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.wal_config",
+        "message": "field `wal_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.strict_mode_config",
+        "message": "field `strict_mode_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.strict_mode_config",
+        "message": "field `strict_mode_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionConfig.metadata",
+        "message": "field `metadata` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionConfig.metadata",
+        "message": "field `metadata` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantCollectionParams",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.vectors",
+        "message": "field `vectors` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.vectors",
+        "message": "field `vectors` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantCollectionParams.vectors",
+        "message": "consider #[serde(default)] on `vectors` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.shard_number",
+        "message": "field `shard_number` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.shard_number",
+        "message": "field `shard_number` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.replication_factor",
+        "message": "field `replication_factor` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.replication_factor",
+        "message": "field `replication_factor` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.write_consistency_factor",
+        "message": "field `write_consistency_factor` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.write_consistency_factor",
+        "message": "field `write_consistency_factor` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.read_fan_out_factor",
+        "message": "field `read_fan_out_factor` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.read_fan_out_factor",
+        "message": "field `read_fan_out_factor` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.on_disk_payload",
+        "message": "field `on_disk_payload` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.on_disk_payload",
+        "message": "field `on_disk_payload` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantCollectionParams.sparse_vectors",
+        "message": "field `sparse_vectors` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantCollectionParams.sparse_vectors",
+        "message": "field `sparse_vectors` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantVectorParams",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.size",
+        "message": "field `size` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.size",
+        "message": "field `size` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantVectorParams.size",
+        "message": "consider #[serde(default)] on `size` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.distance",
+        "message": "field `distance` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.distance",
+        "message": "field `distance` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantVectorParams.distance",
+        "message": "consider #[serde(default)] on `distance` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.hnsw_config",
+        "message": "field `hnsw_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.hnsw_config",
+        "message": "field `hnsw_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.quantization_config",
+        "message": "field `quantization_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.quantization_config",
+        "message": "field `quantization_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.on_disk",
+        "message": "field `on_disk` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.on_disk",
+        "message": "field `on_disk` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.datatype",
+        "message": "field `datatype` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.datatype",
+        "message": "field `datatype` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantVectorParams.multivector_config",
+        "message": "field `multivector_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantVectorParams.multivector_config",
+        "message": "field `multivector_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantHnswConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.m",
+        "message": "field `m` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.m",
+        "message": "field `m` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantHnswConfig.m",
+        "message": "consider #[serde(default)] on `m` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.ef_construct",
+        "message": "field `ef_construct` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.ef_construct",
+        "message": "field `ef_construct` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantHnswConfig.ef_construct",
+        "message": "consider #[serde(default)] on `ef_construct` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.full_scan_threshold",
+        "message": "field `full_scan_threshold` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.full_scan_threshold",
+        "message": "field `full_scan_threshold` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantHnswConfig.full_scan_threshold",
+        "message": "consider #[serde(default)] on `full_scan_threshold` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.max_indexing_threads",
+        "message": "field `max_indexing_threads` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.max_indexing_threads",
+        "message": "field `max_indexing_threads` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantHnswConfig.max_indexing_threads",
+        "message": "consider #[serde(default)] on `max_indexing_threads` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.on_disk",
+        "message": "field `on_disk` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.on_disk",
+        "message": "field `on_disk` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.payload_m",
+        "message": "field `payload_m` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.payload_m",
+        "message": "field `payload_m` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantHnswConfig.m0",
+        "message": "field `m0` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantHnswConfig.m0",
+        "message": "field `m0` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantOptimizersConfig",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantOptimizersConfig.deleted_threshold",
+        "message": "field `deleted_threshold` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantOptimizersConfig.deleted_threshold",
+        "message": "field `deleted_threshold` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantOptimizersConfig.deleted_threshold",
+        "message": "consider #[serde(default)] on `deleted_threshold` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantOptimizersConfig.vacuum_min_vector_number",
+        "message": "field `vacuum_min_vector_number` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantOptimizersConfig.vacuum_min_vector_number",
+        "message": "field `vacuum_min_vector_number` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantOptimizersConfig.vacuum_min_vector_number",
+        "message": "consider #[serde(default)] on `vacuum_min_vector_number` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantOptimizersConfig.default_segment_number",
+        "message": "field `default_segment_number` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantOptimizersConfig.default_segment_number",
+        "message": "field `default_segment_number` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantOptimizersConfig.default_segment_number",
+        "message": "consider #[serde(default)] on `default_segment_number` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantOptimizersConfig.max_segment_size",
+        "message": "field `max_segment_size` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantOptimizersConfig.max_segment_size",
+        "message": "field `max_segment_size` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantOptimizersConfig.max_segment_size",
+        "message": "consider #[serde(default)] on `max_segment_size` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantOptimizersConfig.flush_interval_sec",
+        "message": "field `flush_interval_sec` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantOptimizersConfig.flush_interval_sec",
+        "message": "field `flush_interval_sec` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantOptimizersConfig.flush_interval_sec",
+        "message": "consider #[serde(default)] on `flush_interval_sec` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantOptimizersConfig.indexing_threshold",
+        "message": "field `indexing_threshold` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantOptimizersConfig.indexing_threshold",
+        "message": "field `indexing_threshold` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct QdrantState",
+        "message": "state struct missing #[schemars(extend(\"x-oscal-subid\" = \"sch.…@v1\"))]",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.version",
+        "message": "field `version` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.version",
+        "message": "field `version` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantState.version",
+        "message": "consider #[serde(default)] on `version` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.title",
+        "message": "field `title` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.title",
+        "message": "field `title` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantState.title",
+        "message": "consider #[serde(default)] on `title` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.commit",
+        "message": "field `commit` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.commit",
+        "message": "field `commit` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantState.commit",
+        "message": "consider #[serde(default)] on `commit` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.http_endpoint",
+        "message": "field `http_endpoint` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.http_endpoint",
+        "message": "field `http_endpoint` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantState.http_endpoint",
+        "message": "consider #[serde(default)] on `http_endpoint` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.grpc_endpoint",
+        "message": "field `grpc_endpoint` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.grpc_endpoint",
+        "message": "field `grpc_endpoint` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantState.grpc_endpoint",
+        "message": "consider #[serde(default)] on `grpc_endpoint` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.collections",
+        "message": "field `collections` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.collections",
+        "message": "field `collections` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "QdrantState.collections",
+        "message": "consider #[serde(default)] on `collections` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.cluster_status",
+        "message": "field `cluster_status` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.cluster_status",
+        "message": "field `cluster_status` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "QdrantState.telemetry",
+        "message": "field `telemetry` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "QdrantState.telemetry",
+        "message": "field `telemetry` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CreateCollectionInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CreateCollectionInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateCollectionInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateCollectionInput.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateCollectionInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateCollectionInput.vectors_config",
+        "message": "field `vectors_config` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateCollectionInput.vectors_config",
+        "message": "field `vectors_config` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateCollectionInput.vectors_config",
+        "message": "consider #[serde(default)] on `vectors_config` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeleteCollectionInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DeleteCollectionInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeleteCollectionInput.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeleteCollectionInput.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeleteCollectionInput.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListCollectionsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListCollectionsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct UpsertPointsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct UpsertPointsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "UpsertPointsInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "UpsertPointsInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "UpsertPointsInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "UpsertPointsInput.points",
+        "message": "field `points` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "UpsertPointsInput.points",
+        "message": "field `points` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "UpsertPointsInput.points",
+        "message": "consider #[serde(default)] on `points` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SearchPointsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SearchPointsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SearchPointsInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SearchPointsInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SearchPointsInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SearchPointsInput.vector",
+        "message": "field `vector` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SearchPointsInput.vector",
+        "message": "field `vector` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SearchPointsInput.vector",
+        "message": "consider #[serde(default)] on `vector` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SearchPointsInput.limit",
+        "message": "field `limit` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SearchPointsInput.limit",
+        "message": "field `limit` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SearchPointsInput.limit",
+        "message": "consider #[serde(default)] on `limit` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct DeletePointsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct DeletePointsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeletePointsInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeletePointsInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeletePointsInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "DeletePointsInput.points",
+        "message": "field `points` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "DeletePointsInput.points",
+        "message": "field `points` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "DeletePointsInput.points",
+        "message": "consider #[serde(default)] on `points` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ScrollPointsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ScrollPointsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ScrollPointsInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ScrollPointsInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ScrollPointsInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ScrollPointsInput.limit",
+        "message": "field `limit` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ScrollPointsInput.limit",
+        "message": "field `limit` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ScrollPointsInput.limit",
+        "message": "consider #[serde(default)] on `limit` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CreateSnapshotInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CreateSnapshotInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreateSnapshotInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreateSnapshotInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreateSnapshotInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListSnapshotsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListSnapshotsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListSnapshotsInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ListSnapshotsInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListSnapshotsInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct CreatePayloadIndexInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct CreatePayloadIndexInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreatePayloadIndexInput.collection_name",
+        "message": "field `collection_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreatePayloadIndexInput.collection_name",
+        "message": "field `collection_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreatePayloadIndexInput.collection_name",
+        "message": "consider #[serde(default)] on `collection_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreatePayloadIndexInput.field_name",
+        "message": "field `field_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreatePayloadIndexInput.field_name",
+        "message": "field `field_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreatePayloadIndexInput.field_name",
+        "message": "consider #[serde(default)] on `field_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "CreatePayloadIndexInput.field_schema",
+        "message": "field `field_schema` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "CreatePayloadIndexInput.field_schema",
+        "message": "field `field_schema` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "CreatePayloadIndexInput.field_schema",
+        "message": "consider #[serde(default)] on `field_schema` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListCollectionsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListCollectionsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListCollectionsOutput.collections",
+        "message": "field `collections` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ListCollectionsOutput.collections",
+        "message": "field `collections` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListCollectionsOutput.collections",
+        "message": "consider #[serde(default)] on `collections` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct SearchPointsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct SearchPointsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "SearchPointsOutput.results",
+        "message": "field `results` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "SearchPointsOutput.results",
+        "message": "field `results` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "SearchPointsOutput.results",
+        "message": "consider #[serde(default)] on `results` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ScrollPointsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ScrollPointsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ScrollPointsOutput.points",
+        "message": "field `points` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ScrollPointsOutput.points",
+        "message": "field `points` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ScrollPointsOutput.points",
+        "message": "consider #[serde(default)] on `points` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ScrollPointsOutput.next_page_offset",
+        "message": "field `next_page_offset` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ScrollPointsOutput.next_page_offset",
+        "message": "field `next_page_offset` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListSnapshotsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListSnapshotsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListSnapshotsOutput.snapshots",
+        "message": "field `snapshots` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ListSnapshotsOutput.snapshots",
+        "message": "field `snapshots` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListSnapshotsOutput.snapshots",
+        "message": "consider #[serde(default)] on `snapshots` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "ack_output_used",
+        "location": null,
+        "message": "AckOutput is a legacy shortcut — prefer a dedicated typed Output struct for new methods",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:docs/inspector-gadget/repomix-inputs/qdrant.xml version=repomix nodes=0 elements=319 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=51 introspected=319 missing_in_plugin=319 extra_in_plugin=51",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.clean.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.clean.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.collection_ops.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.collection_ops.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.distance_matrix.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.distance_matrix.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.facet.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.facet.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.mmr.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.mmr.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.mod.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.payload_index_schema.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.payload_index_schema.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.point_ops.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.point_ops.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.query.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.query.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.resharding.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.resharding.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.search.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.search.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.shard_transfer.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.shard_transfer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.sharding_keys.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.sharding_keys.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.snapshots.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.snapshots.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.state_management.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.state_management.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.telemetry.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.telemetry.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection.vector_name_schema.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection.vector_name_schema.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.collection_updater.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.collection_updater.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.fixtures.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.fixtures.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.holders.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.holders.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.mod.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.config_mismatch_optimizer.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.config_mismatch_optimizer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.indexing_optimizer.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.indexing_optimizer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.merge_optimizer.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.merge_optimizer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.mod.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.segment_optimizer.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.segment_optimizer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.vacuum_optimizer.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.optimizers.vacuum_optimizer.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.probabilistic_search_sampling.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.probabilistic_search_sampling.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.segments_searcher.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.segments_searcher.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.tests.mod.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.tests.mod.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_manager.tests.test_search_aggregation.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_manager.tests.test_search_aggregation.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.collection_state.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.collection_state.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.adaptive_handle.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.adaptive_handle.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.batching.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.batching.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.collection_size_stats.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.collection_size_stats.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.eta_calculator.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.eta_calculator.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.fetch_vectors.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.fetch_vectors.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.file_utils.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.file_utils.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.is_ready.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.is_ready.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "file.qdrant__qdrant.lib.collection.src.common.memory_reporter.rs",
+        "message": "external surface has `file.qdrant__qdrant.lib.collection.src.common.memory_reporter.rs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 279 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:docs/inspector-gadget/repomix-inputs/qdrant.xml",
+    "files_by_kind": {
+      "rust": 304
+    },
+    "by_kind": {
+      "rust": 319
+    },
+    "element_path_count": 319,
+    "gaps": {
+      "surface_paths_total": 319,
+      "signal_paths_considered": 0,
+      "covered_approx": 0,
+      "missing_from_plugin": 0,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {},
+      "delegated_paths": [],
+      "missing_paths_sample": [],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

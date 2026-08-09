@@ -7,6 +7,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
 
+/// Source-owned global options exposed by btrfs-progs v7.1.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.btrfs.cli-options@v1"))]
+pub struct BtrfsCliOptions {
+    /// Root command selector from `btrfs <group> <command>`.
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub verbose: bool,
+    #[serde(default)]
+    pub quiet: bool,
+    #[serde(default)]
+    pub log: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub help: bool,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CreateSubvolumeInput {
     pub path: String,
@@ -118,6 +139,13 @@ pub struct BtrfsState {
         extend("x-oscal-subid" = "obs.software.plugin.btrfs.config@v1")
     )]
     pub config: JsonValue,
+    /// Global CLI surface discovered from the installed upstream btrfs-progs binary.
+    #[serde(default)]
+    #[schemars(
+        description = "btrfs-progs global command options",
+        extend("x-oscal-subid" = "obs.software.plugin.btrfs.cli-options@v1")
+    )]
+    pub inspector_fields: BtrfsCliOptions,
 }
 pub struct BtrfsPlugin;
 impl Default for BtrfsPlugin {
@@ -137,8 +165,88 @@ impl BtrfsPlugin {
             send_state: serde_json::json!({"active_transfers": 0, "last_send": null, "last_receive": null}),
             dr_status: serde_json::json!({"mode": "none", "replication_enabled": false, "last_sync": null, "lag_bytes": 0}),
             config: serde_json::json!({"snapshot_schedule": "daily", "retention_count": 7, "compression": "zstd", "send_compressed": true}),
+            inspector_fields: BtrfsCliOptions {
+                version: Some("btrfs-progs v7.1".to_string()),
+                ..BtrfsCliOptions::default()
+            },
         }
     }
+}
+
+fn required_string(args: &JsonValue, field: &str) -> Result<String> {
+    args.get(field)
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("missing non-empty string argument '{field}'"))
+}
+
+/// Resolve every published method to an argv vector without invoking a shell.
+fn btrfs_command_args(method: &str, args: &JsonValue) -> Result<Vec<String>> {
+    let path = || required_string(args, "path");
+    Ok(match method {
+        "create_subvolume" => vec!["subvolume".into(), "create".into(), path()?],
+        "delete_subvolume" => vec!["subvolume".into(), "delete".into(), path()?],
+        "snapshot" => {
+            let mut command = vec!["subvolume".into(), "snapshot".into()];
+            if args
+                .get("readonly")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                command.push("-r".into());
+            }
+            command.push(required_string(args, "source")?);
+            command.push(required_string(args, "destination")?);
+            command
+        }
+        "list_subvolumes" => vec!["subvolume".into(), "list".into(), path()?],
+        "scrub_start" => vec!["scrub".into(), "start".into(), path()?],
+        "scrub_status" => vec!["scrub".into(), "status".into(), path()?],
+        "balance_start" => vec!["balance".into(), "start".into(), path()?],
+        "balance_status" => vec!["balance".into(), "status".into(), path()?],
+        "filesystem_df" => vec!["filesystem".into(), "df".into(), path()?],
+        "filesystem_usage" => vec!["filesystem".into(), "usage".into(), path()?],
+        "device_add" => vec![
+            "device".into(),
+            "add".into(),
+            required_string(args, "device")?,
+            path()?,
+        ],
+        "device_remove" => vec![
+            "device".into(),
+            "remove".into(),
+            required_string(args, "device")?,
+            path()?,
+        ],
+        other => return Err(anyhow::anyhow!("unknown btrfs method '{other}'")),
+    })
+}
+
+/// Execute a published Btrfs method through the installed upstream CLI.
+pub async fn dispatch_btrfs_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
+    let command_args = btrfs_command_args(method, args)?;
+    let output = tokio::process::Command::new("/usr/bin/btrfs")
+        .args(&command_args)
+        .output()
+        .await
+        .map_err(|error| anyhow::anyhow!("execute /usr/bin/btrfs: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "btrfs {} failed with {}: {}",
+            command_args.join(" "),
+            output.status,
+            stderr
+        ));
+    }
+    Ok(serde_json::json!({
+        "command": command_args,
+        "stdout": stdout,
+        "stderr": stderr,
+        "exit_code": output.status.code(),
+    }))
 }
 #[async_trait]
 impl StatePlugin for BtrfsPlugin {
@@ -372,4 +480,40 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("btrfs", |_ctx| std::sync::Arc::new(BtrfsPlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_declared_method_has_real_cli_dispatch() {
+        let schema = btrfs_schema();
+        for method in schema.methods.keys() {
+            let args = match method.as_str() {
+                "snapshot" => serde_json::json!({"source":"/src", "destination":"/dst"}),
+                "device_add" | "device_remove" => {
+                    serde_json::json!({"device":"/dev/test", "path":"/mnt/test"})
+                }
+                _ => serde_json::json!({"path":"/mnt/test"}),
+            };
+            let command = btrfs_command_args(method, &args)
+                .unwrap_or_else(|error| panic!("{method} lacks dispatch: {error}"));
+            assert!(!command.is_empty(), "{method} produced an empty command");
+        }
+    }
+
+    #[test]
+    fn inspector_fields_preserve_original_state_fields() {
+        let state = BtrfsPlugin::current_state();
+        assert_eq!(state.status, "active");
+        assert_eq!(
+            state.inspector_fields.version.as_deref(),
+            Some("btrfs-progs v7.1")
+        );
+        let schema = btrfs_schema();
+        assert!(schema.fields.contains_key("status"));
+        assert!(schema.fields.contains_key("inspector_fields"));
+        assert_eq!(schema.methods.len(), 12);
+    }
 }

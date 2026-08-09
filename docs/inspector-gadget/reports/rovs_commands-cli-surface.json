@@ -1,0 +1,47 @@
+{
+  "binary": "/usr/bin/ovs-vsctl",
+  "version": "ovs-vsctl (Open vSwitch) 3.7.1",
+  "ssh": null,
+  "nodes": [
+    {
+      "path": [],
+      "usage": "",
+      "about": "ovs-vsctl: ovs-vswitchd management utility",
+      "commands": [],
+      "flags": [
+        {
+          "name": "--no-wait",
+          "short": null,
+          "value_name": null,
+          "description": "do not wait for ovs-vswitchd to reconfigure"
+        },
+        {
+          "name": "--retry",
+          "short": null,
+          "value_name": null,
+          "description": "keep trying to connect to server forever -t, --timeout=SECS          wait at most SECS seconds for ovs-vswitchd"
+        },
+        {
+          "name": "--dry-run",
+          "short": null,
+          "value_name": null,
+          "description": "do not commit changes to database"
+        },
+        {
+          "name": "--oneline",
+          "short": null,
+          "value_name": null,
+          "description": "print exactly one line of output per command"
+        }
+      ],
+      "arguments": []
+    }
+  ],
+  "element_paths": [
+    "cmd",
+    "flag.root.dry_run",
+    "flag.root.no_wait",
+    "flag.root.oneline",
+    "flag.root.retry"
+  ]
+}
