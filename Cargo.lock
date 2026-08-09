@@ -5548,6 +5548,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "op-gallery-gen"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "jsonschema 0.29.1",
+ "op-blob",
+ "op-plugins",
+ "op-state-store",
+ "reqwest 0.12.28",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "simd-json",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "op-gateway"
 version = "0.1.0"
 dependencies = [
@@ -6179,6 +6202,7 @@ dependencies = [
  "op-cognitive-mcp",
  "op-core",
  "op-cozo-store",
+ "op-gallery-gen",
  "op-grpc-bridge",
  "op-identity",
  "op-introspection",

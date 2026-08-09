@@ -28,9 +28,13 @@ op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-cozo-store = { path = "../op-cozo-store" }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
+op-gallery-gen = { path = "../op-gallery-gen" }
 
 # Rate limiting
 tower_governor = "0.4"
+
+lazy_static = "1.4"
+async-stream = "0.3"
 
 # Web framework
 axum = { workspace = true, features = ["ws", "macros", "tokio"] }
@@ -51,7 +55,6 @@ toml = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
-async-stream = "0.3"
 
 # Utilities
 uuid = { workspace = true, features = ["v4", "serde"] }
@@ -64,7 +67,6 @@ thiserror = { workspace = true }
 # System info
 sysinfo = "0.30"
 gethostname = { workspace = true }
-lazy_static = "1.4"
 regex = { workspace = true }
 
 # Privacy router signup
