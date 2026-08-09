@@ -12,7 +12,8 @@ use crate::context::GenerationContext;
 
 /// Registry of available tools.
 pub struct ToolRegistry {
-    // Future: Qdrant client when enabled
+    /// Optional Qdrant client for real semantic search.
+    qdrant: Option<crate::qdrant::GalleryQdrantClient>,
 }
 
 /// OpenAI-compatible tool call.
@@ -39,9 +40,16 @@ pub struct ToolResult {
 }
 
 impl ToolRegistry {
-    /// Create a new tool registry.
+    /// Create a new tool registry without Qdrant.
     pub fn new() -> Self {
-        Self {}
+        Self { qdrant: None }
+    }
+
+    /// Create a tool registry with Qdrant integration.
+    pub fn with_qdrant(qdrant: crate::qdrant::GalleryQdrantClient) -> Self {
+        Self {
+            qdrant: Some(qdrant),
+        }
     }
 
     /// Execute a tool call.
@@ -326,27 +334,54 @@ impl ToolRegistry {
 
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-        // TODO: Implement actual Qdrant integration
-        // For now, do simple keyword matching as fallback
+        // Use real Qdrant if available, otherwise fall back to keyword matching
+        if let Some(qdrant) = &self.qdrant {
+            match qdrant.search(query, limit, None).await {
+                Ok(results) => {
+                    let results_json: Vec<serde_json::Value> = results
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "plugin_id": r.plugin_id,
+                                "fragment": r.fragment,
+                                "domain_tag": r.domain_tag,
+                                "score": r.score,
+                            })
+                        })
+                        .collect();
+
+                    return ToolResult {
+                        success: true,
+                        result: serde_json::json!({
+                            "query": query,
+                            "results": results_json,
+                            "count": results_json.len(),
+                            "source": "qdrant"
+                        }),
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!("Qdrant search failed, falling back to keywords: {}", e);
+                    // Fall through to keyword matching below
+                }
+            }
+        }
+
+        // Keyword matching fallback
         let query_lower = query.to_lowercase();
         let mut results = Vec::new();
 
         for schema in &ctx.schemas {
-            let mut score = 0.0;
+            let mut score = 0.0_f64;
 
-            // Check name match
             if schema.name.to_lowercase().contains(&query_lower) {
                 score += 0.5;
             }
-
-            // Check description match
             if let Some(desc) = &schema.description {
                 if desc.to_lowercase().contains(&query_lower) {
                     score += 0.3;
                 }
             }
-
-            // Check field names
             for field_name in schema.fields.keys() {
                 if field_name.to_lowercase().contains(&query_lower) {
                     score += 0.1;
@@ -355,21 +390,19 @@ impl ToolRegistry {
 
             if score > 0.0 {
                 results.push(serde_json::json!({
-                    "plugin": schema.name,
+                    "plugin_id": schema.name,
                     "score": score,
-                    "description": schema.description
+                    "domain_tag": schema.category,
+                    "fragment": schema.description,
                 }));
             }
         }
 
         results.sort_by(|a, b| {
-            let score_a = a.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
-            let score_b = b.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
-            score_b
-                .partial_cmp(&score_a)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            let sa = a.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+            let sb = b.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
         });
-
         results.truncate(limit);
 
         ToolResult {
@@ -377,7 +410,8 @@ impl ToolRegistry {
             result: serde_json::json!({
                 "query": query,
                 "results": results,
-                "note": "Using keyword matching (Qdrant not yet integrated)"
+                "count": results.len(),
+                "source": "keyword_fallback"
             }),
         }
     }

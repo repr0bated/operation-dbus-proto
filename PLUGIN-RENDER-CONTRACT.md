@@ -3,7 +3,8 @@
 Verified against the live pipeline 2026-08-07 (`antigravity_chat`, schema_hash
 `51f64efb…`, served complete through `/api/ui-model/plugin-schema/`). This is
 the authoring contract for making any plugin renderable by the UI-model loop
-(gemma/Salad producer → json-render Spec → SPA) and by schema-driven forms.
+(`op-gallery-gen` model-agnostic inference → json-render Spec → SPA) and by
+schema-driven forms.
 
 ## The golden rule
 
@@ -12,7 +13,7 @@ descriptors.**
 
 | Consumer path | What it gets |
 |---|---|
-| `op_blob::catalog::read_plugin_schema_shm(id)` (on-host, e.g. op-gemma `ui_gallery.rs`) | FULL schema |
+| `op_blob::catalog::read_plugin_schema_shm(id)` (on-host, e.g. `op-gallery-gen` context assembler) | FULL schema |
 | `GET /api/ui-model/plugin-schema/:plugin` (op-web, remote agents) | FULL schema + `schema_hash` |
 | `GET /api/ui-model/plugins` | every sealed plugin id (state-only plugins included) |
 | `PluginService.GetSchema` (gRPC) | FULL `schema_json` verbatim |
@@ -219,7 +220,22 @@ cargo run -p op-plugin-lint -- \
 # Lint findings only
 cargo run -p op-plugin-lint -- \
   --input path/to/plugin.rs --output /tmp/plugin.lint.md --format md
+
+# Reviewable Rust candidate from Inspector Gadget + Repomix gaps. The input is
+# never overwritten; inferred ownership/types/side effects remain marked for review.
+cargo run -p op-plugin-lint -- \
+  --input crates/op-plugins/src/state_plugins/zeroclaw.rs \
+  --output /tmp/zeroclaw.generated.rs \
+  --format rust \
+  --introspect /path/to/upstream/repomix-output.xml
 ```
+
+`--format rust` preserves the input source and appends Schemars-derived candidate
+fields plus dedicated method Input/Output types. Repomix proves that a surface
+exists, but cannot prove plugin ownership, runtime dispatch, mutation semantics,
+or exact Rust types. Generated candidates therefore must be promoted deliberately:
+register owned fields/methods, choose `SideEffect`, implement dispatch, register
+subids, and pass the verification checklist below before replacing a live plugin.
 
 ### `--introspect` (external discovery — prefer Repomix)
 

@@ -147,11 +147,20 @@ Both projects compile successfully:
 
 ## Next Steps
 
-1. **ZeroClaw Integration**: Connect HTTP handlers to op-gallery-gen crate
-2. **Plugin Schema Loading**: Load schemas from blob catalog
-3. **Qdrant Integration**: Replace keyword fallback with vector search
-4. **Catalog Store Wiring**: Connect to zeroclaw-gui catalog
-5. **End-to-End Testing**: Full generation workflow with real model
+All seven phases are complete:
+
+1. ✅ Static documentation + context assembly
+2. ✅ Inference loop (ZeroClaw /v1/chat/completions)
+3. ✅ Spec validation (SpecContract grammar)
+4. ✅ MCP tool layer (6 read-only tools)
+5. ✅ Qdrant semantic search (real vector search + keyword fallback)
+6. ✅ Antigravity chat integration (session mode, progress streaming)
+7. ✅ Migration from op-gemma (legacy generators removed)
+
+Remaining operational work (not code changes):
+- Wire `GalleryStore` trait to the real `CatalogStore` (when both run in-process or via gRPC)
+- Populate the `gallery-gen-schemas` Qdrant collection on first deploy
+- Operator UX refinement in the dashboard frontend
 
 ## Files Created
 
