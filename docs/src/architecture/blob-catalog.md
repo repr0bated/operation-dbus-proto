@@ -3,9 +3,10 @@
 The sealed blob catalog is the runtime source of truth for active plugins. A
 plugin is available to new catalog reads when its blob is present; removing it
 through the catalog API deregisters it from those reads. Already-mounted D-Bus
-objects and typed gRPC routes remain active until their process restarts.
-Consumers read the catalog instead of consulting the Rust registry or a
-generated monolithic schema file.
+objects remain active until their process restarts. Compiled typed gRPC routes
+change only after a matching bridge binary is installed and restarted. Consumers
+read the catalog instead of consulting the Rust registry or a generated
+monolithic schema file.
 
 ## Runtime layout
 
@@ -68,7 +69,8 @@ schemas built from a dirty or behind-main checkout.
 
 Dynamic gRPC reflection reloads the catalog on the next reflection request.
 The D-Bus object tree and frozen typed gRPC routes do not reload dynamically;
-activate catalog changes only after checking bridge status:
+for stale-catalog recovery where the installed bridge already matches the
+schemas, activate the resealed catalog only after checking bridge status:
 
 ```bash
 sudo sv status op-grpc-bridge
@@ -76,14 +78,24 @@ sudo sv restart op-grpc-bridge
 sudo sv status op-grpc-bridge
 ```
 
-If code changes also require new binaries, publish the release through the
-canonical btrfs golden/live workflow before the deliberate restart:
+For schema or dispatch-code changes, rebuild and publish the matching binary
+through the canonical btrfs golden/live workflow. Suppress automatic restarts
+so catalog and binary activation happen together in the final step:
 
 ```bash
 CXXFLAGS="-include cstdint" cargo build --workspace --release
-sudo deploy/runit/build-golden.sh --dry-run
-sudo deploy/runit/build-golden.sh
+NO_RESTART=1 ./deploy/reseal-plugins.sh
+sudo deploy/runit/build-golden.sh --dry-run --no-restart
+sudo deploy/runit/build-golden.sh --no-restart
+sudo sv status op-grpc-bridge
+sudo sv restart op-grpc-bridge
+sudo sv status op-grpc-bridge
 ```
+
+`--no-restart` leaves every affected service running its previous process.
+Review the publisher's changed-service report and schedule deliberate restarts
+for services other than the bridge. The final bridge restart above loads both
+the installed binary and the resealed catalog.
 
 The default `reseal-plugins.sh` mode directly replaces two live binaries and
 restarts the bridge. It does not update the golden release subvolume, so it is
