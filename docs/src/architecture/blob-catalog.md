@@ -84,8 +84,8 @@ so catalog and binary activation happen together in the final step:
 
 ```bash
 CXXFLAGS="-include cstdint" cargo build --workspace --release
-NO_RESTART=1 ./deploy/reseal-plugins.sh
-sudo deploy/runit/build-golden.sh --dry-run --no-restart
+CXXFLAGS="-include cstdint" NO_RESTART=1 ./deploy/reseal-plugins.sh
+sudo deploy/runit/build-golden.sh --dry-run
 sudo deploy/runit/build-golden.sh --no-restart
 sudo sv status op-grpc-bridge
 sudo sv restart op-grpc-bridge
@@ -93,9 +93,9 @@ sudo sv status op-grpc-bridge
 ```
 
 `--no-restart` leaves every affected service running its previous process.
-Review the publisher's changed-service report and schedule deliberate restarts
-for services other than the bridge. The final bridge restart above loads both
-the installed binary and the resealed catalog.
+Record the dry run's restart and held-back service lists, then schedule
+deliberate restarts for services other than the bridge. The final bridge restart
+above loads both the installed binary and the resealed catalog.
 
 The default `reseal-plugins.sh` mode directly replaces two live binaries and
 restarts the bridge. It does not update the golden release subvolume, so it is
