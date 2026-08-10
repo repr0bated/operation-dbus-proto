@@ -1,9 +1,11 @@
 # Sealed Blob Catalog
 
 The sealed blob catalog is the runtime source of truth for active plugins. A
-plugin exists when its blob is present in the catalog; removing that blob
-deregisters the plugin. Consumers read the catalog instead of consulting the
-Rust registry or a generated monolithic schema file.
+plugin is available to new catalog reads when its blob is present; removing it
+through the catalog API deregisters it from those reads. Already-mounted D-Bus
+objects and typed gRPC routes remain active until their process restarts.
+Consumers read the catalog instead of consulting the Rust registry or a
+generated monolithic schema file.
 
 ## Runtime layout
 
@@ -16,29 +18,36 @@ The catalog lives on tmpfs:
 ```
 
 Each blob contains the plugin schema, D-Bus identity, generated gRPC
-descriptors, method metadata, and optional identity data. Blob bytes are
-deterministic for the same schema. The filename therefore identifies both the
-plugin and the schema version.
+descriptors, method metadata, and optional identity data. The schema hash is
+deterministic for the canonical schema JSON. The filename therefore identifies
+both the plugin and the schema version.
 
-Catalog mutations are atomic:
+Individual blob and manifest replacements are rename-atomic:
 
 1. A new blob is written to a temporary file and renamed into place.
 2. Older hash versions of the same plugin are removed.
 3. `.manifest.json` is written last using the same temporary-file-and-rename
    pattern.
 
-The manifest is the commit point for consumers. It contains the active plugin
-IDs and full schema hashes, a monotonic `generation`, and the `catalog_hash`.
-`catalog_hash` is computed once by `op-blob` from sorted plugin ID and schema
-hash pairs. Consumers read the published value; they do not recompute it.
-Catalog checks happen in response to arrivals rather than in polling loops.
+An upsert or full reseal spans multiple filesystem operations and is not a
+catalog-wide transaction. Manifest-aware consumers use `.manifest.json` as the
+change marker; a consumer that scans blob files directly can observe an
+in-progress reseal.
+
+The manifest contains active plugin IDs and full schema hashes, an incrementing
+`generation` derived from the previous parseable manifest, and the
+`catalog_hash`. The generation restarts at `1` if the manifest is absent or
+invalid. `catalog_hash` is computed once by `op-blob` from sorted plugin ID and
+schema hash pairs. Consumers read the published value; they do not recompute
+it. Catalog checks happen in response to arrivals rather than in polling loops.
 
 ## Resealing after schema changes
 
-On the host, use the guarded workflow from the repository root:
+For a catalog-only reseal on the host, use the guarded workflow from the
+repository root:
 
 ```bash
-./deploy/reseal-plugins.sh
+NO_RESTART=1 ./deploy/reseal-plugins.sh
 ```
 
 The script:
@@ -48,29 +57,42 @@ The script:
 2. Fetches `origin/main` and requires `HEAD` to contain its current tip.
 3. Builds release versions of `opblob` and `op-grpc-bridge`.
 4. Seals schemas loaded from `DefaultPluginRegistry` into the SHM catalog.
-   Plugins absent from the registry are swept; registered plugins without a
-   schema are reported as skipped.
-5. Installs both binaries with rename-based replacement, restarts
-   `op-grpc-bridge` through runit, and reports service status.
+   After sealing succeeds, the sweep retains only successfully sealed IDs. A
+   registered plugin without a schema is reported as skipped and its previous
+   blob, if any, is removed.
+5. Leaves installed binaries and running services unchanged because
+   `NO_RESTART=1` is set.
 
 These preflight checks prevent a successful-looking reseal from publishing
 schemas built from a dirty or behind-main checkout.
 
-Use `NO_RESTART=1` when only the catalog should change:
+Dynamic gRPC reflection reloads the catalog on the next reflection request.
+The D-Bus object tree and frozen typed gRPC routes do not reload dynamically;
+activate catalog changes only after checking bridge status:
 
 ```bash
-NO_RESTART=1 ./deploy/reseal-plugins.sh
+sudo sv status op-grpc-bridge
+sudo sv restart op-grpc-bridge
+sudo sv status op-grpc-bridge
 ```
 
-This mode does **not** install the newly built binaries or restart the bridge.
-D-Bus and dynamic reflection surfaces resynchronize on the next arrival, but
-frozen per-method gRPC service descriptors retain their old method signatures
-until `op-grpc-bridge` is replaced and restarted.
+If code changes also require new binaries, publish the release through the
+canonical btrfs golden/live workflow before the deliberate restart:
+
+```bash
+CXXFLAGS="-include cstdint" cargo build --workspace --release
+sudo deploy/runit/build-golden.sh --dry-run
+sudo deploy/runit/build-golden.sh
+```
+
+The default `reseal-plugins.sh` mode directly replaces two live binaries and
+restarts the bridge. It does not update the golden release subvolume, so it is
+not a release deployment path.
 
 `--force` skips both repository checks:
 
 ```bash
-./deploy/reseal-plugins.sh --force
+NO_RESTART=1 ./deploy/reseal-plugins.sh --force
 ```
 
 Use it only when intentionally testing a non-main or dirty checkout; it removes
@@ -92,12 +114,6 @@ sudo /usr/local/bin/opblob inspect \
   /dev/shm/opdbus/plugin-blobs/<plugin-id>.<schema-hash16>.blob
 ```
 
-After a normal reseal, verify that the bridge remained up:
-
-```bash
-sudo sv status op-grpc-bridge
-```
-
 Common failures:
 
 - `tracked files have uncommitted changes`: commit or stash tracked changes.
@@ -108,5 +124,5 @@ Common failures:
 
 Do not restore the retired `/dev/shm/opdbus/schemas` directory,
 `live-schema.json`, or a separate schema manifest. Do not write blobs directly;
-all catalog changes must go through `op-blob` so blob replacement, stale-version
-cleanup, and manifest publication remain one operation.
+all catalog changes must go through `op-blob` so each blob replacement,
+stale-version cleanup, and manifest publication follows the catalog lifecycle.
