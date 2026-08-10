@@ -48,7 +48,7 @@ For a catalog-only reseal on the host, use the guarded workflow from the
 repository root:
 
 ```bash
-NO_RESTART=1 ./deploy/reseal-plugins.sh
+CXXFLAGS="-include cstdint" NO_RESTART=1 ./deploy/reseal-plugins.sh
 ```
 
 The script:
@@ -104,7 +104,7 @@ not a release deployment path.
 `--force` skips both repository checks:
 
 ```bash
-NO_RESTART=1 ./deploy/reseal-plugins.sh --force
+CXXFLAGS="-include cstdint" NO_RESTART=1 ./deploy/reseal-plugins.sh --force
 ```
 
 Use it only when intentionally testing a non-main or dirty checkout; it removes
