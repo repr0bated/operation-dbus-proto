@@ -38,8 +38,10 @@
 #   3. Installs the libexec helpers and the network runit services from this
 #      repo (deploy/runit/, deploy/runit/libexec-3tched/).
 #   4. Enables and starts the network chain in dependency order.
-#   5. Attaches the OpenFlow controller and installs the static flow set from
-#      deploy/config/openflow-static-flows.json.
+#   5. Stages the static flow set from deploy/config/openflow-static-flows.json
+#      BEFORE starting op-of-controller (it reads that file only at startup),
+#      refuses a 0-flow set, attaches the controller, and reads back both
+#      cookie classes to prove the table is what was asked for.
 #   6. Converges every Incus container onto the shared-socket model: ensures
 #      the ghostbridge-socket mount exists, and reports (or, with
 #      --strip-legacy-devices, removes) any nic/proxy device it finds.
@@ -54,6 +56,7 @@
 #     --no-start                install files + enable, do not sv start/restart
 #     --skip-containers         leave Incus containers untouched
 #     --strip-legacy-devices    remove nic/proxy devices from containers
+#     --allow-empty-flows       permit a 0-flow static set (normally fatal)
 #     --dry-run                 print what would change, touch nothing
 #
 # Rollback (console): the backup directory printed at the top holds the
@@ -71,6 +74,7 @@ CONF_DIR=/etc/op-dbus
 NET_CONF="$CONF_DIR/network.conf"
 STATIC_FLOWS="$CONF_DIR/openflow-static-flows.json"
 LIBEXEC=/usr/local/libexec/3tched
+OF_LOG=/var/log/op-dbus/op-of-controller
 BACKUP="/var/lib/op-dbus/network-install-backup-$(date +%Y%m%d-%H%M%S)"
 
 CAPTURE=false
@@ -78,6 +82,7 @@ DO_START=true
 DO_CONTAINERS=true
 STRIP_LEGACY=false
 DRY_RUN=false
+ALLOW_EMPTY_FLOWS=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -85,6 +90,7 @@ for arg in "$@"; do
         --no-start)             DO_START=false ;;
         --skip-containers)      DO_CONTAINERS=false ;;
         --strip-legacy-devices) STRIP_LEGACY=true ;;
+        --allow-empty-flows)    ALLOW_EMPTY_FLOWS=true ;;
         --dry-run|--print)      DRY_RUN=true ;;
         -h|--help)              sed -n '2,50p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
@@ -288,6 +294,34 @@ for s in "${NET_SERVICES[@]}"; do install_service "$s" && log "  $s"; done
 log "Installing container socket relays"
 for s in "${SOCK_SERVICES[@]}"; do install_service "$s" && log "  $s"; done
 
+# ── Static flows — installed BEFORE op-of-controller starts ───────────────────
+# op-of-controller reads OF_STATIC_FLOWS_FILE exactly once, in main(), at
+# startup. Installing the file after the service is running is a silent no-op
+# until the next restart, which is how the table can look wrong while the file
+# on disk looks right. So it lands here, ahead of the start loop.
+#
+# The guard exists because of what actually happened on 2026-08-10 22:17: the
+# file was truncated to `[]`, the controller logged "Loaded 0 static flow(s)",
+# and the datapath ran on the priority=0 fallback alone for three days without
+# anything reporting a fault. An empty flow set is almost never intended — it
+# has to be asked for explicitly.
+SRC_FLOWS="$REPO/deploy/config/openflow-static-flows.json"
+log "Installing static flows -> $STATIC_FLOWS"
+if [ ! -f "$SRC_FLOWS" ]; then
+    warn "  $SRC_FLOWS missing — controller will start with no static flows"
+elif ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$SRC_FLOWS" 2>/dev/null; then
+    die "  $SRC_FLOWS is not valid JSON — refusing to install a file the controller cannot parse"
+else
+    FLOW_COUNT="$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$SRC_FLOWS")"
+    if [ "$FLOW_COUNT" -eq 0 ] && ! $ALLOW_EMPTY_FLOWS; then
+        die "  $SRC_FLOWS has 0 flows — this is the 2026-08-10 truncation signature.
+       Restore it (btrfs snapshots under /.snapshots hold known-good copies) or
+       pass --allow-empty-flows if a bare fallback-only table is really intended."
+    fi
+    run install -m 0644 "$SRC_FLOWS" "$STATIC_FLOWS"
+    log "  $FLOW_COUNT flow(s) staged for op-of-controller"
+fi
+
 # ── Retire ovsbr0-addr ────────────────────────────────────────────────────────
 # It is still enabled and "running" on this host, but its helper
 # (/usr/local/libexec/3tched/ovsbr0-addr-up) does not exist — the run script has
@@ -332,14 +366,18 @@ else
 fi
 
 # ── 5. OpenFlow ───────────────────────────────────────────────────────────────
-log "Installing static flows -> $STATIC_FLOWS"
-if [ -f "$REPO/deploy/config/openflow-static-flows.json" ]; then
-    run install -m 0644 "$REPO/deploy/config/openflow-static-flows.json" "$STATIC_FLOWS"
-else
-    warn "deploy/config/openflow-static-flows.json missing — controller will run with no static flows"
-fi
-
+# The file was staged before the start loop, so a controller started above
+# already read it. If op-of-controller was ALREADY running when this script
+# began, it is running on whatever it loaded at its own start — restart it so
+# the staged set is the live set. Safe: fail_mode=standalone plus the cookied
+# priority=0 fallback means the datapath keeps forwarding while it cycles.
 if $DO_START; then
+    if [ -f "$STATIC_FLOWS" ]; then
+        log "Restarting op-of-controller so it reloads $STATIC_FLOWS"
+        run sv restart op-of-controller || warn "op-of-controller restart failed"
+        $DRY_RUN || sleep 2
+    fi
+
     log "Attaching OpenFlow controller $OF_CONTROLLER_ENDPOINT to $BRIDGE"
     # attach-controller-safe waits for the plugin tree and rolls back on failure.
     run "$LIBEXEC/attach-controller-safe" "$BRIDGE" "$OF_CONTROLLER_ENDPOINT" \
@@ -351,6 +389,23 @@ if $DO_START; then
     # Reassert fail_mode last: attaching a controller is what makes it matter.
     run zcall openflow set_fail_mode -a "{\"bridge\":\"$BRIDGE\",\"mode\":\"$FAIL_MODE\"}" \
         || warn "set_fail_mode failed — bridge keeps its current fail mode"
+
+    # Confirm the controller actually loaded them. "Loaded 0 static flow(s)"
+    # here is the failure this whole section exists to make loud — it is what
+    # ran unnoticed from 2026-08-10 22:17 onward.
+    if ! $DRY_RUN && [ -r "$OF_LOG/current" ]; then
+        loaded="$(sed 's/\x1b\[[0-9;]*m//g' "$OF_LOG/current" 2>/dev/null \
+            | grep -oE 'Loaded [0-9]+ static flow' | tail -1 | grep -oE '[0-9]+' || true)"
+        if [ -n "$loaded" ]; then
+            if [ "$loaded" -gt 0 ]; then
+                log "  controller loaded $loaded static flow(s)"
+            else
+                warn "  controller loaded 0 static flow(s) — the table is fallback-only"
+            fi
+        else
+            warn "  no 'Loaded N static flow(s)' line yet in $OF_LOG/current"
+        fi
+    fi
 fi
 
 # ── 6. Containers: socket-only convergence ────────────────────────────────────
@@ -424,6 +479,16 @@ log "Ports on $BRIDGE:"
 zcall rovs_commands list_ports -a "{\"bridge_name\":\"$BRIDGE\"}" 2>/dev/null || warn "  list_ports failed"
 log "Datapath health:"
 "$LIBEXEC/get-datapath-health" "$BRIDGE" 2>/dev/null || warn "  health check failed"
+log "Flow table (by cookie class):"
+if command -v ovs-ofctl >/dev/null; then
+    # Read-only introspection; every mutation above went through the plugins.
+    fb="$(ovs-ofctl dump-flows "$BRIDGE" 2>/dev/null | grep -c '0x3344434800000001' || true)"
+    mg="$(ovs-ofctl dump-flows "$BRIDGE" 2>/dev/null | grep -c '0x3344434800000002' || true)"
+    log "    FALLBACK (0x…01): ${fb:-0}   MANAGED (0x…02): ${mg:-0}"
+    [ "${mg:-0}" -eq 0 ] && warn "    no MANAGED flows in the table — static set did not install"
+else
+    warn "    ovs-ofctl not available for flow readback"
+fi
 log "Kernel L3:"
 for dev in "$BRIDGE" "$PUBLIC_PORT" $INTERNAL_PORTS; do
     ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{print "    " $2 " " $4}'
