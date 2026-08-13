@@ -1,8 +1,9 @@
 # Network Address & Protocol Table
 
-> **STALE for the 2026-07 Artix/runit host.** Addresses and interfaces below describe an older layout (ens3, incusbr0, 10.88.88.x).  
-> **Current live inventory:** [operations/host-socket-topology-live.md](src/operations/host-socket-topology-live.md)  
-> **Ops summary:** [src/operations/network.md](src/operations/network.md)
+> **STALE — previous host only** (ens3, incusbr0, 10.88.88.x, `:50051`).  
+> **Current Artix/runit inventory (2026-08-10):** [operations/host-socket-topology-live.md](src/operations/host-socket-topology-live.md)  
+> **Ops summary:** [src/operations/network.md](src/operations/network.md)  
+> Live roles: **svc0** `10.0.0.2` tonic · **grpc0** `10.200.0.2:8090` gRPC · **ovsbr0** `10.200.0.1` fabric/OF · WG `netmaker` off OVS.
 
 ## Historical table (previous host — do not use for runbooks)
 

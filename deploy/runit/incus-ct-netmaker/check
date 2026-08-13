@@ -1,0 +1,9 @@
+#!/bin/sh
+export PATH="/usr/bin:/usr/sbin:/usr/lib/incus:${PATH:-}"
+incus list -f csv -c ns 2>/dev/null | rg -q '^NetMaker,RUNNING$' || exit 1
+exec python3 -c '
+import socket
+for port in (8081, 8083, 8443):
+    with socket.create_connection(("127.0.0.1", port), timeout=1):
+        pass
+'

@@ -67,17 +67,17 @@ pub struct ChatConfig {
 }
 
 fn default_llm_plugin() -> String {
-    "large_language_model".to_string()
+    "zeroclaw".to_string()
 }
 
 fn default_provider_route() -> String {
-    "gemini".to_string()
+    "antigravity".to_string()
 }
 
 /// Top-level Antigravity Chat state.
 ///
-/// Gemini model catalog is **not** owned here — resolve via `llm_plugin` +
-/// `provider_route` (default `large_language_model` / `gemini`). This plugin
+/// Model routing is **not** owned here — resolve via `llm_plugin` +
+/// `provider_route` (default `zeroclaw` / `antigravity`). This plugin
 /// only holds the OAuth bridge, auth, IDE config, and a selected model id.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.antigravity-chat.schema@v1"))]
@@ -92,19 +92,19 @@ pub struct AntigravityChatState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.software.antigravity-chat.auth@v1"))]
     pub auth: Auth,
-    /// Plugin that owns the model catalog (default large_language_model).
+    /// Plugin that owns model routing (default zeroclaw).
     #[serde(default = "default_llm_plugin")]
     #[schemars(
-        description = "Generation/catalog plugin Antigravity delegates to for models (default large_language_model). Catalog lives there; this plugin holds no Gemini model list.",
-        example = &"large_language_model",
+        description = "Router plugin Antigravity Chat delegates to for provider/model selection (default zeroclaw).",
+        example = &"zeroclaw",
         extend("x-oscal-subid" = "mut.software.antigravity-chat.llm-plugin@v1")
     )]
     pub llm_plugin: String,
-    /// Provider route inside `llm_plugin` (default gemini).
+    /// Provider route inside `llm_plugin` (default antigravity).
     #[serde(default = "default_provider_route")]
     #[schemars(
-        description = "Provider route on llm_plugin for the Gemini catalog (default gemini).",
-        example = &"gemini",
+        description = "Provider route on llm_plugin for Antigravity-backed generation (default antigravity).",
+        example = &"antigravity",
         extend("x-oscal-subid" = "mut.software.antigravity-chat.provider-route@v1")
     )]
     pub provider_route: String,
@@ -226,7 +226,7 @@ pub(crate) fn antigravity_chat_schema() -> PluginSchema {
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity_chat",
         "1.1.0",
-        "Antigravity Chat — OAuth bridge and headless IDE; Gemini models via large_language_model/gemini",
+        "Antigravity Chat — OAuth bridge and headless IDE; model routing via zeroclaw/antigravity",
         &root,
     );
 
@@ -262,7 +262,7 @@ pub(crate) fn antigravity_chat_schema() -> PluginSchema {
 
     // Backend note: headless-IDE bridge has no live implementation yet
     // (bridge.status stays "offline" — see current_state()). Model catalog is
-    // owned by llm_plugin/provider_route; do not list models here. Methods are
+    // owned by zeroclaw/antigravity via llm_plugin/provider_route; do not list models here. Methods are
     // declared so the UI can render controls.
     schema.methods.insert(
         "get_bridge_status".to_string(),

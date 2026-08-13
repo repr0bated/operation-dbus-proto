@@ -146,7 +146,7 @@ impl GemmaBrainPlugin {
 
     /// Build the live state: observed fields are read from the system, config
     /// fields from the environment (with sensible defaults).
-    fn current_state() -> GemmaBrainState {
+    pub fn current_state() -> GemmaBrainState {
         let target_count = Self::env_u32("GEMMA_TARGET_COUNT", 200);
         let spec_count = Self::gallery_spec_count();
         let binary_present = std::path::Path::new(&Self::gemma_binary()).exists();
@@ -376,6 +376,60 @@ pub(crate) fn gemma_brain_schema() -> PluginSchema {
     );
 
     schema
+}
+
+/// Mutation-path dispatch for UI/control-plane reads. Domain results are shaped
+/// for zeroclaw-gui page binds (not a silent echo of empty args).
+pub fn dispatch_gemma_brain_method(
+    method: &str,
+    state: &GemmaBrainState,
+) -> Result<serde_json::Value> {
+    match method {
+        "get_ui_spec" => {
+            let last_mint = std::fs::metadata(GEMMA_SPECS_PATH)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| {
+                    let secs = t
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    chrono::DateTime::from_timestamp(secs, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            Ok(serde_json::json!({
+                "catalog": {
+                    "status": state.status,
+                    "elements": state.gallery.spec_count,
+                    "last_mint": last_mint,
+                },
+                "plugins": [
+                    { "name": "gemma_brain", "status": state.status },
+                    { "name": state.llm_plugin, "status": "ok" },
+                    { "name": "json_render", "status": "ok" },
+                ],
+                "spec": {
+                    "perspectives": state.perspectives,
+                    "gallery": state.gallery,
+                    "routing": state.routing,
+                },
+            }))
+        }
+        "list_perspectives" => Ok(serde_json::json!({
+            "perspectives": state.perspectives,
+        })),
+        "list_tags" => Ok(serde_json::json!({
+            "tags": [],
+        })),
+        "classify" | "route" | "register_tag" | "analyze_intent" => Err(anyhow::anyhow!(
+            "gemma_brain.{method} requires a live op-gemma runtime; not available via echo"
+        )),
+        other => Err(anyhow::anyhow!(
+            "gemma_brain method is not declared for mutation dispatch: {other}"
+        )),
+    }
 }
 
 // Self-registration: the plugin registry discovers this via inventory

@@ -65,7 +65,8 @@ pub struct GalleryGenConfig {
     /// Maximum stable-core elements to protect (default: 40)
     pub stable_core_max: usize,
 
-    /// ZeroClaw HTTP endpoint (default: "http://localhost:8082")
+    /// OpenAI-compatible chat endpoint (op-web owns this on :8080;
+    /// ZeroClaw's daemon :8082 serves A2A, not `/v1/chat/completions`).
     pub zeroclaw_endpoint: String,
 
     /// Enable MCP tool layer for cross-blob discovery
@@ -83,7 +84,7 @@ impl Default for GalleryGenConfig {
         Self {
             target_count: 200,
             stable_core_max: 40,
-            zeroclaw_endpoint: "http://localhost:8082".to_string(),
+            zeroclaw_endpoint: "http://127.0.0.1:8080".to_string(),
             enable_mcp: false,
             enable_qdrant: false,
             max_turns: 10,

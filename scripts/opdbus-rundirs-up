@@ -6,6 +6,18 @@ umask 022
 install -d -m 0755 /run/opdbus
 # Shared container UDS parent (bind-mounted into assistant/qdrant as /run/ghostbridge)
 install -d -m 0777 /run/ghostbridge
+# Per-container rendezvous dirs. Every container here is NIC-less and
+# proxy-less, so this bind-mounted dir is its ONLY channel to the host: the
+# in-container op-uds-relay binds its sockets here and the host-side uds-*
+# runit services connect to them. Containers are unprivileged (idmap base
+# 1000000), so each dir must be owned by the mapped root or the container
+# cannot create sockets -- and the service goes dark while still reporting
+# healthy. A per-container dir (rather than a shared 0777 parent) also stops
+# one container binding another's socket name.
+for _ct in mail cozo NetMaker qdrant xray; do
+    install -d -m 0755 -o 1000000 -g 1000000 "/run/ghostbridge/$_ct"
+done
+unset _ct
 install -d -m 0755 /run/op-dbus
 install -d -m 0755 /run/opdbus/runit-ready
 install -d -m 0755 /dev/shm/opdbus/plugin-blobs
@@ -65,24 +77,54 @@ if [ -x /usr/local/bin/op-identity-sled ]; then
                 echo "warning: identity sled returned an invalid footprint"
                 ;;
             *)
+                INSTALLED_GRANTS_PATH=/etc/opdbus/capability-grants.json
                 GRANTS_PATH=/dev/shm/opdbus/capability-grants.json
-                GRANTS_TMP=$(mktemp /dev/shm/opdbus/capability-grants.XXXXXX)
+                install -d -m 0755 /etc/opdbus
+                INSTALLED_GRANTS_TMP=$(mktemp /etc/opdbus/capability-grants.XXXXXX)
                 # The sled footprint changes after every audited mutation, so
                 # grants are capability-scoped rather than footprint-pinned.
                 # Ghostbridge authentication is still required before lookup.
-                jq -n '{
-                    "*": {
-                        capabilities: [
-                            "cap.software.zeroclaw.chat@v1",
-                            "cap.software.zeroclaw.models.read@v1",
-                            "cognitive_mcp.read",
-                            "cognitive_mcp.invoke"
-                        ]
-                    }
-                }' >"$GRANTS_TMP"
-                chmod 0600 "$GRANTS_TMP"
+                REQUIRED_GRANTS='[
+                    "cap.service.lifecycle.init@v1",
+                    "cap.service.lifecycle.run@v1",
+                    "cap.service.lifecycle.shutdown@v1",
+                    "cap.software.zeroclaw.chat@v1",
+                    "cap.software.zeroclaw.models.read@v1",
+                    "cap.software.zeroclaw.providers.read@v1",
+                    "cap.software.zeroclaw.router.read@v1",
+                    "gemma.read",
+                    "host_runtime.read",
+                    "cognitive_mcp.read",
+                    "cognitive_mcp.invoke"
+                ]'
+                if [ -r "$INSTALLED_GRANTS_PATH" ]; then
+                    # The durable document is the authority consumed by the
+                    # opdbus-grants materializer. Re-running this oneshot must
+                    # not erase grants provisioned for other principals.
+                    jq --argjson required "$REQUIRED_GRANTS" '
+                        (if type == "object" then . else {} end)
+                        | .["*"] = ((.["*"] // {})
+                            | .capabilities = (((.capabilities // []) + $required) | unique))
+                    ' "$INSTALLED_GRANTS_PATH" >"$INSTALLED_GRANTS_TMP"
+                elif [ -r "$GRANTS_PATH" ]; then
+                    jq --argjson required "$REQUIRED_GRANTS" '
+                        (if type == "object" then . else {} end)
+                        | .["*"] = ((.["*"] // {})
+                            | .capabilities = (((.capabilities // []) + $required) | unique))
+                    ' "$GRANTS_PATH" >"$INSTALLED_GRANTS_TMP"
+                else
+                    jq -n --argjson required "$REQUIRED_GRANTS" \
+                        '{"*": {capabilities: $required}}' >"$INSTALLED_GRANTS_TMP"
+                fi
+                chmod 0600 "$INSTALLED_GRANTS_TMP"
+                mv -f "$INSTALLED_GRANTS_TMP" "$INSTALLED_GRANTS_PATH"
+
+                # Publish immediately as well as durably. The materializer
+                # will keep SHM synchronized from this installed authority.
+                GRANTS_TMP=$(mktemp /dev/shm/opdbus/capability-grants.XXXXXX)
+                install -m 0600 "$INSTALLED_GRANTS_PATH" "$GRANTS_TMP"
                 mv -f "$GRANTS_TMP" "$GRANTS_PATH"
-                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege ZeroClaw + cognitive_mcp read/invoke grants"
+                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege UI, ZeroClaw, and cognitive_mcp grants"
                 ;;
         esac
     else

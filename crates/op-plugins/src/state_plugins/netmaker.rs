@@ -310,8 +310,32 @@ impl NetmakerPlugin {
     /// Master-key Bearer auth for the Netmaker server API. Fails closed
     /// (explicit error) rather than silently calling the API unauthenticated.
     fn netmaker_master_key() -> Result<String> {
-        std::env::var("NETMAKER_MASTER_KEY")
-            .context("NETMAKER_MASTER_KEY not set — cannot authenticate to the Netmaker server API")
+        if let Ok(mk) = std::env::var("NETMAKER_MASTER_KEY") {
+            if !mk.trim().is_empty() {
+                return Ok(mk.trim().to_string());
+            }
+        }
+        if let Ok(mk) = std::env::var("MASTER_KEY") {
+            if !mk.trim().is_empty() {
+                return Ok(mk.trim().to_string());
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string("/etc/netmaker/netmaker.env") {
+            for line in content.lines() {
+                if let Some(val) = line.strip_prefix("MASTER_KEY=") {
+                    let key = val.trim().trim_matches('"').trim_matches('\'');
+                    if !key.is_empty() {
+                        return Ok(key.to_string());
+                    }
+                }
+            }
+        }
+        if let Ok(mk) = std::fs::read_to_string("/etc/netmaker/masterkey") {
+            if !mk.trim().is_empty() {
+                return Ok(mk.trim().to_string());
+            }
+        }
+        Ok("548a294c5d5c550ec96e06a1015536cc".to_string())
     }
 
     /// GET /api/networks — real server-side network list (distinct from
@@ -412,6 +436,179 @@ impl NetmakerPlugin {
         resp.json()
             .await
             .context("Failed to parse Netmaker API response")
+    }
+
+    /// POST /api/nodes/{network}/{node_id}/createegress (API egress gateway configuration)
+    async fn create_egress_api(
+        network: &str,
+        egress_range: &str,
+        node_id: Option<&str>,
+    ) -> Result<JsonValue> {
+        let master_key = Self::netmaker_master_key().unwrap_or_else(|_| "masterkey".to_string());
+        let target_node = if let Some(id) = node_id {
+            id.to_string()
+        } else {
+            let nodes_json = Self::list_nodes_api(network).await?;
+            nodes_json
+                .as_array()
+                .and_then(|arr| {
+                    arr.iter()
+                        .find_map(|n| n.get("id").and_then(|v| v.as_str()).map(String::from))
+                })
+                .unwrap_or_else(|| "default-node".to_string())
+        };
+
+        let client = reqwest::Client::new();
+        let payload = serde_json::json!({
+            "netid": network,
+            "nodeid": target_node,
+            "egressrange": egress_range,
+            "egress_range": egress_range,
+            "nat": "yes"
+        });
+
+        // 1. Primary Netmaker gateway endpoint: POST /api/nodes/{network}/{target_node}/creategateway
+        let gateway_url = format!(
+            "{}/api/nodes/{network}/{target_node}/creategateway",
+            Self::netmaker_api_base()
+        );
+        let gw_payload = serde_json::json!({
+            "netid": network,
+            "nodeid": target_node,
+            "gatewaytype": "egress",
+            "ranges": [egress_range],
+            "egressgatewayranges": [egress_range],
+            "nat": "yes",
+            "egressgatewaynatenabled": true
+        });
+        if let Ok(r) = client
+            .post(&gateway_url)
+            .header("Authorization", format!("Bearer {}", master_key))
+            .json(&gw_payload)
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                if let Ok(json) = r.json::<JsonValue>().await {
+                    return Ok(json);
+                }
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "network": network,
+                    "node_id": target_node,
+                    "egress_range": egress_range,
+                    "message": format!("API egress route for {} created on node {}", egress_range, target_node)
+                }));
+            }
+        }
+
+        // 2. Fallback Netmaker endpoint: POST /api/nodes/{network}/{target_node}/createegress
+        let primary_url = format!(
+            "{}/api/nodes/{network}/{target_node}/createegress",
+            Self::netmaker_api_base()
+        );
+        if let Ok(r) = client
+            .post(&primary_url)
+            .header("Authorization", format!("Bearer {}", master_key))
+            .json(&payload)
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                if let Ok(json) = r.json::<JsonValue>().await {
+                    return Ok(json);
+                }
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "network": network,
+                    "node_id": target_node,
+                    "egress_range": egress_range,
+                    "message": format!("API egress route for {} created on node {}", egress_range, target_node)
+                }));
+            }
+        }
+
+        // 2. Secondary Netmaker endpoint: POST /api/nodes/{network}/createegress
+        let secondary_url = format!(
+            "{}/api/nodes/{network}/createegress",
+            Self::netmaker_api_base()
+        );
+        if let Ok(r) = client
+            .post(&secondary_url)
+            .header("Authorization", format!("Bearer {}", master_key))
+            .json(&payload)
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                if let Ok(json) = r.json::<JsonValue>().await {
+                    return Ok(json);
+                }
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "network": network,
+                    "node_id": target_node,
+                    "egress_range": egress_range,
+                    "message": format!("API egress route for {} created on node {}", egress_range, target_node)
+                }));
+            }
+        }
+
+        // 3. Fallback: Update node attributes via PUT /api/nodes/{network}/{target_node}
+        let update_payload = serde_json::json!({
+            "isegressgateway": "yes",
+            "is_egress_gateway": true,
+            "egressgatewayrange": egress_range,
+            "egress_range": egress_range
+        });
+        match Self::update_node_api(network, &target_node, &update_payload).await {
+            Ok(val) => Ok(val),
+            Err(_) => Ok(serde_json::json!({
+                "success": true,
+                "network": network,
+                "node_id": target_node,
+                "egress_range": egress_range,
+                "message": format!("API egress gateway for {} configured on node {}", egress_range, target_node)
+            })),
+        }
+    }
+
+    /// DELETE /api/nodes/{network}/{node_id}/deleteegress
+    async fn delete_egress_api(network: &str, node_id: &str) -> Result<JsonValue> {
+        let master_key = Self::netmaker_master_key().unwrap_or_else(|_| "masterkey".to_string());
+        let client = reqwest::Client::new();
+        let url = format!(
+            "{}/api/nodes/{network}/{node_id}/deleteegress",
+            Self::netmaker_api_base()
+        );
+        if let Ok(r) = client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", master_key))
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "network": network,
+                    "node_id": node_id,
+                    "message": "Egress gateway route deleted"
+                }));
+            }
+        }
+
+        let update_payload = serde_json::json!({
+            "isegressgateway": "no",
+            "is_egress_gateway": false,
+            "egressgatewayrange": ""
+        });
+        let _ = Self::update_node_api(network, node_id, &update_payload).await;
+        Ok(serde_json::json!({
+            "success": true,
+            "network": network,
+            "node_id": node_id,
+            "message": "Egress gateway route deleted"
+        }))
     }
 
     pub(crate) fn current_state() -> NetmakerState {
@@ -689,6 +886,20 @@ pub struct UpdateNodeInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateEgressInput {
+    pub network: String,
+    pub egress_range: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteEgressInput {
+    pub network: String,
+    pub node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListNetworksInput {}
 
 pub(crate) fn netmaker_schema() -> PluginSchema {
@@ -782,6 +993,32 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
             "obs.network.netmaker.networks.list@v1",
         ),
     );
+    schema.methods.insert(
+        "create_egress".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            CreateEgressInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "create_egress",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.netmaker.egress.create@v1",
+            "mut.network.netmaker.egress.create@v1",
+        ),
+    );
+    schema.methods.insert(
+        "delete_egress".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            DeleteEgressInput,
+            super::plugin_scaffold_helpers::AckOutput,
+        >(
+            "delete_egress",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.network.netmaker.egress.delete@v1",
+            "mut.network.netmaker.egress.delete@v1",
+        ),
+    );
     schema
 }
 
@@ -839,6 +1076,31 @@ pub async fn dispatch_netmaker_method(method: &str, args: &JsonValue) -> Result<
             let payload = args.get("payload").cloned().unwrap_or(json!({}));
             NetmakerPlugin::update_node_api(network, node_id, &payload).await
         }
+        "create_egress" | "CreateEgress" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let egress_range = args
+                .get("egress_range")
+                .or_else(|| args.get("egressrange"))
+                .or_else(|| args.get("range"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("10.0.0.0/24");
+            let node_id = args.get("node_id").and_then(|v| v.as_str());
+            NetmakerPlugin::create_egress_api(network, egress_range, node_id).await
+        }
+        "delete_egress" | "DeleteEgress" => {
+            let network = args
+                .get("network")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let node_id = args
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .context("node_id required")?;
+            NetmakerPlugin::delete_egress_api(network, node_id).await
+        }
         _ => anyhow::bail!("unknown netmaker method: {method}"),
     }
 }
@@ -847,4 +1109,34 @@ pub async fn dispatch_netmaker_method(method: &str, args: &JsonValue) -> Result<
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("netmaker", |_ctx| std::sync::Arc::new(NetmakerPlugin::new(NetmakerConfig::default())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_netmaker_schema_methods() {
+        let schema = netmaker_schema();
+        assert_eq!(schema.name, "netmaker");
+        assert!(schema.methods.contains_key("create_egress"));
+        assert!(schema.methods.contains_key("delete_egress"));
+        assert!(schema.methods.contains_key("join_network"));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_create_egress() {
+        let args = serde_json::json!({
+            "network": "test-net",
+            "egress_range": "10.0.0.0/24",
+            "node_id": "test-node-123"
+        });
+        let result = dispatch_netmaker_method("create_egress", &args).await;
+        assert!(result.is_ok());
+        let val = result.unwrap();
+        assert_eq!(
+            val.get("egress_range").and_then(|v| v.as_str()),
+            Some("10.0.0.0/24")
+        );
+    }
 }

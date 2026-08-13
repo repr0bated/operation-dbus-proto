@@ -5,8 +5,10 @@
 //! Architecture:
 //! - zeroclaw owns provider/model routing (OD-28) — SendRequest carries them.
 //! - gemma_brain routes to the selected model and applies compliance tags.
-//! - The chatbot is a DELEGATOR — forced tool calling is mandatory; even user
-//!   responses are emitted as tool calls (respond_to_user).
+//! - The chatbot is a DELEGATOR (orchestrator / planner / suggestion giver /
+//!   problem solver) — no direct execution; it only calls agents. Forced tool
+//!   calling is mandatory; even user responses are emitted as tool calls
+//!   (`respond_to_user`).
 //! - Chat persistence flows through the memory loop → cognitive-mcp.
 //! - The agent loop is bounded (≥50 steps) and cancellable.
 

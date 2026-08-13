@@ -297,6 +297,10 @@ impl StreamingBlockchain {
     // can rebuild an entire vector index from the stream alone — no
     // re-embedding, no embedding-provider dependency on the restore path.
     //
+    // Strict automatic path: origin `attach_vector` only; Qdrant for the
+    // blockchain dump pipeline is filled by btrfs receive → ingest on the
+    // replica (not by streaming project upserts on origin).
+    //
     // On-disk form is raw little-endian f32 (4096 bytes at 1024 dims), which
     // needs no parse to become an upsert payload.
 

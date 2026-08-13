@@ -128,6 +128,12 @@ async fn main() -> Result<()> {
     let mut controller = OpenFlowController::new(listen);
 
     for pair in pairs_env.split(',') {
+        // A blank entry is how "no port pairs configured" is expressed (the
+        // runit unit exports OF_FLOW_PAIRS="" explicitly), so it is not
+        // malformed and must not warn on every start.
+        if pair.trim().is_empty() {
+            continue;
+        }
         let parts: Vec<&str> = pair.trim().splitn(2, ':').collect();
         if parts.len() != 2 {
             tracing::warn!("Ignoring malformed flow pair: {:?}", pair);

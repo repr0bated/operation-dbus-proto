@@ -21,6 +21,7 @@ use crate::middleware::security;
 use crate::sse;
 use crate::state::AppState;
 use crate::websocket;
+use op_cognitive_mcp::context_server::build_context_router;
 
 pub mod admin;
 #[allow(dead_code)]
@@ -129,6 +130,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/ui-model/plugins",
             get(handlers::ui_model::ui_model_list_plugins_handler),
+        )
+        .route(
+            "/ui-model/subid-projection",
+            get(handlers::ui_model::ui_model_subid_projection_handler),
         )
         // Gallery generation API (model-agnostic)
         .route(
@@ -300,7 +305,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/mcp/agents/message",
             post(mcp_agents::mcp_agents_message_handler_stateless),
-        );
+        )
+        // Phase 2 FR-2a: same MCP ingress gate as `/mcp` nest.
+        .layer(axum::middleware::from_fn(
+            security::mcp_ingress_auth_middleware,
+        ));
 
     // WebSocket route
     let ws_route = Router::new().route("/ws", get(websocket::websocket_handler));
@@ -327,7 +336,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/jsonrpc", post(mcp::jsonrpc_handler))
         .route("/rpc", post(mcp::jsonrpc_handler))
         .merge(agents_mcp_route) // Agents first (more specific)
-        .nest("/mcp", mcp_route) // Nest MCP routes under /mcp (not root)
+        // Phase 2 FR-2a: enforce zone/Ghostbridge on `/mcp` nest only (not global).
+        .nest(
+            "/mcp",
+            mcp_route.layer(axum::middleware::from_fn(
+                security::mcp_ingress_auth_middleware,
+            )),
+        )
         .merge(ws_route)
         // Well-known discovery endpoint for auto-configuration
         .route(
@@ -336,6 +351,33 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .nest("/groups-admin", groups_admin::create_groups_admin_router())
         .nest("/admin", admin::admin_routes());
+
+    // Phase 2: context-awareness SSE routes (in-process, no :3003 proxy).
+    // Cozo/RocksDB is single-writer — bridge owns memory.db for ToolRegistry.
+    // When op-web cannot open that DB, still expose JSON health (not SPA HTML).
+    let mut router = router;
+    if let Some((context_engine, memory_store, session_manager)) = state.cognitive_context_state()
+    {
+        let context_router =
+            build_context_router(context_engine, memory_store, session_manager);
+        router = router.nest("/cognitive/context", context_router);
+    } else {
+        router = router.route(
+            "/cognitive/context/health",
+            get(|| async {
+                (
+                    axum::http::StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    serde_json::json!({
+                        "status": "degraded",
+                        "mode": "bridge",
+                        "detail": "CozoDB locked by op-grpc-bridge; tools/context run in-process there (:50051 / mesh :8090)",
+                    })
+                    .to_string(),
+                )
+            }),
+        );
+    }
 
     // Serve the pinned Lovable dashboard while keeping `/api`, `/mcp`, and
     // websocket routes on this same origin. Client-side routes fall back to

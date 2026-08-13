@@ -1454,7 +1454,7 @@ mod xray_config_tests {
                 subdomains: vec!["mcp.internal".into()],
                 backend: GemmaBackend::Grpc {
                     host: "127.0.0.1".into(),
-                    port: 3003,
+                    port: GRPC_BRIDGE_PORT,
                     service_name: "operation.cognitive.v1.CognitiveToolService".into(),
                 },
             },

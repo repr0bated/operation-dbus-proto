@@ -3,7 +3,7 @@
 //! Publishes Antigravity product surface (OAuth/Vertex auth, project, safety,
 //! generation defaults, endpoints, usage) through PluginSchema. Gemini model
 //! catalog ownership lives on the delegated `llm_plugin` (default
-//! `large_language_model`) — this plugin only holds `llm_plugin` /
+//! `zeroclaw`) — this plugin only holds `llm_plugin` /
 //! `provider_route` / `selected_model` references.
 
 use super::common::llm_projection::{
@@ -601,11 +601,11 @@ pub struct Endpoints {
 }
 
 fn default_llm_plugin() -> String {
-    "large_language_model".to_string()
+    "zeroclaw".to_string()
 }
 
 fn default_provider_route() -> String {
-    "gemini".to_string()
+    "antigravity".to_string()
 }
 
 /// Top-level Antigravity state.
@@ -629,19 +629,19 @@ pub struct AntigravityState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.project@v1"))]
     pub project: Project,
-    /// Plugin that owns the model catalog (default large_language_model).
+    /// Plugin that owns model routing (default zeroclaw).
     #[serde(default = "default_llm_plugin")]
     #[schemars(
-        description = "Catalog plugin Antigravity delegates to for Gemini models (default large_language_model).",
-        example = &"large_language_model",
+        description = "Router plugin Antigravity delegates to for provider/model selection (default zeroclaw).",
+        example = &"zeroclaw",
         extend("x-oscal-subid" = "mut.software.antigravity.llm-plugin@v1")
     )]
     pub llm_plugin: String,
-    /// Provider route inside `llm_plugin` (default gemini).
+    /// Provider route inside `llm_plugin` (default antigravity).
     #[serde(default = "default_provider_route")]
     #[schemars(
-        description = "Provider route on llm_plugin for the Gemini catalog (default gemini).",
-        example = &"gemini",
+        description = "Provider route on llm_plugin for Antigravity-backed generation (default antigravity).",
+        example = &"antigravity",
         extend("x-oscal-subid" = "mut.software.antigravity.provider-route@v1")
     )]
     pub provider_route: String,
@@ -788,29 +788,29 @@ impl AntigravityPlugin {
                         auth: "oauth".to_string(),
                         sdk: "google.antigravity".to_string(),
                         oscal_source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
-                        description: "Antigravity OAuth/SDK front-door; Gemini catalog via llm_plugin/provider_route".to_string(),
+                        description: "Antigravity OAuth/SDK front-door; model routing via zeroclaw/antigravity".to_string(),
                         ..Default::default()
                     },
                 ],
                 // Model catalog + routes owned by llm_plugin/provider_route.
                 model_routes: vec![],
                 router: Router {
-                    provider: "large_language_model".to_string(),
+                    provider: "zeroclaw".to_string(),
                     model: String::new(),
                     endpoint: String::new(),
                     scope: "delegated".to_string(),
-                    role: "catalog_ref".to_string(),
+                    role: "router_ref".to_string(),
                     emits: vec![
                         "llm_plugin".to_string(),
                         "provider_route".to_string(),
                         "selected_model".to_string(),
                     ],
-                    oscal_source: "/opdbus/v1/plugins/large_language_model".to_string(),
+                    oscal_source: "/opdbus/v1/plugins/zeroclaw".to_string(),
                     classification_rules: serde_json::json!({
                         "catalog": {
-                            "llm_plugin": "large_language_model",
-                            "provider_route": "gemini",
-                            "methods": ["list_models", "list_providers"]
+                            "llm_plugin": "zeroclaw",
+                            "provider_route": "antigravity",
+                            "methods": ["ListProviders", "ListModels", "GetModelRoutes", "Chat"]
                         }
                     }),
                 },
@@ -876,6 +876,11 @@ impl AntigravityPlugin {
                         path: "/antigravity".to_string(),
                         name: "Antigravity SDK".to_string(),
                         schema: "antigravity".to_string(),
+                    },
+                    UiSurface {
+                        path: "/antigravity/chat".to_string(),
+                        name: "Antigravity Chat".to_string(),
+                        schema: "antigravity.chat".to_string(),
                     },
                     UiSurface {
                         path: "/antigravity/safety".to_string(),
@@ -1243,7 +1248,7 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity",
         "1.1.0",
-        "Google Antigravity SDK — OAuth/Vertex auth, safety, generation defaults; Gemini catalog via large_language_model/gemini",
+        "Google Antigravity SDK — OAuth/Vertex auth, safety, generation defaults; model routing via zeroclaw/antigravity",
         &root,
     );
     if let Ok(state) = simd_json::serde::to_owned_value(AntigravityPlugin::current_state()) {
@@ -1290,7 +1295,7 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     }
 
     // NOTE: no `chat` / `list_models` here by design — catalog and chat live on
-    // llm_plugin (default large_language_model) via provider_route.
+    // llm_plugin (default zeroclaw) via provider_route antigravity.
     schema.methods.insert(
         "get_auth_status".to_string(),
         method_decl_from_schemars_with_output::<

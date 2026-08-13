@@ -514,8 +514,51 @@ impl JsonRenderPlugin {
         Self
     }
 
-    pub(crate) fn current_state() -> JsonRenderState {
-        JsonRenderState::default()
+    pub fn current_state() -> JsonRenderState {
+        let mut state = JsonRenderState::default();
+        if state.status.is_empty() {
+            state.status = "ready".to_string();
+        }
+        state
+    }
+}
+
+/// Mutation-path dispatch for json_render UI reads.
+pub fn dispatch_json_render_method(
+    method: &str,
+    state: &JsonRenderState,
+) -> Result<serde_json::Value> {
+    match method {
+        "get_health" => Ok(serde_json::to_value(HealthOutput {
+            status: if state.status.is_empty() {
+                "ready".to_string()
+            } else {
+                state.status.clone()
+            },
+            package_count: state.packages.len(),
+            component_count: state.components.len(),
+            action_count: state.actions.len(),
+            source_commit: if state.source.commit.is_empty() {
+                JSON_RENDER_SOURCE_COMMIT.to_string()
+            } else {
+                state.source.commit.clone()
+            },
+        })?),
+        "get_config" => Ok(serde_json::to_value(ConfigOutput {
+            config: state.config.clone(),
+        })?),
+        "list_tools" => Ok(serde_json::to_value(ToolsOutput {
+            tools: state.methods.clone(),
+        })?),
+        "list_packages" => Ok(serde_json::json!({ "packages": state.packages })),
+        "list_components" => Ok(serde_json::json!({ "components": state.components })),
+        "list_actions" => Ok(serde_json::json!({ "actions": state.actions })),
+        "list_core_exports" => Ok(serde_json::json!({ "exports": state.core_exports })),
+        "list_renderers" => Ok(serde_json::json!({ "renderers": state.renderers })),
+        "get_spec_schema" => Ok(serde_json::json!({ "spec_contract": state.spec_contract })),
+        other => Err(anyhow::anyhow!(
+            "json_render method '{other}' has no mutation dispatch arm"
+        )),
     }
 }
 

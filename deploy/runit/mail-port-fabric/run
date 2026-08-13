@@ -1,0 +1,44 @@
+#!/bin/sh
+# Mail pub0 + ghostbridge fabric — NetMaker pattern (no public Incus listen).
+# Incus proxies must bind 127.0.0.1 only; this unit publishes socks + pub0 TCP.
+exec 2>&1
+
+wait_dep() {
+    sv start "$1" >/dev/null 2>&1 || true
+    i=0
+    until sv check "$1" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -ge 90 ] && { echo "dependency $1 not ready" >&2; exit 1; }
+        sleep 1
+    done
+}
+
+wait_dep incus-ct-mail-3tched
+until [ -d /run/ghostbridge ]; do sleep 1; done
+
+# Loopback Incus proxies into the CT (not pub0).
+for p in 25 143 465 587 993; do
+    i=0
+    until ss -lnt | grep -q "127.0.0.1:$p"; do
+        i=$((i + 1))
+        [ "$i" -ge 120 ] && { echo "127.0.0.1:$p not listening" >&2; exit 1; }
+        sleep 1
+    done
+done
+
+# Mesh host addr must exist (netclient / netmaker iface).
+until ip -4 addr show netmaker 2>/dev/null | grep -q "100.69.0.1/"; do
+    echo "mail-port-fabric: waiting for 100.69.0.1 on netmaker"
+    sleep 1
+done
+
+if [ -S /run/opdbus/session-bus.sock ]; then
+    zcall shared_unix_socket create_unix_socket -a \
+      '{"name":"mail-port-fabric","ports":[25,143,465,587,993]}' >/dev/null 2>&1 || true
+fi
+
+/usr/local/libexec/3tched/runit-ready-signal mail-port-fabric 2>/dev/null || true
+# pub0 + mesh (100.69.0.1) — NetMaker-style dual publish
+export MAIL_BIND_ADDRS="${MAIL_BIND_ADDRS:-188.68.58.237,100.69.0.1}"
+export GHOSTBRIDGE_DIR=/run/ghostbridge
+exec /usr/local/libexec/3tched/mail-port-fabric.py

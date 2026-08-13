@@ -209,6 +209,28 @@ pub async fn add_ipv4_address(ifname: &str, ip: &str, prefix: u8) -> Result<()> 
     // Parse IP address
     let addr: Ipv4Addr = ip.parse().context("Invalid IPv4 address")?;
 
+    // Treat an existing identical address as success. This keeps declarative
+    // boot calls idempotent without depending on string matching EEXIST.
+    let mut existing = handle
+        .address()
+        .get()
+        .set_link_index_filter(ifindex)
+        .set_prefix_length_filter(prefix)
+        .execute();
+    while let Some(message) = existing.try_next().await? {
+        let address_matches = message.attributes.iter().any(|attribute| {
+            matches!(
+                attribute,
+                AddressAttribute::Address(std::net::IpAddr::V4(existing))
+                    | AddressAttribute::Local(std::net::IpAddr::V4(existing))
+                    if *existing == addr
+            )
+        });
+        if address_matches {
+            return Ok(());
+        }
+    }
+
     // Add address to interface
     handle
         .address()
@@ -469,6 +491,59 @@ pub async fn add_default_route_onlink(ifname: &str, gateway: &str) -> Result<()>
         }
     }
 
+    Ok(())
+}
+
+/// Install the target default route before removing obsolete defaults.
+///
+/// This preserves the existing route if the new route cannot be installed,
+/// avoiding the delete-then-add outage window during uplink migration.
+pub async fn replace_default_route_onlink(ifname: &str, gateway: &str) -> Result<()> {
+    use netlink_packet_route::route::RouteAttribute;
+
+    add_default_route_onlink(ifname, gateway).await?;
+
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().match_name(ifname.to_string()).execute();
+    let link = links
+        .try_next()
+        .await?
+        .context(format!("Interface '{}' not found", ifname))?;
+    let target_index = link.header.index;
+
+    let mut found_target = false;
+    let mut routes = handle.route().get(IpVersion::V4).execute();
+    while let Some(route) = routes.try_next().await? {
+        if route.header.destination_prefix_length != 0 {
+            continue;
+        }
+        let uses_target = route.attributes.iter().any(|attribute| match attribute {
+            RouteAttribute::Oif(index) => *index == target_index,
+            RouteAttribute::MultiPath(next_hops) => next_hops
+                .iter()
+                .any(|next_hop| next_hop.interface_index == target_index),
+            _ => false,
+        });
+        if uses_target {
+            found_target = true;
+        } else {
+            handle
+                .route()
+                .del(route)
+                .execute()
+                .await
+                .context("remove obsolete default route")?;
+        }
+    }
+
+    if !found_target {
+        anyhow::bail!(
+            "default route via {} was not visible on interface {} after replacement",
+            gateway,
+            ifname
+        );
+    }
     Ok(())
 }
 

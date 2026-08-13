@@ -4673,18 +4673,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab2156c4fce2f8df6c499cc1c763e4394b7482525bf2a9701c9d79d215f519e4"
-dependencies = [
- "bitflags 2.13.1",
- "cfg-if",
- "cfg_aliases 0.1.1",
- "libc",
-]
-
-[[package]]
-name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
@@ -5310,7 +5298,6 @@ dependencies = [
  "clap",
  "cozo",
  "dashmap",
- "futures",
  "hex",
  "memmap2",
  "op-agents",
@@ -5324,7 +5311,6 @@ dependencies = [
  "op-mcp",
  "op-plugins",
  "op-state-store",
- "op-waypipe-grpc",
  "parking_lot",
  "prost 0.13.5",
  "qdrant-client",
@@ -5340,15 +5326,9 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-build 0.12.3",
- "tonic-health",
- "tonic-reflection",
- "tonic-web",
- "tower 0.4.13",
- "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
- "zbus 5.18.0",
  "zip",
 ]
 
@@ -5654,8 +5634,8 @@ dependencies = [
  "hex",
  "http 1.4.2",
  "jsonschema 0.29.1",
+ "libc",
  "memmap2",
- "nix 0.28.0",
  "op-blob",
  "op-blockchain",
  "op-cognitive-mcp",
@@ -5664,7 +5644,7 @@ dependencies = [
  "op-grpc-adapters",
  "op-identity",
  "op-jsonrpc",
- "op-llm",
+ "op-mcp",
  "op-network",
  "op-plugins",
  "op-state",
@@ -5983,9 +5963,9 @@ dependencies = [
  "chrono",
  "dirs",
  "inventory",
+ "libc",
  "log",
  "md5",
- "nix 0.28.0",
  "op-agents",
  "op-blob",
  "op-blockchain",
@@ -6025,29 +6005,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zbus 5.18.0",
-]
-
-[[package]]
-name = "op-services"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "futures",
- "op-plugins",
- "prost 0.13.5",
- "prost-types 0.13.5",
- "serde",
- "serde_json",
- "simd-json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "toml",
- "tonic",
- "tonic-build 0.12.3",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -6142,6 +6099,10 @@ dependencies = [
  "uuid",
  "zbus 5.18.0",
 ]
+
+[[package]]
+name = "op-uds-relay"
+version = "0.1.0"
 
 [[package]]
 name = "op-waypipe-grpc"
@@ -6264,7 +6225,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "hyper-util",
- "nix 0.28.0",
+ "libc",
  "prost 0.13.5",
  "serde",
  "serde_json",

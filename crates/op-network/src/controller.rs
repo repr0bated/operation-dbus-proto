@@ -11,7 +11,7 @@
 //!   table-miss PACKET_IN uses controller ID 0; never rely on PACKET_IN for
 //!   host L3 survival — NORMAL fallback is mandatory after every wipe.
 //! - FLOW_MOD: each mod is atomic; delete-all + add-NORMAL is two mods (race).
-//!   Minimize the gap; `AttachControllerSafe` pre-seeds NORMAL via ofctl.
+//!   Minimize the gap; `AttachControllerSafe` pre-seeds NORMAL via bridge.mgmt OF.
 //! - In-band principle: essential traffic must forward without the controller.
 //! - Echo: reply to OFPT_ECHO_REQUEST; prefer echo for session liveness.
 //!

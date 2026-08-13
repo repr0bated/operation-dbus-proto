@@ -19,6 +19,7 @@
 #     bin/                       release binaries
 #     sbin/                      control scripts + systemd compat layer
 #     sv/<service>/run           runit service definitions
+#     libexec/3tched/            runit helper scripts
 #     etc/                       environment defaults, pacman hooks
 #     MANIFEST                   commit, build time, sha256 per binary
 #
@@ -118,7 +119,8 @@ build_golden() {
         log "reusing existing subvolume $GOLDEN_DIR"
     fi
 
-    run mkdir -p "$GOLDEN_DIR/bin" "$GOLDEN_DIR/sbin" "$GOLDEN_DIR/sv" "$GOLDEN_DIR/etc"
+    run mkdir -p "$GOLDEN_DIR/bin" "$GOLDEN_DIR/sbin" "$GOLDEN_DIR/sv" \
+        "$GOLDEN_DIR/etc" "$GOLDEN_DIR/libexec/3tched"
 
     # Binaries
     printf '%s\n' "$BINARIES" | while IFS= read -r bin; do
@@ -128,13 +130,16 @@ build_golden() {
 
     # Control scripts + the systemd compatibility layer.
     for script in systemd-unit-to-runit op-convert-systemd-units systemctl-shim \
-                  build-golden.sh; do
+                  build-golden.sh 3tched-incus-svcgen; do
         [ -f "$SCRIPT_DIR/$script" ] &&
             run install -Dm755 "$SCRIPT_DIR/$script" "$GOLDEN_DIR/sbin/$script"
     done
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$GOLDEN_DIR/sbin/agent-runit-guard.sh"
+    [ -f "$PROJECT_ROOT/scripts/opdbus-rundirs-up" ] &&
+        run install -Dm755 "$PROJECT_ROOT/scripts/opdbus-rundirs-up" \
+            "$GOLDEN_DIR/libexec/3tched/opdbus-rundirs-up"
     ok "staged control scripts into golden/sbin"
 
     # Runit service definitions tracked in the repo.
@@ -147,6 +152,12 @@ build_golden() {
             run install -Dm755 "${svc_dir}log/run" "$GOLDEN_DIR/sv/$svc/log/run"
         [ -f "${svc_dir}finish" ] &&
             run install -Dm755 "${svc_dir}finish" "$GOLDEN_DIR/sv/$svc/finish"
+        [ -f "${svc_dir}check" ] &&
+            run install -Dm755 "${svc_dir}check" "$GOLDEN_DIR/sv/$svc/check"
+    done
+    for helper in "$SCRIPT_DIR/libexec-3tched"/*; do
+        [ -f "$helper" ] || continue
+        run install -Dm755 "$helper" "$GOLDEN_DIR/libexec/3tched/$(basename "$helper")"
     done
     ok "staged runit service definitions into golden/sv"
 
@@ -154,6 +165,9 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../environment.default" ] &&
         run install -Dm644 "$SCRIPT_DIR/../environment.default" \
             "$GOLDEN_DIR/etc/environment.default"
+    [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
+            "$GOLDEN_DIR/etc/zeroclaw-runtime.toml"
     [ -f "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" ] &&
         run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
             "$GOLDEN_DIR/etc/pacman-hooks/99-systemd-unit-to-runit.hook"
@@ -186,7 +200,7 @@ build_golden() {
 # reparent the control plane. They are reported so an operator can restart them
 # deliberately, on the console, in a chosen order.
 NEVER_AUTO_RESTART="ovs-vswitchd ovsbr0-addr ovsbr0-svc-addr ovsbr0-uplink \
-uplink-dhcp op-session-bus opdbus-rundirs dbus"
+uplink-dhcp op-grpc-bridge op-session-bus opdbus-rundirs dbus"
 
 # Which enabled services actually exec a given binary?
 #
@@ -211,6 +225,8 @@ services_using() {
 install_live() {
     log "installing into the live runtime"
 
+    rundirs_helper_changed=0
+
     changed_binaries=""
     printf '%s\n' "$BINARIES" | while IFS= read -r bin; do
         name=$(basename "$bin")
@@ -232,7 +248,8 @@ install_live() {
 
     # Control scripts. The systemctl shim goes in $INSTALL_BIN because sudo's
     # secure_path searches it before /usr/bin, so it wins for installers.
-    for script in systemd-unit-to-runit op-convert-systemd-units; do
+    for script in systemd-unit-to-runit op-convert-systemd-units \
+                  3tched-incus-svcgen; do
         [ -f "$SCRIPT_DIR/$script" ] &&
             run install -Dm755 "$SCRIPT_DIR/$script" "$INSTALL_SBIN/$script"
     done
@@ -241,6 +258,15 @@ install_live() {
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$INSTALL_SBIN/agent-runit-guard"
+    if [ -f "$PROJECT_ROOT/scripts/opdbus-rundirs-up" ]; then
+        rundirs_helper_target=/usr/local/libexec/3tched/opdbus-rundirs-up
+        if [ ! -f "$rundirs_helper_target" ] || \
+            ! cmp -s "$PROJECT_ROOT/scripts/opdbus-rundirs-up" "$rundirs_helper_target"; then
+            rundirs_helper_changed=1
+        fi
+        run install -Dm755 "$PROJECT_ROOT/scripts/opdbus-rundirs-up" \
+            "$rundirs_helper_target"
+    fi
     ok "installed control scripts + systemd compat layer"
 
     if [ -d /etc/pacman.d/hooks ] || mkdir -p /etc/pacman.d/hooks 2>/dev/null; then
@@ -248,6 +274,10 @@ install_live() {
             run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
                 /etc/pacman.d/hooks/99-systemd-unit-to-runit.hook
     fi
+
+    [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
+            /etc/op-dbus/zeroclaw-runtime.toml
 
     # Service definitions: install new ones, never clobber a hand-tuned run
     # script that differs (the host copy is authoritative until an operator says
@@ -263,11 +293,22 @@ install_live() {
         run install -Dm755 "${svc_dir}run" "$dest"
         [ -f "${svc_dir}log/run" ] &&
             run install -Dm755 "${svc_dir}log/run" "$RUNIT_SV_DIR/$svc/log/run"
+        [ -f "${svc_dir}check" ] &&
+            run install -Dm755 "${svc_dir}check" "$RUNIT_SV_DIR/$svc/check"
+    done
+    for helper in "$SCRIPT_DIR/libexec-3tched"/*; do
+        [ -f "$helper" ] || continue
+        run install -Dm755 "$helper" \
+            "/usr/local/libexec/3tched/$(basename "$helper")"
     done
 
     if [ "$DO_RESTART" != 1 ]; then
         warn "--no-restart: services still running the previous binaries"
         return 0
+    fi
+    if [ "$rundirs_helper_changed" = 1 ]; then
+        warn "updated opdbus-rundirs-up; opdbus-rundirs is not auto-restarted"
+        warn "  apply it deliberately from the console: sudo sv restart opdbus-rundirs"
     fi
     if [ -z "$changed_binaries" ]; then
         log "nothing changed; no restarts needed"

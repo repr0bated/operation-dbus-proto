@@ -16,13 +16,11 @@ pub mod agent_tools;
 pub mod blob_catalog_tool;
 pub mod blob_vectors_tool;
 pub mod chain_vectors;
-pub mod client_config;
 pub mod code_tools;
 pub mod cognitive_tools;
 pub mod context_awareness;
 pub mod context_server;
 pub mod cozo_shuttle;
-pub mod dbus_interface;
 pub mod doctor;
 pub mod gemini_fallback;
 pub mod grpc_service;
@@ -42,11 +40,8 @@ pub use activity_filter::{
     derive_significance, is_pii, ActivityEvent, ActivityFilter, FilterDecision, FilterTunables,
     OpKind, Significance, SuppressReason,
 };
-pub use chain_vectors::{ChainVectorIndex, IngestSummary, ProjectionSummary};
-pub use client_config::{
-    CacheConfig, CircuitBreakerConfig, ClientConfig, ClientStats, ClientType, CognitiveMcpClient,
-    CognitiveMcpClientFactory, PoolConfig, RetryConfig, COGNITIVE_MCP_DEFAULT_ENDPOINT,
-    COMPACT_MCP_DEFAULT_ENDPOINT,
+pub use chain_vectors::{
+    project_writes_qdrant, ChainVectorIndex, IngestSummary, ProjectionSummary,
 };
 pub use code_tools::register_code_tools;
 pub use cognitive_tools::CognitiveToolRegistry;
@@ -76,4 +71,4 @@ pub mod proto {
     pub const FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("cognitive_descriptor");
 }
-pub mod interceptor;
+

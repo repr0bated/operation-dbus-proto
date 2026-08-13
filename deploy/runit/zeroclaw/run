@@ -1,0 +1,38 @@
+#!/bin/sh
+exec 2>&1
+set -eu
+
+CONFIG_DIR=${ZEROCLAW_CONFIG_DIR:-/var/lib/zeroclaw}
+BOOTSTRAP_CONFIG=${ZEROCLAW_BOOTSTRAP_CONFIG:-/etc/op-dbus/zeroclaw-runtime.toml}
+BOOTSTRAP_SKILLS=${ZEROCLAW_BOOTSTRAP_SKILLS:-/etc/op-dbus/zeroclaw-skills/default}
+AUTH_FILE=${OPENCODE_AUTH_FILE:-/home/jeremy/.local/share/opencode/auth.json}
+
+install -d -o jeremy -g jeremy -m 0700 "$CONFIG_DIR"
+if [ ! -f "$CONFIG_DIR/config.toml" ]; then
+    install -o jeremy -g jeremy -m 0600 "$BOOTSTRAP_CONFIG" "$CONFIG_DIR/config.toml"
+fi
+
+# Seed/refresh drill-down skills under the default bundle (zeroclaw owns the surface).
+if [ -d "$BOOTSTRAP_SKILLS" ]; then
+    install -d -o jeremy -g jeremy -m 0755 "$CONFIG_DIR/shared/skills/default"
+    cp -a "$BOOTSTRAP_SKILLS"/. "$CONFIG_DIR/shared/skills/default/"
+    chown -R jeremy:jeremy "$CONFIG_DIR/shared/skills/default"
+fi
+
+exec chpst -u jeremy:jeremy env -i \
+    HOME=/home/jeremy \
+    USER=jeremy \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    ZEROCLAW_CONFIG_DIR="$CONFIG_DIR" \
+    OPENCODE_AUTH_FILE="$AUTH_FILE" \
+    sh -c '
+        set -eu
+        OPENCODE_API_KEY=$(jq -er '\''.["opencode-go"].key | strings | select(length > 0)'\'' "$OPENCODE_AUTH_FILE")
+        export OPENCODE_API_KEY
+        unset OPENCODE_AUTH_FILE
+        exec /usr/bin/zeroclaw daemon \
+            --config-dir "$ZEROCLAW_CONFIG_DIR" \
+            --host 127.0.0.1 \
+            --port 8082 \
+            --log-level warn
+    '

@@ -1,15 +1,19 @@
-//! Operator CLI for the blockchain vector pipeline.
+//! Operator CLI for the blockchain vector pipeline (`blockchain_footprints` only).
+//!
+//! Strict automatic Qdrant policy applies **only** to this collection — not to
+//! `blob_vectors`, user_memory, or RAG shuttle traffic.
 //!
 //! Origin host (has a Voyage key):
 //! ```sh
 //! op-chain-vectors status
-//! op-chain-vectors project --limit 50      # embed pending blocks into the chain + index
+//! op-chain-vectors project --limit 50              # embed → btrfs vectors only (no Qdrant)
+//! op-chain-vectors project --limit 50 --upsert-qdrant  # manual: also write Qdrant directly
 //! op-chain-vectors replicate --host offsite.example --remote-path /var/lib/opdbus/chain-replica
 //! ```
 //!
 //! Replica host (no Voyage key needed):
 //! ```sh
-//! op-chain-vectors ingest                  # index vectors that arrived via btrfs receive
+//! op-chain-vectors ingest                  # Qdrant upsert after btrfs receive (automatic path)
 //! ```
 //!
 //! Configuration is env-driven and shared with the rest of the workspace:
@@ -35,13 +39,21 @@ struct Cli {
 enum Cmd {
     /// Report chain, vector-coverage and replication state without changing anything.
     Status,
-    /// Origin: embed blocks that have no vector yet, write them into the chain, index them.
+    /// Origin: embed pending blocks into the chain `vectors` subvolume.
+    ///
+    /// Default does **not** write Qdrant (`blockchain_footprints` is filled by
+    /// replica `ingest` after `btrfs receive`). Pass `--upsert-qdrant` for a
+    /// manual direct index write that bypasses send/receive.
     Project {
         /// Cap this pass (default: all pending blocks).
         #[arg(long)]
         limit: Option<usize>,
+        /// Manual exception: also upsert `blockchain_footprints` on this host.
+        /// Does not affect other Qdrant collections.
+        #[arg(long, default_value_t = false)]
+        upsert_qdrant: bool,
     },
-    /// Rebuild the whole index from vectors already in the chain (no embedding, no Voyage key).
+    /// Manual: rebuild `blockchain_footprints` from chain vectors (no Voyage, no receive).
     Reindex,
     /// Replica: index the vectors that arrived since the last indexed block.
     Ingest {
@@ -85,9 +97,12 @@ async fn main() -> Result<()> {
 
     match cli.cmd {
         Cmd::Status => status().await,
-        Cmd::Project { limit } => {
+        Cmd::Project {
+            limit,
+            upsert_qdrant,
+        } => {
             let index = ChainVectorIndex::open().await?;
-            let summary = index.project_pending(limit).await?;
+            let summary = index.project_pending(limit, upsert_qdrant).await?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(())
         }

@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::Query;
+use axum::routing::get;
+use axum::{Json, Router};
 use op_grpc_bridge::proto::zeroclaw::{
     zeroclaw_service_client::ZeroclawServiceClient, GetSchemaRequest, WatchSchemaRequest,
 };
@@ -64,6 +67,56 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     (addr, loader, path)
+}
+
+async fn start_zeroclaw_runtime() -> SocketAddr {
+    async fn health() -> Json<serde_json::Value> {
+        Json(json!({ "status": "ok" }))
+    }
+
+    async fn config_prop(
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        assert_eq!(
+            query.get("path").map(String::as_str),
+            Some("agents.dashboard.model_provider")
+        );
+        Json(json!({ "value": "opencode.go" }))
+    }
+
+    async fn config_list() -> Json<serde_json::Value> {
+        Json(json!({
+            "entries": [{
+                "path": "providers.models.opencode.go.model",
+                "value": "deepseek-v4-flash-free"
+            }]
+        }))
+    }
+
+    async fn model_catalog(
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        assert_eq!(
+            query.get("model_provider").map(String::as_str),
+            Some("opencode")
+        );
+        Json(json!({
+            "models": ["deepseek-v4-flash-free", "runtime-discovered-test-model"],
+            "live": true
+        }))
+    }
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/api/config/prop", get(config_prop))
+        .route("/api/config/list", get(config_list))
+        .route("/api/config/catalog/models", get(model_catalog));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
 }
 
 #[tokio::test]
@@ -143,17 +196,24 @@ async fn should_stream_reload_on_sighup() {
 
 #[tokio::test]
 async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
+    let runtime_addr = start_zeroclaw_runtime().await;
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-    let engine = op_grpc_bridge::MutationEngine::new(event_chain.clone(), ovsdb);
+    let engine = op_grpc_bridge::MutationEngine::new_with_zeroclaw_runtime(
+        event_chain.clone(),
+        ovsdb,
+        format!("http://{runtime_addr}"),
+        "dashboard".to_string(),
+        None,
+    );
 
     let result = engine
         .dispatch_method_call(
             "zeroclaw",
             "ListModels",
-            r#"{"provider":"salad"}"#,
+            r#"{"provider":"opencode"}"#,
             Some("cap.software.zeroclaw.models.read@v1"),
             "integration-test-actor",
         )
@@ -167,7 +227,10 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
     assert!(!routes.is_empty());
     assert!(routes
         .iter()
-        .all(|route| { route["provider"] == "salad" || route["upstream_provider"] == "salad" }));
+        .all(|route| { route["provider"] == "opencode" }));
+    assert!(routes
+        .iter()
+        .any(|route| route["model"] == "runtime-discovered-test-model"));
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();

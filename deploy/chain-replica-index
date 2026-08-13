@@ -31,9 +31,16 @@ counter="${1:?usage: chain-replica-index <counter>}"
 # shellcheck source=/dev/null
 [ -r /etc/opdbus/chain-replica.env ] && . /etc/opdbus/chain-replica.env
 
-base="${CHAIN_REPLICA_BASE:-/var/lib/opdbus/chain-replica}"
+# Sourced assignments are shell vars; export so `exec` passes them to the indexer.
+export CHAIN_REPLICA_BASE="${CHAIN_REPLICA_BASE:-/var/lib/opdbus/chain-replica}"
+export OP_CHAIN_VECTORS_BIN="${OP_CHAIN_VECTORS_BIN:-/usr/local/bin/op-chain-vectors}"
+export OPDBUS_QDRANT_URL="${OPDBUS_QDRANT_URL:-}"
+export OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION="${OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION:-}"
+export OPDBUS_QDRANT_BLOCKCHAIN_DIM="${OPDBUS_QDRANT_BLOCKCHAIN_DIM:-}"
+
+base="$CHAIN_REPLICA_BASE"
 incoming="$base/incoming"
-indexer="${OP_CHAIN_VECTORS_BIN:-/usr/local/bin/op-chain-vectors}"
+indexer="$OP_CHAIN_VECTORS_BIN"
 
 case "$counter" in
     *[!0-9]*) echo "counter must be numeric: $counter" >&2; exit 64 ;;

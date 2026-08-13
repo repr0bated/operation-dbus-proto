@@ -61,4 +61,8 @@ path = "src/bin/op-of-controller.rs"
 name = "op-ovsbr0-setup"
 path = "src/bin/op-ovsbr0-setup.rs"
 
+[[bin]]
+name = "op-rtnetlink-init"
+path = "src/bin/op-rtnetlink-init.rs"
+
 

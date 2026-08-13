@@ -133,7 +133,7 @@ impl Default for XrayState {
 /// Find running `xray` process PIDs by scanning `/proc` directly — no
 /// `pgrep`/`pkill` subprocess spawning (CLAUDE.md: no `Command::new(...)`
 /// subprocesses in plugin/service code).
-fn find_xray_pids() -> Vec<nix::unistd::Pid> {
+fn find_xray_pids() -> Vec<i32> {
     let mut pids = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return pids;
@@ -145,11 +145,20 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
         let comm_path = entry.path().join("comm");
         if let Ok(comm) = std::fs::read_to_string(&comm_path) {
             if comm.trim() == "xray" {
-                pids.push(nix::unistd::Pid::from_raw(pid));
+                pids.push(pid);
             }
         }
     }
     pids
+}
+
+fn signal_process(pid: i32, sig: i32) -> Result<(), std::io::Error> {
+    let rc = unsafe { libc::kill(pid, sig) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Is an xray process currently running on the host?
@@ -246,7 +255,7 @@ impl StatePlugin for XrayPlugin {
                 changes.push("xray not running; supervisor starts it".to_string());
             } else {
                 for pid in pids {
-                    match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP) {
+                    match signal_process(pid, libc::SIGHUP) {
                         Ok(()) => changes.push(format!("xray reloaded (SIGHUP, pid {pid})")),
                         Err(e) => errors.push(format!("xray reload failed (pid {pid}): {e}")),
                     }
@@ -256,7 +265,7 @@ impl StatePlugin for XrayPlugin {
             changes.push("xray already stopped".to_string());
         } else {
             for pid in pids {
-                match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
+                match signal_process(pid, libc::SIGTERM) {
                     Ok(()) => changes.push(format!("xray stopped (pid {pid})")),
                     Err(e) => errors.push(format!("xray stop failed (pid {pid}): {e}")),
                 }

@@ -1,0 +1,3 @@
+#!/bin/sh
+exec 2>&1
+exec /usr/local/bin/op-waypipe-grpc serve --listen 10.200.0.2:50052

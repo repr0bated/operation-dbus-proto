@@ -1,0 +1,40 @@
+{
+  "*": {
+    "capabilities": [
+      "cap.service.lifecycle.init@v1",
+      "cap.service.lifecycle.run@v1",
+      "cap.service.lifecycle.shutdown@v1",
+      "cap.software.zeroclaw.chat@v1",
+      "cap.software.zeroclaw.models.read@v1",
+      "cap.software.zeroclaw.providers.read@v1",
+      "cap.software.zeroclaw.router.read@v1",
+      "cognitive_mcp.invoke",
+      "cognitive_mcp.read",
+      "gemma.read",
+      "host_runtime.read",
+      "network.read",
+      "network.write",
+      "shared_unix_socket.invoke",
+      "shared_unix_socket.read",
+      "xray.read",
+      "xray.write"
+    ]
+  },
+  "898fbad6ed3fbf0b3b08dc95a61d4f32be4645885c08c7356311eb45486a65ad": {
+    "capabilities": [
+      "cap.network.rtnetlink.link.move-netns@v1",
+      "cap.network.rtnetlink.link-state.set@v1",
+      "cap.network.rtnetlink.mtu.set@v1",
+      "cap.network.rtnetlink.ipv4-address.add@v1",
+      "cap.network.rtnetlink.default-route.set@v1",
+      "cap.network.rtnetlink.default-route.replace@v1",
+      "cap.network.rtnetlink.route.add@v1",
+      "cap.network.ovsdb.port.add@v1",
+      "cap.network.ovsdb.port.ensure-internal@v1",
+      "cap.network.ovsdb.port.delete@v1",
+      "cap.network.ovsdb.port.list@v1",
+      "cap.network.ovsdb.bridge.controller.set@v1",
+      "cap.network.ovsdb.bridge.controller.read@v1"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+#!/bin/sh
+exec 2>&1
+sv start dbus >/dev/null 2>&1 || true
+sv start op-session-bus >/dev/null 2>&1 || true
+until [ -d /sys/class/net/svc0 ]; do sleep 1; done
+# Wait for svc0 address to exist (sysfs + /proc)
+i=0
+until grep -q "10.0.0.2" /proc/net/fib_trie 2>/dev/null; do
+    i=$((i+1))
+    [ "$i" -ge 120 ] && break
+    sleep 1
+done
+exec /usr/local/libexec/3tched/socket-relay tcp-listen 10.0.0.2 8090 unix-connect /run/opdbus/grpc.sock

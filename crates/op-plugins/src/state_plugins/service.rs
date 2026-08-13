@@ -271,6 +271,63 @@ pub(crate) fn service_schema() -> PluginSchema {
     schema
 }
 
+/// Backend for the `service` plugin lifecycle methods, called from
+/// `mutation_engine::dispatch_method_call`'s `"service"` arm.
+pub async fn dispatch_service_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    use super::plugin_scaffold_helpers::AckOutput;
+    use crate::service_def::RunitPlugin;
+
+    let manager = RunitPlugin::new();
+    match method {
+        "init" => {
+            let input: InitInput = serde_json::from_value(args.clone())
+                .map_err(|e| anyhow::anyhow!("invalid init args: {e}"))?;
+            let _ = input.service_type;
+            manager.enable(&input.name).await?;
+            Ok(serde_json::to_value(AckOutput { success: true })?)
+        }
+        "run" => {
+            let input: RunInput = serde_json::from_value(args.clone())
+                .map_err(|e| anyhow::anyhow!("invalid run args: {e}"))?;
+            let _ = input.args;
+            manager.start(&input.name).await?;
+            Ok(serde_json::to_value(AckOutput { success: true })?)
+        }
+        "shutdown" => {
+            let input: ShutdownInput = serde_json::from_value(args.clone())
+                .map_err(|e| anyhow::anyhow!("invalid shutdown args: {e}"))?;
+            if input.force {
+                force_stop_service(&input.name).await?;
+            } else {
+                manager.stop(&input.name).await?;
+            }
+            Ok(serde_json::to_value(AckOutput { success: true })?)
+        }
+        other => Err(anyhow::anyhow!("unknown service method: {other}")),
+    }
+}
+
+async fn force_stop_service(name: &str) -> Result<()> {
+    let service = ServiceName::new(name)?;
+    let active = Path::new(RUNIT_ACTIVE_DIR).join(service.as_str());
+    if !active.exists() {
+        anyhow::bail!("runit service '{service}' is not enabled");
+    }
+    let status = tokio::process::Command::new("sv")
+        .arg("force-stop")
+        .arg(&active)
+        .status()
+        .await
+        .with_context(|| format!("sv force-stop {service}"))?;
+    if !status.success() {
+        anyhow::bail!("sv force-stop {service} exited with {status}");
+    }
+    Ok(())
+}
+
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {

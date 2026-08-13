@@ -1,6 +1,0 @@
----
-description: Always load grpc-expert for odbus / op-grpc-bridge work
-alwaysApply: true
----
-
-Load and follow .agents/skills/grpc-expert/SKILL.md for any gRPC, proto, bridge, PluginV1, tonic, or plugin-method work in this repo.
