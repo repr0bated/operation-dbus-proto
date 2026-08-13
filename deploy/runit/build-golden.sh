@@ -175,6 +175,21 @@ build_golden() {
         run install -Dm644 "$SCRIPT_DIR/../99-agent-runit-guard.hook" \
             "$GOLDEN_DIR/etc/pacman-hooks/99-agent-runit-guard.hook"
 
+    # Network config. Without these, golden reproduces the programs but not the
+    # network they need to work — the binaries come up on a host with no MSS
+    # clamp and an empty OpenFlow table. Both lived only under /etc until
+    # 2026-08-13, which is exactly how the flow set was lost for three days and
+    # how the mesh MSS clamp stayed mistuned. Staged into golden/etc; installing
+    # them onto a running host is deliberately NOT part of the live path, since
+    # nftables.conf is partly netclient-generated and blindly overwriting it
+    # would clobber the NETMAKER-ACL chains.
+    [ -f "$SCRIPT_DIR/../config/nftables.conf" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/nftables.conf" \
+            "$GOLDEN_DIR/etc/nftables.conf"
+    [ -f "$SCRIPT_DIR/../config/openflow-static-flows.json" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/openflow-static-flows.json" \
+            "$GOLDEN_DIR/etc/openflow-static-flows.json"
+
     # MANIFEST: what this snapshot is, and the hashes to prove the running host
     # matches it.
     if [ "$DRY_RUN" != 1 ]; then
