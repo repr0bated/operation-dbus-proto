@@ -14,6 +14,10 @@ path = "src/bin/dbus-agent.rs"
 name = "op-agent-manager"
 path = "src/bin/dbus-agent-manager.rs"
 
+[[bin]]
+name = "gen-agent-defs"
+path = "src/bin/gen-agent-defs.rs"
+
 [dependencies]
 # Internal crates
 op-core = { workspace = true }
