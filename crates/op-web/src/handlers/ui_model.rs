@@ -15,6 +15,7 @@
 //! - Gallery generation uses `op-gallery-gen` (model-agnostic, via ZeroClaw).
 
 use crate::state::AppState;
+use crate::state_tree;
 use axum::{
     extract::{Extension, Path},
     http::StatusCode,
@@ -23,6 +24,7 @@ use axum::{
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -249,6 +251,38 @@ pub async fn ui_model_list_plugins_handler(
             "blob catalog manifest unavailable",
         ),
     }
+}
+
+/// GET /api/ui-model/state — live present-state from `/dev/shm/opdbus/state/`.
+///
+/// Replaces the projection daemon and `/api/dashboard/projections`. Empty
+/// `{ plugins: [], state: {} }` is correct when nothing has been mutated.
+pub async fn ui_model_state_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+    ok(catalog_state_body(simd_tree_to_serde(state_tree::read_all())))
+}
+
+/// Catalog JSON for the SHM state tree: sorted plugin ids plus the objects.
+pub(crate) fn catalog_state_body(tree: HashMap<String, Value>) -> Value {
+    let mut plugins: Vec<String> = tree.keys().cloned().collect();
+    plugins.sort();
+    json!({ "plugins": plugins, "state": tree })
+}
+
+fn simd_tree_to_serde(
+    tree: HashMap<String, simd_json::OwnedValue>,
+) -> HashMap<String, Value> {
+    tree.into_iter()
+        .filter_map(|(key, value)| {
+            let text = simd_json::to_string(&value).ok()?;
+            match serde_json::from_str(&text) {
+                Ok(parsed) => Some((key, parsed)),
+                Err(e) => {
+                    tracing::warn!("Failed to convert simd_json to serde_json for plugin '{}': {}", key, e);
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// GET /api/ui-model/plugin-schema/:plugin
@@ -507,4 +541,30 @@ pub async fn generation_stream(
     };
 
     Sse::new(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_state_body_lists_shm_state_plugins_not_projections() {
+        let mut tree = HashMap::new();
+        tree.insert("zeroclaw".into(), json!({ "selected_model": "qwen" }));
+        tree.insert("system.memory".into(), json!({ "rss": 1 }));
+        let body = catalog_state_body(tree);
+        assert_eq!(
+            body["plugins"],
+            json!(["system.memory", "zeroclaw"])
+        );
+        assert_eq!(body["state"]["zeroclaw"]["selected_model"], "qwen");
+        assert!(body.get("projections").is_none());
+    }
+
+    #[test]
+    fn catalog_state_body_empty_tree_is_valid() {
+        let body = catalog_state_body(HashMap::new());
+        assert_eq!(body["plugins"], json!([]));
+        assert_eq!(body["state"], json!({}));
+    }
 }
