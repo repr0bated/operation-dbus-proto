@@ -107,14 +107,6 @@ pub async fn dashboard_metrics_handler(
     })
 }
 
-/// GET /api/dashboard/projections — Return all plugin state from SHM state tree.
-pub async fn dashboard_projections_handler(
-    Extension(_state): Extension<Arc<AppState>>,
-) -> Json<std::collections::HashMap<String, simd_json::OwnedValue>> {
-    let projections = state_tree::read_all();
-    Json(projections)
-}
-
 fn get_vpn_peer_count() -> usize {
     let peers_dir = "/sys/class/net/wg0/wireguard/peers";
     std::fs::read_dir(peers_dir)

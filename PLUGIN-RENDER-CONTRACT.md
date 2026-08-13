@@ -16,6 +16,7 @@ descriptors.**
 | `op_blob::catalog::read_plugin_schema_shm(id)` (on-host, e.g. `op-gallery-gen` context assembler) | FULL schema |
 | `GET /api/ui-model/plugin-schema/:plugin` (op-web, remote agents) | FULL schema + `schema_hash` |
 | `GET /api/ui-model/plugins` | every sealed plugin id (state-only plugins included) |
+| `GET /api/ui-model/state` | live present-state from `/dev/shm/opdbus/state/` (`{ plugins, state }`); replaces the projection daemon |
 | `PluginService.GetSchema` (gRPC) | FULL `schema_json` verbatim |
 | gRPC reflection descriptors | **methods only**, type-skeleton: no state fields at all, enums/unions/maps → `string`, constraints/descriptions/defaults/subids dropped |
 

@@ -54,9 +54,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/dashboard/metrics",
             get(handlers::dashboard::dashboard_metrics_handler),
         )
+        // Live SHM present-state. Replaces the projection daemon dump.
+        .route(
+            "/ui-model/state",
+            get(handlers::ui_model::ui_model_state_handler),
+        )
         .route(
             "/dashboard/projections",
-            get(handlers::dashboard::dashboard_projections_handler),
+            get(handlers::ui_model::ui_model_state_handler),
         )
         // Users
         .route("/users", get(handlers::users::list_users_handler))
