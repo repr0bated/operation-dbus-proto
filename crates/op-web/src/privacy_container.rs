@@ -240,9 +240,8 @@ mod tests {
         assert_eq!(name, "privacy-user-user");
     }
 
-    #[test]
-    fn desired_instance_publishes_route_without_bridged_nic_by_default() {
-        let user = PrivacyUser {
+    fn test_user() -> PrivacyUser {
+        PrivacyUser {
             id: "user-1".to_string(),
             email: "user@example.com".to_string(),
             email_verified: true,
@@ -259,14 +258,61 @@ mod tests {
             google_id: None,
             google_email: None,
             api_credentials: None,
-        };
-        let cfg = PrivacyContainerConfig::from_env();
-        let instance = desired_instance(&user, "privacy-user-user1", "route-a", &cfg);
-        assert_eq!(
-            instance.config.as_ref().unwrap()["user.opdbus.route_id"],
-            "route-a"
+        }
+    }
+
+    /// Built explicitly rather than via `from_env`: the process environment is
+    /// shared across the whole test binary, so reading it here would make these
+    /// assertions depend on ambient `PRIVACY_CONTAINER_*` vars.
+    fn test_config(attach_bridged_nic: bool) -> PrivacyContainerConfig {
+        PrivacyContainerConfig {
+            image: DEFAULT_CONTAINER_IMAGE.to_string(),
+            name_prefix: DEFAULT_NAME_PREFIX.to_string(),
+            device_name: DEFAULT_DEVICE_NAME.to_string(),
+            storage_pool: None,
+            attach_bridged_nic,
+        }
+    }
+
+    #[test]
+    fn desired_instance_publishes_route_id_in_config() {
+        let instance = desired_instance(
+            &test_user(),
+            "privacy-user-user1",
+            "route-a",
+            &test_config(false),
         );
-        assert!(instance.devices.is_none());
+
+        let config = instance.config.as_ref().unwrap();
+        assert_eq!(config["user.opdbus.route_id"], "route-a");
+        assert_eq!(config["user.opdbus.user_id"], "user-1");
+        assert_eq!(config["user.opdbus.assigned_ip"], "10.100.0.2/32");
+        assert_eq!(instance.name, "privacy-user-user1");
         assert!(instance.profiles.is_empty());
+    }
+
+    #[test]
+    fn desired_instance_omits_devices_when_bridged_nic_disabled() {
+        let instance = desired_instance(
+            &test_user(),
+            "privacy-user-user1",
+            "route-a",
+            &test_config(false),
+        );
+
+        assert!(instance.devices.is_none());
+    }
+
+    #[test]
+    fn desired_instance_attaches_bridged_nic_when_enabled() {
+        let cfg = test_config(true);
+        let instance = desired_instance(&test_user(), "privacy-user-user1", "route-a", &cfg);
+
+        let devices = instance.devices.as_ref().unwrap();
+        let nic = &devices[&cfg.device_name];
+        assert_eq!(nic["type"], "nic");
+        assert_eq!(nic["nictype"], "bridged");
+        // `parent` comes from PRIVACY_CONTAINER_BRIDGE, so only assert it is set.
+        assert!(nic.contains_key("parent"));
     }
 }
