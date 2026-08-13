@@ -89,7 +89,7 @@ ARCH_SUPPORT_TRIED=0
 # HELPERS
 # ============================================================================
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;36m'; NC='\033[0m'
 log()  { echo -e "${BLUE}[3tched]${NC} $*"; }
 ok()   { echo -e "${GREEN}[  ok  ]${NC} $*"; }
 warn() { echo -e "${YELLOW}[ warn ]${NC} $*"; }
