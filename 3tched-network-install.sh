@@ -14,8 +14,20 @@
 #     2     svc0    10.0.0.1/24 + 10.0.0.2/24  entrance / tonic helpers
 #     3     grpc0   10.200.0.2/24   gRPC plane (op-grpc-bridge :8090)
 #     4     eth0    physical uplink, enslaved LAST, no L3 of its own
-#   controller  tcp:10.200.0.1:6653 (op-of-controller), one flow:
-#     table=0 priority=0 actions=NORMAL cookie=0x3344434800000001
+#   controller  tcp:10.200.0.1:6653 (op-of-controller), two cookie classes:
+#     FALLBACK 0x3344434800000001 — table=0 priority=0 actions=NORMAL, the
+#       standalone safety net that keeps the datapath forwarding with no
+#       controller attached (ensure_fallback_normal).
+#     MANAGED  0x3344434800000002 — the 4 durable static flows from
+#       deploy/config/openflow-static-flows.json: priority=100 NORMAL for
+#       netmaker API tcp/10.200.0.1:8081 and QUIC udp/188.68.58.237:443,
+#       each direction. Deleted-by-cookie and reinstalled on every OVS
+#       reconnect, so they are the set the controller actually owns.
+#     NOTE the live table held only the FALLBACK flow between 2026-08-10
+#     22:17 and this script's first run: /etc/op-dbus/openflow-static-flows.json
+#     had been truncated to `[]`, so the controller logged "Loaded 0 static
+#     flow(s)" on every start. Recovered from the btrfs snapshot
+#     /.snapshots/root-20260806-062641-postcommit-1afa6c25.
 #   containers  socket-only, every one of them: the sole network path is the
 #     /run/ghostbridge bind mount. No NICs, no incus proxy devices, anywhere.
 #
