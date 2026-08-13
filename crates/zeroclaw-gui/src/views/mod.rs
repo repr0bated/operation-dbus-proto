@@ -684,7 +684,6 @@ fn description(r: Route) -> &'static str {
     match r {
         Route::Orchestration => "Plugin lifecycle, dependency graph, restart policy.",
         Route::Services => "runit service control center — start/stop/restart via sv.",
-        Route::Sessions => "Active client sessions and auth handles.",
         Route::Llm => "LLM router status, provider mix, queue depth.",
         Route::Agents => "Persona registry sourced from personas.yaml.",
         Route::Assistant => "Operator assistant — tool-augmented agent.",

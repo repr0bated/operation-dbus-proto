@@ -57,7 +57,7 @@ else
 fi
 RELEASE_DIR="$PROJECT_ROOT/target/release"
 
-log()  { printf '\033[0;34m[golden]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;36m[golden]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[0;32m[ ok  ]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn ]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[0;31m[fail ]\033[0m %s\n' "$*" >&2; exit 1; }
