@@ -1,0 +1,142 @@
+#!/bin/sh
+# opdbus-rundirs: runtime dirs, sealed-blob catalog, and Ghostbridge identity.
+set -eu
+umask 022
+
+install -d -m 0755 /run/opdbus
+# Shared container UDS parent (bind-mounted into assistant/qdrant as /run/ghostbridge)
+install -d -m 0777 /run/ghostbridge
+# Per-container rendezvous dirs. Every container here is NIC-less and
+# proxy-less, so this bind-mounted dir is its ONLY channel to the host: the
+# in-container op-uds-relay binds its sockets here and the host-side uds-*
+# runit services connect to them. Containers are unprivileged (idmap base
+# 1000000), so each dir must be owned by the mapped root or the container
+# cannot create sockets -- and the service goes dark while still reporting
+# healthy. A per-container dir (rather than a shared 0777 parent) also stops
+# one container binding another's socket name.
+for _ct in mail cozo NetMaker qdrant xray; do
+    install -d -m 0755 -o 1000000 -g 1000000 "/run/ghostbridge/$_ct"
+done
+unset _ct
+install -d -m 0755 /run/op-dbus
+install -d -m 0755 /run/opdbus/runit-ready
+install -d -m 0755 /dev/shm/opdbus/plugin-blobs
+# Socket rendezvous parents shared into NIC-less containers (socket contracts).
+install -d -m 0755 /var/lib/opdbus-runtime /var/lib/netmaker-runtime
+install -d -m 0755 -o svlog -g svlog /var/log/op-dbus
+
+# Seal plugin blobs before op-grpc-bridge starts: the bridge hydrates its gRPC
+# reflection from this catalog and retry-loops against an empty tmpfs.
+if [ -x /usr/local/bin/opblob ]; then
+    /usr/local/bin/opblob seal-shm >/dev/null
+    find /dev/shm/opdbus/plugin-blobs -maxdepth 1 -type f \
+        \( -name '*.blob' -o -name '.manifest.json' \) \
+        -exec chmod 0644 {} +
+else
+    echo "warning: /usr/local/bin/opblob missing — blob catalog not sealed"
+fi
+
+# Host Ghostbridge identity sled. It lives in tmpfs and must be re-seeded every
+# boot. Prefer the host WireGuard identity, then fall back to the trusted
+# chatbot identity used by the shared Ghostbridge socket.
+umask 077
+if [ -x /usr/local/bin/op-identity-sled ]; then
+    WG_IFACE="${OP_IDENTITY_WG_IFACE:-3tched}"
+    PUBKEY=""
+    TRACE_ID=""
+    IDENTITY_SOURCE=""
+    if command -v wg >/dev/null 2>&1; then
+        PUBKEY=$(wg show "$WG_IFACE" public-key 2>/dev/null || true)
+    fi
+    if [ -n "$PUBKEY" ]; then
+        IDENTITY_SOURCE="WireGuard interface $WG_IFACE"
+    elif command -v jq >/dev/null 2>&1 \
+        && [ -r /var/lib/opdbus-runtime/identities/chatbot/identity.json ] \
+        && [ "$(jq -r '.role == "chatbot" and .ghostbridge == true' /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null)" = "true" ]; then
+        PUBKEY=$(jq -er '.pubkey | select(type == "string" and length > 0)' \
+            /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null || true)
+        TRACE_ID=$(jq -er '.session_id | select(type == "string" and length > 0)' \
+            /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null || true)
+        IDENTITY_SOURCE="trusted chatbot identity"
+    fi
+
+    SLED_VIEW=$(mktemp /run/opdbus/identity-sled.XXXXXX)
+    if [ -n "$PUBKEY" ] && {
+        if [ -n "$TRACE_ID" ]; then
+            /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" \
+                --trace-id "$TRACE_ID" >"$SLED_VIEW" 2>/dev/null
+        else
+            /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" \
+                >"$SLED_VIEW" 2>/dev/null
+        fi
+    }; then
+        FOOTPRINT=$(jq -er '.hashed_footprint | ascii_downcase | select(length == 64)' \
+            "$SLED_VIEW" 2>/dev/null || true)
+        case "$FOOTPRINT" in
+            *[!0-9a-f]*|"")
+                echo "warning: identity sled returned an invalid footprint"
+                ;;
+            *)
+                INSTALLED_GRANTS_PATH=/etc/opdbus/capability-grants.json
+                GRANTS_PATH=/dev/shm/opdbus/capability-grants.json
+                install -d -m 0755 /etc/opdbus
+                INSTALLED_GRANTS_TMP=$(mktemp /etc/opdbus/capability-grants.XXXXXX)
+                # The sled footprint changes after every audited mutation, so
+                # grants are capability-scoped rather than footprint-pinned.
+                # Ghostbridge authentication is still required before lookup.
+                REQUIRED_GRANTS='[
+                    "cap.service.lifecycle.init@v1",
+                    "cap.service.lifecycle.run@v1",
+                    "cap.service.lifecycle.shutdown@v1",
+                    "cap.software.zeroclaw.chat@v1",
+                    "cap.software.zeroclaw.models.read@v1",
+                    "cap.software.zeroclaw.providers.read@v1",
+                    "cap.software.zeroclaw.router.read@v1",
+                    "gemma.read",
+                    "host_runtime.read",
+                    "cognitive_mcp.read",
+                    "cognitive_mcp.invoke"
+                ]'
+                if [ -r "$INSTALLED_GRANTS_PATH" ]; then
+                    # The durable document is the authority consumed by the
+                    # opdbus-grants materializer. Re-running this oneshot must
+                    # not erase grants provisioned for other principals.
+                    jq --argjson required "$REQUIRED_GRANTS" '
+                        (if type == "object" then . else {} end)
+                        | .["*"] = ((.["*"] // {})
+                            | .capabilities = (((.capabilities // []) + $required) | unique))
+                    ' "$INSTALLED_GRANTS_PATH" >"$INSTALLED_GRANTS_TMP"
+                elif [ -r "$GRANTS_PATH" ]; then
+                    jq --argjson required "$REQUIRED_GRANTS" '
+                        (if type == "object" then . else {} end)
+                        | .["*"] = ((.["*"] // {})
+                            | .capabilities = (((.capabilities // []) + $required) | unique))
+                    ' "$GRANTS_PATH" >"$INSTALLED_GRANTS_TMP"
+                else
+                    jq -n --argjson required "$REQUIRED_GRANTS" \
+                        '{"*": {capabilities: $required}}' >"$INSTALLED_GRANTS_TMP"
+                fi
+                chmod 0600 "$INSTALLED_GRANTS_TMP"
+                mv -f "$INSTALLED_GRANTS_TMP" "$INSTALLED_GRANTS_PATH"
+
+                # Publish immediately as well as durably. The materializer
+                # will keep SHM synchronized from this installed authority.
+                GRANTS_TMP=$(mktemp /dev/shm/opdbus/capability-grants.XXXXXX)
+                install -m 0600 "$INSTALLED_GRANTS_PATH" "$GRANTS_TMP"
+                mv -f "$GRANTS_TMP" "$GRANTS_PATH"
+                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege UI, ZeroClaw, and cognitive_mcp grants"
+                ;;
+        esac
+    else
+        echo "warning: no trusted Ghostbridge identity available — identity sled not seeded"
+    fi
+    rm -f "$SLED_VIEW"
+else
+    echo "warning: /usr/local/bin/op-identity-sled missing — Ghostbridge identity not seeded"
+fi
+
+# Xray owns its single live configuration inside the container at
+# /etc/xray/xray_config.json. Host bootstrap must not create a shadow live
+# path in /dev/shm or /var/lib; container materialization/reload belongs to
+# the validated D-Bus deployment path.
+echo "rundirs ready: /run/opdbus, sealed catalog, Ghostbridge identity"
