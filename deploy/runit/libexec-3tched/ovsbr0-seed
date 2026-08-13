@@ -7,8 +7,12 @@
 # uplink already in its ports set means vswitchd's first read of OVSDB sees the
 # finished topology and brings the datapath up once.
 #
-# Runs from ovs-vswitchd/run BEFORE `exec ovs-vswitchd`, so there is no running
-# datapath to disturb while the rows are replaced.
+# Designed to run from ovs-vswitchd/run BEFORE `exec ovs-vswitchd`, so there is
+# no running datapath to disturb while the rows are replaced.
+#
+# NOTE (2026-08-13): nothing invokes this script today — ovs-vswitchd/run does
+# not reference it and neither does the installer; setup-ovsbr0-atomic.sh is the
+# live bridge-creation path. Kept in sync so it stays correct if revived.
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/usr/sbin:${PATH:-}"
 set -a; [ -r /etc/op-dbus/network.conf ] && . /etc/op-dbus/network.conf; set +a
@@ -18,6 +22,16 @@ PHYS="${UPLINK_PHYS:-eth0}"
 PUB="${PUBLIC_PORT:-pub0}"
 FAIL_MODE="${FAIL_MODE:-standalone}"
 DATAPATH="${DATAPATH_TYPE:-system}"
+
+# OpenFlow versions the bridge accepts. Must be set here, because this script
+# deletes and recreates the Bridge row — anything applied to the old row by hand
+# does not carry over. op-of-controller speaks 1.3, while ovs-ofctl and other CLI
+# clients still default to 1.0 — allow both, or those clients fail version
+# negotiation and vswitchd drops the socket, which surfaces at the caller as the
+# misleading "failed to connect to socket (Broken pipe)". Leaving the column
+# empty is not equivalent: OVS then defaults to OpenFlow10 alone and the
+# controller cannot connect at all.
+OF_PROTOCOLS="${OF_PROTOCOLS:-OpenFlow10,OpenFlow13}"
 
 [ -d "/sys/class/net/$PHYS" ] || {
     echo "ovsbr0-seed: uplink $PHYS is absent — refusing to seed" >&2
@@ -43,6 +57,20 @@ zcall ovsdb_bridge delete_bridge -a "{\"name\":\"$BRIDGE\"}" >/dev/null 2>&1 || 
 # named-uuid, so the bridge cannot exist without its uplink.
 ops=""
 refs=""
+
+# Comma-separated OF_PROTOCOLS -> an OVSDB set literal.
+protos=""
+_oldifs="$IFS"
+IFS=,
+for _v in $OF_PROTOCOLS; do
+    [ -n "$_v" ] && protos="${protos}\"${_v}\","
+done
+IFS="$_oldifs"
+[ -n "$protos" ] || {
+    echo "ovsbr0-seed: OF_PROTOCOLS is empty — refusing to seed" >&2
+    exit 1
+}
+PROTOCOLS="[\"set\",[${protos%,}]]"
 
 add_port() {
     _name="$1"; _type="$2"; _tag="$3"; _extra="${4:-}"
@@ -71,6 +99,7 @@ PAYLOAD="{\"db_name\":\"Open_vSwitch\",\"operations\":[${ops}
 {\"op\":\"insert\",\"table\":\"Bridge\",\"uuid-name\":\"br\",
  \"row\":{\"name\":\"${BRIDGE}\",\"datapath_type\":\"${DATAPATH}\",
           \"fail_mode\":\"${FAIL_MODE}\",
+          \"protocols\":${PROTOCOLS},
           \"ports\":[\"set\",[${refs%,}]]}},
 {\"op\":\"mutate\",\"table\":\"Open_vSwitch\",\"where\":[],
  \"mutations\":[[\"bridges\",\"insert\",[\"set\",[[\"named-uuid\",\"br\"]]]]]}]}"

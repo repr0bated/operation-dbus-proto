@@ -26,6 +26,14 @@ BRIDGE="${BRIDGE:-ovsbr0}"
 UPLINK="${UPLINK_PHYS:-eth0}"
 FAIL_MODE="${FAIL_MODE:-standalone}"
 DATAPATH="${DATAPATH_TYPE:-system}"
+# OpenFlow versions the bridge accepts. Set at creation so a fresh provision
+# matches a long-running host: op-of-controller speaks 1.3, while ovs-ofctl and
+# other CLI clients still default to 1.0. Allow both, or those clients fail
+# version negotiation, vswitchd drops the socket, and the caller sees only the
+# misleading "failed to connect to socket (Broken pipe)". Leaving the column
+# empty is not equivalent — OVS then defaults to OpenFlow10 alone and the
+# controller cannot connect at all.
+OF_PROTOCOLS="${OF_PROTOCOLS:-OpenFlow10,OpenFlow13}"
 MIGRATE_IP=true
 DRY_RUN=false
 
@@ -94,6 +102,15 @@ fi
 OPS=""
 REFS=""
 
+# Comma-separated OF_PROTOCOLS -> an OVSDB set literal.
+PROTO_ITEMS=""
+IFS=',' read -ra _protos <<< "$OF_PROTOCOLS"
+for _v in "${_protos[@]}"; do
+    [[ -n $_v ]] && PROTO_ITEMS="${PROTO_ITEMS}\"${_v}\","
+done
+[[ -n $PROTO_ITEMS ]] || die "OF_PROTOCOLS is empty — refusing to create a bridge with no OpenFlow version"
+PROTOCOLS="[\"set\",[${PROTO_ITEMS%,}]]"
+
 add_port() {
     local name="$1" type="$2" tag="$3"
     OPS="${OPS}
@@ -113,6 +130,7 @@ PAYLOAD="{\"db_name\":\"Open_vSwitch\",\"operations\":[${OPS}
 {\"op\":\"insert\",\"table\":\"Bridge\",\"uuid-name\":\"br\",
  \"row\":{\"name\":\"${BRIDGE}\",\"datapath_type\":\"${DATAPATH}\",
           \"fail_mode\":\"${FAIL_MODE}\",
+          \"protocols\":${PROTOCOLS},
           \"ports\":[\"set\",[${REFS%,}]]}},
 {\"op\":\"mutate\",\"table\":\"Open_vSwitch\",\"where\":[],
  \"mutations\":[[\"bridges\",\"insert\",[\"set\",[[\"named-uuid\",\"br\"]]]]]}]}"
