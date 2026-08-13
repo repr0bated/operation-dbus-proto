@@ -36,9 +36,37 @@ impl NetmakerAdapter {
         }
     }
 
+    fn get_master_key() -> String {
+        if let Ok(mk) = std::env::var("NETMAKER_MASTER_KEY") {
+            if !mk.trim().is_empty() {
+                return mk.trim().to_string();
+            }
+        }
+        if let Ok(mk) = std::env::var("MASTER_KEY") {
+            if !mk.trim().is_empty() {
+                return mk.trim().to_string();
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string("/etc/netmaker/netmaker.env") {
+            for line in content.lines() {
+                if let Some(val) = line.strip_prefix("MASTER_KEY=") {
+                    let key = val.trim().trim_matches('"').trim_matches('\'');
+                    if !key.is_empty() {
+                        return key.to_string();
+                    }
+                }
+            }
+        }
+        if let Ok(mk) = std::fs::read_to_string("/etc/netmaker/masterkey") {
+            if !mk.trim().is_empty() {
+                return mk.trim().to_string();
+            }
+        }
+        "548a294c5d5c550ec96e06a1015536cc".to_string()
+    }
+
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Status> {
-        let master_key =
-            std::env::var("NETMAKER_MASTER_KEY").unwrap_or_else(|_| "masterkey".to_string());
+        let master_key = Self::get_master_key();
 
         // The socket-backed registration path resolves the service endpoint;
         // the adapter keeps a conventional HTTP client here.

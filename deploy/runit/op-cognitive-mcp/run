@@ -1,0 +1,8 @@
+#!/bin/sh
+exec 2>&1
+# Phase 2: no network listeners. Stdio mode only.
+# Tool execution is now in-process in op-grpc-bridge.
+# NOTE: CozoDB concurrent access — bridge is primary writer; stdio is read-mostly.
+export COGNITIVE_MCP_DB_PATH=/var/lib/op-cognitive-mcp/memory.db
+[ -r /etc/op-dbus/secrets/notebooklm-cookie ] && export NOTEBOOKLM_COOKIE="$(cat /etc/op-dbus/secrets/notebooklm-cookie)"
+exec /usr/local/bin/op-cognitive-mcp --stdio

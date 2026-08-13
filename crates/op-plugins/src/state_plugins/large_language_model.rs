@@ -392,6 +392,73 @@ pub(crate) fn large_language_model_schema() -> PluginSchema {
     schema
 }
 
+/// Mutation-path dispatch for the active inference surface.
+///
+/// UI overview/LLM pages call these methods; gemma_brain is not the inference
+/// path (semi-deprecated for that role).
+pub async fn dispatch_large_language_model_method(
+    method: &str,
+    _args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let state = LargeLanguageModelPlugin::live_state().await;
+    match method {
+        "get_config" => {
+            let models: Vec<serde_json::Value> = state
+                .available_models
+                .iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "id": id,
+                        "status": if *id == state.model_id { "active" } else { "ok" },
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "provider": state.provider,
+                "model_id": state.model_id,
+                "status": state.status,
+                "endpoint": state.endpoint,
+                "model_digest": state.model_digest,
+                "params": state.params,
+                "models": models,
+            }))
+        }
+        "list_providers" => Ok(serde_json::json!({
+            "active_model": state.model_id,
+            "providers": [{
+                "id": state.provider,
+                "status": state.status,
+                "models": state.available_models.len(),
+            }],
+        })),
+        "get_provider" => Ok(serde_json::json!({
+            "provider": {
+                "id": state.provider,
+                "status": state.status,
+                "endpoint": state.endpoint,
+                "model_id": state.model_id,
+                "available_models": state.available_models,
+            }
+        })),
+        "list_models" => {
+            let models: Vec<serde_json::Value> = state
+                .available_models
+                .iter()
+                .map(|id| serde_json::json!({ "id": id }))
+                .collect();
+            Ok(serde_json::json!({ "models": models }))
+        }
+        "set_provider" | "generate" | "stream_generate" | "update_config" => {
+            Err(anyhow::anyhow!(
+                "large_language_model.{method} is mutation-declared but not implemented on this host path"
+            ))
+        }
+        other => Err(anyhow::anyhow!(
+            "unknown large_language_model method: {other}"
+        )),
+    }
+}
+
 // Self-registration: the plugin registry discovers this via inventory
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {

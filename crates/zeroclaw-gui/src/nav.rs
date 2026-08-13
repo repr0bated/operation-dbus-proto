@@ -1,4 +1,4 @@
-//! Navigation model — 1:1 mirror of the React `NAV_GROUPS` array.
+//! Navigation model — mirrors the operation-dashboard `NAV_MANIFEST`.
 
 use serde::{Deserialize, Serialize};
 
@@ -6,10 +6,16 @@ use serde::{Deserialize, Serialize};
 pub enum Route {
     // Console (top tab)
     Chat,
+    Gallery,
+    AntigravityLlm,
+    Catalog,
+    ZeroCatalog,
+    ZeroSpecs,
+    ZeroAgent,
+    ZeroQuery,
     Overview,
     Orchestration,
     Services,
-    Sessions,
     Llm,
     Agents,
     Assistant,
@@ -23,6 +29,7 @@ pub enum Route {
     Embedding,
     Containers,
     PrivacyNetwork,
+    Network,
     Ovs,
     OpenFlow,
     Btrfs,
@@ -38,6 +45,15 @@ pub enum Route {
     Reflections,
     Observability,
     LiveTrace,
+    Gateway,
+    Channels,
+    Cron,
+    Integrations,
+    Hardware,
+    EStop,
+    Invoke,
+    Blobs,
+    Plugins,
     // Top-level tab
     Install,
 }
@@ -82,13 +98,23 @@ pub static GROUPS: &[Group] = &[
         label: "Chat",
         items: &[it("Chat", "💬", Route::Chat)],
     },
+    Group { label: "UI Model", items: &[
+        it("Gallery", "▦", Route::Gallery),
+        it("Antigravity LLM", "✦", Route::AntigravityLlm),
+        it("Catalog", "▤", Route::Catalog),
+    ]},
+    Group { label: "Zerolang", items: &[
+        placeholder("Zero Catalog", "▦", Route::ZeroCatalog),
+        placeholder("Zero Specs", "◇", Route::ZeroSpecs),
+        placeholder("Zero Agent", "✦", Route::ZeroAgent),
+        placeholder("Zero Query", "⌕", Route::ZeroQuery),
+    ]},
     Group {
         label: "Control",
         items: &[
             it("Overview", "▦", Route::Overview),
             it("Orchestration", "◎", Route::Orchestration),
             it("Services", "⇄", Route::Services),
-            it("Sessions", "≡", Route::Sessions),
             it("LLM", "◉", Route::Llm),
         ],
     },
@@ -112,12 +138,20 @@ pub static GROUPS: &[Group] = &[
         items: &[
             it("Containers", "▣", Route::Containers),
             it("Privacy Network", "⌖", Route::PrivacyNetwork),
+            it("Network Control", "⌁", Route::Network),
             it("Open vSwitch", "⌬", Route::Ovs),
             it("OpenFlow", "⌘", Route::OpenFlow),
             it("BTRFS Storage", "▥", Route::Btrfs),
             it("Data Stores", "▥", Route::DataStores),
         ],
     },
+    Group { label: "ZeroClaw", items: &[
+        placeholder("Gateway", "⇄", Route::Gateway),
+        placeholder("Channels", "◌", Route::Channels),
+        placeholder("Cron", "◷", Route::Cron),
+        placeholder("Integrations", "⌘", Route::Integrations),
+        placeholder("Hardware", "▣", Route::Hardware),
+    ]},
     Group {
         label: "Settings",
         items: &[
@@ -127,6 +161,8 @@ pub static GROUPS: &[Group] = &[
             it("Logs", "✎", Route::Logs),
             it("gRPC Diagnostics", "◉", Route::Grpc),
             it("gRPC Explorer", "⌁", Route::GrpcExplorer),
+            placeholder("E-Stop", "■", Route::EStop),
+            it("Invoke", "▶", Route::Invoke),
         ],
     },
     Group {
@@ -138,6 +174,10 @@ pub static GROUPS: &[Group] = &[
             placeholder("Live Trace", "≈", Route::LiveTrace),
         ],
     },
+    Group { label: "Blobs", items: &[
+        it("Sealed Blobs", "⬢", Route::Blobs),
+        it("Plugins", "◆", Route::Plugins),
+    ]},
 ];
 
 pub fn route_title(r: Route) -> &'static str {

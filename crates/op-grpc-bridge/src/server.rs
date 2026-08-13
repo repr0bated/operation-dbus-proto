@@ -26,7 +26,9 @@ use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
 use crate::schema_router::SchemaRouter;
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
-use crate::grpc_server::build_operation_routes;
+use crate::grpc_server::{
+    attach_cognitive_tool_service, build_operation_routes, init_cognitive_mcp,
+};
 use crate::proto::zeroclaw::{
     zeroclaw_service_server::{ZeroclawService, ZeroclawServiceServer},
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
@@ -36,12 +38,12 @@ use crate::proto::zeroclaw::{
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
 /// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
 const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
-// NOTE: 50052 deliberately excluded — already owned by op-cognitive-mcp
-// (COGNITIVE_MCP_GRPC_BIND=10.200.0.2:50052; 0.0.0.0:50052 here would
-// collide with that, since 0.0.0.0 covers every interface including
-// 10.200.0.2 — confirmed live via "Address already in use (os error 98)"
-// crash-looping the service before this was narrowed).
-const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090,0.0.0.0:50051";
+// Native gRPC (:50051) and tonic-web (:8090). CognitiveToolService lives on
+// :50051 behind the bridge Ghostbridge interceptor (Task 0b); `:50052` is
+// reserved for op-waypipe-grpc after Phase 2 Task 6.
+// Prefer loopback + netmaker mesh IP — never 0.0.0.0 (steals every iface).
+// Live override: ZEROCLAW_BIND_ADDR / deploy/runit/op-grpc-bridge/run.
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8090,100.69.0.1:8090,127.0.0.1:50051,100.69.0.1:50051";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
 /// the catalog IS the plugin); a file path is still accepted for tests and
@@ -283,6 +285,11 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    let cognitive = init_cognitive_mcp().await;
+    if let Some(ref handle) = cognitive {
+        mutation_engine
+            .attach_cognitive_mcp(Some(handle.tool_registry()), Some(handle.context_state()));
+    }
     // Open the durable audit sink and replay the pre-restart trail before any
     // surface accepts traffic, so an immediate query sees prior history.
     let replayed = mutation_engine.init_audit_durability().await;
@@ -290,6 +297,14 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
+    // Start the OVSDB → process_authoritative_change feed after seed (same as run_grpc_server).
+    match mutation_engine.clone().start().await {
+        Ok(()) => tracing::info!("MutationEngine OVSDB monitor started"),
+        Err(error) => tracing::warn!(
+            %error,
+            "MutationEngine::start failed; continuing without OVSDB feed"
+        ),
+    }
     let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
@@ -310,6 +325,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // zeroclaw bridge advertised sealed plugins while serving none of their typed
     // per-method services.
     operation_server.freeze_plugin_method_reflection().await;
+
+    // Mount CognitiveToolService on the bridge :50051 surface (Task 0b).
+    let operation_server = attach_cognitive_tool_service(operation_server, cognitive).await;
 
     // ── D-Bus plugin object registration ──────────────────────────────────
     // Register all plugin objects from the SHM blob catalog on the session bus

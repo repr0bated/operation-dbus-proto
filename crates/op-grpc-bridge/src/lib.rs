@@ -42,6 +42,7 @@ pub mod server;
 pub mod shared_socket;
 pub mod tracing;
 pub mod zeroclaw_object_blob;
+mod zeroclaw_runtime;
 
 // Re-export main types
 pub use grpc_client::{

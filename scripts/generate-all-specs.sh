@@ -24,7 +24,7 @@ CRATES=(
     # D-Bus Integration
     "op-introspection" "op-dbus-mirror"
     # Network
-    "op-network" "op-services"
+    "op-network"
     # AI/LLM
     "op-llm" "op-chat" "op-ml"
     # MCP

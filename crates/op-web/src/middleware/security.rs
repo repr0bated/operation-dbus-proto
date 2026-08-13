@@ -10,11 +10,14 @@
 
 use axum::{
     extract::{ConnectInfo, Request},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
+    Json,
 };
 use op_core::security::AccessZone;
+use op_identity::FootprintVerifyError;
+use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use tracing::{debug, warn};
@@ -219,6 +222,72 @@ pub async fn ip_security_middleware(
 
     request.extensions_mut().insert(zone);
     next.run(request).await
+}
+
+/// Enforcing gate for `/mcp/*` only (Phase 2 FR-2a).
+///
+/// Allows the request when either:
+/// 1. `AccessZone` is `Localhost` or `TrustedMesh` (netmaker/loopback), or
+/// 2. valid Ghostbridge identity headers are present
+///    (`x-ghostbridge-footprint` plus `x-ghostbridge-trace-id` or
+///    `x-wireguard-pubkey`) and the footprint verifies against the live sled.
+///
+/// Applied on the `/mcp` nest (and `/mcp/agents*`), never globally.
+pub async fn mcp_ingress_auth_middleware(request: Request, next: Next) -> Response {
+    let zone = request
+        .extensions()
+        .get::<AccessZone>()
+        .copied()
+        .unwrap_or(AccessZone::Public);
+
+    match zone {
+        AccessZone::Localhost | AccessZone::TrustedMesh => {
+            return next.run(request).await;
+        }
+        AccessZone::PrivateNetwork | AccessZone::Public => {}
+    }
+
+    match ghostbridge_headers_ok(request.headers()) {
+        Ok(()) => next.run(request).await,
+        Err(status) => (
+            status,
+            Json(json!({
+                "error": "mcp ingress requires netmaker/loopback zone or Ghostbridge identity",
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn ghostbridge_headers_ok(headers: &HeaderMap) -> Result<(), StatusCode> {
+    let footprint = headers
+        .get("x-ghostbridge-footprint")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let has_trace = headers
+        .get("x-ghostbridge-trace-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let has_pubkey = headers
+        .get("x-wireguard-pubkey")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    if !has_trace && !has_pubkey {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    match op_identity::verify_ghostbridge_footprint(footprint) {
+        Ok(()) => Ok(()),
+        Err(FootprintVerifyError::Mismatch) | Err(FootprintVerifyError::InvalidSled) => {
+            Err(StatusCode::FORBIDDEN)
+        }
+        Err(FootprintVerifyError::SledUnreachable) => Err(StatusCode::SERVICE_UNAVAILABLE),
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Host Netclient starts only after the local NetMaker control plane is ready.
+exec 2>&1
+export PATH="/usr/local/bin:/usr/bin:/usr/sbin:${PATH:-}"
+
+sv start incus-ct-netmaker >/dev/null 2>&1 || true
+i=0
+until sv check incus-ct-netmaker >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -ge 180 ] && { echo "NetMaker container not ready after 180s" >&2; exit 1; }
+    sleep 1
+done
+
+/usr/local/libexec/3tched/runit-ready-signal netclient
+exec /usr/bin/netclient daemon

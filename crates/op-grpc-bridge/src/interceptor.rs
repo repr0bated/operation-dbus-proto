@@ -165,7 +165,29 @@ fn ghostbridge_interceptor_with_validator(
         req.extensions_mut().insert(identity);
         return Ok(req);
     }
+    warn_footprint_fallback();
     ghostbridge_footprint_interceptor(req)
+}
+
+/// Announce the degradation from the assertion path to the legacy self-asserted
+/// footprint header.
+///
+/// When no assertion is presented this falls back silently, so a decoy that is
+/// not issuing — or a trust store that failed closed — presents as "identity is
+/// not being carried" rather than as an error anywhere. Warn once so the
+/// condition is visible without emitting a line per request, and keep a
+/// per-request record at debug.
+fn warn_footprint_fallback() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            metadata_key = ASSERTION_METADATA_KEY,
+            "no oracle identity assertion presented — falling back to the legacy \
+             self-asserted footprint path; the presented identity is NOT cryptographically \
+             bound to a WireGuard-authenticated peer (logged once per process)"
+        );
+    });
+    tracing::debug!("assertion absent; using legacy self-asserted footprint path");
 }
 
 /// Legacy/test entry: footprint-only path (assertion metadata absent).

@@ -1,10 +1,9 @@
 {
   "mcpServers": {
-    "op-dbus-compact": {
-      "url": "http://127.0.0.1:8090/mcp/compact"
-    },
-    "cognitive-mcp": {
-      "url": "http://127.0.0.1:8090/mcp/agents"
+    "op-dbus": {
+      "command": "/usr/local/bin/op-mcp-server",
+      "args": ["--stdio", "-m", "cognitive"],
+      "type": "stdio"
     }
   }
 }

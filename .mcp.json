@@ -1,53 +1,15 @@
 {
   "mcpServers": {
-    "op-web-compact": {
+    "op-dbus": {
+      "url": "unix:///run/ghostbridge/container.sock",
+      "type": "stdio",
+      "_comment": "Prefer: one socket door. If the client cannot speak UDS gRPC directly, use the stdio adapter below which talks to that same authenticated surface."
+    },
+    "op-dbus-socket": {
       "command": "/usr/local/bin/op-mcp-server",
-      "args": [
-        "--stdio",
-        "-m",
-        "cognitive"
-      ],
-      "type": "stdio"
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/home/admin/git/odbus"
-      ],
-      "type": "stdio"
-    },
-    "memory": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ],
-      "type": "stdio"
-    },
-    "sequential-thinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ],
-      "type": "stdio"
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": [
-        "mcp-server-fetch"
-      ],
-      "type": "stdio"
-    },
-    "op-dbus-compact": {
-      "url": "http://127.0.0.1:8080/mcp/compact",
-      "type": "http"
-    },
-    "op-dbus-agents": {
-      "url": "http://127.0.0.1:8080/mcp/agents/message",
-      "type": "http"
+      "args": ["--stdio", "-m", "cognitive"],
+      "type": "stdio",
+      "_comment": "Stdio adapter onto the single socket-authenticated control plane (all tools)."
     }
   }
 }

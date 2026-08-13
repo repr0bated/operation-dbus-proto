@@ -52,6 +52,9 @@ pub struct StateChange {
     /// Actor who made the change
     #[prost(string, tag = "12")]
     pub actor_id: ::prost::alloc::string::String,
+    /// Stream framing: initial static-tree state, a live update, or keepalive.
+    #[prost(enumeration = "StateFrameKind", tag = "13")]
+    pub frame_kind: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MutateRequest {
@@ -893,6 +896,29 @@ pub struct RuntimeGetNumaTopologyResponse {
     pub nodes: ::prost::alloc::vec::Vec<NumaNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeCheckUnixSocketsRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeUnixSocketStatus {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(bool, tag = "2")]
+    pub exists: bool,
+    #[prost(bool, tag = "3")]
+    pub connectable: bool,
+    #[prost(string, tag = "4")]
+    pub detail: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeCheckUnixSocketsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub sockets: ::prost::alloc::vec::Vec<RuntimeUnixSocketStatus>,
+    #[prost(message, optional, tag = "2")]
+    pub queried_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NumaNode {
     #[prost(uint32, tag = "1")]
     pub node_id: u32,
@@ -1042,6 +1068,38 @@ pub struct ZeroclawProjection {
     pub model_routes: ::prost::alloc::vec::Vec<ModelRouteProto>,
     #[prost(message, repeated, tag = "3")]
     pub providers: ::prost::alloc::vec::Vec<ProviderProto>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StateFrameKind {
+    Unspecified = 0,
+    InitialState = 1,
+    Update = 2,
+    Heartbeat = 3,
+}
+impl StateFrameKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STATE_FRAME_KIND_UNSPECIFIED",
+            Self::InitialState => "STATE_FRAME_KIND_INITIAL_STATE",
+            Self::Update => "STATE_FRAME_KIND_UPDATE",
+            Self::Heartbeat => "STATE_FRAME_KIND_HEARTBEAT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STATE_FRAME_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "STATE_FRAME_KIND_INITIAL_STATE" => Some(Self::InitialState),
+            "STATE_FRAME_KIND_UPDATE" => Some(Self::Update),
+            "STATE_FRAME_KIND_HEARTBEAT" => Some(Self::Heartbeat),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2550,6 +2608,34 @@ pub mod runtime_mirror_client {
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new("operation.v1.RuntimeMirror", "GetNumaTopology"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Probe Unix domain socket paths from the bridge host (tonic-web clients cannot
+        /// open UDS directly — this is the supported health path for socket pills).
+        pub async fn check_unix_sockets(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RuntimeCheckUnixSocketsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RuntimeCheckUnixSocketsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.RuntimeMirror/CheckUnixSockets",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.RuntimeMirror", "CheckUnixSockets"),
                 );
             self.inner.unary(req, path, codec).await
         }

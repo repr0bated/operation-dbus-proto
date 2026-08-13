@@ -33,7 +33,8 @@
       "pubkey": "VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=",
       "allowed_ip": "100.69.0.10/32",
       "runtime_dir": "/var/lib/opdbus-runtime/identities/chatbot",
-      "notes": "Reuses existing chatbot keypair; conf re-homed onto 3tched mesh"
+      "internet": false,
+      "notes": "Reuses existing chatbot keypair; conf re-homed onto 3tched mesh. Production: internet=false (mesh/UDS only); UI switch stamps x-opdbus-account-internet for later network enforcement."
     }
   }
 }

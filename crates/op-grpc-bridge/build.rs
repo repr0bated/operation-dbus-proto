@@ -119,7 +119,7 @@ fn collect_plugin_methods() -> Vec<PluginMethodSet> {
                         .methods
                         .get(&schema_name)
                         .expect("method declaration must exist");
-                    let rpc_name = to_pascal_ident(&schema_name);
+                    let rpc_name = avoid_tonic_client_collision(to_pascal_ident(&schema_name));
                     let message_prefix = to_pascal_ident(&plugin_id);
                     PluginMethod {
                         rust_name: to_snake_ident(&rpc_name),
@@ -230,13 +230,13 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
 
     writeln!(
         rust,
-        "    pub(crate) fn add_routes(mut routes: tonic::service::Routes, server: OperationGrpcServer) -> tonic::service::Routes {{"
+        "    pub(crate) fn add_routes(mut routes: tonic::service::Routes, server: OperationGrpcServer, intercept: crate::interceptor::GhostbridgeInterceptorWithValidator) -> tonic::service::Routes {{"
     )
     .unwrap();
     for set in sets {
         writeln!(
             rust,
-            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::new(server.clone())));",
+            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::with_interceptor(server.clone(), intercept.clone())));",
             set.server_module, set.server_type
         )
         .unwrap();
@@ -416,6 +416,35 @@ fn sanitize_proto_ident(value: &str) -> String {
         format!("_{ident}")
     } else {
         ident
+    }
+}
+
+/// Inherent methods tonic emits on every generated gRPC client. tonic derives a
+/// client fn from each rpc name, so an rpc whose snake_case form is one of these
+/// produces two definitions with the same name and the crate stops compiling
+/// (E0592). A plugin method called `connect` collides with the
+/// `Client::connect(dst)` constructor exactly this way.
+///
+/// Only the derived proto/rpc identifier moves; the plugin's schema and D-Bus
+/// method name are untouched, and routing keys off `schema_name`.
+const TONIC_CLIENT_RESERVED: &[&str] = &[
+    "connect",
+    "new",
+    "with_interceptor",
+    "with_origin",
+    "send_compressed",
+    "accept_compressed",
+    "max_decoding_message_size",
+    "max_encoding_message_size",
+];
+
+fn avoid_tonic_client_collision(rpc_name: String) -> String {
+    // Suffix rather than reject: a plugin is entitled to name a method
+    // `connect`, and the generated surface has to accommodate it.
+    if TONIC_CLIENT_RESERVED.contains(&to_snake_ident(&rpc_name).as_str()) {
+        format!("{rpc_name}Method")
+    } else {
+        rpc_name
     }
 }
 

@@ -5,84 +5,24 @@
 //!
 //! # Why attach without fallback black-holes the host
 //!
-//! ## Asynchronous messages
+//! Host L3 (SSH/pub0) must **never** depend on `OFPR_NO_MATCH` → PACKET_IN →
+//! controller flow install. Keep cookied `priority=0,actions=NORMAL` present.
 //!
-//! A **service** controller never receives async messages unless it raises
-//! `miss_send_len` from the service default of **0** via:
-//! - `OFPT_SET_CONFIG` with nonzero `miss_send_len`, or
-//! - any `NXT_SET_ASYNC_CONFIG` (side effect: `miss_send_len` → 128).
+//! # No CLI shell-outs
 //!
-//! `OFPT_FLOW_REMOVED` is generated only if the removed flow had
-//! `OFPFF_SEND_FLOW_REM`.
+//! This module talks to OVS only via:
+//! - OVSDB JSON-RPC (`rovs_ovsdb` over `unix:.../db.sock`) for Bridge/Controller
+//! - OpenFlow over the bridge management socket (`unix:.../<bridge>.mgmt`) for
+//!   FlowMod / flow-stats (replaces forbidden `ovs-ofctl` / `ovs-vsctl`)
 //!
-//! `OFPT_PACKET_IN` / `NXT_PACKET_IN` go only to the connection with the
-//! correct controller ID (`NXAST_CONTROLLER` uses the action's ID; table-miss
-//! and other reasons use **controller ID 0**). Secondary role suppresses
-//! `OFPR_NO_MATCH` by default.
-//!
-//! Therefore host L3 (SSH/pub0) must **never** depend on
-//! `OFPR_NO_MATCH` → PACKET_IN → controller flow install.
-//!
-//! ## `OFPT_FLOW_MOD` atomicity (and the delete-all race)
-//!
-//! OVS applies each `flow_mod` atomically, but **separate** `flow_mod`s are
-//! not one transaction (OF1.4 bundles would be). `delete-all` then
-//! `add NORMAL` is two mods: packets can observe an empty table between them.
-//! Datapath cache revalidation is also deferred (~1s), so connectivity can
-//! look fine briefly, then die. Contract: always keep `priority=0,actions=NORMAL`
-//! via ofctl **before** `set-controller`, re-install NORMAL immediately after
-//! any wipe, and roll back if health check fails.
-//!
-//! ## In-band control principle
-//!
-//! "An OpenFlow switch must recognize and switch control traffic without
-//! involving the OpenFlow controller." In-band rules must work even while
-//! connected, and must override controller flows — a controller "last resort
-//! send-to-controller" otherwise isolates itself. Our priority=0 NORMAL is the
-//! same principle for host/management traffic when the OF channel is local to
-//! the bridge (out-of-band TCP to `10.200.0.1:6653`, but host L3 still traverses
-//! the bridge pipeline).
-//!
-//! ## Echo for liveness
-//!
-//! Prefer `OFPT_ECHO_REQUEST` over bare TCP timeouts to detect a hung OF
-//! session (kernel TCP can take many minutes).
-//!
-//! # Contract methods
-//! - [`ensure_fallback_normal`]
-//! - [`set_fail_mode`]
-//! - [`del_controller`] / [`set_controller`]
-//! - [`get_datapath_health`]
-//! - [`attach_controller_safe`] (orchestrated; auto-rollback)
-
-//! ## Flow cookies
-//!
-//! Tag the NORMAL fallback with a stable cookie (`FALLBACK_COOKIE`) and
-//! controller-managed flows with `MANAGED_COOKIE`. Prefer deleting by managed
-//! cookie instead of delete-all so the fallback survives reconnect wipes
-//! (OF1.3 cookie match on DELETE).
-//!
-//! ## Tables
-//!
-//! Controllers must use tables 0–127 only; 128+ are reserved for the switch.
-//!
-//! ## Connection mode
-//!
-//! OF endpoint `tcp:10.200.0.1:6653` is on the bridge IP → keep
-//! `connection_mode=in-band` (default). Do **not** set
-//! `other_config:disable-in-band=true`. Host SSH still needs NORMAL; in-band
-//! hidden flows only cover controller/manager remotes.
-//!
-//! ## Action reproduction
-//!
-//! Do not byte-compare dumped actions to expected bytes — OVS normalizes
-//! instruction order and drops empty Apply/Write-Actions.
+//! The live `op-of-controller` also re-installs NORMAL on every OVS reconnect.
 //!
 use anyhow::{bail, Context, Result};
+use rovs_openflow::{ActionList, Flow, Match, VConn};
+use rovs_transport::Address;
 use serde::Serialize;
-use std::process::Stdio;
+use std::path::PathBuf;
 use std::time::Duration;
-use tokio::process::Command;
 
 /// Cookie for priority=0 NORMAL host-safety fallback (never delete-all this).
 pub const FALLBACK_COOKIE: u64 = 0x3344_4348_0000_0001; // "3DCH"+1
@@ -92,52 +32,150 @@ const FALLBACK_PRIORITY: u16 = 0;
 /// Datapath cache revalidation window (OVS design: usually within ~1s).
 const DATAPATH_SETTLE: Duration = Duration::from_millis(1200);
 
-fn fallback_flow_spec() -> String {
-    format!("cookie={FALLBACK_COOKIE:#x}/-1,priority={FALLBACK_PRIORITY},actions=NORMAL")
+const DEFAULT_OVSDB_ADDR: &str = "unix:/var/run/openvswitch/db.sock";
+
+fn ovsdb_addr() -> String {
+    std::env::var("OVSDB_SOCKET_ADDR").unwrap_or_else(|_| DEFAULT_OVSDB_ADDR.to_string())
 }
 
-async fn run_capture(cmd: &str, args: &[&str]) -> Result<(i32, String, String)> {
-    let out = Command::new(cmd)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+fn bridge_mgmt_addr(bridge: &str) -> Address {
+    let path = std::env::var("OVS_BRIDGE_MGMT_SOCK").unwrap_or_else(|_| {
+        format!("/var/run/openvswitch/{bridge}.mgmt")
+    });
+    Address::Unix(PathBuf::from(path))
+}
+
+async fn ovsdb_connect() -> Result<rovs_ovsdb::Client> {
+    let addr = ovsdb_addr();
+    rovs_ovsdb::Client::connect(&addr)
         .await
-        .with_context(|| format!("failed to spawn {cmd}"))?;
-    let code = out.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    Ok((code, stdout, stderr))
+        .with_context(|| format!("OVSDB connect {addr}"))
 }
 
-async fn run_ok(cmd: &str, args: &[&str]) -> Result<String> {
-    let (code, stdout, stderr) = run_capture(cmd, args).await?;
-    if code != 0 {
-        bail!("{cmd} {:?} failed (exit {code}): {stderr}{stdout}", args);
+async fn ovsdb_transact(
+    client: &mut rovs_ovsdb::Client,
+    ops: Vec<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let result = client
+        .transact(serde_json::Value::Array(ops))
+        .await
+        .context("OVSDB transact failed")?;
+    if let Some(arr) = result.as_array() {
+        for (i, entry) in arr.iter().enumerate() {
+            if let Some(err) = entry.get("error") {
+                bail!("OVSDB op[{i}] error: {err} detail={}", entry.get("details").unwrap_or(&serde_json::Value::Null));
+            }
+        }
     }
-    Ok(stdout)
+    Ok(result)
 }
 
-/// Idempotently install cookied priority=0 NORMAL and verify it is present.
+fn first_rows(result: &serde_json::Value) -> &[serde_json::Value] {
+    result
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|e| e.get("rows"))
+        .and_then(|r| r.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+}
+
+fn json_str_field(row: &serde_json::Value, key: &str) -> Option<String> {
+    let v = row.get(key)?;
+    match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        // OVSDB sometimes wraps enums as ["set",[]] or bare strings
+        serde_json::Value::Array(a) if a.len() == 2 && a[0] == "set" => None,
+        other => Some(other.to_string().trim_matches('"').to_string()),
+    }
+}
+
+fn uuid_from_cell(cell: &serde_json::Value) -> Option<String> {
+    cell.as_array()
+        .filter(|a| a.len() == 2 && a[0] == "uuid")
+        .and_then(|a| a[1].as_str())
+        .map(str::to_string)
+}
+
+fn collect_uuids(cell: &serde_json::Value, out: &mut Vec<String>) {
+    if let Some(u) = uuid_from_cell(cell) {
+        out.push(u);
+        return;
+    }
+    if let Some(arr) = cell.as_array() {
+        if arr.len() == 2 && arr[0] == "set" {
+            if let Some(set) = arr[1].as_array() {
+                for item in set {
+                    collect_uuids(item, out);
+                }
+            }
+        } else {
+            for item in arr {
+                collect_uuids(item, out);
+            }
+        }
+    }
+}
+
+fn fallback_rovs_flow() -> Flow {
+    let mut flow = Flow::add()
+        .priority(FALLBACK_PRIORITY)
+        .cookie(FALLBACK_COOKIE)
+        .match_fields(Match::new())
+        .actions(ActionList::new().normal());
+    flow.flags.no_pkt_counts = true;
+    flow.flags.no_byte_counts = true;
+    flow
+}
+
+async fn with_bridge_of<T, F>(bridge: &str, f: F) -> Result<T>
+where
+    F: for<'a> FnOnce(
+        &'a mut VConn,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>>,
+{
+    let addr = bridge_mgmt_addr(bridge);
+    let mut vconn = VConn::connect(&addr)
+        .await
+        .with_context(|| format!("OpenFlow connect to {addr}"))?;
+    f(&mut vconn).await
+}
+
+/// Idempotently install cookied priority=0 NORMAL via the bridge .mgmt OF socket.
 pub async fn ensure_fallback_normal(bridge: &str) -> Result<()> {
-    let flow = fallback_flow_spec();
-    let (_c, _o, _e) = run_capture("ovs-ofctl", &["add-flow", bridge, &flow]).await?;
+    with_bridge_of(bridge, |vconn| {
+        Box::pin(async move {
+            vconn
+                .send_flow_sync(&fallback_rovs_flow())
+                .await
+                .context("FlowMod ADD NORMAL via bridge.mgmt")?;
+            Ok(())
+        })
+    })
+    .await?;
+
     if !fallback_present(bridge).await? {
-        bail!("EnsureFallbackNormal: NORMAL fallback not present on {bridge} after add-flow");
+        bail!("EnsureFallbackNormal: NORMAL fallback not present on {bridge} after FlowMod");
     }
-    log::info!("EnsureFallbackNormal: {flow} present on {bridge}");
+    log::info!(
+        "EnsureFallbackNormal: cookie={FALLBACK_COOKIE:#x},priority={FALLBACK_PRIORITY},actions=NORMAL present on {bridge}"
+    );
     Ok(())
 }
 
 pub async fn fallback_present(bridge: &str) -> Result<bool> {
-    let dump = run_ok("ovs-ofctl", &["dump-flows", bridge]).await?;
-    let cookie_hex = format!("{FALLBACK_COOKIE:x}");
-    Ok(dump.lines().any(|l| {
-        let lower = l.to_ascii_lowercase();
-        lower.contains("priority=0")
-            && lower.contains("actions=normal")
-            && lower.contains(&cookie_hex)
-    }))
+    with_bridge_of(bridge, |vconn| {
+        Box::pin(async move {
+            let flows = vconn
+                .dump_flows()
+                .await
+                .context("OF dump_flows via bridge.mgmt")?;
+            Ok(flows.iter().any(|e| {
+                e.cookie == FALLBACK_COOKIE && e.priority == FALLBACK_PRIORITY
+            }))
+        })
+    })
+    .await
 }
 
 pub async fn set_fail_mode(bridge: &str, mode: &str) -> Result<()> {
@@ -145,15 +183,15 @@ pub async fn set_fail_mode(bridge: &str, mode: &str) -> Result<()> {
         "standalone" | "secure" => {}
         other => bail!("fail_mode must be standalone|secure, got {other}"),
     }
-    run_ok(
-        "ovs-vsctl",
-        &[
-            "--no-wait",
-            "set",
-            "Bridge",
-            bridge,
-            &format!("fail_mode={mode}"),
-        ],
+    let mut client = ovsdb_connect().await?;
+    ovsdb_transact(
+        &mut client,
+        vec![serde_json::json!({
+            "op": "update",
+            "table": "Bridge",
+            "where": [["name", "==", bridge]],
+            "row": { "fail_mode": mode }
+        })],
     )
     .await?;
     log::info!("SetFailMode: {bridge} fail_mode={mode}");
@@ -162,74 +200,142 @@ pub async fn set_fail_mode(bridge: &str, mode: &str) -> Result<()> {
 
 /// Keep in-band for bridge-local OF endpoints (design: hidden remotes).
 pub async fn ensure_controller_in_band(bridge: &str) -> Result<()> {
-    // After set-controller, Controller rows exist; set connection_mode on each.
-    let _ = run_capture(
-        "ovs-vsctl",
-        &[
-            "--no-wait",
-            "set",
-            "Controller",
-            &format!("{bridge}"), // may fail if name form unsupported
-            "connection_mode=in-band",
-        ],
+    let mut client = ovsdb_connect().await?;
+
+    // Clear disable-in-band if present.
+    let br = ovsdb_transact(
+        &mut client,
+        vec![serde_json::json!({
+            "op": "select",
+            "table": "Bridge",
+            "where": [["name", "==", bridge]],
+            "columns": ["other_config", "controller"]
+        })],
     )
-    .await;
-    // Portable: find Controller UUIDs referenced by the bridge
-    let uuids = run_ok(
-        "ovs-vsctl",
-        &[
-            "--bare",
-            "--columns=_uuid",
-            "find",
-            "Controller",
-            &format!("target!=\"\""),
-        ],
-    )
-    .await
-    .unwrap_or_default();
-    for uuid in uuids.lines().map(str::trim).filter(|s| !s.is_empty()) {
-        let _ = run_capture(
-            "ovs-vsctl",
-            &[
-                "--no-wait",
-                "set",
-                "Controller",
-                uuid,
-                "connection_mode=in-band",
-            ],
+    .await?;
+    let rows = first_rows(&br);
+    let Some(row) = rows.first() else {
+        bail!("Bridge '{bridge}' not found");
+    };
+
+    if let Some(other) = row.get("other_config") {
+        // other_config is ["map", [[k,v], ...]]
+        if let Some(arr) = other.as_array() {
+            if arr.len() == 2 && arr[0] == "map" {
+                if let Some(pairs) = arr[1].as_array() {
+                    let has_disable = pairs.iter().any(|p| {
+                        p.as_array()
+                            .and_then(|a| a.first())
+                            .and_then(|k| k.as_str())
+                            == Some("disable-in-band")
+                    });
+                    if has_disable {
+                        let _ = ovsdb_transact(
+                            &mut client,
+                            vec![serde_json::json!({
+                                "op": "mutate",
+                                "table": "Bridge",
+                                "where": [["name", "==", bridge]],
+                                "mutations": [[
+                                    "other_config",
+                                    "delete",
+                                    ["map", [["disable-in-band", "true"]]]
+                                ]]
+                            })],
+                        )
+                        .await;
+                        let _ = ovsdb_transact(
+                            &mut client,
+                            vec![serde_json::json!({
+                                "op": "mutate",
+                                "table": "Bridge",
+                                "where": [["name", "==", bridge]],
+                                "mutations": [[
+                                    "other_config",
+                                    "delete",
+                                    ["map", [["disable-in-band", "false"]]]
+                                ]]
+                            })],
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ctrl_uuids = Vec::new();
+    if let Some(ctrl) = row.get("controller") {
+        collect_uuids(ctrl, &mut ctrl_uuids);
+    }
+    for uuid in ctrl_uuids {
+        let _ = ovsdb_transact(
+            &mut client,
+            vec![serde_json::json!({
+                "op": "update",
+                "table": "Controller",
+                "where": [["_uuid", "==", ["uuid", uuid]]],
+                "row": { "connection_mode": "in-band" }
+            })],
         )
         .await;
     }
-    // Never disable in-band globally on the bridge
-    let _ = run_capture(
-        "ovs-vsctl",
-        &[
-            "--no-wait",
-            "remove",
-            "Bridge",
-            bridge,
-            "other_config",
-            "disable-in-band",
-        ],
-    )
-    .await;
     Ok(())
 }
 
 pub async fn del_controller(bridge: &str) -> Result<()> {
-    run_ok("ovs-vsctl", &["--no-wait", "del-controller", bridge]).await?;
+    let mut client = ovsdb_connect().await?;
+    // Clear Bridge.controller set (orphaned Controller rows are GC'd by ovsdb).
+    ovsdb_transact(
+        &mut client,
+        vec![serde_json::json!({
+            "op": "update",
+            "table": "Bridge",
+            "where": [["name", "==", bridge]],
+            "row": { "controller": ["set", []] }
+        })],
+    )
+    .await?;
     log::info!("DelController: {bridge}");
     Ok(())
 }
 
 pub async fn set_controller(bridge: &str, endpoint: &str) -> Result<()> {
     ensure_fallback_normal(bridge).await?;
-    let ep = if endpoint.starts_with("tcp:") {
+    let ep = if endpoint.starts_with("tcp:") || endpoint.starts_with("unix:") {
         endpoint.to_string()
     } else {
         format!("tcp:{endpoint}")
     };
-    run_ok("ovs-vsctl", &["--no-wait", "set-controller", bridge, &ep]).await?;
+
+    let mut client = ovsdb_connect().await?;
+
+    // Insert Controller row, then point Bridge.controller at it.
+    let result = ovsdb_transact(
+        &mut client,
+        vec![
+            serde_json::json!({
+                "op": "insert",
+                "table": "Controller",
+                "row": {
+                    "target": ep,
+                    "connection_mode": "in-band"
+                },
+                "uuid-name": "new_ctrl"
+            }),
+            serde_json::json!({
+                "op": "update",
+                "table": "Bridge",
+                "where": [["name", "==", bridge]],
+                "row": {
+                    "controller": ["set", [["named-uuid", "new_ctrl"]]]
+                }
+            }),
+        ],
+    )
+    .await?;
+    let _ = result;
+
     ensure_controller_in_band(bridge).await?;
     log::info!("SetController: {bridge} -> {ep} (connection_mode=in-band)");
     Ok(())
@@ -248,37 +354,67 @@ pub struct DatapathHealth {
 }
 
 pub async fn get_datapath_health(bridge: &str) -> Result<DatapathHealth> {
-    let fail_mode = run_ok("ovs-vsctl", &["get", "Bridge", bridge, "fail_mode"])
-        .await?
-        .trim()
-        .trim_matches('"')
-        .to_string();
+    let mut client = ovsdb_connect().await?;
+    let br = ovsdb_transact(
+        &mut client,
+        vec![serde_json::json!({
+            "op": "select",
+            "table": "Bridge",
+            "where": [["name", "==", bridge]],
+            "columns": ["fail_mode", "controller", "other_config"]
+        })],
+    )
+    .await?;
+    let rows = first_rows(&br);
+    let Some(row) = rows.first() else {
+        bail!("Bridge '{bridge}' not found");
+    };
 
-    let controllers_raw = run_ok("ovs-vsctl", &["get-controller", bridge])
-        .await
-        .unwrap_or_default();
-    let controllers: Vec<String> = controllers_raw
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let fail_mode = json_str_field(row, "fail_mode").unwrap_or_default();
+
+    let mut ctrl_uuids = Vec::new();
+    if let Some(ctrl) = row.get("controller") {
+        collect_uuids(ctrl, &mut ctrl_uuids);
+    }
+
+    let mut controllers = Vec::new();
+    let mut connection_mode = "n/a".to_string();
+    for uuid in &ctrl_uuids {
+        let c = ovsdb_transact(
+            &mut client,
+            vec![serde_json::json!({
+                "op": "select",
+                "table": "Controller",
+                "where": [["_uuid", "==", ["uuid", uuid]]],
+                "columns": ["target", "connection_mode"]
+            })],
+        )
+        .await?;
+        if let Some(crow) = first_rows(&c).first() {
+            if let Some(t) = json_str_field(crow, "target") {
+                controllers.push(t);
+            }
+            if let Some(m) = json_str_field(crow, "connection_mode") {
+                connection_mode = m;
+            }
+        }
+    }
+
+    let mut disable_in_band = false;
+    if let Some(other) = row.get("other_config").and_then(|v| v.as_array()) {
+        if other.len() == 2 && other[0] == "map" {
+            if let Some(pairs) = other[1].as_array() {
+                disable_in_band = pairs.iter().any(|p| {
+                    let a = p.as_array();
+                    matches!(a, Some(a) if a.len() == 2
+                        && a[0].as_str() == Some("disable-in-band")
+                        && a[1].as_str() == Some("true"))
+                });
+            }
+        }
+    }
 
     let fallback_normal = fallback_present(bridge).await?;
-
-    let connection_mode = run_ok(
-        "ovs-vsctl",
-        &["--if-exists", "get", "Controller", ".", "connection_mode"],
-    )
-    .await
-    .unwrap_or_else(|_| "n/a".into())
-    .trim()
-    .trim_matches('"')
-    .to_string();
-
-    let other = run_ok("ovs-vsctl", &["get", "Bridge", bridge, "other_config"])
-        .await
-        .unwrap_or_default();
-    let disable_in_band = other.contains("disable-in-band") && other.contains("true");
 
     Ok(DatapathHealth {
         bridge: bridge.to_string(),

@@ -116,6 +116,15 @@ message StateChange {
   google.protobuf.Timestamp timestamp = 11;
   // Actor who made the change
   string actor_id = 12;
+  // Stream framing: initial static-tree state, a live update, or keepalive.
+  StateFrameKind frame_kind = 13;
+}
+
+enum StateFrameKind {
+  STATE_FRAME_KIND_UNSPECIFIED = 0;
+  STATE_FRAME_KIND_INITIAL_STATE = 1;
+  STATE_FRAME_KIND_UPDATE = 2;
+  STATE_FRAME_KIND_HEARTBEAT = 3;
 }
 
 enum ChangeType {
@@ -690,6 +699,10 @@ service RuntimeMirror {
 
   // Get NUMA topology
   rpc GetNumaTopology(google.protobuf.Empty) returns (RuntimeGetNumaTopologyResponse);
+
+  // Probe Unix domain socket paths from the bridge host (tonic-web clients cannot
+  // open UDS directly — this is the supported health path for socket pills).
+  rpc CheckUnixSockets(RuntimeCheckUnixSocketsRequest) returns (RuntimeCheckUnixSocketsResponse);
 }
 
 // --- Runtime Messages ---
@@ -769,6 +782,22 @@ message RuntimeNetworkInterface {
 
 message RuntimeGetNumaTopologyResponse {
   repeated NumaNode nodes = 1;
+}
+
+message RuntimeCheckUnixSocketsRequest {
+  repeated string paths = 1;
+}
+
+message RuntimeUnixSocketStatus {
+  string path = 1;
+  bool exists = 2;
+  bool connectable = 3;
+  string detail = 4;
+}
+
+message RuntimeCheckUnixSocketsResponse {
+  repeated RuntimeUnixSocketStatus sockets = 1;
+  google.protobuf.Timestamp queried_at = 2;
 }
 
 message NumaNode {

@@ -211,52 +211,46 @@ impl GenerationContext {
     }
 
     /// Build the system message for the inference model.
+    ///
+    /// Intentionally does **not** frame this as "building a UI" or a gallery.
+    /// The model receives: (1) how to read the dataset via tools / access docs,
+    /// (2) the json-render vocabulary + grammar as the only output format.
+    /// The goal lives in the user message (`universal_prompt`).
     pub fn build_system_message(&self) -> String {
         let mut parts = vec![
-            "# Gallery Generation System".to_string(),
+            "# Dataset".to_string(),
             "".to_string(),
-            "You are a UI specification generator. Your task is to create json-render.dev specifications that make plugin data accessible and useful.".to_string(),
+            "You are given a dataset. Discover it only through the provided tools \
+             (`list_plugins`, `get_plugin_schema`, `search_fields`, and any enabled \
+             discovery tools). Do not invent fields, methods, or values."
+                .to_string(),
             "".to_string(),
-            "## Available Plugins".to_string(),
+            "Produce one JSON document that expresses the dataset using the vocabulary \
+             and grammar below. Stay inside that vocabulary; do not invent component types."
+                .to_string(),
+            "".to_string(),
+            "## Dataset (from sealed plugin schemas)".to_string(),
+            "Use tools to refine or search; the payloads below are already loaded."
+                .to_string(),
+            "".to_string(),
         ];
 
         for schema in &self.schemas {
-            parts.push(format!(
-                "- **{}** ({}): {}",
-                schema.name,
-                schema.version,
-                schema.description.as_deref().unwrap_or("No description")
-            ));
+            parts.push(format!("### {}", schema.name));
+            parts.push(
+                serde_json::to_string_pretty(&schema.raw_json)
+                    .unwrap_or_else(|_| "{}".to_string()),
+            );
+            parts.push("".to_string());
         }
 
-        parts.push("".to_string());
-        parts.push("## Authoritative UI Routes".to_string());
-        parts.push("Use plugin-declared routes exactly when present. For plugins without an authoritative ui_surfaces projection, derive a fallback layout from their fields and methods.".to_string());
-        for schema in &self.schemas {
-            if schema.ui_surfaces.is_authoritative() {
-                parts.push(format!(
-                    "- **{}** [{}]: {}",
-                    schema.name,
-                    schema.ui_surfaces.subids.join(", "),
-                    serde_json::to_string(&schema.ui_surfaces.routes)
-                        .unwrap_or_else(|_| "[]".into())
-                ));
-            } else {
-                parts.push(format!(
-                    "- **{}**: no authoritative routes; use schema-derived fallback",
-                    schema.name
-                ));
-            }
-        }
-
-        parts.push("".to_string());
-        parts.push("## Component Catalog".to_string());
+        parts.push("## Vocabulary".to_string());
         parts.push(self.catalog_docs.clone());
         parts.push("".to_string());
-        parts.push("## Spec Grammar".to_string());
+        parts.push("## Grammar".to_string());
         parts.push(self.grammar_docs.clone());
         parts.push("".to_string());
-        parts.push("## Plugin Schema Access".to_string());
+        parts.push("## How to read the dataset".to_string());
         parts.push(self.access_instructions.clone());
 
         parts.join("\n")
@@ -919,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_marks_authoritative_and_fallback_plugins() {
+    fn system_message_is_dataset_plus_docs_not_ui_roleplay() {
         let projection = UiSurfaceProjection {
             subids: vec!["exp.service.demo.ui-surfaces@v1".into()],
             routes: vec![UiSurfaceRoute {
@@ -937,10 +931,22 @@ mod tests {
             ],
             String::new(),
         );
-        let prompt = ctx.build_system_message();
-        assert!(prompt.contains("exp.service.demo.ui-surfaces@v1"));
-        assert!(prompt.contains("/demo"));
-        assert!(prompt.contains("plain**: no authoritative routes"));
+        let system = ctx.build_system_message();
+        let user = ctx.build_user_message();
+
+        // Goal lives in the user message — vague accessibility baseline.
+        assert!(user.contains("as accessible to as many people"));
+        assert!(!user.to_lowercase().contains("ui specification"));
+
+        // System message: dataset + vocabulary/grammar — not "you are a UI builder".
+        assert!(system.contains("# Dataset"));
+        assert!(system.contains("### demo"));
+        assert!(system.contains("### plain"));
+        assert!(system.contains("## Vocabulary"));
+        assert!(system.contains("## Grammar"));
+        assert!(!system.to_lowercase().contains("ui specification generator"));
+        assert!(!system.contains("Authoritative UI Routes"));
+        assert!(!system.contains("schema-derived fallback"));
     }
 
     #[test]

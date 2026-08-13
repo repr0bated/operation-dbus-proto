@@ -27,8 +27,8 @@ enum Commands {
         #[arg(short, long, default_value = "200")]
         target: usize,
 
-        /// ZeroClaw HTTP endpoint
-        #[arg(long, default_value = "http://localhost:8082")]
+        /// OpenAI-compatible chat endpoint (op-web :8080)
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
         endpoint: String,
 
         /// Enable MCP tool layer

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::Arc;
@@ -264,6 +265,10 @@ impl UnixSocketPlugin {
         }
         if let Some(parent) = Path::new(&endpoint.path).parent() {
             std::fs::create_dir_all(parent)?;
+            // umask makes create_dir_all land 0755 root:root, which lets an
+            // unprivileged container connect here but not bind its own socket —
+            // the only inbound channel a NIC-less container has. See f9188f96.
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o777))?;
         }
         if Path::new(&endpoint.path).exists() {
             info!(

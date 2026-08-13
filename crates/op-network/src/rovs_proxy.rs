@@ -650,24 +650,107 @@ impl OvsdbDbusClient {
 
     /// Monitor OVSDB for changes to a database.
     ///
-    /// Not yet implemented over the native vendor transport. It never
-    /// actually worked before either (the D-Bus passthrough it depended on
-    /// had no server), so this is a like-for-like failure mode — the only
-    /// caller (`MutationEngine::start`) already treats a monitor error as
-    /// "feature unavailable, skip" and continues without it.
+    /// Spawns a dedicated native `rovs_ovsdb::Client` (separate from the
+    /// short-lived transact mutex connection) that:
+    /// 1. Connects with `ClientConfig` for `database` (monitor V1 / full IDL)
+    /// 2. Immediately broadcasts a full IDL snapshot
+    /// 3. Blocks on `Client::wait()` and re-broadcasts a snapshot on each update
+    /// 4. Reconnects with exponential backoff (capped at 30s) on disconnect
     ///
-    /// `rovs_ovsdb::Client` does have real monitoring support internally
-    /// (its `Idl`, populated via `run()`/`process_update`), so a proper
-    /// implementation is possible — it needs a background task holding the
-    /// connected client, calling `run()` in a loop, and diffing `idl()`
-    /// state per table into the broadcast channel. Left as a follow-up.
+    /// Snapshot shape (IDL table map — what `MutationEngine::start` consumes):
+    /// ```json
+    /// { "Bridge": [ { "_uuid": ["uuid", "..."], "name": "br0", ... }, ... ], ... }
+    /// ```
+    ///
+    /// Returns a broadcast receiver immediately; connection happens in the
+    /// background so callers can subscribe before OVS is up.
     pub async fn monitor_db(
         &self,
-        _database: &str,
+        database: &str,
     ) -> Result<tokio::sync::broadcast::Receiver<serde_json::Value>> {
-        anyhow::bail!(
-            "OvsdbDbusClient::monitor_db is not yet implemented over the native OVSDB transport"
-        )
+        let (tx, rx) = tokio::sync::broadcast::channel(100);
+        let addr =
+            std::env::var("OVSDB_SOCKET_ADDR").unwrap_or_else(|_| DEFAULT_OVSDB_ADDR.to_string());
+        let db = database.to_string();
+
+        tokio::spawn(async move {
+            use rovs_ovsdb::{Client, ClientConfig};
+            use rovs_transport::Reconnect;
+            use std::time::Duration;
+
+            let mut reconnect = Reconnect::new();
+            reconnect.set_max_backoff(Duration::from_secs(30));
+
+            loop {
+                if !reconnect.should_connect() {
+                    let backoff = reconnect.current_backoff();
+                    tracing::debug!(
+                        database = %db,
+                        ?backoff,
+                        "monitor_db: backing off before reconnect"
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+
+                reconnect.connecting();
+                tracing::debug!(database = %db, %addr, "monitor_db: connecting");
+
+                let config = ClientConfig::default().database(&db);
+                let mut client = match Client::connect_with_config(&addr, config).await {
+                    Ok(c) => {
+                        reconnect.connected();
+                        tracing::info!(
+                            database = %db,
+                            seqno = c.idl().change_seqno(),
+                            "monitor_db: connected and monitoring"
+                        );
+                        c
+                    }
+                    Err(e) => {
+                        tracing::warn!(database = %db, error = %e, "monitor_db: connect failed");
+                        reconnect.disconnected();
+                        reconnect.increase_backoff();
+                        continue;
+                    }
+                };
+
+                // Initial snapshot — IDL already holds current DB state from initialize().
+                let snapshot = idl_snapshot(client.idl());
+                if tx.send(snapshot).is_err() {
+                    tracing::debug!(database = %db, "monitor_db: no receivers; stopping");
+                    return;
+                }
+                reconnect.activity();
+
+                loop {
+                    match client.wait().await {
+                        Ok(()) => {
+                            reconnect.activity();
+                            let snapshot = idl_snapshot(client.idl());
+                            if tx.send(snapshot).is_err() {
+                                tracing::debug!(
+                                    database = %db,
+                                    "monitor_db: receivers dropped; stopping"
+                                );
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                database = %db,
+                                error = %e,
+                                "monitor_db: connection error; will reconnect"
+                            );
+                            reconnect.disconnected();
+                            reconnect.increase_backoff();
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
     }
 
     /// Compatibility shim for plugins that pass `simd_json::OwnedValue`.
@@ -721,5 +804,113 @@ impl OvsdbDbusClient {
         endpoint: &str,
     ) -> Result<crate::datapath_safe::DatapathHealth> {
         crate::datapath_safe::attach_controller_safe(bridge, endpoint).await
+    }
+}
+
+
+/// Build a full snapshot of an [`rovs_ovsdb::Idl`] as a plain JSON value.
+///
+/// Shape:
+/// ```json
+/// {
+///   "TableName": [
+///     { "_uuid": ["uuid", "<uuid-str>"], "col1": val, … },
+///     …
+///   ],
+///   …
+/// }
+/// ```
+fn idl_snapshot(idl: &rovs_ovsdb::Idl) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(schema) = idl.schema() {
+        for table_name in schema.tables.keys() {
+            let rows: Vec<serde_json::Value> = idl
+                .rows(table_name)
+                .map(|row| {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert(
+                        "_uuid".to_string(),
+                        serde_json::json!(["uuid", row.uuid.to_string()]),
+                    );
+                    for (col, val) in &row.columns {
+                        obj.insert(col.clone(), val.clone());
+                    }
+                    serde_json::Value::Object(obj)
+                })
+                .collect();
+            out.insert(table_name.clone(), serde_json::Value::Array(rows));
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+#[cfg(test)]
+mod monitor_db_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Pure helper mirroring MutationEngine table extraction for IDL snapshots
+    /// and RFC 7047 update notifications — kept here so monitor + consumer stay
+    /// aligned without a live ovsdb-server.
+    fn tables_from_monitor_update(
+        update: &serde_json::Value,
+    ) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
+            // RFC 7047: params = [monitor-id, table-updates]
+            if let Some(obj) = params.get(1).and_then(|v| v.as_object()) {
+                return Some(obj);
+            }
+            // Legacy mistaken 3-param shape used by an earlier start() draft
+            if let Some(obj) = params.get(2).and_then(|v| v.as_object()) {
+                return Some(obj);
+            }
+            return None;
+        }
+        update.as_object()
+    }
+
+    #[test]
+    fn idl_snapshot_empty_idl_is_empty_object() {
+        let idl = rovs_ovsdb::Idl::new();
+        let snap = idl_snapshot(&idl);
+        assert_eq!(snap, json!({}));
+    }
+
+    #[test]
+    fn tables_from_idl_snapshot_shape() {
+        let update = json!({
+            "Bridge": [{"_uuid": ["uuid", "aaa"], "name": "br0"}],
+            "Port": []
+        });
+        let tables = tables_from_monitor_update(&update).expect("tables");
+        assert!(tables.contains_key("Bridge"));
+        assert_eq!(tables["Bridge"][0]["name"], "br0");
+    }
+
+    #[test]
+    fn tables_from_rfc7047_update_params() {
+        let update = json!({
+            "method": "update",
+            "params": [
+                "mon-id",
+                {"Bridge": {"row-uuid": {"new": {"name": "br1"}}}}
+            ]
+        });
+        let tables = tables_from_monitor_update(&update).expect("tables");
+        assert!(tables.contains_key("Bridge"));
+    }
+
+    #[tokio::test]
+    async fn monitor_db_returns_receiver_without_blocking() {
+        // Does not require a live ovsdb-server: connect runs in a background task.
+        let client = OvsdbDbusClient::new();
+        let rx = client
+            .monitor_db("Open_vSwitch")
+            .await
+            .expect("monitor_db should return a receiver immediately");
+        // Dropping rx should eventually stop the task (send fails → return).
+        drop(rx);
+        // Give the task a tick; no panic is success.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }

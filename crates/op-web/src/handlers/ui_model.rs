@@ -254,6 +254,11 @@ pub async fn ui_model_list_plugins_handler(
 /// GET /api/ui-model/plugin-schema/:plugin
 /// The base schema is the render source: read straight from the sealed blob
 /// catalog. Resolve by exact id, then by manifest prefix/contains match.
+///
+/// Presentation remap (display / arrangement / priority / audience / element
+/// role) is derived from `docs/subid-taxonomy.md` categories via
+/// `op_state_store::subid_ui` — not Card/Button names. Live values come from
+/// the second SHM (`/dev/shm/opdbus/state/`).
 pub async fn ui_model_plugin_schema_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(plugin): Path<String>,
@@ -271,10 +276,49 @@ pub async fn ui_model_plugin_schema_handler(
         },
     };
 
+    let ui_projection = op_state_store::project_schema_ui(&resolved_id, &schema);
+    // Second SHM: live present values (not sealed schema).
+    let state = crate::state_tree::read_plugin(&resolved_id).and_then(|v| {
+        serde_json::to_value(v).ok()
+    });
+
     ok(json!({
         "plugin": resolved_id,
         "schema_hash": schema_hash_for(&resolved_id),
         "schema": schema,
+        "ui_projection": ui_projection,
+        "state": state,
+    }))
+}
+
+/// GET /api/ui-model/subid-projection
+/// Dump every sealed plugin's subid → UI role rows (populate the catalog).
+/// Keep what fills; clear unused later; chatbot wires to this surface.
+pub async fn ui_model_subid_projection_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Response {
+    let Some(ids) = op_blob::catalog::read_manifest_plugin_ids_shm() else {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "blob catalog manifest unavailable",
+        );
+    };
+
+    let mut rows = Vec::new();
+    for id in &ids {
+        if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(id) {
+            rows.extend(op_state_store::project_schema_ui(id, &schema));
+        }
+    }
+    let population = op_state_store::role_population(&rows);
+
+    ok(json!({
+        "source": "docs/subid-taxonomy.md + sealed PluginSchema.subids",
+        "scope": "render/display/arrangement/priority/audience/element-role only",
+        "plugins": ids.len(),
+        "rows": rows.len(),
+        "population": population,
+        "projections": rows,
     }))
 }
 
@@ -350,7 +394,7 @@ pub async fn start_generation(
     let run_config = op_gallery_gen::GalleryGenConfig {
         target_count: config.target_count,
         stable_core_max: 40,
-        zeroclaw_endpoint: "http://localhost:8082".to_string(),
+        zeroclaw_endpoint: "http://127.0.0.1:8080".to_string(),
         enable_mcp: config.enable_mcp,
         enable_qdrant: config.enable_qdrant,
         max_turns: 10,

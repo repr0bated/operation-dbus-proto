@@ -2,12 +2,20 @@
 //!
 //! Architecture:
 //! 1. System-wide memory — global CozoDB namespace, all authenticated entities
-//! 2. Chatbot soul — chatbot is a user entity with its own container, session-scoped soul namespace
+//! 2. Chatbot soul — chatbot is a lifelong account (container = identity);
+//!    soul namespaces bind to that account, not to a transient activity session
 //! 3. Container memory — user gets container at registration, soul + domain namespace
 //!
 //! Post-turn: detect memorable info, write to CozoDB (durable) + Qdrant (semantic)
 //! MEMORY_INDEX: one key per namespace, slug-per-line orientation
 
+/// Lifelong chatbot account session_id (= Incus container name = identity sled key).
+/// Source: /var/lib/opdbus-runtime/identities/chatbot/identity.json
+/// Distinct from the `assistant` workspace instance that mounts this identity.
+pub const CHATBOT_ACCOUNT_SESSION_ID: &str = "bea37ecb-92be-197c-660f-09e806f1a34f";
+
+/// Historical workspace / soul-namespace key used by memory injection today.
+/// Prefer [`CHATBOT_ACCOUNT_SESSION_ID`] for permissions and identity boundaries.
 pub const CHATBOT_CONTAINER_ID: &str = "assistant";
 
 use anyhow::{Context, Result};

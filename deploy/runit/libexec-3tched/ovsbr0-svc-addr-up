@@ -1,0 +1,49 @@
+#!/bin/sh
+# Internal L3: the service and fabric addresses on the bridge's internal ports.
+#
+#   grpc0   GRPC_ADDR         gRPC TLS
+#   svc0…   BRIDGE_SVC_ADDRS  "addr@port" pairs — entrance / tonic helpers
+#   ovsbr0  BRIDGE_ADDR       the fabric address op-grpc-bridge binds :50051 on
+#
+# op-grpc-bridge waits on this service, so every address it needs exists before
+# it starts and its bind list needs no conditionals.
+#
+# Plain `ip` for the same reason as ovsbr0-addr-up: the plugin tree is not up
+# yet, by design.
+set -eu
+export PATH="/usr/local/bin:/usr/bin:/usr/sbin:${PATH:-}"
+
+set -a; [ -r /etc/op-dbus/network.conf ] && . /etc/op-dbus/network.conf; set +a
+BRIDGE="${BRIDGE:-ovsbr0}"
+SVC="${GRPC_PORT:-grpc0}"
+
+i=0
+until [ -d "/sys/class/net/$BRIDGE" ] && [ -d "/sys/class/net/$SVC" ]; do
+    i=$((i+1))
+    [ "$i" -ge 60 ] && { echo "ovsbr0-svc-addr: $BRIDGE/$SVC not ready after 60s — conf.db topology is wrong" >&2; exit 1; }
+    sleep 1
+done
+
+apply_addr() {
+    _dev="$1"; _addr="$2"
+    [ -n "$_addr" ] || return 0
+    i=0
+    until [ -d "/sys/class/net/$_dev" ]; do
+        i=$((i+1))
+        [ "$i" -ge 30 ] && { echo "ovsbr0-svc-addr: port $_dev missing" >&2; return 1; }
+        sleep 1
+    done
+    ip link set dev "$_dev" up
+    ip -4 addr show dev "$_dev" | grep -qw "${_addr%%/*}" \
+        || ip addr add "$_addr" dev "$_dev"
+    echo "ovsbr0-svc-addr: $_addr on $_dev"
+}
+
+apply_addr "$SVC" "${GRPC_ADDR:-}"
+
+# "10.0.0.2/24@svc0 ..." — address and device joined by @.
+for pair in ${BRIDGE_SVC_ADDRS:-}; do
+    apply_addr "${pair#*@}" "${pair%@*}"
+done
+
+apply_addr "$BRIDGE" "${BRIDGE_ADDR:-}"

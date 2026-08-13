@@ -6,6 +6,14 @@ use simd_json::prelude::*;
 use crate::state_tree;
 
 #[derive(Debug, Clone)]
+pub struct ZeroclawSelection {
+    pub provider: String,
+    pub model: String,
+    pub providers: Vec<String>,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ZeroclawRoute {
     pub provider: String,
     pub upstream_provider: String,
@@ -81,6 +89,44 @@ pub fn routes() -> Option<Vec<ZeroclawRoute>> {
             .filter_map(ZeroclawRoute::from_value)
             .collect(),
     )
+}
+
+pub fn selection() -> Option<ZeroclawSelection> {
+    let zeroclaw = state_tree::read_plugin("zeroclaw")?;
+    let provider = zeroclaw.get("selected_provider")?.as_str()?.to_string();
+    let model = zeroclaw.get("selected_model")?.as_str()?.to_string();
+    let mut providers = zeroclaw
+        .get("providers")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.get("id").and_then(|id| id.as_str()))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    providers.sort();
+    providers.dedup();
+    let available = zeroclaw
+        .get("model_routes")
+        .and_then(|value| value.as_array())
+        .map(|routes| {
+            routes.iter().any(|route| {
+                route.get("model").and_then(|value| value.as_str()) == Some(model.as_str())
+                    && route
+                        .get("available")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    Some(ZeroclawSelection {
+        provider,
+        model,
+        providers,
+        available,
+    })
 }
 
 pub fn route_for_model(model: &str) -> Option<ZeroclawRoute> {

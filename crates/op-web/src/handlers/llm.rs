@@ -28,32 +28,37 @@ pub struct LlmProvidersResponse {
 
 /// GET /api/llm/status - Get LLM status
 pub async fn llm_status_handler(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<LlmStatusResponse> {
-    let provider = state.chat_manager.current_provider().await.to_string();
-    let model = state.chat_manager.current_model().await;
-    let available = !state.chat_manager.available_providers().is_empty();
-    let model_non_sandboxed = state.chat_manager.current_model_non_sandboxed().await;
+    let selection = crate::zeroclaw_routes::selection();
     Json(LlmStatusResponse {
-        provider,
-        model,
-        model_non_sandboxed,
-        available,
+        provider: selection
+            .as_ref()
+            .map(|value| value.provider.clone())
+            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
+        model: selection
+            .as_ref()
+            .map(|value| value.model.clone())
+            .unwrap_or_default(),
+        model_non_sandboxed: false,
+        available: selection.map(|value| value.available).unwrap_or(false),
     })
 }
 
 /// GET /api/llm/providers - List available providers
 pub async fn list_providers_handler(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<LlmProvidersResponse> {
-    let providers: Vec<String> = state
-        .chat_manager
-        .available_providers()
-        .into_iter()
-        .map(|provider| provider.to_string())
-        .collect();
-    let current = state.chat_manager.current_provider().await.to_string();
-    Json(LlmProvidersResponse { providers, current })
+    let selection = crate::zeroclaw_routes::selection();
+    Json(LlmProvidersResponse {
+        providers: selection
+            .as_ref()
+            .map(|value| value.providers.clone())
+            .unwrap_or_default(),
+        current: selection
+            .map(|value| value.provider)
+            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
+    })
 }
 
 /// GET /api/llm/models - List available models

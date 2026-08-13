@@ -37,6 +37,7 @@ pub mod gcloud_adc;
 pub mod gemma_brain;
 pub mod ghostbridge;
 pub mod hardware;
+pub mod host_runtime;
 pub mod human_principal;
 pub mod identity_sled;
 pub mod incus;

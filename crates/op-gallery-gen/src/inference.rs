@@ -1,6 +1,10 @@
 //! Inference loop for gallery generation.
 //!
-//! Calls ZeroClaw `/v1/chat/completions` with tool support for:
+//! Calls the OpenAI-compatible `/v1/chat/completions` surface on op-web (:8080)
+//! with Ghostbridge identity headers. (ZeroClaw's daemon on :8082 exposes A2A
+//! at `/a2a/<agent>`, not this OpenAI path.)
+//!
+//! Tool support covers:
 //! - Plugin schema queries
 //! - MCP cross-blob discovery (when enabled)
 //! - Qdrant semantic search (when enabled)
@@ -8,9 +12,14 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::context::GenerationContext;
 use crate::tools::{ToolCall, ToolRegistry};
+
+const SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
+const FOOTPRINT_OFFSET: usize = 40;
+const TRACE_OFFSET: usize = 72;
 
 /// Inference loop that generates UI specs.
 pub struct InferenceLoop {
@@ -66,6 +75,7 @@ pub struct FunctionDefinition {
 /// OpenAI-compatible chat completion response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatResponse {
+    #[serde(default)]
     pub id: String,
     pub choices: Vec<Choice>,
 }
@@ -178,16 +188,18 @@ impl InferenceLoop {
         anyhow::bail!("Max turns reached without generating a valid spec")
     }
 
-    /// Call ZeroClaw chat completions endpoint.
+    /// Call OpenAI-compatible chat completions (op-web → zeroclaw.Chat).
     async fn call_zeroclaw(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> Result<ChatResponse> {
-        let url = format!("{}/v1/chat/completions", self.endpoint);
+        let url = format!("{}/v1/chat/completions", self.endpoint.trim_end_matches('/'));
 
+        // Empty model → bridge uses ZeroClaw's selected model. Literal
+        // "default" is rejected when a real model is selected.
         let request = ChatRequest {
-            model: "default".to_string(), // ZeroClaw selects the actual model
+            model: String::new(),
             messages: messages.to_vec(),
             tools: if tools.is_empty() {
                 None
@@ -197,18 +209,19 @@ impl InferenceLoop {
             stream: false,
         };
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("HTTP request failed")?;
+        let mut req = self.client.post(&url).json(&request);
+        if let Some((footprint, trace_id)) = live_ghostbridge_identity() {
+            req = req
+                .header("x-ghostbridge-footprint", footprint)
+                .header("x-ghostbridge-trace-id", trace_id);
+        }
+
+        let response = req.send().await.context("HTTP request failed")?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("ZeroClaw returned {}: {}", status, body);
+            anyhow::bail!("chat completions returned {}: {}", status, body);
         }
 
         response.json().await.context("Failed to parse response")
@@ -406,4 +419,33 @@ impl InferenceLoop {
 
         anyhow::bail!("No valid spec found in model output")
     }
+}
+
+/// Resolve Ghostbridge identity for op-web `/v1/chat/completions`.
+///
+/// Prefers env overrides, then the live host sled at `/dev/shm/plugin_schema.dat`
+/// (same offsets as `IdentitySled`: footprint @40, trace_id @72).
+fn live_ghostbridge_identity() -> Option<(String, String)> {
+    let env_fp = std::env::var("X_GHOSTBRIDGE_FOOTPRINT")
+        .or_else(|_| std::env::var("GB_FOOTPRINT"))
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let env_tr = std::env::var("X_GHOSTBRIDGE_TRACE_ID")
+        .or_else(|_| std::env::var("GB_TRACE_ID"))
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    if let (Some(fp), Some(tr)) = (env_fp, env_tr) {
+        return Some((fp, tr));
+    }
+
+    let bytes = std::fs::read(Path::new(SLED_PATH)).ok()?;
+    if bytes.len() < TRACE_OFFSET + 16 {
+        return None;
+    }
+    let footprint = hex::encode(&bytes[FOOTPRINT_OFFSET..FOOTPRINT_OFFSET + 32]);
+    let trace_id = hex::encode(&bytes[TRACE_OFFSET..TRACE_OFFSET + 16]);
+    if footprint.chars().all(|c| c == '0') || trace_id.chars().all(|c| c == '0') {
+        return None;
+    }
+    Some((footprint, trace_id))
 }

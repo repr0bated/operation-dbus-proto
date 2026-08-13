@@ -1,0 +1,9 @@
+#!/bin/sh
+exec 2>&1
+# gRPC / tonic-web bridge on mesh IP 100.69.0.1:8090 — laptop/peers reach
+# op-grpc-bridge without svc0 or loopback. Same pattern as fwd-nm-mesh-8081.
+until [ -S /run/opdbus/grpc.sock ]; do sleep 1; done
+until ip -4 addr show netmaker 2>/dev/null | grep -q "100.69.0.1/"; do sleep 1; done
+/usr/local/libexec/3tched/runit-ready-signal fwd-nm-mesh-8090 2>/dev/null || true
+exec /usr/local/libexec/3tched/socket-relay \
+    tcp-listen 100.69.0.1 8090 unix-connect /run/opdbus/grpc.sock

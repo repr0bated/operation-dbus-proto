@@ -6,12 +6,15 @@
 //! - Broadcasts authoritative state changes to gRPC subscribers
 //! - Directly manages authoritative RCP stores (OVSDB, NonNet, SQLite)
 
-use anyhow::Context as _;
+use anyhow::Context;
 use async_trait::async_trait;
+use op_cognitive_mcp::{CognitiveMemoryStore, ContextAwarenessEngine, SessionManager};
+use op_mcp::tool_registry::ToolRegistry;
 use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
@@ -19,7 +22,6 @@ use zbus::{Connection, Proxy};
 use base64::Engine;
 use op_blockchain::{PluginFootprint, StreamingBlockchain};
 use op_identity::{read_sled, write_sled_full};
-use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::blockchain_plugin::{
     AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
@@ -30,6 +32,13 @@ use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationTyp
 /// audit trail, when `$OPDBUS_BLOCKCHAIN_PATH` is unset. Matches
 /// `blockchain_plugin::DEFAULT_BASE_PATH` so both read the same chain.
 const DEFAULT_BLOCKCHAIN_PATH: &str = "/var/lib/opdbus/blockchain";
+
+/// Context-awareness state extracted from [`CognitiveMcpServer`] for Task 3 routes.
+pub type CognitiveContextState = (
+    Arc<ContextAwarenessEngine>,
+    Arc<CognitiveMemoryStore>,
+    Arc<SessionManager>,
+);
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -72,6 +81,13 @@ pub struct MutationEngine {
     pub event_chain: Arc<RwLock<EventChain>>,
     /// Real-time change projection channel
     change_tx: broadcast::Sender<StateChange>,
+    /// Real-time audit-chain projection channel.
+    ///
+    /// Fed from the same pipeline that appends to `event_chain`, so the mutation
+    /// door remains the only producer of chain events. Sent after the projection
+    /// write for the same reason `change_tx` is: a subscriber must never learn of
+    /// an event before the state it describes is readable.
+    chain_tx: broadcast::Sender<ChainEvent>,
     /// State cache for instant gRPC retrieval
     state_cache: Arc<RwLock<HashMap<String, simd_json::OwnedValue>>>,
     /// System D-Bus connection authority
@@ -95,8 +111,12 @@ pub struct MutationEngine {
     pub ovsdb: Arc<OvsdbDbusClient>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
-    /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
-    chat_manager: Arc<ChatManager>,
+    /// Loopback adapter to the real ZeroClaw runtime authority.
+    zeroclaw_runtime: Arc<crate::zeroclaw_runtime::ZeroclawRuntimeClient>,
+    /// In-process cognitive MCP tool registry (Phase 2). `None` when init failed.
+    cognitive_tool_registry: std::sync::RwLock<Option<Arc<ToolRegistry>>>,
+    /// Context engine tuple for Task 3 (context-awareness routes).
+    cognitive_context_engine: std::sync::RwLock<Option<CognitiveContextState>>,
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -145,10 +165,42 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
 impl MutationEngine {
     /// Create a new authoritative Mutation Engine
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
+        Self::new_with_zeroclaw_client(
+            event_chain,
+            ovsdb,
+            crate::zeroclaw_runtime::ZeroclawRuntimeClient::from_env(),
+        )
+    }
+
+    /// Create an engine using an explicit ZeroClaw endpoint.
+    ///
+    /// This is primarily useful for integration tests, where the runtime API is
+    /// provided by an ephemeral local server instead of the host daemon.
+    pub fn new_with_zeroclaw_runtime(
+        event_chain: Arc<RwLock<EventChain>>,
+        ovsdb: Arc<OvsdbDbusClient>,
+        endpoint: String,
+        agent_alias: String,
+        token: Option<String>,
+    ) -> Self {
+        Self::new_with_zeroclaw_client(
+            event_chain,
+            ovsdb,
+            crate::zeroclaw_runtime::ZeroclawRuntimeClient::new(endpoint, agent_alias, token),
+        )
+    }
+
+    fn new_with_zeroclaw_client(
+        event_chain: Arc<RwLock<EventChain>>,
+        ovsdb: Arc<OvsdbDbusClient>,
+        zeroclaw_runtime: crate::zeroclaw_runtime::ZeroclawRuntimeClient,
+    ) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
+        let (chain_tx, _) = broadcast::channel(1024);
         Self {
             event_chain,
             change_tx,
+            chain_tx,
             state_cache: Arc::new(RwLock::new(HashMap::new())),
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
@@ -157,8 +209,31 @@ impl MutationEngine {
             audit_sink: Arc::new(OnceCell::new()),
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
-            chat_manager: Arc::new(ChatManager::new()),
+            zeroclaw_runtime: Arc::new(zeroclaw_runtime),
+            cognitive_tool_registry: std::sync::RwLock::new(None),
+            cognitive_context_engine: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Attach the in-process cognitive MCP registry constructed at bridge startup.
+    pub fn attach_cognitive_mcp(
+        &self,
+        registry: Option<Arc<ToolRegistry>>,
+        context: Option<CognitiveContextState>,
+    ) {
+        if let Ok(mut guard) = self.cognitive_tool_registry.write() {
+            *guard = registry;
+        }
+        if let Ok(mut guard) = self.cognitive_context_engine.write() {
+            *guard = context;
+        }
+    }
+
+    fn cognitive_tool_registry(&self) -> Option<Arc<ToolRegistry>> {
+        self.cognitive_tool_registry
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     /// Open the durable audit sink and rebuild the in-memory event chain from it.
@@ -496,6 +571,12 @@ impl MutationEngine {
             blobs = sealed,
             "Seeded missing plugin projections and sealed current plugin schemas"
         );
+        if let Err(error) = self.refresh_zeroclaw_projection().await {
+            tracing::warn!(
+                %error,
+                "ZeroClaw runtime was unavailable during startup projection refresh"
+            );
+        }
         Ok(seeded)
     }
 
@@ -806,6 +887,9 @@ impl MutationEngine {
         };
 
         let _ = self.change_tx.send(change.clone());
+        // Fan the recorded event out to EventChainService.SubscribeEvents from
+        // the same pipeline that appended it, after the projection write above.
+        let _ = self.chain_tx.send(event);
         Ok(change)
     }
 
@@ -814,62 +898,71 @@ impl MutationEngine {
     pub async fn start(self: Arc<Self>) -> anyhow::Result<()> {
         let me = self.clone();
 
-        // Subscribe to OVSDB updates
+        // Subscribe to OVSDB updates (native Idl monitor → process_authoritative_change).
         let ovsdb_self = me.clone();
         tokio::spawn(async move {
-            if let Ok(mut rx) = ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
-                loop {
-                    match rx.recv().await {
-                        Ok(update) => {
-                            if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
-                                if params.len() >= 3 {
-                                    if let Some(tables) = params[2].as_object() {
-                                        for (table_name, table_update) in tables.iter() {
-                                            let table_name_owned: String = table_name.to_string();
-                                            // monitor_db returns serde_json::Value; convert to
-                                            // simd_json::OwnedValue required by process_authoritative_change.
-                                            let simd_val: simd_json::OwnedValue = {
-                                                match serde_json::to_string(table_update)
-                                                    .ok()
-                                                    .and_then(|s| {
-                                                        let mut b = s.into_bytes();
-                                                        simd_json::to_owned_value(&mut b).ok()
-                                                    }) {
-                                                    Some(v) => v,
-                                                    None => continue,
-                                                }
-                                            };
-                                            let _ = ovsdb_self
-                                                .process_authoritative_change(
-                                                    "net".to_string(),
-                                                    format!(
-                                                        "/org/opdbus/v1/ovsdb/{}",
-                                                        table_name_owned
-                                                    ),
-                                                    ChangeType::PropertySet,
-                                                    Some(table_name_owned),
-                                                    None,
-                                                    simd_val,
-                                                    vec![
-                                                        "ovsdb".to_string(),
-                                                        "network".to_string(),
-                                                    ],
-                                                    "ovsdb-monitor".to_string(),
-                                                    None,
-                                                    ChangeSource::DBus,
-                                                )
-                                                .await;
+            match ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
+                Ok(mut rx) => {
+                    tracing::info!("MutationEngine: OVSDB monitor_db subscribed");
+                    loop {
+                        match rx.recv().await {
+                            Ok(update) => {
+                                let Some(tables) = ovsdb_monitor_tables(&update) else {
+                                    tracing::debug!(
+                                        "OVSDB monitor update had no table map; skipping"
+                                    );
+                                    continue;
+                                };
+                                for (table_name, table_update) in tables.iter() {
+                                    let table_name_owned = table_name.to_string();
+                                    // monitor_db returns serde_json::Value; convert to
+                                    // simd_json::OwnedValue required by process_authoritative_change.
+                                    let simd_val: simd_json::OwnedValue = {
+                                        match serde_json::to_string(table_update).ok().and_then(
+                                            |s| {
+                                                let mut b = s.into_bytes();
+                                                simd_json::to_owned_value(&mut b).ok()
+                                            },
+                                        ) {
+                                            Some(v) => v,
+                                            None => continue,
                                         }
+                                    };
+                                    if let Err(e) = ovsdb_self
+                                        .process_authoritative_change(
+                                            "net".to_string(),
+                                            format!("/org/opdbus/v1/ovsdb/{}", table_name_owned),
+                                            ChangeType::PropertySet,
+                                            Some(table_name_owned),
+                                            None,
+                                            simd_val,
+                                            vec!["ovsdb".to_string(), "network".to_string()],
+                                            "ovsdb-monitor".to_string(),
+                                            None,
+                                            ChangeSource::DBus,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "OVSDB monitor → process_authoritative_change failed"
+                                        );
                                     }
                                 }
                             }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("OVSDB subscription lagged by {} events", n);
+                                continue;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!("OVSDB subscription lagged by {} events", n);
-                            continue;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MutationEngine: OVSDB monitor_db unavailable; continuing without it"
+                    );
                 }
             }
         });
@@ -1223,6 +1316,9 @@ impl MutationEngine {
             source: ChangeSource::DBus,
         };
         let _ = self.change_tx.send(change.clone());
+        // Same fan-out as process_authoritative_change: the event is already in
+        // the chain and durable, so audit subscribers can see it now.
+        let _ = self.chain_tx.send(event_summary.3);
 
         // Dispatch to appropriate backend based on plugin_id
         let method_result: serde_json::Value = match plugin_id {
@@ -1231,6 +1327,11 @@ impl MutationEngine {
             }
             "ovsdb_bridge" => {
                 dispatch_ovsdb_bridge_method(&self.ovsdb, method, &parsed_value).await?
+            }
+            "rtnetlink" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::rtnetlink::dispatch_rtnetlink_method(method, &args)
+                    .await?
             }
             "xray" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -1305,6 +1406,15 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::procfs::dispatch_procfs_method(method, &args).await?
             }
+            "host_runtime" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::host_runtime::dispatch_host_runtime_method(method, &args)
+                    .await?
+            }
+            "service" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::service::dispatch_service_method(method, &args).await?
+            }
             "privacy_routes" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::privacy_routes::dispatch_privacy_routes_method(
@@ -1315,6 +1425,11 @@ impl MutationEngine {
             "btrfs" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::btrfs_plugin::dispatch_btrfs_method(method, &args)
+                    .await?
+            }
+            "mail_server" | "mail" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::mail_server::dispatch_mail_server_method(method, &args)
                     .await?
             }
             "antigravity" => {
@@ -1331,7 +1446,7 @@ impl MutationEngine {
                 )?
             }
             "zeroclaw" => {
-                let state = self
+                let declared_state = self
                     .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>(
                         "zeroclaw",
                     )
@@ -1339,24 +1454,57 @@ impl MutationEngine {
                     .unwrap_or_else(
                         op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state,
                     );
+                let mut state = self
+                    .zeroclaw_runtime
+                    .project_state(declared_state)
+                    .await
+                    .context("ZeroClaw runtime state projection failed")?;
+                self.cache_zeroclaw_state(&state).await?;
+                if let Err(error) = self
+                    .publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+                    .await
+                {
+                    tracing::warn!(
+                        %error,
+                        "unable to publish refreshed ZeroClaw state projection"
+                    );
+                }
                 if method == "Chat" {
                     let args = serde_json::from_value::<
                         op_plugins::state_plugins::zeroclaw::ChatInput,
                     >(serde_json::to_value(&parsed_value)?)
                     .context("invalid zeroclaw.Chat arguments")?;
-                    serde_json::to_value(
-                        crate::chat_service::dispatch_schema_chat(
-                            self.chat_manager.as_ref(),
-                            &state,
-                            args,
-                        )
-                        .await?,
-                    )?
+                    serde_json::to_value(self.zeroclaw_runtime.chat(&state, args).await?)?
                 } else {
                     match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
                         method, json_args, &state,
                     ) {
                         Ok(outcome) => {
+                            match method {
+                                "SetProvider" => {
+                                    let provider_id = outcome
+                                        .result
+                                        .get("selected_provider")
+                                        .and_then(serde_json::Value::as_str)
+                                        .context("SetProvider returned no selected_provider")?;
+                                    let selection =
+                                        self.zeroclaw_runtime.set_provider(provider_id).await?;
+                                    state.selected_provider = selection.provider;
+                                    state.selected_model = selection.model;
+                                    self.cache_zeroclaw_state(&state).await?;
+                                }
+                                "SetModel" => {
+                                    let model_id = outcome
+                                        .result
+                                        .get("selected_model")
+                                        .and_then(serde_json::Value::as_str)
+                                        .context("SetModel returned no selected_model")?;
+                                    state.selected_model =
+                                        self.zeroclaw_runtime.set_model(model_id).await?;
+                                    self.cache_zeroclaw_state(&state).await?;
+                                }
+                                _ => {}
+                            }
                             if method.starts_with("Set") {
                                 self.persist_zeroclaw_mutation(method, &outcome.result)
                                     .await?;
@@ -1388,8 +1536,91 @@ impl MutationEngine {
                 op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
             }
             "cognitive_mcp" => {
+                dispatch_cognitive_mcp_method(&self.cognitive_tool_registry(), method, json_args)
+                    .await?
+            }
+            "large_language_model" => {
                 let args = serde_json::to_value(&parsed_value)?;
-                dispatch_cognitive_mcp_method(method, &args).await?
+                op_plugins::state_plugins::large_language_model::dispatch_large_language_model_method(
+                    method, &args,
+                )
+                .await?
+            }
+            "json_render" => {
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::json_render::JsonRenderState>(
+                        "json_render",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::json_render::JsonRenderPlugin::current_state,
+                    );
+                op_plugins::state_plugins::json_render::dispatch_json_render_method(method, &state)?
+            }
+            "agent_config" => {
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::agent_config::AgentConfigState>(
+                        "agent_config",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::agent_config::AgentConfigPlugin::current_state,
+                    );
+                op_plugins::state_plugins::agent_config::dispatch_agent_config_method(
+                    method, &state,
+                )?
+            }
+            "wireguard" => {
+                let state = self
+                    .projected_state::<op_plugins::state_plugins::wireguard::WireGuardState>(
+                        "wireguard",
+                    )
+                    .await
+                    .unwrap_or_else(
+                        op_plugins::state_plugins::wireguard::WireGuardPlugin::current_state,
+                    );
+                op_plugins::state_plugins::wireguard::dispatch_wireguard_method(method, &state)?
+            }
+            "qdrant" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                let method_result =
+                    op_plugins::state_plugins::qdrant::dispatch_qdrant_method(method, &args)
+                        .await?;
+                // Publish observed collections into the mutation cache so
+                // StateSync / GetState (json-render $state) see live data.
+                if method == "list_collections" {
+                    if let Some(names) = method_result
+                        .get("collections")
+                        .and_then(serde_json::Value::as_array)
+                    {
+                        let template =
+                            op_plugins::state_plugins::qdrant::QdrantPlugin::exemplar_state();
+                        let template_collection = template.collections.first().cloned();
+                        let mut state = template;
+                        state.collections = names
+                            .iter()
+                            .filter_map(|n| n.as_str())
+                            .filter_map(|name| {
+                                let mut c = template_collection.clone()?;
+                                c.name = name.to_string();
+                                Some(c)
+                            })
+                            .collect();
+                        if let Ok(owned) = simd_json::serde::to_owned_value(&state) {
+                            self.update_state_cache("qdrant".to_string(), owned.clone())
+                                .await;
+                            let bytes = serde_json::to_vec(&owned).unwrap_or_default();
+                            let _ = op_core::projection_shm::write_projection("qdrant", &bytes);
+                        }
+                    }
+                }
+                method_result
+            }
+            // gemma_brain is semi-deprecated for inference; UI uses large_language_model.
+            "gemma_brain" => {
+                return Err(anyhow::anyhow!(
+                    "gemma_brain.{method} is not on the UI mutation path; use large_language_model"
+                ));
             }
             // Audit-trail query surface. Deliberately scoped: only the two
             // audit methods are wired. The plugin's seven pre-existing methods
@@ -1404,6 +1635,24 @@ impl MutationEngine {
                 }
                 _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
             },
+            // UI data-plane plugins must never silently echo empty args.
+            ui_plugin
+                if matches!(
+                    ui_plugin,
+                    "large_language_model"
+                        | "json_render"
+                        | "agent_config"
+                        | "wireguard"
+                        | "host_runtime"
+                        | "gemma_brain"
+                        | "s6_systemctl"
+                        | "qdrant"
+                ) =>
+            {
+                return Err(anyhow::anyhow!(
+                    "plugin '{ui_plugin}' method '{method}' has no mutation dispatch arm; refuse echo"
+                ));
+            }
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
 
@@ -1492,6 +1741,26 @@ impl MutationEngine {
             .await
     }
 
+    async fn cache_zeroclaw_state(
+        &self,
+        state: &op_plugins::state_plugins::zeroclaw::ZeroclawState,
+    ) -> anyhow::Result<()> {
+        let owned = simd_json::serde::to_owned_value(state)?;
+        self.update_state_cache("zeroclaw".to_string(), owned).await;
+        Ok(())
+    }
+
+    async fn refresh_zeroclaw_projection(&self) -> anyhow::Result<()> {
+        let declared_state = self
+            .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>("zeroclaw")
+            .await
+            .unwrap_or_else(op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state);
+        let state = self.zeroclaw_runtime.project_state(declared_state).await?;
+        self.cache_zeroclaw_state(&state).await?;
+        self.publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+            .await
+    }
+
     /// Merge a flat JSON object of changed fields into the authoritative
     /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
     /// selection changes so readers observe the new effective state).
@@ -1554,6 +1823,19 @@ impl MutationEngine {
     pub async fn get_state(&self, plugin_id: &str) -> Option<simd_json::OwnedValue> {
         let cache = self.state_cache.read().await;
         cache.get(plugin_id).cloned()
+    }
+
+    /// Take one coherent copy of the present-state cache for a new stream
+    /// subscriber. The cache is hydrated from the SHM static tree before the
+    /// server starts accepting requests, so this is not a D-Bus fan-out.
+    pub async fn state_snapshot(&self) -> Vec<(String, simd_json::OwnedValue)> {
+        let cache = self.state_cache.read().await;
+        let mut snapshot: Vec<_> = cache
+            .iter()
+            .map(|(plugin_id, state)| (plugin_id.clone(), state.clone()))
+            .collect();
+        snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        snapshot
     }
 
     /// Update the authoritative state cache
@@ -1686,6 +1968,14 @@ impl MutationEngine {
 
     pub fn change_tx(&self) -> broadcast::Sender<StateChange> {
         self.change_tx.clone()
+    }
+
+    /// Audit-chain fan-out backing `EventChainService.SubscribeEvents`.
+    ///
+    /// Every event appended to the chain by this engine is published here; there
+    /// is no other producer.
+    pub fn chain_tx(&self) -> broadcast::Sender<ChainEvent> {
+        self.chain_tx.clone()
     }
 }
 
@@ -2128,16 +2418,16 @@ async fn dispatch_xray_method(
             // own service manager already supervises the process; a config
             // reload is the safe, sanctioned action here (see op-plugins::xray's
             // apply_state, which uses the same pattern). No Command::new
-            // subprocess — signals the real PID directly via /proc + nix.
+            // subprocess — signals the real PID directly via /proc + libc::kill.
             let pids = find_xray_pids();
             if pids.is_empty() {
                 return Err(anyhow::anyhow!("no running xray process found"));
             }
             let mut reloaded = Vec::new();
             for pid in pids {
-                nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP)
+                signal_process(pid, libc::SIGHUP)
                     .with_context(|| format!("sending SIGHUP to xray pid {pid}"))?;
-                reloaded.push(pid.as_raw());
+                reloaded.push(pid);
             }
             Ok(serde_json::json!({ "reloaded_pids": reloaded }))
         }
@@ -2153,7 +2443,7 @@ async fn dispatch_xray_method(
 /// subprocess spawning. Mirrors `op_plugins::state_plugins::xray`'s private
 /// helper of the same shape; kept local since it's a few lines and the two
 /// crates don't otherwise share process-inspection utilities.
-fn find_xray_pids() -> Vec<nix::unistd::Pid> {
+fn find_xray_pids() -> Vec<i32> {
     let mut pids = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return pids;
@@ -2164,59 +2454,110 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
         };
         if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
             if comm.trim() == "xray" {
-                pids.push(nix::unistd::Pid::from_raw(pid));
+                pids.push(pid);
             }
         }
     }
     pids
 }
 
+fn signal_process(pid: i32, sig: i32) -> Result<(), std::io::Error> {
+    let rc = unsafe { libc::kill(pid, sig) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 /// Dispatch a `cognitive_mcp` schema method to the cognitive tool registry.
 ///
 /// OSCAL subid: mut.service.cognitive-mcp.dispatch@v1
 ///
-/// Phase 1 transport is an HTTP loopback to `op-cognitive-mcp`'s MCP endpoint. The
+/// Phase 2 transport is an in-process `ToolRegistry::execute` / `list` call. The
 /// bridge remains the only authorization door: the method-existence gate, arg
 /// validation, capability check and event-chain append have all already happened in
 /// `dispatch_method_call` before this function is reached.
-///
-/// Phase 2 replaces the loopback with an in-process `ToolRegistry::execute` call and
-/// retires the `:3003` listener. See
-/// `.kiro/specs/cognitive-mcp-only-door-phase2/`.
 async fn dispatch_cognitive_mcp_method(
+    tool_registry: &Option<Arc<ToolRegistry>>,
     method: &str,
-    args: &serde_json::Value,
+    json_args: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    // Plugin-local methods answer from published state; no executor hop needed.
+    // Plugin-local methods: unchanged from Phase 1
     match method {
         "get_config" | "get_health" => {
-            let mut bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
+            let bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
                 .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection not available"))?;
-            let value = simd_json::to_owned_value(&mut bytes)
-                .map_err(|e| anyhow::anyhow!("cognitive_mcp projection is not valid JSON: {e}"))?;
-            return Ok(serde_json::to_value(&value)?);
+            let val: serde_json::Value = serde_json::from_slice(&bytes)?;
+            return Ok(val);
         }
         "set_config" | "restart_service" => {
-            // These belong to the plugin's own apply_state path, which is reached
-            // through StatePlugin rather than the tool registry. Acknowledge without
-            // fabricating a result so callers can distinguish "accepted" from "done".
-            return Ok(serde_json::json!({
-                "acknowledged": true,
-                "method": method,
-                "note": "handled by cognitive_mcp apply_state; not a tool-registry call",
-            }));
+            return Ok(serde_json::json!({"acknowledged": true, "method": method}));
         }
         _ => {}
     }
 
-    // `list_tools` is an MCP *protocol* method (`tools/list`), not an entry in the
-    // tool registry, so it cannot go through `tools/call`.
+    let registry = tool_registry
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tool registry unavailable (init failed)"))?;
+
     if method == "list_tools" {
-        return cognitive_tools_list().await;
+        let reg = registry.clone();
+        let timeout = Duration::from_secs(
+            std::env::var("COGNITIVE_TOOL_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
+        );
+        return tokio::time::timeout(timeout, async move {
+            let defs = reg.list(0, usize::MAX, None).await;
+            Ok::<serde_json::Value, anyhow::Error>(serde_json::to_value(defs)?)
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "tool execution timed out after {}s: list_tools",
+                timeout.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e));
     }
 
-    let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
-    let result = call_cognitive_tool(&tool_name, &tool_args).await?;
+    let args: serde_json::Value = if json_args.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(json_args)?
+    };
+    let (tool_name, tool_args) = map_schema_method_to_tool(method, &args)?;
+
+    // Execute with timeout on a spawned task to avoid blocking D-Bus loop
+    let reg = registry.clone();
+    let name = tool_name.clone();
+    let timeout = Duration::from_secs(
+        std::env::var("COGNITIVE_TOOL_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30),
+    );
+
+    let result = tokio::time::timeout(timeout, async move {
+        let mut payload = tool_args.to_string().into_bytes();
+        let tool_input =
+            simd_json::to_owned_value(&mut payload).context("invalid cognitive tool arguments")?;
+        reg.execute(&name, tool_input)
+            .await
+            .map(|v| serde_json::to_value(&v).unwrap_or(serde_json::Value::Null))
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "tool execution timed out after {}s: {}",
+            timeout.as_secs(),
+            tool_name
+        )
+    })?
+    .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e))?;
+
     Ok(result)
 }
 
@@ -2302,201 +2643,6 @@ fn map_schema_method_to_tool(
     }
 }
 
-/// Shared HTTP client for the cognitive MCP loopback.
-///
-/// Built once: a fresh `Client` per call would leak a connection pool and defeat
-/// keep-alive on what is a hot path.
-static COGNITIVE_MCP_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-
-fn cognitive_mcp_http() -> &'static reqwest::Client {
-    COGNITIVE_MCP_HTTP.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
-}
-
-/// MCP endpoint of the local cognitive service.
-///
-/// Overridable so the bridge can follow a relocated listener without a rebuild.
-fn cognitive_mcp_endpoint() -> String {
-    std::env::var("COGNITIVE_MCP_MCP_URL")
-        .unwrap_or_else(|_| "http://10.200.0.2:3003/mcp".to_string())
-}
-
-/// Send the MCP `initialize` handshake.
-///
-/// The cognitive MCP server rejects `tools/call` with "Server not initialized" until
-/// this has been sent. Initialization is server-side state, so it survives across
-/// requests but is lost whenever `op-cognitive-mcp` restarts — which is why callers
-/// treat it as a recoverable condition rather than doing it once at startup.
-async fn cognitive_mcp_initialize() -> anyhow::Result<()> {
-    let endpoint = cognitive_mcp_endpoint();
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 0,
-        "method": "initialize",
-        "params": {},
-    });
-
-    let response = cognitive_mcp_http()
-        .post(&endpoint)
-        .header("Content-Type", "application/json")
-        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
-        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
-        .json(&request)
-        .send()
-        .await
-        .with_context(|| format!("cognitive_mcp initialize POST {endpoint}"))?;
-
-    if !response.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "cognitive_mcp initialize returned HTTP {}",
-            response.status()
-        ));
-    }
-    Ok(())
-}
-
-/// Issue one `tools/call` and return the raw JSON-RPC envelope.
-async fn cognitive_tools_call_raw(
-    tool_name: &str,
-    tool_args: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let endpoint = cognitive_mcp_endpoint();
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": tool_name, "arguments": tool_args },
-    });
-
-    let response = cognitive_mcp_http()
-        .post(&endpoint)
-        .header("Content-Type", "application/json")
-        // The interceptor on the direct listener expects these; the authoritative
-        // authorization decision was already made by the bridge before dispatch.
-        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
-        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
-        .json(&request)
-        .send()
-        .await
-        .with_context(|| format!("cognitive_mcp loopback POST {endpoint}"))?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("reading cognitive_mcp loopback response body")?;
-
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "cognitive_mcp loopback returned HTTP {status}: {body}"
-        ));
-    }
-
-    serde_json::from_str(&body)
-        .with_context(|| format!("cognitive_mcp returned non-JSON body: {body}"))
-}
-
-/// Invoke one tool over the MCP `tools/call` JSON-RPC method and unwrap the result.
-///
-/// Performs the `initialize` handshake lazily: rather than initializing once at bridge
-/// startup (which would break the first call after any `op-cognitive-mcp` restart), a
-/// "not initialized" error triggers one initialize and a single retry.
-async fn call_cognitive_tool(
-    tool_name: &str,
-    tool_args: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let mut envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
-
-    if mcp_needs_initialize(&envelope) {
-        cognitive_mcp_initialize().await?;
-        envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
-    }
-
-    if let Some(error) = envelope.get("error") {
-        let message = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown MCP error");
-        return Err(anyhow::anyhow!("tool '{tool_name}' failed: {message}"));
-    }
-
-    envelope.get("result").cloned().ok_or_else(|| {
-        anyhow::anyhow!("cognitive_mcp response had neither 'result' nor 'error': {envelope}")
-    })
-}
-
-/// Enumerate the live tool registry via the MCP `tools/list` protocol method.
-///
-/// Distinct from `call_cognitive_tool`: `tools/list` is a protocol method rather than a
-/// registry entry, so routing the `list_tools` schema method through `tools/call` would
-/// (and did) fail with "Tool not found: list_tools".
-async fn cognitive_tools_list() -> anyhow::Result<serde_json::Value> {
-    let endpoint = cognitive_mcp_endpoint();
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": {},
-    });
-
-    let post = || async {
-        let response = cognitive_mcp_http()
-            .post(&endpoint)
-            .header("Content-Type", "application/json")
-            .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
-            .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
-            .json(&request)
-            .send()
-            .await
-            .with_context(|| format!("cognitive_mcp tools/list POST {endpoint}"))?;
-
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .context("reading cognitive_mcp tools/list response body")?;
-        if !status.is_success() {
-            return Err(anyhow::anyhow!(
-                "cognitive_mcp tools/list returned HTTP {status}: {body}"
-            ));
-        }
-        serde_json::from_str::<serde_json::Value>(&body)
-            .with_context(|| format!("cognitive_mcp tools/list returned non-JSON body: {body}"))
-    };
-
-    let mut envelope = post().await?;
-    if mcp_needs_initialize(&envelope) {
-        cognitive_mcp_initialize().await?;
-        envelope = post().await?;
-    }
-
-    if let Some(error) = envelope.get("error") {
-        let message = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown MCP error");
-        return Err(anyhow::anyhow!("tools/list failed: {message}"));
-    }
-
-    envelope
-        .get("result")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tools/list response had no 'result'"))
-}
-
-/// True when the envelope is the server's "call initialize first" rejection.
-fn mcp_needs_initialize(envelope: &serde_json::Value) -> bool {
-    envelope
-        .get("error")
-        .and_then(|e| e.get("message"))
-        .and_then(|m| m.as_str())
-        .is_some_and(|m| m.contains("not initialized"))
-}
-
 /// Parse createunixsocket arguments. Accepts either a JSON array
 /// `[name, [ports...]]` or an object `{ "name": "...", "ports": [...] }`.
 /// `ports` may be a JSON array of numbers or a CSV string ("6334" / "6334,8080").
@@ -2563,4 +2709,59 @@ fn parse_port_number(value: &simd_json::OwnedValue) -> Option<u64> {
                 (n.is_finite() && n >= 0.0 && n <= u16::MAX as f64).then_some(n as u64)
             })
         })
+}
+
+/// Extract the table-update map from an OVSDB monitor notification.
+///
+/// Accepts:
+/// - IDL snapshots from `OvsdbDbusClient::monitor_db`: `{ "Bridge": [...], ... }`
+/// - RFC 7047 JSON-RPC updates: `{ "params": [<monitor-id>, <table-updates>] }`
+/// - Legacy 3-param drafts: `{ "params": [?, ?, <table-updates>] }`
+pub(crate) fn ovsdb_monitor_tables(
+    update: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
+        if let Some(obj) = params.get(1).and_then(|v| v.as_object()) {
+            return Some(obj);
+        }
+        if let Some(obj) = params.get(2).and_then(|v| v.as_object()) {
+            return Some(obj);
+        }
+        return None;
+    }
+    update.as_object()
+}
+
+#[cfg(test)]
+mod ovsdb_monitor_tables_tests {
+    use super::ovsdb_monitor_tables;
+    use serde_json::json;
+
+    #[test]
+    fn idl_snapshot_tables() {
+        let update = json!({
+            "Bridge": [{"name": "br0"}],
+            "Port": []
+        });
+        let tables = ovsdb_monitor_tables(&update).expect("tables");
+        assert_eq!(tables["Bridge"][0]["name"], "br0");
+    }
+
+    #[test]
+    fn rfc7047_params_tables() {
+        let update = json!({
+            "params": ["mon", {"Interface": {"u": {"new": {"name": "eth0"}}}}]
+        });
+        let tables = ovsdb_monitor_tables(&update).expect("tables");
+        assert!(tables.contains_key("Interface"));
+    }
+
+    #[test]
+    fn legacy_three_param_tables() {
+        let update = json!({
+            "params": [null, "mon", {"Bridge": {"u": {"old": {}, "new": {"name": "br1"}}}}]
+        });
+        let tables = ovsdb_monitor_tables(&update).expect("tables");
+        assert!(tables.contains_key("Bridge"));
+    }
 }

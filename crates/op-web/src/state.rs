@@ -16,6 +16,9 @@ use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
 use op_agents::agent_registry::AgentRegistry;
+use op_cognitive_mcp::{
+    CognitiveMemoryStore, CognitiveMcpServer, ContextAwarenessEngine, SessionManager,
+};
 use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use op_llm::chat::ChatManager;
 use op_state_store::{MemoryStore, StateStore};
@@ -103,7 +106,16 @@ pub struct AppState {
     pub system_stats: Arc<RwLock<simd_json::OwnedValue>>,
     /// Recent activity feed from projection/D-Bus events
     pub activity_log: Arc<RwLock<Vec<simd_json::OwnedValue>>>,
+    /// In-process cognitive MCP server for context-awareness routes (Phase 2).
+    cognitive_mcp: Option<Arc<CognitiveMcpServer>>,
 }
+
+/// Context-awareness state for `/cognitive/context` SSE routes.
+pub type CognitiveContextState = (
+    Arc<ContextAwarenessEngine>,
+    Arc<CognitiveMemoryStore>,
+    Arc<SessionManager>,
+);
 
 impl AppState {
     /// Create new AppState with an optional shared tool registry
@@ -250,6 +262,8 @@ impl AppState {
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
 
+        let cognitive_mcp = init_cognitive_mcp_for_context().await;
+
         Ok(Self {
             orchestrator,
             tool_registry,
@@ -270,6 +284,18 @@ impl AppState {
             grpc_client,
             system_stats: Arc::new(RwLock::new(simd_json::json!(null))),
             activity_log: Arc::new(RwLock::new(Vec::new())),
+            cognitive_mcp,
+        })
+    }
+
+    /// Context engine tuple for `/cognitive/context` when init succeeded.
+    pub fn cognitive_context_state(&self) -> Option<CognitiveContextState> {
+        self.cognitive_mcp.as_ref().map(|server| {
+            (
+                server.context_engine(),
+                server.memory_store(),
+                server.session_manager(),
+            )
         })
     }
 
@@ -682,4 +708,32 @@ fn log_tool_summary(tools: &[op_tools::registry::ToolDefinition]) {
         "  OVS: {}, D-Bus: {}, File: {}, Shell: {}, Agents: {}, Other: {}",
         ovs, dbus, file, shell, agent, other
     );
+}
+
+/// Construct the in-process cognitive MCP server for context-awareness routes.
+///
+/// Mirrors `op_grpc_bridge::grpc_server::init_cognitive_mcp` — op-web runs as a
+/// separate process from the bridge, so it owns its own engine instance.
+async fn init_cognitive_mcp_for_context() -> Option<Arc<CognitiveMcpServer>> {
+    if std::env::var("COGNITIVE_MCP_CONTEXT_HTTP_DISABLED").as_deref() == Ok("1") {
+        info!("Cognitive context routes disabled (COGNITIVE_MCP_CONTEXT_HTTP_DISABLED=1)");
+        return None;
+    }
+
+    let db_path = std::env::var("COGNITIVE_MCP_DB_PATH")
+        .unwrap_or_else(|_| "/var/lib/op-cognitive-mcp/memory.db".into());
+
+    match CognitiveMcpServer::new(&db_path).await {
+        Ok(server) => {
+            info!("Cognitive context engine loaded for /cognitive/context routes");
+            Some(Arc::new(server))
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "CognitiveMcpServer init failed; /cognitive/context routes unavailable"
+            );
+            None
+        }
+    }
 }

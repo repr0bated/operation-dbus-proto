@@ -1,0 +1,3 @@
+#!/bin/sh
+pgrep -x netclient >/dev/null 2>&1 || exit 1
+[ -d /sys/class/net/netmaker ]

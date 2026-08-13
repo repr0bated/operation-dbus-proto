@@ -84,6 +84,17 @@ pub async fn bind_shared_socket() -> std::io::Result<UnixListenerStream> {
     // Ensure parent directory exists.
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
+        // `create_dir_all` is umask-limited, so it lands 0755 root:root and
+        // silently re-breaks the parent every time this process restarts.
+        // Unprivileged containers map root to a subuid: at 0755 they can
+        // CONNECT to this socket but cannot BIND their own alongside it, which
+        // is the only inbound channel a NIC-less container has. That is the
+        // regression f9188f96 fixed in opdbus-rundirs-up; keep both in sync.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o777)).await?;
+        }
     }
 
     if let Err(e) = tokio::fs::remove_file(&path).await {

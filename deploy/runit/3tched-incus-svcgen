@@ -37,10 +37,27 @@ is_uuid_name() {
 
 gen_one() {
     name="$1"
+    case "$name" in
+        NetMaker|xray)
+            echo "skip specialized service: $name"
+            return 0
+            ;;
+    esac
+
     svc="incus-ct-${name}"
     dir="${SV_DIR}/${svc}"
     ldir="${dir}/log"
     logdir="${LOG_ROOT}/${svc}"
+    extra_deps=""
+    case "$name" in
+        qdrant)
+            extra_deps='wait_dep ovsbr0-svc-addr'
+            ;;
+        mail-3tched)
+            extra_deps='wait_dep ovsbr0-addr
+wait_dep netclient'
+            ;;
+    esac
 
     if ! incus list -f csv -c n 2>/dev/null | grep -qx "$name"; then
         echo "error: container '$name' not found in incus list" >&2
@@ -53,6 +70,7 @@ gen_one() {
 #!/bin/sh
 # runit longrun for Incus container: ${name}
 exec 2>&1
+set -eu
 
 wait_dep() {
     dep="\$1"
@@ -69,11 +87,26 @@ wait_dep() {
 }
 
 wait_dep incusd
+$extra_deps
 if [ "${name}" = "xray" ] && [ -d /etc/runit/sv/xray-config-mount ]; then
     wait_dep xray-config-mount || true
 fi
 
 NAME='${name}'
+START_PID=
+
+cleanup() {
+    if [ -n "\$START_PID" ]; then
+        kill "\$START_PID" 2>/dev/null || true
+        wait "\$START_PID" 2>/dev/null || true
+    fi
+    if incus list -f csv -c ns 2>/dev/null | grep -q "^\${NAME},RUNNING\$"; then
+        echo "stopping container \$NAME (runit down)"
+        incus stop "\$NAME" --timeout 30 2>/dev/null \
+            || incus stop "\$NAME" --force 2>/dev/null || true
+    fi
+}
+trap cleanup TERM INT HUP
 
 i=0
 until incus info >/dev/null 2>&1; do
@@ -85,15 +118,12 @@ until incus info >/dev/null 2>&1; do
     sleep 1
 done
 
-incus config set "\$NAME" boot.autostart=false 2>/dev/null || true
-
 if ! incus list -f csv -c ns 2>/dev/null | grep -q "^\${NAME},RUNNING\$"; then
     echo "starting container \$NAME"
-    if ! incus start "\$NAME"; then
-        echo "incus start failed for \$NAME" >&2
-        incus info "\$NAME" --show-log 2>&1 | tail -n 40 || true
-        exit 1
-    fi
+    incus start "\$NAME" &
+    START_PID=\$!
+    wait "\$START_PID"
+    START_PID=
 fi
 
 i=0
@@ -107,14 +137,7 @@ until incus list -f csv -c ns 2>/dev/null | grep -q "^\${NAME},RUNNING\$"; do
     sleep 1
 done
 echo "container \$NAME is RUNNING"
-
-incus console "\$NAME" --show-log 2>/dev/null | tail -n 80 || true
-
-cleanup() {
-    echo "stopping container \$NAME (runit down)"
-    incus stop "\$NAME" --timeout 30 2>/dev/null || incus stop "\$NAME" --force 2>/dev/null || true
-}
-trap cleanup TERM INT HUP
+/usr/local/libexec/3tched/runit-ready-signal "incus-ct-\$NAME"
 
 while incus list -f csv -c ns 2>/dev/null | grep -q "^\${NAME},RUNNING\$"; do
     sleep 5

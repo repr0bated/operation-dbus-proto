@@ -20,6 +20,7 @@ pub mod metrics;
 pub mod plugin_schema;
 pub mod schema_validator;
 pub mod state_store;
+pub mod subid_ui;
 
 pub use disaster_recovery::{
     get_global_dependencies, get_plugin_dependencies, DisasterRecoveryExport, HostInfo,
@@ -42,6 +43,10 @@ pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };
 pub use state_store::StateStore;
+pub use subid_ui::{
+    element_key_from_subid, project_schema_ui, role_population, subid_category, ui_role_from_subid,
+    UiFieldShape, UiRole, UiSubidProjection, SUBID_CATEGORIES,
+};
 
 use serde::{Deserialize, Serialize};
 

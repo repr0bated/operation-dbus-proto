@@ -611,7 +611,7 @@ impl Default for ZeroclawPlugin {
 impl ZeroclawPlugin {
     const DBUS_OBJECT: &'static str = "/org/opdbus/v1/plugins/zeroclaw";
     const OSCAL_SUBID_REGISTRY_OBJECT: &'static str = "/org/opdbus/v1/plugins/oscal_subid_registry";
-    const DEFAULT_LOCAL_MODEL: &'static str = "gemma3:4b";
+    const DEFAULT_CHAT_MODEL: &'static str = "deepseek-v4-flash-free";
 
     pub fn new() -> Self {
         Self
@@ -622,23 +622,23 @@ impl ZeroclawPlugin {
     }
 
     pub fn current_state() -> ZeroclawState {
-        let selected_provider = Self::env_or("LLM_PROVIDER", "ollama");
-        let selected_model = Self::env_or("LLM_MODEL", Self::DEFAULT_LOCAL_MODEL);
-        let local_model = selected_model.clone();
+        let selected_provider = Self::env_or("LLM_PROVIDER", "opencode");
+        let selected_model = Self::env_or("LLM_MODEL", Self::DEFAULT_CHAT_MODEL);
+        let chat_model = selected_model.clone();
         let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
         let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.2:50051");
         let grpc_target_for_provider = grpc_target.clone();
 
         ZeroclawState {
             status: "declared".to_string(),
-            selected_provider,
+            selected_provider: selected_provider.clone(),
             selected_model,
             model_assignments: ModelAssignments {
-                ovs_routing: local_model.clone(),
-                obfuscation: local_model.clone(),
+                ovs_routing: Self::DEFAULT_CHAT_MODEL.to_string(),
+                obfuscation: Self::DEFAULT_CHAT_MODEL.to_string(),
                 vectorization: "gemini-embedding-001".to_string(),
                 qdrant_retrieval: "gemini-embedding-001".to_string(),
-                cozo_retrieval: local_model.clone(),
+                cozo_retrieval: Self::DEFAULT_CHAT_MODEL.to_string(),
             },
             transport: LlmTransport {
                 dbus_object: Self::DBUS_OBJECT.to_string(),
@@ -699,7 +699,10 @@ impl ZeroclawPlugin {
                         id: "opencode".to_string(),
                         route: "custom:opencode".to_string(),
                         kind: "cli".to_string(),
-                        aliases: vec![],
+                        aliases: vec![
+                            "opencode.go".to_string(),
+                            "deepseek-v4-flash-free".to_string(),
+                        ],
                         ..Default::default()
                     },
                     Provider {
@@ -762,8 +765,8 @@ impl ZeroclawPlugin {
                     },
                 ],
                 router: Router {
-                    provider: "ollama".to_string(),
-                    model: local_model.clone(),
+                    provider: selected_provider.clone(),
+                    model: chat_model.clone(),
                     endpoint: router_endpoint,
                     scope: "all".to_string(),
                     role: "context_aware_allocator".to_string(),
@@ -807,15 +810,15 @@ impl ZeroclawPlugin {
                     },
                     ModelRoute {
                         hint: "local".to_string(),
-                        provider: "ollama".to_string(),
-                        upstream_provider: "ollama".to_string(),
-                        transport: "loopback".to_string(),
-                        model: local_model.clone(),
+                        provider: "opencode".to_string(),
+                        upstream_provider: "opencode".to_string(),
+                        transport: "zeroclaw-loopback".to_string(),
+                        model: chat_model.clone(),
                         kind: "router".to_string(),
                         status: "declared".to_string(),
                         available: false,
                         status_reason: format!(
-                            "{local_model} is the declared local classifier; unavailable until Ollama projects it."
+                            "{chat_model} is the declared OpenCode chat model; availability is projected by the ZeroClaw runtime."
                         ),
                         api_key: Some(JsonValue::Null),
                         ..Default::default()
@@ -862,14 +865,14 @@ impl ZeroclawPlugin {
                     ModelRoute {
                         hint: "local".to_string(),
                         provider: "factory".to_string(),
-                        upstream_provider: "ollama".to_string(),
-                        transport: "loopback".to_string(),
-                        model: local_model.clone(),
+                        upstream_provider: "opencode".to_string(),
+                        transport: "zeroclaw-loopback".to_string(),
+                        model: chat_model.clone(),
                         kind: "router".to_string(),
                         status: "declared".to_string(),
                         available: false,
                         status_reason: format!(
-                            "Factory local route -> ollama/{local_model}; requires backend projection."
+                            "Factory local route -> opencode/{chat_model}; requires backend projection."
                         ),
                         api_key: Some(JsonValue::Null),
                         ..Default::default()
@@ -976,11 +979,6 @@ impl ZeroclawPlugin {
                     ..Default::default()
                 },
                 ui_surfaces: vec![
-                    UiSurface {
-                        path: "/chat".to_string(),
-                        name: "Antigravity Chat".to_string(),
-                        schema: "zeroclaw".to_string(),
-                    },
                     UiSurface {
                         path: "/grpc".to_string(),
                         name: "gRPC Diagnostics".to_string(),

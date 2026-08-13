@@ -1,0 +1,51 @@
+#!/bin/sh
+exec 2>&1
+
+wait_dep() {
+    sv start "$1" >/dev/null 2>&1 || true
+    i=0
+    until sv check "$1" >/dev/null 2>&1; do
+        i=$((i+1))
+        [ "$i" -ge 90 ] && { echo "dependency $1 not ready after 90s" >&2; exit 1; }
+        sleep 1
+    done
+}
+
+# This service starts LAST. It binds a fabric address that only exists once the
+# network is up, and op-grpc-bridge aborts the whole process on a failed bind
+# (server.rs: `TcpListener::bind(bind_addr)?` → EADDRNOTAVAIL), so starting it
+# before ovsbr0-svc-addr is a crash loop, not a degraded start.
+#
+# Nothing in the boot path calls back into this service: ovs-vswitchd
+# materializes the topology from conf.db and the ovsbr0-* units use plain `ip`.
+# That absence of a back-edge is what keeps this list cycle-free — check it with
+# deploy/runit/check-dep-cycles.py before any reboot.
+wait_dep opdbus-rundirs
+wait_dep opdbus-grants
+wait_dep dbus
+wait_dep op-session-bus
+wait_dep ovsdb-server
+wait_dep ovsbr0-svc-addr
+wait_dep netclient
+wait_dep incus-ct-qdrant
+
+set -a
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+set +a
+
+# Bind loopback (op-web) + netmaker mesh IP (laptop/peers). Never 0.0.0.0 —
+# that steals every iface and races mesh relays. Wait for 100.69.0.1 is covered
+# by wait_dep netclient above.
+MESH_IP="${NETMAKER_MESH_IP:-100.69.0.1}"
+FABRIC_BIND="127.0.0.1:8090,${MESH_IP}:8090,127.0.0.1:50051,${MESH_IP}:50051"
+export ZEROCLAW_BIND_ADDR="$FABRIC_BIND"
+export GRPC_BIND="$FABRIC_BIND"
+export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
+unset ZEROCLAW_TLS_BIND_ADDR
+export RUST_LOG="${GRPC_RUST_LOG:-info}"
+export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
+[ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"
+# Phase 2: tool dispatch is in-process ToolRegistry — no HTTP MCP loopback URL.
+
+/usr/local/libexec/3tched/runit-ready-signal op-grpc-bridge
+exec /usr/local/bin/op-grpc-bridge

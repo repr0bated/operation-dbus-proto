@@ -212,6 +212,71 @@ impl WireGuardPlugin {
     pub fn new() -> Self {
         Self
     }
+
+    /// Observed WireGuard / Netmaker mesh interfaces from sysfs (no CLI).
+    pub fn current_state() -> WireGuardState {
+        let mut interfaces = Vec::new();
+        let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
+            return WireGuardState {
+                interfaces,
+                inspector_fields: inspector_gadget_generated::InspectorGadgetFields::default(),
+            };
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !(name.starts_with("wg") || name == "netmaker") {
+                continue;
+            }
+            interfaces.push(WireGuardInterface {
+                name,
+                private_key: None,
+                listen_port: 0,
+                peers: vec![],
+            });
+        }
+        interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+        WireGuardState {
+            interfaces,
+            inspector_fields: inspector_gadget_generated::InspectorGadgetFields::default(),
+        }
+    }
+}
+
+/// Mutation-path dispatch for wireguard UI reads.
+pub fn dispatch_wireguard_method(
+    method: &str,
+    state: &WireGuardState,
+) -> Result<serde_json::Value> {
+    match method {
+        "list_peers" => {
+            let iface = state.interfaces.first();
+            let peers: Vec<serde_json::Value> = state
+                .interfaces
+                .iter()
+                .flat_map(|i| {
+                    i.peers.iter().map(|p| {
+                        serde_json::json!({
+                            "public_key": p.public_key,
+                            "endpoint": p.endpoint.clone().unwrap_or_else(|| "unset".to_string()),
+                            "status": if p.endpoint.is_some() { "ok" } else { "warn" },
+                        })
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "interface": {
+                    "name": iface.map(|i| i.name.as_str()).unwrap_or("—"),
+                    "status": if iface.is_some() { "ok" } else { "missing" },
+                },
+                "peers": peers,
+            }))
+        }
+        "get_device" => Ok(serde_json::json!({ "interfaces": state.interfaces })),
+        "set_device" | "add_peer" | "remove_peer" | "set_config" => Err(anyhow::anyhow!(
+            "wireguard.{method} is a write path; not implemented as silent echo"
+        )),
+        other => Err(anyhow::anyhow!("unknown wireguard method: {other}")),
+    }
 }
 
 #[async_trait]

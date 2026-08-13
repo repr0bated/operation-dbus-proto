@@ -55,7 +55,7 @@ pub struct AccountabilityTransport;
 impl AccountabilityTransport {
     /// gRPC endpoint, matching the one `main.rs` uses for reflection and chat.
     pub fn endpoint() -> String {
-        std::env::var("ZEROCLAW_GRPC").unwrap_or_else(|_| "http://127.0.0.1:8090".into())
+        std::env::var("ZEROCLAW_GRPC").unwrap_or_else(|_| "http://10.200.0.1:50051".into())
     }
 
     /// Connect once and reuse. Retries on the next call if connecting failed.
@@ -99,7 +99,9 @@ impl AccountabilityTransport {
             decision_filter: filter.decision.as_proto(),
         };
 
-        let response = client.get_events(tonic::Request::new(request)).await?;
+        let mut tonic_request = tonic::Request::new(request);
+        crate::grpc::attach_ghostbridge_identity(&mut tonic_request);
+        let response = client.get_events(tonic_request).await?;
         let response = response.into_inner();
         let has_more = response.has_more;
         let events: Vec<AuditEvent> = response

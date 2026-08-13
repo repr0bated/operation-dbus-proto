@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/op-services",
     "crates/op-gateway",
     "crates/op-core",
     "crates/op-tools",
@@ -16,6 +15,7 @@ members = [
     "crates/op-jsonrpc",
     "crates/op-llm",
     "crates/op-network",
+    "crates/op-uds-relay",
     "crates/op-inspector",
     "crates/op-agents",
     "crates/op-plugins",

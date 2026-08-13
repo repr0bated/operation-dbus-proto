@@ -766,6 +766,13 @@ impl IncusPlugin {
         current: Option<&IncusInstance>,
         desired: &IncusInstance,
     ) -> Result<Vec<String>> {
+        // Refuse banned device types before touching the instance. Enforced on
+        // `desired` only: a proxy/nic already present out-of-band shows up in
+        // `current` and is removed below as stale, which is the intended
+        // direction of travel — but declaring a new one never succeeds.
+        NamedDevice::enforce_device_policy(&desired.devices)
+            .with_context(|| format!("refusing to apply devices to '{name}'"))?;
+
         let current_devices = current.map(Self::managed_devices).unwrap_or_default();
         let desired_devices = Self::managed_devices(desired);
         let mut changes = Vec::new();

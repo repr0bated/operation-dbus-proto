@@ -1,23 +1,31 @@
 //! Blockchain vector projection: chain block -> Voyage embedding -> chain
-//! vector subvolume -> Qdrant.
+//! vector subvolume, with Qdrant filled on the replica after `btrfs receive`.
 //!
-//! Two halves of one mechanism, split by which side of a `btrfs send` you are
-//! on:
+//! **Strict automatic invariant:** the streaming / default `project` path must
+//! **not** upsert Qdrant on the origin. Vectors land in the chain first
+//! ([`StreamingBlockchain::attach_vector`] / `vectors/vec-*.bin`); the automatic
+//! pipeline fills `blockchain_footprints` only via **`btrfs receive` →
+//! [`ChainVectorIndex::ingest_received`]** (replica hook). Orthogonal paths
+//! (`blob_vectors`, user_memory, RAG shuttle) are unrelated and untouched.
 //!
-//! - **Origin** ([`ChainVectorIndex::project_pending`]): reads blocks whose
-//!   vector projection has not landed, embeds the deterministic block text with
-//!   Voyage, writes the vector *into the chain* (raw LE f32 in the `vectors`
-//!   subvolume), then upserts it to Qdrant. Because the vector is in the chain,
-//!   it is snapshotted and replicated with everything else.
+//! Split by role:
 //!
-//! - **Replica** ([`ChainVectorIndex::ingest_received`]): after an incremental
-//!   `btrfs receive`, asks btrfs which vector files are new since the last
-//!   indexed generation and upserts exactly those. No Voyage key, no
-//!   re-embedding, no network round trip per block — the vectors arrived in the
-//!   stream.
+//! - **Origin, automatic** ([`ChainVectorIndex::project_pending`] with
+//!   `upsert_qdrant = false`): embed pending blocks with Voyage, write raw LE
+//!   f32 into the `vectors` subvolume, stop. No Qdrant write, no index
+//!   watermark bump. Snapshots carry the vectors to the replica.
 //!
-//! Qdrant is therefore a disposable index: it can be rebuilt from any received
-//! snapshot, which is what keeps the blockchain the sole durability layer.
+//! - **Replica, automatic** ([`ChainVectorIndex::ingest_received`]): after
+//!   incremental `btrfs receive`, upsert only vectors that arrived (watermark +
+//!   gap check). No Voyage key, no re-embedding.
+//!
+//! - **Manual exception** (`project_pending(..., upsert_qdrant = true)` /
+//!   CLI `--upsert-qdrant`, or [`ChainVectorIndex::reindex_from_chain`]):
+//!   explicit direct Qdrant write that **bypasses send/receive**. Not the
+//!   default streaming path.
+//!
+//! Qdrant remains a disposable index: rebuild from any chain (or received
+//! snapshot) that already holds the vectors.
 
 use anyhow::{Context, Result};
 use op_blockchain::btrfs_delta;
@@ -60,7 +68,21 @@ pub struct ChainVectorIndex {
 pub struct ProjectionSummary {
     pub embedded: usize,
     pub already_present: usize,
+    /// Points written directly to Qdrant on this pass.
+    ///
+    /// Always `0` for the automatic project path. Non-zero only when the
+    /// explicit manual `--upsert-qdrant` / `upsert_qdrant: true` exception is set
+    /// (bypasses send/receive).
+    pub upserted_to_qdrant: usize,
     pub collection: String,
+}
+
+/// Whether an origin `project` call may write Qdrant directly.
+///
+/// Automatic pipeline always returns `false`. Only the explicit manual
+/// exception (`--upsert-qdrant`) returns `true`.
+pub fn project_writes_qdrant(upsert_qdrant: bool) -> bool {
+    upsert_qdrant
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -77,7 +99,8 @@ pub struct IngestSummary {
 }
 
 impl ChainVectorIndex {
-    /// Origin side: embeds and indexes. Requires a Voyage key.
+    /// Origin side: embeds into the chain (and optionally Qdrant when the
+    /// caller passes the manual upsert flag). Requires a Voyage key.
     pub async fn open() -> Result<Self> {
         let voyage = VoyageClient::new().context(
             "blockchain vector projection needs a Voyage key (see embedding_model plugin)",
@@ -85,8 +108,9 @@ impl ChainVectorIndex {
         Self::build(Some(voyage)).await
     }
 
-    /// Replica side: indexes vectors that arrived in a btrfs stream. No
-    /// embedder, so it works on a host that has no Voyage credentials at all.
+    /// Replica / automatic index path: indexes vectors that arrived in a btrfs
+    /// stream. No embedder, so it works on a host that has no Voyage credentials
+    /// at all.
     pub async fn open_replica() -> Result<Self> {
         Self::build(None).await
     }
@@ -162,14 +186,30 @@ impl ChainVectorIndex {
         }
     }
 
-    /// Embed every block that has no vector yet, write it into the chain, and
-    /// index it. `limit` caps one pass so a large backlog can be worked through
-    /// in bounded chunks.
-    pub async fn project_pending(&self, limit: Option<usize>) -> Result<ProjectionSummary> {
+    /// Embed every block that has no vector yet and write it into the chain.
+    ///
+    /// **Automatic default** (`upsert_qdrant = false`): Voyage + `attach_vector`
+    /// only. Does **not** upsert Qdrant and does **not** advance the Qdrant
+    /// watermark — the replica's `ingest_received` owns that after `btrfs
+    /// receive`.
+    ///
+    /// **Manual exception** (`upsert_qdrant = true`): also upserts Qdrant on
+    /// this host and advances the watermark. That bypasses send/receive; use
+    /// only via an explicit CLI flag / CallMethod, never as the streaming
+    /// default.
+    ///
+    /// `limit` caps one pass so a large backlog can be worked through in
+    /// bounded chunks.
+    pub async fn project_pending(
+        &self,
+        limit: Option<usize>,
+        upsert_qdrant: bool,
+    ) -> Result<ProjectionSummary> {
         let voyage = self
             .voyage
             .as_ref()
             .context("project_pending requires an embedder; this index was opened as a replica")?;
+        let write_qdrant = project_writes_qdrant(upsert_qdrant);
 
         let all = self.chain.blocks().await?;
         let already_present = all.iter().filter(|block| block.has_vector).count();
@@ -180,6 +220,7 @@ impl ChainVectorIndex {
             .collect();
 
         let mut embedded = 0usize;
+        let mut upserted_to_qdrant = 0usize;
         for block in &pending {
             let vector = voyage
                 .embed(&block.embedding_text(), Some("document"))
@@ -187,39 +228,49 @@ impl ChainVectorIndex {
                 .with_context(|| format!("failed to embed block {}", block.block_num))?;
             let vector = self.fit_dims(vector, block.block_num)?;
 
-            // Chain first: the vector is durable state, the index is derived.
+            // Chain first: the vector is durable state; automatic Qdrant is
+            // derived only after receive → ingest on the replica.
             self.chain.attach_vector(block.block_num, &vector).await?;
-            self.upsert_block(block, vector).await?;
+            if write_qdrant {
+                self.upsert_block(block, vector).await?;
+                upserted_to_qdrant += 1;
+            }
             embedded += 1;
         }
 
-        // Keep the watermark honest on the origin too, so `status` and a later
-        // gap check agree with what is actually indexed.
-        if let Some(highest) = pending.iter().map(|block| block.block_num).max() {
-            let watermark = self.read_indexed_block().await?.max(highest);
-            self.write_indexed_block(watermark).await?;
+        // Watermark tracks Qdrant coverage, not chain vector coverage. Bump it
+        // only when this pass actually wrote the index (manual exception).
+        if write_qdrant {
+            if let Some(highest) = pending.iter().map(|block| block.block_num).max() {
+                let watermark = self.read_indexed_block().await?.max(highest);
+                self.write_indexed_block(watermark).await?;
+            }
         }
 
         tracing::info!(
             collection = %self.collection,
             embedded,
             already_present,
+            upserted_to_qdrant,
+            write_qdrant,
             "blockchain vector projection pass complete"
         );
 
         Ok(ProjectionSummary {
             embedded,
             already_present,
+            upserted_to_qdrant,
             collection: self.collection.clone(),
         })
     }
 
-    /// Rebuild the index from vectors already in the chain, without embedding.
+    /// Manual: rebuild the index from vectors already in the chain, without
+    /// embedding and **without** waiting for `btrfs receive`.
     ///
-    /// This is the disaster-recovery and post-restore path: Qdrant is a
-    /// disposable projection, so a replica (or an origin whose index was lost)
-    /// can repopulate it from the received subvolume alone, with no Voyage key
-    /// and no re-embedding spend.
+    /// Disaster-recovery / operator catch-up on a host that already has chain
+    /// vectors on disk. This is **not** the automatic replication path —
+    /// prefer `ingest_received` after receive when filling the replica index.
+    /// No Voyage key and no re-embedding spend.
     pub async fn reindex_from_chain(&self) -> Result<IngestSummary> {
         let blocks = self.chain.blocks().await?;
         let mut upserted = 0usize;
@@ -566,5 +617,26 @@ mod tests {
         assert!(!super::is_already_exists(&QdrantError::ResponseError {
             status: tonic::Status::internal("some other failure"),
         }));
+    }
+
+    #[test]
+    fn automatic_project_path_does_not_write_qdrant() {
+        // Strict automatic: default project must not upsert Qdrant on origin.
+        assert!(!project_writes_qdrant(false));
+        // Manual exception only: explicit --upsert-qdrant / CallMethod flag.
+        assert!(project_writes_qdrant(true));
+    }
+
+    #[test]
+    fn projection_summary_default_reports_zero_direct_upserts() {
+        let summary = ProjectionSummary {
+            embedded: 3,
+            already_present: 40,
+            upserted_to_qdrant: 0,
+            collection: DEFAULT_COLLECTION.to_string(),
+        };
+        assert_eq!(summary.upserted_to_qdrant, 0);
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["upserted_to_qdrant"], 0);
     }
 }

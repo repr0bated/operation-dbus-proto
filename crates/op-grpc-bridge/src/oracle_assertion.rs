@@ -90,7 +90,26 @@ impl DecoyTrustStore {
         let path = std::env::var("OP_DECOY_TRUST_STORE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_DECOY_TRUST_STORE));
-        Self::load_from_path(&path)
+        let store = Self::load_from_path(&path);
+        // Every failure mode here — missing file, bad UTF-8, duplicate key ids,
+        // a key that is not 32 bytes — collapses to the same empty store, and an
+        // empty store rejects every assertion. Silence made that indistinguishable
+        // from "no client is presenting one", so say which it is.
+        if store.key_count() == 0 {
+            tracing::warn!(
+                path = %path.display(),
+                "decoy trust store is EMPTY (missing, unreadable, or invalid) — every oracle \
+                 identity assertion will be rejected and callers will fall back to the legacy \
+                 self-asserted footprint path"
+            );
+        } else {
+            tracing::info!(
+                path = %path.display(),
+                keys = store.key_count(),
+                "decoy trust store loaded"
+            );
+        }
+        store
     }
 
     /// Load from an explicit path (tests).

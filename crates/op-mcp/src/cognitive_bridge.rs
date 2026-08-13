@@ -105,10 +105,18 @@ impl BridgeToolExecutor {
         // `{}` validates where a bare `null` previously did not.
         let result = self.call_method("list_tools", "{}").await?;
 
+        // The bridge returns the registry as a BARE ARRAY; older/other callers
+        // wrap it as `{"tools": [...]}`. Accepting only the wrapped form made
+        // every tool invisible and took the whole cognitive surface down with
+        // "list_tools result had no 'tools' array" — the tools were right there
+        // in the payload. Accept both rather than pin one side of the contract.
         let entries = result
             .get("tools")
             .and_then(|v: &Value| v.as_array())
-            .ok_or_else(|| anyhow!("list_tools result had no 'tools' array: {result}"))?;
+            .or_else(|| result.as_array())
+            .ok_or_else(|| {
+                anyhow!("list_tools result was neither a tools array nor {{tools:[…]}}: {result}")
+            })?;
 
         let tools: Vec<ToolInfo> = entries
             .iter()
@@ -126,8 +134,13 @@ impl BridgeToolExecutor {
                         .to_string(),
                     // Tools whose schema the cognitive side omits still need a valid
                     // object schema, or MCP clients reject the tool outright.
+                    // The bridge emits snake_case `input_schema`; MCP's own wire
+                    // format is camelCase `inputSchema`. Reading only camelCase
+                    // silently replaced every real schema with the empty-object
+                    // fallback, so tools loaded but took no arguments.
                     input_schema: entry
                         .get("inputSchema")
+                        .or_else(|| entry.get("input_schema"))
                         .cloned()
                         .unwrap_or_else(|| json!({"type": "object"})),
                     annotations: None,
