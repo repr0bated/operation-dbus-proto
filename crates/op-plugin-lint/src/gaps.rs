@@ -347,8 +347,7 @@ mod tests {
         let leaves = BTreeSet::from(["selected_model".into(), "bridge".into()]);
         let methods = BTreeSet::new();
         let gaps =
-            gaps_from_surface_json_for_plugin(surface, &leaves, &methods, "antigravity_chat")
-                .unwrap();
+            gaps_from_surface_json_for_plugin(surface, &leaves, &methods, "antigravity").unwrap();
         assert!(
             gaps.delegated_paths.iter().any(|p| p == "cmd.models"),
             "delegated={:?}",

@@ -394,7 +394,7 @@ pub struct OperationGrpcServer {
     mutation_engine: Arc<MutationEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
-    /// CognitiveToolService — relocated from op-cognitive-mcp `:50052` (Task 0b).
+    /// CognitiveToolService — in-process on the :8090 / socket surface.
     cognitive_grpc: Option<CognitiveGrpcService>,
     /// Keeps CognitiveMcpServer background tasks alive while gRPC is mounted.
     cognitive_server: Option<Arc<CognitiveMcpServer>>,
@@ -754,10 +754,9 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 /// Mount the COMPLETE Operation gRPC service surface onto a `tonic::service::Routes`.
 ///
 /// This is the SINGLE source of the backplane's service set. Every endpoint that
-/// serves the backplane — the op-dbus bridge (`run_grpc_server`, TCP `:50051`) and
-/// the zeroclaw bridge (`run_zeroclaw_server`, `:8090` + `container.sock`) — builds
-/// its routes from here, so reflection can never advertise a service that isn't
-/// actually mounted (the bug the gRPC-Web probe surfaced).
+/// serves the backplane — the Unix sockets and the one TCP door (`:8090`
+/// tonic-web, HTTP + native gRPC) — builds its routes from here, so reflection
+/// can never advertise a service that isn't actually mounted.
 ///
 /// Services (all behind the Ghostbridge interceptor, all gRPC-Web enabled):
 ///   StateSync, PluginService, EventChainService, ComponentRegistry,

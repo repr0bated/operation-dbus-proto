@@ -167,10 +167,7 @@ pub fn element_key_from_subid(subid: &str) -> String {
 }
 
 /// Map a sealed `PluginSchema`'s fields + methods to presentation rows.
-pub fn project_schema_ui(
-    plugin_id: &str,
-    schema: &crate::PluginSchema,
-) -> Vec<UiSubidProjection> {
+pub fn project_schema_ui(plugin_id: &str, schema: &crate::PluginSchema) -> Vec<UiSubidProjection> {
     let mut out = Vec::new();
 
     if let Some(sid) = schema.subids.get("__schema__") {
@@ -204,9 +201,7 @@ pub fn project_schema_ui(
         }
     }
 
-    out.sort_by(|a, b| {
-        (&a.kind, &a.id, &a.subid).cmp(&(&b.kind, &b.id, &b.subid))
-    });
+    out.sort_by(|a, b| (&a.kind, &a.id, &a.subid).cmp(&(&b.kind, &b.id, &b.subid)));
     out
 }
 
@@ -266,7 +261,10 @@ mod tests {
 
     #[test]
     fn category_only_from_doc_seven() {
-        assert_eq!(subid_category("obs.software.plugin.xray.status@v1"), Some("obs"));
+        assert_eq!(
+            subid_category("obs.software.plugin.xray.status@v1"),
+            Some("obs")
+        );
         assert_eq!(subid_category("mut.service.llm.generate@v1"), Some("mut"));
         assert_eq!(subid_category("nope.software.foo.bar@v1"), None);
     }

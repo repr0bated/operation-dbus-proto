@@ -1,0 +1,19 @@
+#!/bin/sh
+# runit: Cloudflare WARP tunnel for UI stream egress (wgcf-uiStream).
+#
+# Independent of wgcf-egress: its own Cloudflare device, its own fwmark and its
+# own routing table. The two must never share a device -- one key is ONE peer to
+# Cloudflare, which keeps a single endpoint per peer and updates it on whichever
+# side handshook last, so two tunnels on one key fight over return traffic.
+#
+#   mark 0x52889 -> table 52888 -> wgcf-uiStream   (UI stream / renderer exit)
+#   mark 0x3344xxxx/0xffff0000 -> table 51820 -> wgcf-egress
+#
+# Table=52888 keeps AllowedIPs out of `main`, so nothing routes here until
+# something actually sets 0x52889. Bringing this up is therefore inert on its
+# own -- it does NOT redirect any existing traffic.
+exec 2>&1
+wg-quick down wgcf-uiStream 2>/dev/null || true
+wg-quick up wgcf-uiStream || exit 1
+echo "wgcf-uiStream: up (WARP UI-stream path, mark 0x52889 -> table 52888), supervising"
+exec sleep 2147483647

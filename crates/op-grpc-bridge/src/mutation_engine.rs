@@ -1145,6 +1145,20 @@ impl MutationEngine {
                 .await?;
                 caller_result = Some(simd_json::serde::to_owned_value(&result)?);
             }
+        } else if plugin_id == "emqx" && change_type == ChangeType::MethodCall {
+            if let Some(method) = &member_name {
+                let mut args_json = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let result =
+                    op_plugins::state_plugins::emqx::dispatch_emqx_method(method, &args_json)
+                        .await?;
+                caller_result = Some(simd_json::serde::to_owned_value(&result)?);
+            }
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
@@ -1431,6 +1445,14 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::mail_server::dispatch_mail_server_method(method, &args)
                     .await?
+            }
+            "incus" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::incus::dispatch_incus_method(method, &args).await?
+            }
+            "emqx" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::emqx::dispatch_emqx_method(method, &args).await?
             }
             "antigravity" => {
                 let state = self
@@ -2246,6 +2268,12 @@ async fn dispatch_blockchain_verify_chain(
 }
 
 /// Execute rovs_commands methods via OVSDB proxy
+fn parse_rovs_command_input<T: serde::de::DeserializeOwned>(
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<T> {
+    serde_json::from_value(serde_json::to_value(args)?).map_err(Into::into)
+}
+
 async fn dispatch_rovs_commands_method(
     ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
     method: &str,
@@ -2253,60 +2281,71 @@ async fn dispatch_rovs_commands_method(
 ) -> anyhow::Result<serde_json::Value> {
     match method {
         "create_bridge" => {
-            let bridge_name = args
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            ovsdb.create_bridge(bridge_name).await?;
-            Ok(serde_json::json!({"created": bridge_name}))
+            let input: op_plugins::state_plugins::rovs_commands::CreateBridgeInput =
+                parse_rovs_command_input(args)?;
+            ovsdb.create_bridge(&input.bridge_name).await?;
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::CreateBridgeOutput {
+                    bridge_name: input.bridge_name,
+                },
+            )?)
         }
         "delete_bridge" => {
-            let bridge_name = args
-                .get("name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            ovsdb.delete_bridge(bridge_name).await?;
-            Ok(serde_json::json!({"deleted": bridge_name}))
+            let input: op_plugins::state_plugins::rovs_commands::DeleteBridgeInput =
+                parse_rovs_command_input(args)?;
+            ovsdb.delete_bridge(&input.bridge_name).await?;
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::DeleteBridgeOutput {
+                    bridge_name: input.bridge_name,
+                },
+            )?)
         }
         "add_port" => {
-            let bridge_name = args
-                .get("bridge")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let port_name = args
-                .get("port")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb.add_port(bridge_name, port_name).await?;
-            Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
+            let input: op_plugins::state_plugins::rovs_commands::AddPortInput =
+                parse_rovs_command_input(args)?;
+            ovsdb.add_port(&input.bridge_name, &input.port_name).await?;
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::AddPortOutput {
+                    bridge_name: input.bridge_name,
+                    port_name: input.port_name,
+                },
+            )?)
         }
         "remove_port" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let port_name = args
-                .get("port_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb.delete_port(bridge_name, port_name).await?;
-            Ok(serde_json::json!({"removed": port_name, "from": bridge_name}))
+            let input: op_plugins::state_plugins::rovs_commands::RemovePortInput =
+                parse_rovs_command_input(args)?;
+            ovsdb
+                .delete_port(&input.bridge_name, &input.port_name)
+                .await?;
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::RemovePortOutput {
+                    bridge_name: input.bridge_name,
+                    port_name: input.port_name,
+                },
+            )?)
         }
         "list_bridges" => {
             let bridges = ovsdb.list_bridges().await?;
-            Ok(serde_json::json!(bridges))
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::ListBridgesOutput { bridges },
+            )?)
         }
         "list_ports" => {
-            let bridge_name = args
-                .get("bridge_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
-            let ports = ovsdb.list_bridge_ports(bridge_name).await?;
-            Ok(serde_json::json!(ports))
+            let input: op_plugins::state_plugins::rovs_commands::ListPortsInput =
+                parse_rovs_command_input(args)?;
+            let ports = ovsdb.list_bridge_ports(&input.bridge_name).await?;
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::ListPortsOutput {
+                    bridge_name: input.bridge_name,
+                    ports,
+                },
+            )?)
         }
         "list_dbs" => {
-            let dbs = ovsdb.list_dbs().await?;
-            Ok(serde_json::json!(dbs))
+            let databases = ovsdb.list_dbs().await?;
+            Ok(serde_json::to_value(
+                op_plugins::state_plugins::rovs_commands::ListDbsOutput { databases },
+            )?)
         }
         _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
     }
@@ -2734,7 +2773,7 @@ pub(crate) fn ovsdb_monitor_tables(
 
 #[cfg(test)]
 mod ovsdb_monitor_tables_tests {
-    use super::ovsdb_monitor_tables;
+    use super::{ovsdb_monitor_tables, parse_rovs_command_input};
     use serde_json::json;
 
     #[test]
@@ -2763,5 +2802,17 @@ mod ovsdb_monitor_tables_tests {
         });
         let tables = ovsdb_monitor_tables(&update).expect("tables");
         assert!(tables.contains_key("Bridge"));
+    }
+
+    #[test]
+    fn rovs_add_port_input_is_bound_to_the_typed_plugin_contract() {
+        let args = simd_json::json!({
+            "bridge_name": "ovsbr0",
+            "port_name": "netmaker"
+        });
+        let input: op_plugins::state_plugins::rovs_commands::AddPortInput =
+            parse_rovs_command_input(&args).expect("typed rovs add_port input");
+        assert_eq!(input.bridge_name, "ovsbr0");
+        assert_eq!(input.port_name, "netmaker");
     }
 }

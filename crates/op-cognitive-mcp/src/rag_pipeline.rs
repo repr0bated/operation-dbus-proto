@@ -788,7 +788,10 @@ fn is_already_exists(err: &QdrantError) -> bool {
     match err {
         QdrantError::ResponseError { status }
         | QdrantError::ResourceExhaustedError { status, .. } => {
-            status.code() == tonic::Code::AlreadyExists
+            // qdrant-client currently carries Tonic 0.14 while the OP-DBUS
+            // workspace surface remains on 0.12. Their `Code` enums are
+            // distinct Rust types but share the canonical gRPC wire values.
+            status.code() as i32 == tonic::Code::AlreadyExists as i32
         }
         _ => false,
     }

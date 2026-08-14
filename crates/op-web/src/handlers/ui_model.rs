@@ -238,8 +238,8 @@ pub async fn ui_model_catalog_delete_handler(
 
 /// GET /api/ui-model/plugins — every plugin actually in the sealed blob catalog.
 /// A plugin exists iff its blob is sealed here; this is NOT the same list as
-/// "plugins with generated RPC methods" (some plugins, e.g. antigravity/
-/// antigravity_chat, are state-only with zero methods, so they're absent
+/// "plugins with generated RPC methods" (some plugins, e.g. antigravity,
+/// are state-only with zero compiled RPC methods, so they're absent
 /// from the frontend's method-index but very much present as real blobs).
 pub async fn ui_model_list_plugins_handler(
     Extension(_state): Extension<Arc<AppState>>,
@@ -258,7 +258,9 @@ pub async fn ui_model_list_plugins_handler(
 /// Replaces the projection daemon and `/api/dashboard/projections`. Empty
 /// `{ plugins: [], state: {} }` is correct when nothing has been mutated.
 pub async fn ui_model_state_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    ok(catalog_state_body(simd_tree_to_serde(state_tree::read_all())))
+    ok(catalog_state_body(simd_tree_to_serde(
+        state_tree::read_all(),
+    )))
 }
 
 /// Catalog JSON for the SHM state tree: sorted plugin ids plus the objects.
@@ -268,16 +270,18 @@ pub(crate) fn catalog_state_body(tree: HashMap<String, Value>) -> Value {
     json!({ "plugins": plugins, "state": tree })
 }
 
-fn simd_tree_to_serde(
-    tree: HashMap<String, simd_json::OwnedValue>,
-) -> HashMap<String, Value> {
+fn simd_tree_to_serde(tree: HashMap<String, simd_json::OwnedValue>) -> HashMap<String, Value> {
     tree.into_iter()
         .filter_map(|(key, value)| {
             let text = simd_json::to_string(&value).ok()?;
             match serde_json::from_str(&text) {
                 Ok(parsed) => Some((key, parsed)),
                 Err(e) => {
-                    tracing::warn!("Failed to convert simd_json to serde_json for plugin '{}': {}", key, e);
+                    tracing::warn!(
+                        "Failed to convert simd_json to serde_json for plugin '{}': {}",
+                        key,
+                        e
+                    );
                     None
                 }
             }
@@ -312,9 +316,8 @@ pub async fn ui_model_plugin_schema_handler(
 
     let ui_projection = op_state_store::project_schema_ui(&resolved_id, &schema);
     // Second SHM: live present values (not sealed schema).
-    let state = crate::state_tree::read_plugin(&resolved_id).and_then(|v| {
-        serde_json::to_value(v).ok()
-    });
+    let state =
+        crate::state_tree::read_plugin(&resolved_id).and_then(|v| serde_json::to_value(v).ok());
 
     ok(json!({
         "plugin": resolved_id,
@@ -553,10 +556,7 @@ mod tests {
         tree.insert("zeroclaw".into(), json!({ "selected_model": "qwen" }));
         tree.insert("system.memory".into(), json!({ "rss": 1 }));
         let body = catalog_state_body(tree);
-        assert_eq!(
-            body["plugins"],
-            json!(["system.memory", "zeroclaw"])
-        );
+        assert_eq!(body["plugins"], json!(["system.memory", "zeroclaw"]));
         assert_eq!(body["state"]["zeroclaw"]["selected_model"], "qwen");
         assert!(body.get("projections").is_none());
     }

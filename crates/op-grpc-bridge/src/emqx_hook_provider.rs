@@ -2,10 +2,11 @@
 //!
 //! EMQX acts as a gRPC client, calling this service for MQTT events
 //! (EMQX 5.x fixed the exhook proto package at `emqx.exhook.v2`).
-//! The implementation records events through MutationEngine for
-//! accountability. Authenticate/authorize/publish decisions are left to the
-//! broker (`IGNORE`) — the hook is an audit tap, not the auth gate; identity
+//! Authenticate/authorize/publish decisions are left to the broker
+//! (`IGNORE`) — the hook is an audit tap, not the auth gate; identity
 //! gating stays with the Ghostbridge interceptor on the plugin surface.
+//!
+//! These RPCs stay here. The `emqx` plugin is present-state only.
 
 use std::sync::Arc;
 
@@ -35,49 +36,16 @@ const REGISTERED_HOOKS: &[&str] = &[
 ];
 
 /// HookProvider service implementation for EMQX MQTT event hooks.
-///
-/// All EMQX hook events are recorded as signals through the MutationEngine,
-/// providing accountability and persistence without direct SQL storage.
 #[derive(Clone)]
 pub struct HookProviderService {
-    mutation_engine: Arc<MutationEngine>,
+    _mutation_engine: Arc<MutationEngine>,
 }
 
 impl HookProviderService {
     pub fn new(mutation_engine: Arc<MutationEngine>) -> Self {
-        Self { mutation_engine }
-    }
-
-    /// Record an EMQX event as a signal mutation.
-    async fn record_event(
-        &self,
-        event_type: &str,
-        client_id: &str,
-        topic: Option<&str>,
-        detail: Option<&str>,
-    ) -> anyhow::Result<()> {
-        let mut event_data = simd_json::json!({
-            "event_type": event_type,
-            "client_id": client_id,
-        });
-        if let Some(t) = topic {
-            event_data["topic"] = simd_json::json!(t);
+        Self {
+            _mutation_engine: mutation_engine,
         }
-        if let Some(d) = detail {
-            event_data["detail"] = simd_json::json!(d);
-        }
-
-        self.mutation_engine
-            .dispatch_method_call(
-                "mqtt",
-                &format!("hook.{}", event_type),
-                &serde_json::to_string(&event_data)?,
-                None,
-                "grpc:emqx.exhook.v2",
-            )
-            .await?;
-
-        Ok(())
     }
 }
 
@@ -143,9 +111,6 @@ impl HookProvider for HookProviderService {
             .map(|c| c.clientid.as_str())
             .unwrap_or("unknown");
         debug!(client_id = %client, "EMQX OnClientConnect");
-        let _ = self
-            .record_event("on_client_connect", client, None, None)
-            .await;
         Ok(empty())
     }
 
@@ -161,11 +126,7 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::ClientConnectedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        info!(client_id = %client, "EMQX OnClientConnected");
-        let _ = self
-            .record_event("on_client_connected", client, None, None)
-            .await;
+        info!(client_id = %client_id(&req.clientinfo), "EMQX OnClientConnected");
         Ok(empty())
     }
 
@@ -174,11 +135,11 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::ClientDisconnectedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        info!(client_id = %client, reason = %req.reason, "EMQX OnClientDisconnected");
-        let _ = self
-            .record_event("on_client_disconnected", client, None, Some(&req.reason))
-            .await;
+        info!(
+            client_id = %client_id(&req.clientinfo),
+            reason = %req.reason,
+            "EMQX OnClientDisconnected"
+        );
         Ok(empty())
     }
 
@@ -187,16 +148,11 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::ClientAuthenticateRequest>,
     ) -> Result<Response<ValuedResponse>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        debug!(client_id = %client, result = req.result, "EMQX OnClientAuthenticate");
-        let _ = self
-            .record_event(
-                "on_client_authenticate",
-                client,
-                None,
-                Some(if req.result { "pass" } else { "fail" }),
-            )
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            result = req.result,
+            "EMQX OnClientAuthenticate"
+        );
         Ok(ignore())
     }
 
@@ -205,11 +161,11 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::ClientAuthorizeRequest>,
     ) -> Result<Response<ValuedResponse>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        debug!(client_id = %client, topic = %req.topic, "EMQX OnClientAuthorize");
-        let _ = self
-            .record_event("on_client_authorize", client, Some(&req.topic), None)
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            topic = %req.topic,
+            "EMQX OnClientAuthorize"
+        );
         Ok(ignore())
     }
 
@@ -218,17 +174,10 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::ClientSubscribeRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        let topics = req
-            .topic_filters
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        debug!(client_id = %client, topics = %topics, "EMQX OnClientSubscribe");
-        let _ = self
-            .record_event("on_client_subscribe", client, Some(&topics), None)
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            "EMQX OnClientSubscribe"
+        );
         Ok(empty())
     }
 
@@ -237,17 +186,10 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::ClientUnsubscribeRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        let topics = req
-            .topic_filters
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        debug!(client_id = %client, topics = %topics, "EMQX OnClientUnsubscribe");
-        let _ = self
-            .record_event("on_client_unsubscribe", client, Some(&topics), None)
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            "EMQX OnClientUnsubscribe"
+        );
         Ok(empty())
     }
 
@@ -256,11 +198,10 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::SessionCreatedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        debug!(client_id = %client, "EMQX OnSessionCreated");
-        let _ = self
-            .record_event("on_session_created", client, None, None)
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            "EMQX OnSessionCreated"
+        );
         Ok(empty())
     }
 
@@ -269,11 +210,11 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::SessionSubscribedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        debug!(client_id = %client, topic = %req.topic, "EMQX OnSessionSubscribed");
-        let _ = self
-            .record_event("on_session_subscribed", client, Some(&req.topic), None)
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            topic = %req.topic,
+            "EMQX OnSessionSubscribed"
+        );
         Ok(empty())
     }
 
@@ -282,11 +223,11 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::SessionUnsubscribedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        debug!(client_id = %client, topic = %req.topic, "EMQX OnSessionUnsubscribed");
-        let _ = self
-            .record_event("on_session_unsubscribed", client, Some(&req.topic), None)
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            topic = %req.topic,
+            "EMQX OnSessionUnsubscribed"
+        );
         Ok(empty())
     }
 
@@ -316,11 +257,11 @@ impl HookProvider for HookProviderService {
         request: Request<exhook::SessionTerminatedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         let req = request.into_inner();
-        let client = client_id(&req.clientinfo);
-        debug!(client_id = %client, reason = %req.reason, "EMQX OnSessionTerminated");
-        let _ = self
-            .record_event("on_session_terminated", client, None, Some(&req.reason))
-            .await;
+        debug!(
+            client_id = %client_id(&req.clientinfo),
+            reason = %req.reason,
+            "EMQX OnSessionTerminated"
+        );
         Ok(empty())
     }
 
@@ -330,16 +271,7 @@ impl HookProvider for HookProviderService {
     ) -> Result<Response<ValuedResponse>, Status> {
         let req = request.into_inner();
         if let Some(message) = req.message.as_ref() {
-            let payload_preview = String::from_utf8_lossy(&message.payload).into_owned();
             info!(from = %message.from, topic = %message.topic, "EMQX OnMessagePublish");
-            let _ = self
-                .record_event(
-                    "on_message_publish",
-                    &message.from,
-                    Some(&message.topic),
-                    Some(&payload_preview),
-                )
-                .await;
         }
         Ok(ignore())
     }

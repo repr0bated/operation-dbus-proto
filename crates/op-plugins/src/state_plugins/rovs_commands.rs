@@ -27,13 +27,6 @@ use std::collections::HashMap;
 pub struct CreateBridgeInput {
     /// Name of the bridge to create
     pub bridge_name: String,
-    /// Datapath type (e.g. "system", "netdev")
-    #[serde(default = "default_datapath_type")]
-    pub datapath_type: String,
-}
-
-fn default_datapath_type() -> String {
-    "system".to_string()
 }
 
 /// delete_bridge method input
@@ -50,20 +43,12 @@ pub struct AddPortInput {
     pub bridge_name: String,
     /// Port name to add
     pub port_name: String,
-    /// Interface type (e.g. "internal", "system")
-    #[serde(default = "default_interface_type")]
-    pub interface_type: String,
-}
-
-fn default_interface_type() -> String {
-    "internal".to_string()
 }
 
 /// remove_port method input
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RemovePortInput {
-    /// Bridge name containing the port (optional for backward compat)
-    #[serde(default)]
+    /// Bridge name containing the port
     pub bridge_name: String,
     /// Port name to remove
     pub port_name: String,
@@ -74,6 +59,44 @@ pub struct RemovePortInput {
 pub struct ListPortsInput {
     /// Bridge name to query
     pub bridge_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateBridgeOutput {
+    pub bridge_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteBridgeOutput {
+    pub bridge_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddPortOutput {
+    pub bridge_name: String,
+    pub port_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RemovePortOutput {
+    pub bridge_name: String,
+    pub port_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListBridgesOutput {
+    pub bridges: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListPortsOutput {
+    pub bridge_name: String,
+    pub ports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListDbsOutput {
+    pub databases: Vec<String>,
 }
 
 // =============================================================================
@@ -181,7 +204,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         "create_bridge".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             CreateBridgeInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            CreateBridgeOutput,
         >(
             "create_bridge",
             SideEffect::Mutation,
@@ -194,7 +217,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         "delete_bridge".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             DeleteBridgeInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            DeleteBridgeOutput,
         >(
             "delete_bridge",
             SideEffect::Mutation,
@@ -207,7 +230,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         "add_port".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             AddPortInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            AddPortOutput,
         >(
             "add_port",
             SideEffect::Mutation,
@@ -220,7 +243,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         "remove_port".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             RemovePortInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            RemovePortOutput,
         >(
             "remove_port",
             SideEffect::Mutation,
@@ -234,7 +257,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         "list_bridges".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             (),
-            super::plugin_scaffold_helpers::AckOutput,
+            ListBridgesOutput,
         >(
             "list_bridges",
             SideEffect::Read,
@@ -247,7 +270,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         "list_ports".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ListPortsInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            ListPortsOutput,
         >(
             "list_ports",
             SideEffect::Read,
@@ -258,10 +281,7 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
     );
     methods.insert(
         "list_dbs".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            (),
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<(), ListDbsOutput>(
             "list_dbs",
             SideEffect::Read,
             true,
@@ -308,4 +328,25 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
 
 inventory::submit! {
     crate::default_registry::PluginReg::new("rovs_commands", |_ctx| std::sync::Arc::new(RovsCommandsPlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn method_contracts_use_the_dispatcher_field_names_and_typed_outputs() {
+        let schema = rovs_commands_schema();
+        let add_port = schema.methods.get("add_port").expect("add_port method");
+        let args = serde_json::to_value(&add_port.args).expect("args JSON schema");
+        let returns = serde_json::to_value(add_port.returns.as_ref().expect("typed returns"))
+            .expect("returns JSON schema");
+        assert!(args.pointer("/properties/bridge_name").is_some());
+        assert!(args.pointer("/properties/port_name").is_some());
+        assert!(args.pointer("/properties/bridge").is_none());
+        assert!(args.pointer("/properties/port").is_none());
+        assert!(returns.pointer("/properties/bridge_name").is_some());
+        assert!(returns.pointer("/properties/port_name").is_some());
+        assert!(returns.pointer("/properties/success").is_none());
+    }
 }

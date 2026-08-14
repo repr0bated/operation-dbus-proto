@@ -1,7 +1,22 @@
 #!/bin/sh
-# Mail pub0 + ghostbridge fabric — NetMaker pattern (no public Incus listen).
-# Incus proxies must bind 127.0.0.1 only; this unit publishes socks + pub0 TCP.
+# Mail publication, NIC-less. Host TCP -> shared UDS -> mail CT loopback.
+#
+# The mail CT has no `nic` and no `proxy` device: the ONLY channel into it is
+# the bind-mounted /run/ghostbridge directory. `mail-uds-relay` (openrc, inside
+# the CT) publishes each daemon port as a socket under /run/ghostbridge/mail/;
+# this unit binds the public and mesh addresses and forwards into those sockets.
+#
+# Replaces mail-port-fabric.py, which forwarded to 127.0.0.1:<port> on the HOST
+# and therefore depended on per-port Incus proxy devices. Those devices are gone
+# by design, which is exactly why mail broke: every listener accepted and then
+# dead-ended. Do not reintroduce them.
 exec 2>&1
+
+GB=/run/ghostbridge/mail
+RELAY=/usr/local/libexec/3tched/op-uds-relay
+
+# Comma-separated publication addresses: pub0 + netmaker mesh.
+MAIL_BIND_ADDRS="${MAIL_BIND_ADDRS:-188.68.58.237,100.69.0.1}"
 
 wait_dep() {
     sv start "$1" >/dev/null 2>&1 || true
@@ -13,32 +28,43 @@ wait_dep() {
     done
 }
 
+wait_dep opdbus-rundirs
 wait_dep incus-ct-mail-3tched
-until [ -d /run/ghostbridge ]; do sleep 1; done
+sv start netclient >/dev/null 2>&1 || true
 
-# Loopback Incus proxies into the CT (not pub0).
-for p in 25 143 465 587 993; do
-    i=0
-    until ss -lnt | grep -q "127.0.0.1:$p"; do
-        i=$((i + 1))
-        [ "$i" -ge 120 ] && { echo "127.0.0.1:$p not listening" >&2; exit 1; }
-        sleep 1
-    done
-done
-
-# Mesh host addr must exist (netclient / netmaker iface).
+# The mesh address must exist before binding it, or the listener silently
+# publishes on fewer addresses than intended (the sshd failure mode).
 until ip -4 addr show netmaker 2>/dev/null | grep -q "100.69.0.1/"; do
     echo "mail-port-fabric: waiting for 100.69.0.1 on netmaker"
     sleep 1
 done
 
-if [ -S /run/opdbus/session-bus.sock ]; then
-    zcall shared_unix_socket create_unix_socket -a \
-      '{"name":"mail-port-fabric","ports":[25,143,465,587,993]}' >/dev/null 2>&1 || true
-fi
+# The CT-side relay creates these; without them there is nothing to forward to.
+i=0
+for s in smtp imap smtps submission imaps php; do
+    until [ -S "$GB/$s.sock" ]; do
+        i=$((i + 1))
+        [ "$i" -ge 180 ] && { echo "CT socket $s.sock never appeared" >&2; exit 1; }
+        sleep 1
+    done
+done
+
+set --
+# Mail protocols: published on every bind address.
+for spec in 25:smtp 143:imap 465:smtps 587:submission 993:imaps; do
+    port="${spec%%:*}"
+    name="${spec##*:}"
+    OLDIFS="$IFS"; IFS=,
+    for addr in $MAIL_BIND_ADDRS; do
+        IFS="$OLDIFS"
+        [ -n "$addr" ] && set -- "$@" --tcp-to-unix "$addr:$port=$GB/$name.sock"
+        IFS=,
+    done
+    IFS="$OLDIFS"
+done
+
+# PHP-FPM (SnappyMail backend) stays mesh-only — never published on pub0.
+set -- "$@" --tcp-to-unix "100.69.0.1:9000=$GB/php.sock"
 
 /usr/local/libexec/3tched/runit-ready-signal mail-port-fabric 2>/dev/null || true
-# pub0 + mesh (100.69.0.1) — NetMaker-style dual publish
-export MAIL_BIND_ADDRS="${MAIL_BIND_ADDRS:-188.68.58.237,100.69.0.1}"
-export GHOSTBRIDGE_DIR=/run/ghostbridge
-exec /usr/local/libexec/3tched/mail-port-fabric.py
+exec "$RELAY" "$@"

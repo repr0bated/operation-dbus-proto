@@ -162,14 +162,14 @@ pub fn audit_source_with_coverage(
     if !has_schema_seeded_test {
         report.warn(
             "missing_schema_seeded_test",
-            "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+            "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity.rs)",
             None,
         );
     }
     if !has_subid_test {
         report.warn(
             "missing_subid_validity_test",
-            "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+            "add #[test] fn all_subids_are_valid (see antigravity.rs)",
             None,
         );
     }

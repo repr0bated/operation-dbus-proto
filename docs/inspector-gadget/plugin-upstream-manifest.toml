@@ -68,6 +68,11 @@ repos = ["usnistgov__OSCAL", "opencontrol__schemas", "OpenGovDataMirror__A_gsa_f
 kind = "schema-and-catalog"
 
 [[mapping]]
+plugins = ["emqx"]
+repos = ["emqx__emqx"]
+kind = "broker-and-exhook"
+
+[[mapping]]
 plugins = ["config"]
 repos = ["cue-lang__cue", "nickel-lang__nickel"]
 kind = "configuration-schema"

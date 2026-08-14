@@ -82,7 +82,11 @@ fn pubkey_for_ip(iface: &str, peer_ip: IpAddr) -> Result<String> {
         let (Some(pubkey), Some(ips)) = (parts.next(), parts.next()) else {
             continue;
         };
-        for entry in ips.split(',').map(str::trim).filter(|e| !e.is_empty() && *e != "(none)") {
+        for entry in ips
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty() && *e != "(none)")
+        {
             let Some((addr, prefix)) = entry.rsplit_once('/') else {
                 continue;
             };
@@ -150,7 +154,12 @@ async fn handle(mut stream: TcpStream, peer: SocketAddr, issuer: &DecoyIssuer, c
         Ok(pk) => pk,
         Err(e) => {
             eprintln!("deny {inner_ip}: {e}");
-            let _ = respond(&mut stream, "403 Forbidden", "no verified peer for source\n").await;
+            let _ = respond(
+                &mut stream,
+                "403 Forbidden",
+                "no verified peer for source\n",
+            )
+            .await;
             return;
         }
     };
@@ -190,8 +199,11 @@ async fn main() -> Result<()> {
     };
 
     if cfg.listen.ip().is_unspecified() {
-        bail!("refusing to bind {}: the listener must be on a WireGuard inner address, \
-               otherwise anyone reachable can mint assertions", cfg.listen);
+        bail!(
+            "refusing to bind {}: the listener must be on a WireGuard inner address, \
+               otherwise anyone reachable can mint assertions",
+            cfg.listen
+        );
     }
 
     let key_path = PathBuf::from(arg("--key").unwrap_or_else(|| DEFAULT_KEY_PATH.to_string()));
@@ -205,8 +217,8 @@ async fn main() -> Result<()> {
     };
 
     let issuer = DecoyIssuer::new(signing_key, key_id, cfg.ttl);
-    let verifying = base64::engine::general_purpose::STANDARD
-        .encode(issuer.verifying_key().to_bytes());
+    let verifying =
+        base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
 
     let listener = TcpListener::bind(cfg.listen)
         .await

@@ -140,6 +140,14 @@ build_golden() {
     [ -f "$PROJECT_ROOT/scripts/opdbus-rundirs-up" ] &&
         run install -Dm755 "$PROJECT_ROOT/scripts/opdbus-rundirs-up" \
             "$GOLDEN_DIR/libexec/3tched/opdbus-rundirs-up"
+    [ -f "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" ] &&
+        run install -Dm755 "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" \
+            "$GOLDEN_DIR/sbin/configure-netmaker-broker-8090"
+    for asset in emqx-ws-8090.hocon op-uds-relay-8090.conf; do
+        [ -f "$PROJECT_ROOT/deploy/netmaker/$asset" ] &&
+            run install -Dm644 "$PROJECT_ROOT/deploy/netmaker/$asset" \
+                "$GOLDEN_DIR/etc/op-dbus/netmaker/$asset"
+    done
     ok "staged control scripts into golden/sbin"
 
     # Runit service definitions tracked in the repo.
@@ -168,6 +176,9 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
             "$GOLDEN_DIR/etc/zeroclaw-runtime.toml"
+    [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
+            "$GOLDEN_DIR/etc/netmaker-broker.env"
     [ -f "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" ] &&
         run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
             "$GOLDEN_DIR/etc/pacman-hooks/99-systemd-unit-to-runit.hook"
@@ -273,6 +284,14 @@ install_live() {
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$INSTALL_SBIN/agent-runit-guard"
+    [ -f "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" ] &&
+        run install -Dm755 "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" \
+            "$INSTALL_SBIN/configure-netmaker-broker-8090"
+    for asset in emqx-ws-8090.hocon op-uds-relay-8090.conf; do
+        [ -f "$PROJECT_ROOT/deploy/netmaker/$asset" ] &&
+            run install -Dm644 "$PROJECT_ROOT/deploy/netmaker/$asset" \
+                "/etc/op-dbus/netmaker/$asset"
+    done
     if [ -f "$PROJECT_ROOT/scripts/opdbus-rundirs-up" ]; then
         rundirs_helper_target=/usr/local/libexec/3tched/opdbus-rundirs-up
         if [ ! -f "$rundirs_helper_target" ] || \
@@ -293,6 +312,9 @@ install_live() {
     [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
             /etc/op-dbus/zeroclaw-runtime.toml
+    [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
+            /etc/op-dbus/netmaker-broker.env
 
     # Service definitions: install new ones, never clobber a hand-tuned run
     # script that differs (the host copy is authoritative until an operator says

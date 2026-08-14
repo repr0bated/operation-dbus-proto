@@ -16,6 +16,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -294,6 +295,32 @@ fn assert_tmpfs_or_abort(path: &str) -> std::io::Result<()> {
 
 // ── Writer side (called from SchemaEngine) ───────────────────────────────────
 
+/// Group granted read access to the sled, overridable with `OP_SLED_GROUP`.
+///
+/// The sled is written by root but read by services that drop privileges, so a
+/// shared group is what bridges them without exposing it to every local user.
+const DEFAULT_SLED_GROUP: &str = "secrets";
+
+fn sled_group() -> String {
+    env::var("OP_SLED_GROUP").unwrap_or_else(|_| DEFAULT_SLED_GROUP.to_string())
+}
+
+/// Resolve a group name to its gid, or `None` if the group does not exist.
+fn gid_for_group(name: &str) -> Option<u32> {
+    let c_name = std::ffi::CString::new(name).ok()?;
+    // SAFETY: getgrnam returns a pointer into a static buffer, or null when the
+    // group is absent. gr_gid is copied out before any further libc call can
+    // overwrite that buffer.
+    unsafe {
+        let gr = libc::getgrnam(c_name.as_ptr());
+        if gr.is_null() {
+            None
+        } else {
+            Some((*gr).gr_gid)
+        }
+    }
+}
+
 /// Atomically write the active sled into `/dev/shm`.
 ///
 /// Uses a tmp-file + rename so readers never see a partial write.
@@ -314,7 +341,20 @@ fn write_sled_with_schema_blob(
         std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
     };
     let mut f = File::create(&tmp)?;
+    // Start owner-only, then widen to the group only if it actually resolves and
+    // the chown succeeds. Consumers that drop privileges (notebook-sources-sync
+    // runs as `admin`) cannot read a root-owned 0600 sled, but a missing group
+    // must fail closed rather than leave identity material world-readable.
     f.set_permissions(fs::Permissions::from_mode(0o600))?;
+    if let Some(gid) = gid_for_group(&sled_group()) {
+        // SAFETY: `f` is an open fd for the duration of the call. `-1` as uid_t
+        // leaves the owner untouched, per chown(2).
+        let rc = unsafe { libc::fchown(f.as_raw_fd(), u32::MAX, gid) };
+        if rc == 0 {
+            // Set the mode after chown: chown(2) clears set-user/group-ID bits.
+            f.set_permissions(fs::Permissions::from_mode(0o640))?;
+        }
+    }
     f.write_all(bytes)?;
     if let Some(schema_blob) = schema_blob {
         write_schema_blob_tail(&mut f, schema_blob)?;
@@ -815,7 +855,7 @@ fn build_xray_config(
       "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
         "network": "xhttp",
-        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
+        "sockopt": {{ "tcpNoDelay": true }},
         "xhttpSettings": {{
           "host": "{host}",
           "path": "/Ghostbridge.StateSync",
@@ -967,7 +1007,7 @@ fn route_to_outbound(_footprint: &str, _trace_id: &str, route: &XrayRoute) -> Op
       "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
         "network": "xhttp",
-        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
+        "sockopt": {{ "tcpNoDelay": true }},
         "xhttpSettings": {{
           "host": "{host}",
           "path": "/{service_name}",
@@ -988,7 +1028,7 @@ fn route_to_outbound(_footprint: &str, _trace_id: &str, route: &XrayRoute) -> Op
       "settings": {{ "redirect": "{host}:{port}" }},
       "streamSettings": {{
         "network": "xhttp",
-        "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
+        "sockopt": {{ "tcpNoDelay": true }},
         "xhttpSettings": {{
           "host": "{host}",
           "path": "/{tag}",

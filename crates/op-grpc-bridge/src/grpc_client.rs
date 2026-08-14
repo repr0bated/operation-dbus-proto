@@ -10,7 +10,7 @@ use std::time::Duration;
 use prost_types::{value::Kind as ProstKind, Struct as ProstStruct, Value as ProstValue};
 use tokio::sync::RwLock;
 use tonic::metadata::MetadataValue;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tonic::Request;
 use tracing::info;
 
@@ -50,8 +50,8 @@ pub struct GhostbridgeCallMetadata {
 impl Default for RemoteEndpoint {
     fn default() -> Self {
         Self {
-            address: "http://127.0.0.1:8090".to_string(),
-            tls_enabled: false,
+            address: "https://localhost:8090".to_string(),
+            tls_enabled: true,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(30),
         }
@@ -87,6 +87,41 @@ impl GrpcClientPool {
         }
     }
 
+    fn configure_endpoint(
+        &self,
+        address: &str,
+        endpoint: Endpoint,
+    ) -> Result<Endpoint, GrpcClientError> {
+        let endpoint = endpoint
+            .connect_timeout(self.default_config.connect_timeout)
+            .timeout(self.default_config.request_timeout);
+
+        if !address.starts_with("https://") {
+            return Ok(endpoint);
+        }
+
+        let mut tls = ClientTlsConfig::new().with_native_roots();
+        if let Ok(path) = std::env::var("OP_DBUS_GRPC_CA_FILE") {
+            if !path.trim().is_empty() {
+                let pem = std::fs::read(&path).map_err(|error| {
+                    GrpcClientError::ConnectionFailed(format!(
+                        "failed to read gRPC CA certificate {path}: {error}"
+                    ))
+                })?;
+                tls = tls.ca_certificate(Certificate::from_pem(pem));
+            }
+        }
+        if let Ok(domain) = std::env::var("OP_DBUS_GRPC_TLS_DOMAIN") {
+            if !domain.trim().is_empty() {
+                tls = tls.domain_name(domain);
+            }
+        }
+
+        endpoint
+            .tls_config(tls)
+            .map_err(|error| GrpcClientError::ConnectionFailed(error.to_string()))
+    }
+
     /// Get or create a channel to the specified address (supports comma-separated endpoints for load balancing)
     async fn get_channel(&self, address: &str) -> Result<Channel, GrpcClientError> {
         {
@@ -107,23 +142,21 @@ impl GrpcClientPool {
             let endpoints = addrs
                 .into_iter()
                 .map(|addr| {
-                    Endpoint::from_shared(addr.to_string()).map(|e| {
-                        e.connect_timeout(self.default_config.connect_timeout)
-                            .timeout(self.default_config.request_timeout)
-                    })
+                    let endpoint = Endpoint::from_shared(addr.to_string()).map_err(|error| {
+                        GrpcClientError::ConnectionFailed(format!(
+                            "Invalid endpoint {addr}: {error}"
+                        ))
+                    })?;
+                    self.configure_endpoint(addr, endpoint)
                 })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    GrpcClientError::ConnectionFailed(format!("Invalid endpoint: {}", e))
-                })?;
+                .collect::<Result<Vec<_>, _>>()?;
 
             Channel::balance_list(endpoints.into_iter())
         } else {
             // Single endpoint
             let endpoint = Endpoint::from_shared(address.to_string())
-                .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?
-                .connect_timeout(self.default_config.connect_timeout)
-                .timeout(self.default_config.request_timeout);
+                .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?;
+            let endpoint = self.configure_endpoint(address, endpoint)?;
 
             endpoint
                 .connect()

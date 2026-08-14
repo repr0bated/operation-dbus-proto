@@ -1277,6 +1277,121 @@ pub struct ExecInstanceInput {
     pub command: Vec<String>,
 }
 
+fn validate_instance_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        anyhow::bail!("invalid Incus instance name");
+    }
+    Ok(())
+}
+
+/// Execute the declared Incus lifecycle methods against the Incus REST API.
+///
+/// These methods used to fall through the bridge's generic echo arm, which
+/// produced an audited `success` response without touching Incus. Keep the
+/// authority here beside the typed method inputs and fail closed for methods
+/// that do not yet have a real backend.
+pub async fn dispatch_incus_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let acknowledge = || serde_json::json!({"success": true});
+
+    match method {
+        "start_instance" | "StartInstance" => {
+            let input: StartInstanceInput = serde_json::from_value(args.clone())?;
+            validate_instance_name(&input.name)?;
+            IncusPlugin::incus_api_call(
+                "PUT",
+                &format!("/1.0/instances/{}/state", input.name),
+                Some(r#"{"action":"start","timeout":30,"force":false,"stateful":false}"#),
+            )
+            .await?;
+            Ok(acknowledge())
+        }
+        "stop_instance" | "StopInstance" => {
+            let input: StopInstanceInput = serde_json::from_value(args.clone())?;
+            validate_instance_name(&input.name)?;
+            let body = serde_json::to_string(&serde_json::json!({
+                "action": "stop",
+                "timeout": 30,
+                "force": input.force.unwrap_or(false),
+                "stateful": false,
+            }))?;
+            IncusPlugin::incus_api_call(
+                "PUT",
+                &format!("/1.0/instances/{}/state", input.name),
+                Some(&body),
+            )
+            .await?;
+            Ok(acknowledge())
+        }
+        "restart_instance" | "RestartInstance" => {
+            let input: RestartInstanceInput = serde_json::from_value(args.clone())?;
+            validate_instance_name(&input.name)?;
+            let body = serde_json::to_string(&serde_json::json!({
+                "action": "restart",
+                "timeout": 30,
+                "force": input.force.unwrap_or(false),
+                "stateful": false,
+            }))?;
+            IncusPlugin::incus_api_call(
+                "PUT",
+                &format!("/1.0/instances/{}/state", input.name),
+                Some(&body),
+            )
+            .await?;
+            Ok(acknowledge())
+        }
+        "freeze_instance" | "FreezeInstance" => {
+            let input: FreezeInstanceInput = serde_json::from_value(args.clone())?;
+            validate_instance_name(&input.name)?;
+            IncusPlugin::incus_api_call(
+                "PUT",
+                &format!("/1.0/instances/{}/state", input.name),
+                Some(r#"{"action":"freeze","timeout":30,"force":false,"stateful":false}"#),
+            )
+            .await?;
+            Ok(acknowledge())
+        }
+        "unfreeze_instance" | "UnfreezeInstance" => {
+            let input: UnfreezeInstanceInput = serde_json::from_value(args.clone())?;
+            validate_instance_name(&input.name)?;
+            IncusPlugin::incus_api_call(
+                "PUT",
+                &format!("/1.0/instances/{}/state", input.name),
+                Some(r#"{"action":"unfreeze","timeout":30,"force":false,"stateful":false}"#),
+            )
+            .await?;
+            Ok(acknowledge())
+        }
+        "exec_instance" | "ExecInstance" => {
+            let input: ExecInstanceInput = serde_json::from_value(args.clone())?;
+            validate_instance_name(&input.name)?;
+            if input.command.is_empty() || input.command.iter().any(|part| part.contains('\0')) {
+                anyhow::bail!("Incus exec command must contain non-NUL arguments");
+            }
+            let body = serde_json::to_string(&serde_json::json!({
+                "command": input.command,
+                "interactive": false,
+                "wait-for-websocket": false,
+                "record-output": true,
+            }))?;
+            IncusPlugin::incus_api_call(
+                "POST",
+                &format!("/1.0/instances/{}/exec", input.name),
+                Some(&body),
+            )
+            .await?;
+            Ok(acknowledge())
+        }
+        _ => anyhow::bail!("Incus method '{method}' has no live dispatch backend"),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddDeviceInput {
     pub instance_name: String,

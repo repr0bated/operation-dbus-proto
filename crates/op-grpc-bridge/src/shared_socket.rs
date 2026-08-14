@@ -1,15 +1,14 @@
 //! Shared Unix Domain Socket — Full Tonic Data Plane
 //!
 //! Serves the identical gRPC service stack over a single host-side UDS that
-//! thousands of containers connect to. Identity is resolved from the peer
-//! credentials (via tonic's native `UdsConnectInfo`) and mapped to the
-//! canonical Ghostbridge footprint for the same interceptor gating.
+//! thousands of containers connect to. The Unix peer credential proves that
+//! the request arrived on the UDS transport; the canonical Ghostbridge
+//! footprint still comes from the authoritative shared-memory sled.
 //!
 //! ## Identity Model
 //!
 //! ```text
-//! Container connects → UDS accept → tonic::UdsConnectInfo.peer_cred
-//!   → peer UID/PID as lookup key
+//! Container connects → UDS accept → require tonic::UdsConnectInfo.peer_cred
 //!   → resolve canonical session_id from /dev/shm/plugin_schema.dat
 //!   → inject x-ghostbridge-footprint + x-ghostbridge-trace-id
 //!   → same GhostbridgeInterceptor applies
@@ -30,9 +29,9 @@ pub const DEFAULT_SOCKET_PATH: &str = "/run/ghostbridge/container.sock";
 
 /// Resolved canonical identity from peer credentials.
 ///
-/// This is NOT minted from cgroup names — it is looked up against the
-/// authoritative IdentitySled in shared memory. The peer_cred (UID/PID)
-/// is the lookup key, not the identity itself.
+/// This is NOT minted from cgroup names or caller-supplied metadata. It is read
+/// from the authoritative IdentitySled in shared memory after the transport is
+/// proven to be a Unix socket.
 #[derive(Debug, Clone)]
 pub struct CanonicalPeerIdentity {
     /// The hex-encoded hashed_footprint from the IdentitySled.
@@ -138,10 +137,24 @@ pub fn extract_peer_cred<T>(request: &tonic::Request<T>) -> Option<tokio::net::u
 /// This is the UDS equivalent of Xray injecting `X-Ghostbridge-Footprint`.
 #[allow(clippy::result_large_err)]
 pub fn uds_identity_interceptor(
-    mut req: tonic::Request<()>,
+    req: tonic::Request<()>,
 ) -> Result<tonic::Request<()>, tonic::Status> {
+    if extract_peer_cred(&req).is_none() {
+        return Err(tonic::Status::unauthenticated(
+            "UDS peer credentials unavailable — connection rejected",
+        ));
+    }
+
     let identity = CanonicalPeerIdentity::from_sled();
 
+    inject_canonical_identity(req, identity)
+}
+
+#[allow(clippy::result_large_err)]
+fn inject_canonical_identity(
+    mut req: tonic::Request<()>,
+    identity: CanonicalPeerIdentity,
+) -> Result<tonic::Request<()>, tonic::Status> {
     if !identity.is_valid {
         return Err(tonic::Status::failed_precondition(
             "Identity sled unavailable or invalid — UDS connection rejected",
@@ -162,4 +175,76 @@ pub fn uds_identity_interceptor(
     req.metadata_mut().insert("x-ghostbridge-trace-id", tr);
 
     Ok(req)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::Code;
+
+    fn valid_identity() -> CanonicalPeerIdentity {
+        CanonicalPeerIdentity {
+            footprint_hex: "11".repeat(32),
+            trace_id_hex: "22".repeat(16),
+            is_valid: true,
+        }
+    }
+
+    #[test]
+    fn canonical_identity_overwrites_caller_metadata() {
+        let mut request = tonic::Request::new(());
+        request.metadata_mut().insert(
+            "x-ghostbridge-footprint",
+            "spoofed".parse().expect("test metadata"),
+        );
+        request.metadata_mut().insert(
+            "x-ghostbridge-trace-id",
+            "spoofed".parse().expect("test metadata"),
+        );
+
+        let request = inject_canonical_identity(request, valid_identity())
+            .expect("valid canonical identity should be injected");
+
+        assert_eq!(
+            request
+                .metadata()
+                .get("x-ghostbridge-footprint")
+                .expect("footprint")
+                .to_str()
+                .expect("ASCII footprint"),
+            "11".repeat(32)
+        );
+        assert_eq!(
+            request
+                .metadata()
+                .get("x-ghostbridge-trace-id")
+                .expect("trace id")
+                .to_str()
+                .expect("ASCII trace id"),
+            "22".repeat(16)
+        );
+    }
+
+    #[test]
+    fn invalid_canonical_identity_fails_closed() {
+        let error = inject_canonical_identity(
+            tonic::Request::new(()),
+            CanonicalPeerIdentity {
+                footprint_hex: String::new(),
+                trace_id_hex: String::new(),
+                is_valid: false,
+            },
+        )
+        .expect_err("invalid sled identity must be rejected");
+
+        assert_eq!(error.code(), Code::FailedPrecondition);
+    }
+
+    #[test]
+    fn interceptor_rejects_request_without_uds_connect_info() {
+        let error = uds_identity_interceptor(tonic::Request::new(()))
+            .expect_err("non-UDS request must not enter the UDS identity path");
+
+        assert_eq!(error.code(), Code::Unauthenticated);
+    }
 }

@@ -3,18 +3,15 @@ exec 2>&1
 ssh-keygen -A >/dev/null 2>&1 # Will generate host keys if they don't already exist
 [ -r conf ] && . ./conf
 
-# sshd SKIPS a ListenAddress that does not exist yet and starts anyway. If it
-# wins the race against netclient, the mesh address in
-# sshd_config.d/10-netmaker-only.conf is silently dropped, only loopback is
-# bound, and every peer gets "connection refused" with nothing logged anywhere.
-# That is exactly what happened on 2026-08-12 after netclient's identity broke.
+# Public listen is in sshd_config.d/90-singleuser-password.conf
+# (ListenAddress 0.0.0.0). Do not wait on 100.69.0.1 — netclient/EMQX
+# must not gate rescue SSH. Optional mesh bind can be added later once
+# that address exists; sshd skips missing ListenAddress values.
 #
-# Wait BOUNDED, then start regardless: a netclient failure must degrade to a
-# loopback-only sshd, never to no sshd at all. Do not convert this into a hard
-# dependency — that is how you lock yourself out of the box.
+# Wait BOUNDED for the mesh address only as a nicety. Always start.
 MESH_IP="${SSHD_WAIT_ADDR:-100.69.0.1}"
 i=0
-while [ "$i" -lt 30 ]; do
+while [ "$i" -lt 5 ]; do
     if ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 \
         | grep -qx "$MESH_IP"; then
         break

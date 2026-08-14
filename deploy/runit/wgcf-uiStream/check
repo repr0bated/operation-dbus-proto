@@ -1,0 +1,7 @@
+#!/bin/sh
+# Ready = the interface exists AND has completed a handshake with Cloudflare.
+# `wg-quick up` succeeding only means the link was created; a wrong/duplicate
+# key still produces an interface that never handshakes, which is exactly the
+# failure this tunnel was in before it got its own device.
+[ -d /sys/class/net/wgcf-uiStream ] || exit 1
+wg show wgcf-uiStream latest-handshakes 2>/dev/null | awk '{ if ($2 > 0) ok=1 } END { exit ok?0:1 }'

@@ -361,10 +361,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Cozo/RocksDB is single-writer — bridge owns memory.db for ToolRegistry.
     // When op-web cannot open that DB, still expose JSON health (not SPA HTML).
     let mut router = router;
-    if let Some((context_engine, memory_store, session_manager)) = state.cognitive_context_state()
-    {
-        let context_router =
-            build_context_router(context_engine, memory_store, session_manager);
+    if let Some((context_engine, memory_store, session_manager)) = state.cognitive_context_state() {
+        let context_router = build_context_router(context_engine, memory_store, session_manager);
         router = router.nest("/cognitive/context", context_router);
     } else {
         router = router.route(
@@ -376,7 +374,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                     serde_json::json!({
                         "status": "degraded",
                         "mode": "bridge",
-                        "detail": "CozoDB locked by op-grpc-bridge; tools/context run in-process there (:50051 / mesh :8090)",
+                        "detail": "CozoDB locked by op-grpc-bridge; tools/context run in-process there (socket / :8090)",
                     })
                     .to_string(),
                 )

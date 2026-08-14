@@ -14,8 +14,8 @@
       ]
     },
     "protocols": ["grpc", "grpc-web", "mcp"],
-    "native_grpc_tcp": "127.0.0.1:50051",
-    "tonic_web_tcp": "127.0.0.1:8090"
+    "tcp": "127.0.0.1:8090",
+    "also_tcp": "100.69.0.1:8090"
   },
   "not_doors": {
     "_comment": "These are NOT separate MCP control-plane endpoints. Browser UI is :8080; chatbot loopback is not an external MCP door.",

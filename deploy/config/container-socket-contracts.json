@@ -86,8 +86,7 @@
         "/var/lib/netmaker-runtime/netmaker.sock"
       ],
       "tcp_ports": [
-        8081,
-        50051
+        8081
       ]
     },
     {

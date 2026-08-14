@@ -1,0 +1,3 @@
+#!/bin/sh
+# Bring the UI-stream WARP tunnel down when the service stops.
+wg-quick down wgcf-uiStream 2>/dev/null || true
