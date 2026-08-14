@@ -193,7 +193,10 @@ pub async fn static_fdb_present(bridge: &str, mac: &str) -> Result<bool> {
     let mac = mac.to_ascii_lowercase();
     Ok(table.lines().any(|line| {
         let l = line.to_ascii_lowercase();
-        l.contains(&mac) && l.contains("static")
+    Ok(table.lines().any(|line| {
+        let l = line.to_ascii_lowercase();
+        l.contains(&mac)
+    }))
     }))
 }
 
