@@ -93,9 +93,12 @@ fn build_set_config(xid: u32) -> Vec<u8> {
 
 /// Build an OpenFlow PortDesc multipart request.
 ///
-/// Body: type(2) + flags(2) + pad(4) = 8 bytes.
+/// Body: type(2) + flags(2) + pad(12) = 16 bytes (24-byte message).
+///
+/// OVS 3.7 validates the OF1.5 request against the full `ofp_multipart_request`
+/// layout and rejects the shorter 16-byte form.
 fn build_port_desc_request(xid: u32) -> Vec<u8> {
-    let mut body = [0u8; 8];
+    let mut body = [0u8; 16];
     body[0..2].copy_from_slice(&OFPMP_PORT_DESC.to_be_bytes());
     build_raw_msg(MessageType::MultipartRequest, xid, &body)
 }
@@ -222,6 +225,12 @@ async fn discover_ports(
 
     loop {
         let msg = recv_msg(stream).await?;
+        log::debug!(
+            "OF discovery message type={} payload_len={} xid={}",
+            msg.msg_type,
+            msg.payload.len(),
+            msg.xid
+        );
         match msg.msg_type {
             // Echo request — must reply to stay alive during discovery.
             2 /* EchoRequest */ => {
@@ -271,7 +280,17 @@ async fn discover_ports(
                     break;
                 }
             }
-            _ => break,
+            // OVS may report a just-created/recreated interface while the
+            // multipart PortDesc response is in flight.  This is especially
+            // common for NetMaker's WireGuard device, whose ofport is not
+            // stable across reconnects.  Do not mistake that asynchronous
+            // event for the end of discovery; consume it and keep waiting for
+            // the PortDesc multipart reply.
+            12 /* PortStatus */ => continue,
+            // OVS can interleave asynchronous messages (and, during a
+            // reconnect, a duplicate handshake reply) before the multipart
+            // response.  Keep reading until the PortDesc reply terminates.
+            _ => continue,
         }
     }
 
