@@ -85,3 +85,8 @@ techops/
 /token.txt
 # agent/editor scratch backups
 *.bak-*
+
+# credential jars — never commit
+cookie.txt
+cookies.txt
+*.cookies.txt
