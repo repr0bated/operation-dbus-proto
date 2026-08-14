@@ -39,9 +39,8 @@ fn ovsdb_addr() -> String {
 }
 
 fn bridge_mgmt_addr(bridge: &str) -> Address {
-    let path = std::env::var("OVS_BRIDGE_MGMT_SOCK").unwrap_or_else(|_| {
-        format!("/var/run/openvswitch/{bridge}.mgmt")
-    });
+    let path = std::env::var("OVS_BRIDGE_MGMT_SOCK")
+        .unwrap_or_else(|_| format!("/var/run/openvswitch/{bridge}.mgmt"));
     Address::Unix(PathBuf::from(path))
 }
 
@@ -63,7 +62,10 @@ async fn ovsdb_transact(
     if let Some(arr) = result.as_array() {
         for (i, entry) in arr.iter().enumerate() {
             if let Some(err) = entry.get("error") {
-                bail!("OVSDB op[{i}] error: {err} detail={}", entry.get("details").unwrap_or(&serde_json::Value::Null));
+                bail!(
+                    "OVSDB op[{i}] error: {err} detail={}",
+                    entry.get("details").unwrap_or(&serde_json::Value::Null)
+                );
             }
         }
     }
@@ -132,7 +134,9 @@ async fn with_bridge_of<T, F>(bridge: &str, f: F) -> Result<T>
 where
     F: for<'a> FnOnce(
         &'a mut VConn,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>,
+    >,
 {
     let addr = bridge_mgmt_addr(bridge);
     let mut vconn = VConn::connect(&addr)
@@ -170,9 +174,9 @@ pub async fn fallback_present(bridge: &str) -> Result<bool> {
                 .dump_flows()
                 .await
                 .context("OF dump_flows via bridge.mgmt")?;
-            Ok(flows.iter().any(|e| {
-                e.cookie == FALLBACK_COOKIE && e.priority == FALLBACK_PRIORITY
-            }))
+            Ok(flows
+                .iter()
+                .any(|e| e.cookie == FALLBACK_COOKIE && e.priority == FALLBACK_PRIORITY))
         })
     })
     .await
