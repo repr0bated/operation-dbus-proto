@@ -23,6 +23,7 @@ pub mod plugin;
 pub mod proxmox;
 pub mod rovs_proxy;
 pub mod rtnetlink;
+pub mod unixctl;
 
 pub use controller::{OpenFlowController, OpenFlowControllerHandle};
 pub use datapath_safe::{
@@ -37,6 +38,9 @@ pub use ovsdb::OvsdbClient;
 pub use plugin::{NetworkInterface, NetworkPlugin, OpenFlowConfig, OvsBridge, OvsdbConfig};
 pub use proxmox::{
     ContainerStatus, CreateContainerRequest, LxcContainer, ProxmoxClient, ProxmoxToken,
+};
+pub use unixctl::{
+    appctl, ensure_static_fdb, ensure_static_fdb_entries, static_fdb_from_env, StaticFdbEntry,
 };
 
 /// Prelude for convenient imports

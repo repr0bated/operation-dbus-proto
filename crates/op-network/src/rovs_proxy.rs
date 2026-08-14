@@ -807,7 +807,6 @@ impl OvsdbDbusClient {
     }
 }
 
-
 /// Build a full snapshot of an [`rovs_ovsdb::Idl`] as a plain JSON value.
 ///
 /// Shape:

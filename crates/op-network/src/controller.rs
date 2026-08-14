@@ -33,6 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::datapath_safe::{FALLBACK_COOKIE, MANAGED_COOKIE};
 use crate::openflow_translate::{json_flow_to_add, json_flow_to_delete};
+use crate::unixctl::{ensure_static_fdb_entries, StaticFdbEntry};
 
 /// A request to install or delete a schema-driven flow on the currently
 /// connected switch, submitted via `OpenFlowControllerHandle::send_flow`.
@@ -249,6 +250,7 @@ async fn handle_connection(
     mut stream: TcpStream,
     flows: Arc<Vec<(String, String, u16)>>,
     static_flows: Arc<Vec<String>>,
+    static_fdb: Arc<Vec<StaticFdbEntry>>,
     active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
 ) -> Result<()> {
     let mut xid: u32 = 1;
@@ -354,6 +356,18 @@ async fn handle_connection(
         log::info!("OF controller: {static_installed} static flow(s) installed");
     }
 
+    // 6c. Re-assert static FDB pins. These live in ovs-vswitchd's L2 table, not
+    // in OVSDB or the flow table, so a vswitchd restart silently drops them —
+    // and without them `actions=NORMAL` floods every port instead of unicasting.
+    if !static_fdb.is_empty() {
+        let added = ensure_static_fdb_entries(&static_fdb).await;
+        log::info!(
+            "OF controller: {} static FDB pin(s) configured, {} (re)added",
+            static_fdb.len(),
+            added
+        );
+    }
+
     log::info!(
         "OF controller: {} flows installed; entering keepalive loop",
         installed
@@ -455,6 +469,9 @@ pub struct OpenFlowController {
     /// Durable schema-driven flows (JSON FlowEntry), reinstalled on every
     /// OVS reconnect via the same translator as SendFlow.
     static_flows: Vec<String>,
+    /// Static L2 forwarding pins, re-asserted on every OVS reconnect because
+    /// `ovs-vswitchd` drops them on restart.
+    static_fdb: Vec<StaticFdbEntry>,
     active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
     installed_flows: Arc<Mutex<Vec<serde_json::Value>>>,
 }
@@ -466,6 +483,7 @@ impl OpenFlowController {
             listen_addr,
             flows: Vec::new(),
             static_flows: Vec::new(),
+            static_fdb: Vec::new(),
             active_conn: Arc::new(Mutex::new(None)),
             installed_flows: Arc::new(Mutex::new(Vec::new())),
         }
@@ -504,6 +522,16 @@ impl OpenFlowController {
         self
     }
 
+    /// Pin a MAC to a bridge port in the L2 forwarding table.
+    ///
+    /// Needed when a peer is addressed by one MAC but replies from another (a
+    /// VRRP virtual MAC is the usual case), so learning never records it and
+    /// `actions=NORMAL` floods instead of unicasting.
+    pub fn add_static_fdb(mut self, entry: StaticFdbEntry) -> Self {
+        self.static_fdb.push(entry);
+        self
+    }
+
     /// Run the controller — listens for OVS connections and re-programs flows on each reconnect.
     ///
     /// Each spawned connection handler maintains its own `Reconnect` state machine so
@@ -518,12 +546,14 @@ impl OpenFlowController {
 
         let flows = Arc::new(self.flows);
         let static_flows = Arc::new(self.static_flows);
+        let static_fdb = Arc::new(self.static_fdb);
         let active_conn = self.active_conn;
 
         loop {
             let (stream, peer) = listener.accept().await?;
             let flows = flows.clone();
             let static_flows = static_flows.clone();
+            let static_fdb = static_fdb.clone();
             let active_conn = active_conn.clone();
             log::info!("OpenFlow controller: OVS connected from {}", peer);
 
@@ -535,7 +565,8 @@ impl OpenFlowController {
                 reconnect.set_max_backoff(Duration::from_secs(30));
                 reconnect.connecting();
 
-                match handle_connection(stream, flows, static_flows, active_conn).await {
+                match handle_connection(stream, flows, static_flows, static_fdb, active_conn).await
+                {
                     Ok(()) => {
                         // Clean close — mark disconnected so next accept starts fresh.
                         reconnect.disconnected();

@@ -171,6 +171,21 @@ async fn main() -> Result<()> {
         Err(_) => info!("No static flows file at {} (skipping)", static_flows_path),
     }
 
+    // Static L2 pins (OF_STATIC_FDB="bridge:port:vlan:mac,..."). Re-asserted on
+    // every OVS reconnect: without them NORMAL floods instead of unicasting.
+    match op_network::static_fdb_from_env() {
+        Ok(entries) => {
+            for e in entries {
+                info!(
+                    "Static FDB pin: {} -> {} (vlan {}) on {}",
+                    e.mac, e.port, e.vlan, e.bridge
+                );
+                controller = controller.add_static_fdb(e);
+            }
+        }
+        Err(e) => tracing::warn!("Ignoring malformed OF_STATIC_FDB: {e:#}"),
+    }
+
     let dbus_handle = controller.handle();
     let service = OpenFlowDbusService {
         handle: dbus_handle,
