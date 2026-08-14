@@ -98,17 +98,23 @@ pub static GROUPS: &[Group] = &[
         label: "Chat",
         items: &[it("Chat", "💬", Route::Chat)],
     },
-    Group { label: "UI Model", items: &[
-        it("Gallery", "▦", Route::Gallery),
-        it("Antigravity LLM", "✦", Route::AntigravityLlm),
-        it("Catalog", "▤", Route::Catalog),
-    ]},
-    Group { label: "Zerolang", items: &[
-        placeholder("Zero Catalog", "▦", Route::ZeroCatalog),
-        placeholder("Zero Specs", "◇", Route::ZeroSpecs),
-        placeholder("Zero Agent", "✦", Route::ZeroAgent),
-        placeholder("Zero Query", "⌕", Route::ZeroQuery),
-    ]},
+    Group {
+        label: "UI Model",
+        items: &[
+            it("Gallery", "▦", Route::Gallery),
+            it("Antigravity LLM", "✦", Route::AntigravityLlm),
+            it("Catalog", "▤", Route::Catalog),
+        ],
+    },
+    Group {
+        label: "Zerolang",
+        items: &[
+            placeholder("Zero Catalog", "▦", Route::ZeroCatalog),
+            placeholder("Zero Specs", "◇", Route::ZeroSpecs),
+            placeholder("Zero Agent", "✦", Route::ZeroAgent),
+            placeholder("Zero Query", "⌕", Route::ZeroQuery),
+        ],
+    },
     Group {
         label: "Control",
         items: &[
@@ -145,13 +151,16 @@ pub static GROUPS: &[Group] = &[
             it("Data Stores", "▥", Route::DataStores),
         ],
     },
-    Group { label: "ZeroClaw", items: &[
-        placeholder("Gateway", "⇄", Route::Gateway),
-        placeholder("Channels", "◌", Route::Channels),
-        placeholder("Cron", "◷", Route::Cron),
-        placeholder("Integrations", "⌘", Route::Integrations),
-        placeholder("Hardware", "▣", Route::Hardware),
-    ]},
+    Group {
+        label: "ZeroClaw",
+        items: &[
+            placeholder("Gateway", "⇄", Route::Gateway),
+            placeholder("Channels", "◌", Route::Channels),
+            placeholder("Cron", "◷", Route::Cron),
+            placeholder("Integrations", "⌘", Route::Integrations),
+            placeholder("Hardware", "▣", Route::Hardware),
+        ],
+    },
     Group {
         label: "Settings",
         items: &[
@@ -174,10 +183,13 @@ pub static GROUPS: &[Group] = &[
             placeholder("Live Trace", "≈", Route::LiveTrace),
         ],
     },
-    Group { label: "Blobs", items: &[
-        it("Sealed Blobs", "⬢", Route::Blobs),
-        it("Plugins", "◆", Route::Plugins),
-    ]},
+    Group {
+        label: "Blobs",
+        items: &[
+            it("Sealed Blobs", "⬢", Route::Blobs),
+            it("Plugins", "◆", Route::Plugins),
+        ],
+    },
 ];
 
 pub fn route_title(r: Route) -> &'static str {

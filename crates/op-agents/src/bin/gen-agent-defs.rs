@@ -48,8 +48,7 @@ fn main() -> Result<()> {
             }
         }
     }
-    std::fs::create_dir_all(&out_dir)
-        .with_context(|| format!("creating {}", out_dir.display()))?;
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
 
     for (agent_type, body) in &rendered {
         let path = out_dir.join(format!("{agent_type}.md"));

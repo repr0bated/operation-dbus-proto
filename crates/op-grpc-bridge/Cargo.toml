@@ -18,6 +18,8 @@ tonic-health = { workspace = true }
 
 # HTTP / middleware
 axum = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 
@@ -35,6 +37,7 @@ simd-json = { workspace = true }
 schemars = { workspace = true }
 jsonschema = { workspace = true }
 reqwest = { workspace = true }
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
 
 # Internal crates
 op-state-store = { path = "../op-state-store" }
@@ -94,7 +97,6 @@ http = "1"
 tokio-test = "0.4"
 tempfile = { workspace = true }
 serde_json = { workspace = true }
-rustls = { version = "0.23", features = ["aws_lc_rs"] }
 
 [[test]]
 name = "zeroclaw_integration"

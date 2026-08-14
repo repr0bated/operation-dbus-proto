@@ -11,7 +11,8 @@
 #   ovsbr0  fail_mode=standalone datapath_type=system
 #     LOCAL ovsbr0  10.200.0.1/24   fabric + OpenFlow controller address
 #     1     pub0    188.68.58.237/22 public L3, wears eth0's MAC, default route
-#     2     svc0    10.0.0.1/24 + 10.0.0.2/24  entrance / tonic helpers
+#     2     svc0    10.0.0.2/24  entrance / tonic helpers
+#                    10.0.0.1/24 belongs on decoy wg0, not host svc0
 #     3     grpc0   10.200.0.2/24   gRPC plane (op-grpc-bridge :8090)
 #     4     eth0    physical uplink, enslaved LAST, no L3 of its own
 #   controller  tcp:10.200.0.1:6653 (op-of-controller), two cookie classes:
@@ -57,7 +58,14 @@
 #     --skip-containers         leave Incus containers untouched
 #     --strip-legacy-devices    remove nic/proxy devices from containers
 #     --allow-empty-flows       permit a 0-flow static set (normally fatal)
+#     --skip-plugin-check       install files even if the plugin tree is down
+#                               (steps 5 and 6 will not do anything)
 #     --dry-run                 print what would change, touch nothing
+#
+# Exit status is 1 if any load-bearing step did not complete, with the list
+# printed at the end. A 0 exit means the datapath really is what the summary
+# says it is — earlier versions exited 0 having attached no controller and
+# installed no flows.
 #
 # Rollback (console): the backup directory printed at the top holds the
 # previous /etc/runit/sv, network.conf and libexec tree. Restore with
@@ -83,6 +91,7 @@ DO_CONTAINERS=true
 STRIP_LEGACY=false
 DRY_RUN=false
 ALLOW_EMPTY_FLOWS=false
+SKIP_PLUGIN_CHECK=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -91,8 +100,9 @@ for arg in "$@"; do
         --skip-containers)      DO_CONTAINERS=false ;;
         --strip-legacy-devices) STRIP_LEGACY=true ;;
         --allow-empty-flows)    ALLOW_EMPTY_FLOWS=true ;;
+        --skip-plugin-check)    SKIP_PLUGIN_CHECK=true ;;
         --dry-run|--print)      DRY_RUN=true ;;
-        -h|--help)              sed -n '2,50p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)              sed -n '2,65p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
@@ -106,6 +116,18 @@ die()  { err "$*"; exit 1; }
 run() {
     if $DRY_RUN; then echo "  would run: $*"; else "$@"; fi
 }
+
+# Steps that go through the plugin tree used to be `|| warn` and nothing else,
+# so a run in which the controller was never attached and not one flow was
+# installed still exited 0. Failures are recorded and reported, and the script
+# exits non-zero if anything load-bearing did not happen.
+FAILURES=()
+fail() { err "$*"; FAILURES+=("$*"); }
+# Service dirs under $SV that are symlinks — see the ovsbr0-eth0 note below.
+SYMLINKED_SERVICES=()
+# Services whose run/check/finish this run actually rewrote. Only these get
+# restarted; restarting the whole chain would needlessly cycle the datapath.
+CHANGED_SERVICES=()
 
 # ── Live topology, as read off this host ──────────────────────────────────────
 # Defaults are the current live values. --capture re-reads them instead, so the
@@ -121,7 +143,7 @@ INTERNAL_PORTS="svc0 grpc0"
 GRPC_PORT=grpc0
 GRPC_ADDR=10.200.0.2/24
 BRIDGE_ADDR=10.200.0.1/24
-BRIDGE_SVC_ADDRS="10.0.0.2/24@svc0 10.0.0.1/24@svc0"
+BRIDGE_SVC_ADDRS="10.0.0.2/24@svc0"
 OF_CONTROLLER_LISTEN=10.200.0.1:6653
 OF_CONTROLLER_ENDPOINT=tcp:10.200.0.1:6653
 NETMAKER_NET=100.69.0.0/16
@@ -143,6 +165,10 @@ capture_live() {
     [ -n "$a" ] && BRIDGE_ADDR="$a"
     local svc=""
     while read -r addr; do
+        # 10.0.0.1/24 is decoy wg0. Do not copy it onto host svc0.
+        case "$addr" in
+            10.0.0.1/*|10.0.0.1) continue ;;
+        esac
         [ -n "$addr" ] && svc="$svc $addr@svc0"
     done < <(ip -4 -o addr show dev svc0 scope global 2>/dev/null | awk '{print $4}')
     [ -n "$svc" ] && BRIDGE_SVC_ADDRS="${svc# }"
@@ -158,6 +184,23 @@ capture_live() {
 command -v sv >/dev/null || die "sv not found — this host is not running runit"
 command -v zcall >/dev/null || die "zcall not found — install the operator CLI"
 [ -d "/sys/class/net/$UPLINK_PHYS" ] || die "uplink $UPLINK_PHYS does not exist"
+
+# `command -v zcall` proves the binary exists, not that it can reach anything.
+# Every mutation in steps 5 and 6 goes through the plugin tree, so if the tree
+# is not on the bus this run can only produce warnings — and used to do exactly
+# that, silently. zcall talks to the session bus at
+# /run/opdbus/session-bus.sock, where op-grpc-bridge publishes the objects and
+# claims org.opdbus.v1.plugins. Note `zcall methods <plugin>` answers from the
+# sealed blob catalog in SHM and works even when the bus is empty, so it is not
+# a liveness probe; `zcall list` is.
+if ! zcall list >/dev/null 2>&1; then
+    msg="plugin tree unreachable — 'zcall list' fails against the session bus.
+       op-grpc-bridge is what publishes the tree and claims org.opdbus.v1.plugins;
+       check 'sv status op-grpc-bridge' and its log for a wait_dep timeout.
+       Without it, controller attach, flow install and container convergence
+       cannot run. Re-run with --skip-plugin-check to install files anyway."
+    if $SKIP_PLUGIN_CHECK; then warn "$msg"; else die "$msg"; fi
+fi
 
 $CAPTURE && capture_live
 
@@ -191,12 +234,16 @@ else
 # Model:
 #   - eth0 enslaved last, no L3 on eth0
 #   - pub0: public uplink L3, wears eth0's MAC (provider filters on it)
-#   - svc0: entrance (10.0.0.1/10.0.0.2) — tonic helpers (mail, Netmaker)
+#   - svc0: entrance 10.0.0.2/24 — tonic helpers (mail, Netmaker)
+#     10.0.0.1/24 is decoy wg0, never a host svc0 address
 #   - grpc0: gRPC plane (10.200.0.2:8090) — op-grpc-bridge + cognitive MCP
 #   - ovsbr0 LOCAL: fabric address, also the OpenFlow controller address
 #   - every container is socket-only: /run/ghostbridge bind mount, no NIC,
-#     no incus proxy devices. The WG iface "netmaker" must NOT join ovsbr0.
-#   - gRPC port is :8090 — never :50051
+#     no incus proxy devices. That rule is about CONTAINERS.
+#   - "netmaker" is a WireGuard interface managed by netclient. It BELONGS
+#     on ovsbr0 as a system port (netmaker-ovs-attach, after netclient has
+#     100.69.0.1). Not a wg0-style identity interface — this host has no wg0.
+#   - gRPC/HTTP entrance is tonic :8090 (op-grpc-bridge). Never :50051.
 
 BRIDGE=$BRIDGE
 FAIL_MODE=$FAIL_MODE
@@ -230,9 +277,21 @@ NETMAKER_CT=$NETMAKER_CT
 NETMAKER_INCUS_NAME=$NETMAKER_INCUS_NAME
 NETMAKER_EGRESS_NET=$NETMAKER_EGRESS_NET
 NETMAKER_EGRESS_DEV=$NETMAKER_EGRESS_DEV
+NETMAKER_PORT=netmaker
+BRIDGE_MTU=1420
+NETMAKER_MTU=1420
+IDENTITY_HOST=10.10.0.5
+IDENTITY_VIA=100.69.0.2
+IDENTITY_DEV=netmaker
 EOF
     chmod 0644 "$NET_CONF"
 fi
+
+# One authoritative MQTT/WebSocket door shared by the host runit graph and the
+# NetMaker container convergence tool.
+run install -d -m 0755 "$CONF_DIR"
+run install -m 0644 "$REPO/deploy/config/netmaker-broker.env" \
+    "$CONF_DIR/netmaker-broker.env"
 
 # ── 3. libexec helpers + runit services ───────────────────────────────────────
 log "Installing libexec helpers into $LIBEXEC"
@@ -257,40 +316,87 @@ NET_SERVICES=(
     ovsbr0-svc-addr
     op-of-controller
 )
+# Mesh: NetMaker CT sockets -> netclient IP -> enslave netmaker on ovsbr0.
+MESH_SERVICES=(
+    incus-ct-netmaker
+    uds-netmaker-api
+    nm-api-tls
+    netclient
+    netmaker-ovs-attach
+    nm-identity-route
+)
 # Container socket relays — the only network path any container has.
+# 8090 tonic (grpc + http) is the shared door; mail-port-fabric is SMTP/IMAP.
 SOCK_SERVICES=(
     xsock-web
     xsock-qdrant
     xsock-netmaker
-    xsock-netmaker-broker
     xsock-decoy
     uds-assistant
     uds-cozo-chat
-    uds-netmaker-api
-    uds-netmaker-broker
     uds-qdrant-grpc
     uds-qdrant-http
     uds-qdrant-http-svc0
     uds-xray-reality
+    mail-port-fabric
+    mail-web-socket
+    fwd-8090
+    fwd-nm-mesh-8090
 )
 
 install_service() {
     local name="$1" src="$REPO/deploy/runit/$1"
     [ -d "$src" ] || { warn "no service definition for $name in repo — skipping"; return 1; }
+
+    # A service dir under $SV can be a symlink to a `.retired-<ts>` copy left
+    # behind by a half-finished retirement (ovsbr0-eth0 is one on this host).
+    # `install` follows it, so the files land in the retired dir — which is also
+    # where runsv is chdir'd, so it does work, but `ls $SV` tells you nothing
+    # about where the live definition lives. Install through it and say so.
+    if [ -L "$SV/$name" ]; then
+        warn "  $name: $SV/$name is a symlink -> $(readlink "$SV/$name")"
+        SYMLINKED_SERVICES+=("$name -> $(readlink "$SV/$name")")
+    fi
+
     run install -d -m 0755 "$SV/$name"
-    local f
+    local f changed=false
     for f in run finish check conf; do
-        [ -f "$src/$f" ] && run install -m 0755 "$src/$f" "$SV/$name/$f"
+        [ -f "$src/$f" ] || continue
+        cmp -s "$src/$f" "$SV/$name/$f" || changed=true
+        run install -m 0755 "$src/$f" "$SV/$name/$f"
     done
     if [ -d "$src/log" ]; then
         run install -d -m 0755 "$SV/$name/log"
-        [ -f "$src/log/run" ] && run install -m 0755 "$src/log/run" "$SV/$name/log/run"
+        if [ -f "$src/log/run" ]; then
+            cmp -s "$src/log/run" "$SV/$name/log/run" || changed=true
+            run install -m 0755 "$src/log/run" "$SV/$name/log/run"
+        fi
+    fi
+    $changed && CHANGED_SERVICES+=("$name")
+    return 0
+}
+
+# `sv start` on a service runsv already has up is a no-op: the run script that
+# is executing stays executing, so a definition installed a moment ago does not
+# take effect until something restarts it. That is how this host ended up with
+# a correct ovsbr0-eth0 on disk while runsv kept executing the previous one,
+# blocked forever on a dependency the new script does not even have. Restart
+# what changed; plain start for the rest, so an unchanged datapath is not cycled.
+start_service() {
+    local name="$1"
+    if [[ " ${CHANGED_SERVICES[*]-} " == *" $name "* ]]; then
+        log "  $name: definition changed — restarting"
+        run sv restart "$name" || { fail "$name failed to restart"; return 1; }
+    else
+        run sv start "$name" || { fail "$name failed to start"; return 1; }
     fi
     return 0
 }
 
 log "Installing network services"
 for s in "${NET_SERVICES[@]}"; do install_service "$s" && log "  $s"; done
+log "Installing mesh + netclient attach"
+for s in "${MESH_SERVICES[@]}"; do install_service "$s" && log "  $s"; done
 log "Installing container socket relays"
 for s in "${SOCK_SERVICES[@]}"; do install_service "$s" && log "  $s"; done
 
@@ -334,9 +440,20 @@ if [ -L "$RUNSVDIR/ovsbr0-addr" ] || [ -d "$RUNSVDIR/ovsbr0-addr" ]; then
     run rm -f "$RUNSVDIR/ovsbr0-addr"
 fi
 
+# :8090 is the only externally published NetMaker broker door. The bridge
+# connects `/mqtt` directly to broker.sock, so the old 8083 TCP and secondary
+# UDS relays would bypass the demux and advertise two conflicting mechanisms.
+for retired in uds-netmaker-broker xsock-netmaker-broker fwd-nm-broker-8083 fwd-nm-mesh-8083; do
+    if [ -L "$RUNSVDIR/$retired" ] || [ -d "$RUNSVDIR/$retired" ]; then
+        warn "retiring $retired (broker WebSocket now uses op-grpc-bridge :8090/mqtt)"
+        run sv stop "$retired" || true
+        run rm -f "$RUNSVDIR/$retired"
+    fi
+done
+
 # ── 4. Enable + start ─────────────────────────────────────────────────────────
 log "Enabling services"
-for s in "${NET_SERVICES[@]}" "${SOCK_SERVICES[@]}"; do
+for s in "${NET_SERVICES[@]}" "${MESH_SERVICES[@]}" "${SOCK_SERVICES[@]}"; do
     [ -d "$SV/$s" ] || continue
     [ -e "$RUNSVDIR/$s" ] || run ln -s "$SV/$s" "$RUNSVDIR/$s"
 done
@@ -345,21 +462,40 @@ if $DO_START; then
     log "Starting the network chain in dependency order"
     for s in "${NET_SERVICES[@]}"; do
         [ -d "$SV/$s" ] || continue
-        run sv start "$s" || warn "$s did not start"
+        start_service "$s"
         if ! $DRY_RUN; then
             i=0
+            ready=true
             until sv check "$s" >/dev/null 2>&1; do
                 i=$((i + 1))
-                [ "$i" -ge 60 ] && { warn "$s not ready after 60s — continuing"; break; }
+                # A service can sit here indefinitely: these run scripts poll
+                # `sv check` on their own dependencies, so one unsatisfiable
+                # dependency deep in the chain stalls everything above it while
+                # `sv status` still shows a live pid. Not ready is a failure —
+                # the steps below assume the datapath this was supposed to build.
+                [ "$i" -ge 60 ] && { ready=false; break; }
                 sleep 1
             done
+            if $ready; then
+                log "  $s up"
+            else
+                fail "$s never passed its check (60s) — it is probably blocked in
+       a wait_dep loop on a dependency that will not come ready. Look at
+       'pstree -alp \$(cat $SV/$s/supervise/pid)' to see which one."
+            fi
+        else
+            log "  $s up"
         fi
-        log "  $s up"
+    done
+    log "Starting mesh + netclient attach"
+    for s in "${MESH_SERVICES[@]}"; do
+        [ -d "$SV/$s" ] || continue
+        start_service "$s"
     done
     log "Starting container socket relays"
     for s in "${SOCK_SERVICES[@]}"; do
         [ -d "$SV/$s" ] || continue
-        run sv start "$s" || warn "$s did not start"
+        start_service "$s"
     done
 else
     log "--no-start: services installed and enabled, not started"
@@ -381,11 +517,15 @@ if $DO_START; then
     log "Attaching OpenFlow controller $OF_CONTROLLER_ENDPOINT to $BRIDGE"
     # attach-controller-safe waits for the plugin tree and rolls back on failure.
     run "$LIBEXEC/attach-controller-safe" "$BRIDGE" "$OF_CONTROLLER_ENDPOINT" \
-        || warn "controller attach failed — bridge left on fail_mode=$FAIL_MODE"
+        || fail "controller attach failed — OVS will never dial the controller,
+       so the static flows it loaded are never pushed and the table keeps only
+       whatever fail_mode=$FAIL_MODE gives it."
     # The priority=0 NORMAL fallback is what keeps the datapath forwarding if
-    # the controller is not connected. Idempotent, cookied.
+    # the controller is not connected. Idempotent, cookied. Note this is NOT the
+    # same rule as the cookie=0x0 priority=0 NORMAL that OVS installs itself in
+    # standalone mode — if the table has only that one, this step did not run.
     run zcall openflow ensure_fallback_normal -a "{\"bridge\":\"$BRIDGE\"}" \
-        || warn "ensure_fallback_normal failed"
+        || fail "ensure_fallback_normal failed — no cookied fallback flow"
     # Reassert fail_mode last: attaching a controller is what makes it matter.
     run zcall openflow set_fail_mode -a "{\"bridge\":\"$BRIDGE\",\"mode\":\"$FAIL_MODE\"}" \
         || warn "set_fail_mode failed — bridge keeps its current fail mode"
@@ -400,7 +540,7 @@ if $DO_START; then
             if [ "$loaded" -gt 0 ]; then
                 log "  controller loaded $loaded static flow(s)"
             else
-                warn "  controller loaded 0 static flow(s) — the table is fallback-only"
+                fail "controller loaded 0 static flow(s) — the table is fallback-only"
             fi
         else
             warn "  no 'Loaded N static flow(s)' line yet in $OF_LOG/current"
@@ -477,23 +617,51 @@ log "Bridges:"
 zcall rovs_commands list_bridges 2>/dev/null || warn "  list_bridges failed"
 log "Ports on $BRIDGE:"
 zcall rovs_commands list_ports -a "{\"bridge_name\":\"$BRIDGE\"}" 2>/dev/null || warn "  list_ports failed"
+# Datapath readback goes through openflow.get_datapath_health — the only read
+# path there is. It reports `controllers` (proving the attach landed) and
+# `fallback_normal` (the cookie 0x…01 rule), both straight off OVSDB.
+#
+# ovs-ofctl is forbidden, so the MANAGED (0x…02) static set cannot be counted
+# here: the openflow plugin exposes no flow-dump read method. Its presence is
+# inferred from the controller being connected plus the "Loaded N static
+# flow(s)" readback above, which is weaker than counting the rules. See
+# SIGNALS.md — the plugin needs a dump_flows read method to close this.
 log "Datapath health:"
-"$LIBEXEC/get-datapath-health" "$BRIDGE" 2>/dev/null || warn "  health check failed"
-log "Flow table (by cookie class):"
-if command -v ovs-ofctl >/dev/null; then
-    # Read-only introspection; every mutation above went through the plugins.
-    fb="$(ovs-ofctl dump-flows "$BRIDGE" 2>/dev/null | grep -c '0x3344434800000001' || true)"
-    mg="$(ovs-ofctl dump-flows "$BRIDGE" 2>/dev/null | grep -c '0x3344434800000002' || true)"
-    log "    FALLBACK (0x…01): ${fb:-0}   MANAGED (0x…02): ${mg:-0}"
-    [ "${mg:-0}" -eq 0 ] && warn "    no MANAGED flows in the table — static set did not install"
+health="$("$LIBEXEC/get-datapath-health" "$BRIDGE" 2>/dev/null || true)"
+if [ -z "$health" ]; then
+    fail "get_datapath_health returned nothing — cannot verify the datapath"
 else
-    warn "    ovs-ofctl not available for flow readback"
+    echo "$health" | sed 's/^/    /'
+    case "$health" in
+        *'"controllers":[]'*|*'"controllers": []'*)
+            fail "no controller on $BRIDGE — OVS is not dialing $OF_CONTROLLER_ENDPOINT,
+       so op-of-controller never pushes its static flows" ;;
+    esac
+    case "$health" in
+        *'"fallback_normal":true'*|*'"fallback_normal": true'*)
+            log "    fallback NORMAL (cookie 0x…01) present" ;;
+        *)
+            fail "fallback NORMAL (cookie 0x…01) missing — if the table still
+       forwards it is on OVS's own cookie=0x0 standalone rule, not ours" ;;
+    esac
 fi
 log "Kernel L3:"
 for dev in "$BRIDGE" "$PUBLIC_PORT" $INTERNAL_PORTS; do
     ip -4 -o addr show dev "$dev" scope global 2>/dev/null | awk '{print "    " $2 " " $4}'
 done
 ip -4 route show default | sed 's/^/    default: /'
+
+# The cutover is the one step whose failure looks like success: if ovsbr0-eth0
+# never ran, eth0 keeps its address and the box stays reachable, so nothing
+# complains — but the bridge has no uplink and pub0 is a dark port.
+if ! zcall rovs_commands list_ports -a "{\"bridge_name\":\"$BRIDGE\"}" 2>/dev/null \
+    | grep -qw "$UPLINK_PHYS"; then
+    fail "$UPLINK_PHYS is not a port on $BRIDGE — the ovsbr0-eth0 cutover never
+       ran. Public L3 is still on the raw NIC, $PUBLIC_PORT is unused."
+elif ! ip -4 -o addr show dev "$PUBLIC_PORT" scope global 2>/dev/null | grep -q .; then
+    fail "$UPLINK_PHYS is enslaved but $PUBLIC_PORT has no address — the cutover
+       half-applied. This is the state that takes the host off the network."
+fi
 
 log ""
 log "=== Summary ==="
@@ -505,3 +673,23 @@ log "  Containers:   socket-only via $GHOSTBRIDGE_SRC -> $GHOSTBRIDGE_PATH"
 log "  Backup:       $BACKUP"
 log ""
 log "Verify reachability: ping -c1 -W2 $PUBLIC_GW"
+
+if [ ${#SYMLINKED_SERVICES[@]} -gt 0 ]; then
+    log ""
+    warn "Service dirs installed through a symlink (finish the retirement or"
+    warn "replace the link with a real directory):"
+    for s in "${SYMLINKED_SERVICES[@]}"; do warn "    $s"; done
+fi
+
+if [ ${#FAILURES[@]} -gt 0 ]; then
+    log ""
+    err "=== ${#FAILURES[@]} step(s) did not complete ==="
+    for f in "${FAILURES[@]}"; do err "  - $f"; done
+    err ""
+    err "Files are installed and the backup is at $BACKUP, but the network is"
+    err "not in the state this script describes. Do not treat this run as done."
+    exit 1
+fi
+
+log ""
+log "All steps completed."

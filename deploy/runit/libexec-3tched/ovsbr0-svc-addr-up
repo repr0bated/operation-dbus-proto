@@ -3,7 +3,7 @@
 #
 #   grpc0   GRPC_ADDR         gRPC TLS
 #   svc0…   BRIDGE_SVC_ADDRS  "addr@port" pairs — entrance / tonic helpers
-#   ovsbr0  BRIDGE_ADDR       the fabric address op-grpc-bridge binds :50051 on
+#   ovsbr0  BRIDGE_ADDR       fabric / OpenFlow controller address
 #
 # op-grpc-bridge waits on this service, so every address it needs exists before
 # it starts and its bind list needs no conditionals.

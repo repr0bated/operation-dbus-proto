@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 
 use op_agents::agent_registry::AgentRegistry;
 use op_cognitive_mcp::{
-    CognitiveMemoryStore, CognitiveMcpServer, ContextAwarenessEngine, SessionManager,
+    CognitiveMcpServer, CognitiveMemoryStore, ContextAwarenessEngine, SessionManager,
 };
 use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use op_llm::chat::ChatManager;
@@ -258,7 +258,7 @@ impl AppState {
         // Consolidated control plane is op-grpc-bridge on :8090 (not a separate :50051 opdbus).
         let grpc_addr = std::env::var("OP_DBUS_GRPC_ADDR")
             .or_else(|_| std::env::var("OP_DBUS_ADDR"))
-            .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
+            .unwrap_or_else(|_| "https://localhost:8090".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
 

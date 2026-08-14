@@ -1,5 +1,6 @@
 #!/bin/sh
-# NetMaker is a loopback/socket-only container and starts before OVS/gRPC.
+# NetMaker is socket-only and starts before OVS/gRPC. Do not wait_dep
+# op-grpc-bridge: that binds 100.69.0.1 and would deadlock boot.
 exec 2>&1
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/usr/sbin:/usr/lib/incus:${PATH:-}"
@@ -15,19 +16,8 @@ wait_dep() {
     done
 }
 
-ports_ready() {
-    python3 -c '
-import socket
-for port in (8081, 8083, 8443):
-    with socket.create_connection(("127.0.0.1", port), timeout=1):
-        pass
-'
-}
-
 wait_dep opdbus-rundirs
 wait_dep incusd
-wait_dep nm-warp-egress-proxy
-wait_dep nm-api-tls
 
 NAME="${NETMAKER_INCUS_NAME:-NetMaker}"
 START_PID=
@@ -37,7 +27,7 @@ cleanup() {
         kill "$START_PID" 2>/dev/null || true
         wait "$START_PID" 2>/dev/null || true
     fi
-    if incus list -f csv -c ns 2>/dev/null | rg -q "^${NAME},RUNNING$"; then
+    if incus list -f csv -c ns 2>/dev/null | grep -q "^${NAME},RUNNING$"; then
         echo "stopping container $NAME"
         incus stop "$NAME" --timeout 30 2>/dev/null \
             || incus stop "$NAME" --force 2>/dev/null || true
@@ -45,7 +35,9 @@ cleanup() {
 }
 trap cleanup TERM INT HUP
 
-if ! incus list -f csv -c ns 2>/dev/null | rg -q "^${NAME},RUNNING$"; then
+incus config set "$NAME" boot.autostart=false 2>/dev/null || true
+
+if ! incus list -f csv -c ns 2>/dev/null | grep -q "^${NAME},RUNNING$"; then
     echo "starting container $NAME"
     incus start "$NAME" &
     START_PID=$!
@@ -54,23 +46,24 @@ if ! incus list -f csv -c ns 2>/dev/null | rg -q "^${NAME},RUNNING$"; then
 fi
 
 i=0
-until incus list -f csv -c ns 2>/dev/null | rg -q "^${NAME},RUNNING$"; do
+until incus list -f csv -c ns 2>/dev/null | grep -q "^${NAME},RUNNING$"; do
     i=$((i + 1))
     [ "$i" -ge 60 ] && { echo "container $NAME did not reach RUNNING" >&2; exit 1; }
     sleep 1
 done
 
+GB=/run/ghostbridge/NetMaker
 i=0
-until ports_ready >/dev/null 2>&1; do
+until [ -S "$GB/api.sock" ] && [ -S "$GB/broker.sock" ]; do
     i=$((i + 1))
-    [ "$i" -ge 120 ] && { echo "NetMaker loopback endpoints not ready" >&2; exit 1; }
+    [ "$i" -ge 120 ] && { echo "NetMaker CT sockets never appeared under $GB" >&2; exit 1; }
     sleep 1
 done
 
-echo "container $NAME and loopback endpoints are ready"
+echo "container $NAME RUNNING with api.sock + broker.sock"
 /usr/local/libexec/3tched/runit-ready-signal incus-ct-netmaker
 
-while incus list -f csv -c ns 2>/dev/null | rg -q "^${NAME},RUNNING$"; do
+while incus list -f csv -c ns 2>/dev/null | grep -q "^${NAME},RUNNING$"; do
     sleep 5
 done
 echo "container $NAME left RUNNING"

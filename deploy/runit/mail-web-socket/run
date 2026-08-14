@@ -1,11 +1,25 @@
 #!/bin/sh
 exec 2>&1
 until [ -d /run/ghostbridge ]; do sleep 1; done
-until ss -lnt | grep -q "127.0.0.1:8440"; do sleep 1; done
-/usr/local/libexec/3tched/runit-ready-signal mail-web-socket 2>/dev/null || true
 SOCK=/run/ghostbridge/mail-web.sock
-rm -f "$SOCK"
-if [ -S /run/opdbus/session-bus.sock ]; then
-  zcall shared_unix_socket create_unix_socket -a '{"name":"mail-web","ports":[443,8440]}' >/dev/null 2>&1 || true
-fi
-exec /usr/local/libexec/3tched/socket-relay unix-listen "$SOCK" tcp-connect 127.0.0.1 8440
+
+# Caddy and SnappyMail live inside the NIC-less mail container. Ask the typed
+# Incus D-Bus method to publish Caddy's loopback TLS listener directly into the
+# shared host runtime. The service exits when that socket disappears so runit
+# recreates it after any container restart.
+while :; do
+  rm -f "$SOCK"
+  zcall incus exec_instance -a '{"name":"mail-3tched","command":["/bin/sh","-lc","if ! pgrep -f \\"^/usr/local/bin/op-uds-relay .*mail-web.sock=127.0.0.1:443\\" >/dev/null 2>&1; then nohup /usr/local/bin/op-uds-relay --unix-to-tcp /opt/run-mounts/ghostbridge/mail-web.sock=127.0.0.1:443 >/var/log/mail-web-relay.log 2>&1 & fi"]}' >/dev/null 2>&1 || true
+  i=0
+  until [ -S "$SOCK" ]; do
+    i=$((i + 1))
+    [ "$i" -ge 30 ] && break
+    sleep 1
+  done
+  [ -S "$SOCK" ] && break
+done
+
+chmod 666 "$SOCK" 2>/dev/null || true
+/usr/local/libexec/3tched/runit-ready-signal mail-web-socket 2>/dev/null || true
+while [ -S "$SOCK" ]; do sleep 2; done
+exit 1

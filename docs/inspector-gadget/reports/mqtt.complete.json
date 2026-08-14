@@ -1,0 +1,2177 @@
+{
+  "contract": "PLUGIN-RENDER-CONTRACT.md",
+  "source": "mqtt.rs",
+  "plugin": {
+    "name": "mqtt",
+    "category": "net",
+    "version": "1.0.0",
+    "description": "EMQX broker present-state for the NIC-less NetMaker container: broker.sock, api.sock, container.sock, ExHook on :8090",
+    "display_name": "GB.Mqtt",
+    "state_root": "MqttState",
+    "fields": {
+      "api_socket": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "broker_socket": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "broker_type": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "container_name": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "container_socket": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "dashboard": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "exhook": {
+        "rust_type": "EmqxExhook",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false
+      },
+      "last_hook_event": {
+        "rust_type": "Option<String>",
+        "description": "",
+        "has_serde_default": false,
+        "optional": true,
+        "json_type": "string"
+      },
+      "mqtt_tcp": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "mqtt_ws": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "nic": {
+        "rust_type": "bool",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "boolean"
+      },
+      "sockets": {
+        "rust_type": "Vec<MqttSocket>",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "array"
+      },
+      "software": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      },
+      "version": {
+        "rust_type": "String",
+        "description": "",
+        "has_serde_default": false,
+        "optional": false,
+        "json_type": "string"
+      }
+    },
+    "nested_types": {
+      "EmqxExhook": {
+        "proto": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "registered_hooks": {
+          "rust_type": "Vec<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        },
+        "servers_configured": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "service": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "target": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "GetStatusInput": {},
+      "GetStatusOutput": {
+        "api_socket": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "api_socket_present": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "broker_socket": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "broker_socket_present": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "broker_type": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "container_name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "container_socket": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "container_socket_present": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "exhook_service": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "exhook_target": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "last_hook_event": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "nic": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "software": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "ListSocketsInput": {},
+      "ListSocketsOutput": {
+        "sockets": {
+          "rust_type": "Vec<MqttSocket>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "array"
+        }
+      },
+      "MqttSocket": {
+        "name": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "path": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "present": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "purpose": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        }
+      },
+      "RecordHookInput": {
+        "client_id": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "detail": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        },
+        "event_type": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "topic": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": true,
+          "optional": true,
+          "json_type": "string"
+        }
+      },
+      "RecordHookOutput": {
+        "client_id": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        },
+        "event_type": {
+          "rust_type": "String",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "string"
+        },
+        "recorded": {
+          "rust_type": "bool",
+          "description": "",
+          "has_serde_default": false,
+          "optional": false,
+          "json_type": "boolean"
+        },
+        "topic": {
+          "rust_type": "Option<String>",
+          "description": "",
+          "has_serde_default": false,
+          "optional": true,
+          "json_type": "string"
+        }
+      }
+    },
+    "methods": {
+      "get_status": {
+        "name": "get_status",
+        "input_type": "GetStatusInput",
+        "output_type": "GetStatusOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "cap.network.mqtt.status.get@v1",
+        "subid": "obs.network.mqtt.status.get@v1",
+        "args": {
+          "properties": {},
+          "title": "GetStatusInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "api_socket": {
+              "type": "string"
+            },
+            "api_socket_present": {
+              "type": "boolean"
+            },
+            "broker_socket": {
+              "type": "string"
+            },
+            "broker_socket_present": {
+              "type": "boolean"
+            },
+            "broker_type": {
+              "type": "string"
+            },
+            "container_name": {
+              "type": "string"
+            },
+            "container_socket": {
+              "type": "string"
+            },
+            "container_socket_present": {
+              "type": "boolean"
+            },
+            "exhook_service": {
+              "type": "string"
+            },
+            "exhook_target": {
+              "type": "string"
+            },
+            "last_hook_event": {
+              "type": "string"
+            },
+            "nic": {
+              "type": "boolean"
+            },
+            "software": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "api_socket",
+            "api_socket_present",
+            "broker_socket",
+            "broker_socket_present",
+            "broker_type",
+            "container_name",
+            "container_socket",
+            "container_socket_present",
+            "exhook_service",
+            "exhook_target",
+            "nic",
+            "software"
+          ],
+          "title": "GetStatusOutput",
+          "type": "object"
+        }
+      },
+      "list_sockets": {
+        "name": "list_sockets",
+        "input_type": "ListSocketsInput",
+        "output_type": "ListSocketsOutput",
+        "side_effect": "read",
+        "idempotent": true,
+        "required_capability": "cap.network.mqtt.sockets.list@v1",
+        "subid": "obs.network.mqtt.sockets.list@v1",
+        "args": {
+          "properties": {},
+          "title": "ListSocketsInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "sockets": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "sockets"
+          ],
+          "title": "ListSocketsOutput",
+          "type": "object"
+        }
+      },
+      "record_hook": {
+        "name": "record_hook",
+        "input_type": "RecordHookInput",
+        "output_type": "RecordHookOutput",
+        "side_effect": "mutation",
+        "idempotent": false,
+        "required_capability": "cap.network.mqtt.hook.record@v1",
+        "subid": "evt.network.mqtt.hook.record@v1",
+        "args": {
+          "properties": {
+            "client_id": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "event_type": {
+              "type": "string"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_type"
+          ],
+          "title": "RecordHookInput",
+          "type": "object"
+        },
+        "returns": {
+          "properties": {
+            "client_id": {
+              "type": "string"
+            },
+            "event_type": {
+              "type": "string"
+            },
+            "recorded": {
+              "type": "boolean"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "event_type",
+            "recorded"
+          ],
+          "title": "RecordHookOutput",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "audit": {
+    "ok": false,
+    "fail": 46,
+    "warn": 101,
+    "hint": 41,
+    "findings": [
+      {
+        "code": "missing_struct_subid",
+        "location": "struct MqttSocket",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttSocket.name",
+        "message": "field `name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttSocket.name",
+        "message": "field `name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttSocket.name",
+        "message": "consider #[serde(default)] on `name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttSocket.path",
+        "message": "field `path` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttSocket.path",
+        "message": "field `path` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttSocket.path",
+        "message": "consider #[serde(default)] on `path` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttSocket.present",
+        "message": "field `present` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttSocket.present",
+        "message": "field `present` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttSocket.present",
+        "message": "consider #[serde(default)] on `present` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttSocket.purpose",
+        "message": "field `purpose` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttSocket.purpose",
+        "message": "field `purpose` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttSocket.purpose",
+        "message": "consider #[serde(default)] on `purpose` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct EmqxExhook",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EmqxExhook.proto",
+        "message": "field `proto` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "EmqxExhook.proto",
+        "message": "field `proto` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EmqxExhook.proto",
+        "message": "consider #[serde(default)] on `proto` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EmqxExhook.service",
+        "message": "field `service` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "EmqxExhook.service",
+        "message": "field `service` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EmqxExhook.service",
+        "message": "consider #[serde(default)] on `service` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EmqxExhook.target",
+        "message": "field `target` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "EmqxExhook.target",
+        "message": "field `target` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EmqxExhook.target",
+        "message": "consider #[serde(default)] on `target` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EmqxExhook.servers_configured",
+        "message": "field `servers_configured` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "EmqxExhook.servers_configured",
+        "message": "field `servers_configured` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EmqxExhook.servers_configured",
+        "message": "consider #[serde(default)] on `servers_configured` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "EmqxExhook.registered_hooks",
+        "message": "field `registered_hooks` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "EmqxExhook.registered_hooks",
+        "message": "field `registered_hooks` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "EmqxExhook.registered_hooks",
+        "message": "consider #[serde(default)] on `registered_hooks` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct MqttState",
+        "message": "state struct missing #[schemars(extend(\"x-oscal-subid\" = \"sch.…@v1\"))]",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.software",
+        "message": "field `software` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.software",
+        "message": "field `software` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.software",
+        "message": "consider #[serde(default)] on `software` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.broker_type",
+        "message": "field `broker_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.broker_type",
+        "message": "field `broker_type` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.broker_type",
+        "message": "consider #[serde(default)] on `broker_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.version",
+        "message": "field `version` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.version",
+        "message": "field `version` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.version",
+        "message": "consider #[serde(default)] on `version` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.container_name",
+        "message": "field `container_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.container_name",
+        "message": "field `container_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.container_name",
+        "message": "consider #[serde(default)] on `container_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.nic",
+        "message": "field `nic` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.nic",
+        "message": "field `nic` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.nic",
+        "message": "consider #[serde(default)] on `nic` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.container_socket",
+        "message": "field `container_socket` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.container_socket",
+        "message": "field `container_socket` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.container_socket",
+        "message": "consider #[serde(default)] on `container_socket` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.broker_socket",
+        "message": "field `broker_socket` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.broker_socket",
+        "message": "field `broker_socket` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.broker_socket",
+        "message": "consider #[serde(default)] on `broker_socket` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.api_socket",
+        "message": "field `api_socket` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.api_socket",
+        "message": "field `api_socket` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.api_socket",
+        "message": "consider #[serde(default)] on `api_socket` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.mqtt_tcp",
+        "message": "field `mqtt_tcp` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.mqtt_tcp",
+        "message": "field `mqtt_tcp` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.mqtt_tcp",
+        "message": "consider #[serde(default)] on `mqtt_tcp` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.mqtt_ws",
+        "message": "field `mqtt_ws` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.mqtt_ws",
+        "message": "field `mqtt_ws` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.mqtt_ws",
+        "message": "consider #[serde(default)] on `mqtt_ws` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.dashboard",
+        "message": "field `dashboard` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.dashboard",
+        "message": "field `dashboard` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.dashboard",
+        "message": "consider #[serde(default)] on `dashboard` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.sockets",
+        "message": "field `sockets` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.sockets",
+        "message": "field `sockets` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.sockets",
+        "message": "consider #[serde(default)] on `sockets` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.exhook",
+        "message": "field `exhook` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.exhook",
+        "message": "field `exhook` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "MqttState.exhook",
+        "message": "consider #[serde(default)] on `exhook` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "MqttState.last_hook_event",
+        "message": "field `last_hook_event` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "MqttState.last_hook_event",
+        "message": "field `last_hook_event` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetStatusInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetStatusInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct GetStatusOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct GetStatusOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.software",
+        "message": "field `software` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.software",
+        "message": "field `software` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.software",
+        "message": "consider #[serde(default)] on `software` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.broker_type",
+        "message": "field `broker_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.broker_type",
+        "message": "field `broker_type` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.broker_type",
+        "message": "consider #[serde(default)] on `broker_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.container_name",
+        "message": "field `container_name` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.container_name",
+        "message": "field `container_name` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.container_name",
+        "message": "consider #[serde(default)] on `container_name` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.nic",
+        "message": "field `nic` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.nic",
+        "message": "field `nic` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.nic",
+        "message": "consider #[serde(default)] on `nic` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.container_socket",
+        "message": "field `container_socket` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.container_socket",
+        "message": "field `container_socket` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.container_socket",
+        "message": "consider #[serde(default)] on `container_socket` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.broker_socket",
+        "message": "field `broker_socket` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.broker_socket",
+        "message": "field `broker_socket` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.broker_socket",
+        "message": "consider #[serde(default)] on `broker_socket` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.api_socket",
+        "message": "field `api_socket` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.api_socket",
+        "message": "field `api_socket` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.api_socket",
+        "message": "consider #[serde(default)] on `api_socket` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.broker_socket_present",
+        "message": "field `broker_socket_present` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.broker_socket_present",
+        "message": "field `broker_socket_present` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.broker_socket_present",
+        "message": "consider #[serde(default)] on `broker_socket_present` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.api_socket_present",
+        "message": "field `api_socket_present` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.api_socket_present",
+        "message": "field `api_socket_present` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.api_socket_present",
+        "message": "consider #[serde(default)] on `api_socket_present` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.container_socket_present",
+        "message": "field `container_socket_present` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.container_socket_present",
+        "message": "field `container_socket_present` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.container_socket_present",
+        "message": "consider #[serde(default)] on `container_socket_present` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.exhook_service",
+        "message": "field `exhook_service` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.exhook_service",
+        "message": "field `exhook_service` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.exhook_service",
+        "message": "consider #[serde(default)] on `exhook_service` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.exhook_target",
+        "message": "field `exhook_target` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.exhook_target",
+        "message": "field `exhook_target` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "GetStatusOutput.exhook_target",
+        "message": "consider #[serde(default)] on `exhook_target` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "GetStatusOutput.last_hook_event",
+        "message": "field `last_hook_event` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "GetStatusOutput.last_hook_event",
+        "message": "field `last_hook_event` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListSocketsInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListSocketsInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct ListSocketsOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct ListSocketsOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "ListSocketsOutput.sockets",
+        "message": "field `sockets` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "ListSocketsOutput.sockets",
+        "message": "field `sockets` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "ListSocketsOutput.sockets",
+        "message": "consider #[serde(default)] on `sockets` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct RecordHookInput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct RecordHookInput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookInput.event_type",
+        "message": "field `event_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookInput.event_type",
+        "message": "field `event_type` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RecordHookInput.event_type",
+        "message": "consider #[serde(default)] on `event_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookInput.client_id",
+        "message": "field `client_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookInput.client_id",
+        "message": "field `client_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookInput.topic",
+        "message": "field `topic` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookInput.topic",
+        "message": "field `topic` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookInput.detail",
+        "message": "field `detail` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookInput.detail",
+        "message": "field `detail` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_subid",
+        "location": "struct RecordHookOutput",
+        "message": "schemars struct missing x-oscal-subid — nested schemas need it for UI audit binding",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_struct_doc",
+        "location": "struct RecordHookOutput",
+        "message": "struct has no /// doc comment — renders as blank section description",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookOutput.recorded",
+        "message": "field `recorded` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookOutput.recorded",
+        "message": "field `recorded` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RecordHookOutput.recorded",
+        "message": "consider #[serde(default)] on `recorded` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookOutput.event_type",
+        "message": "field `event_type` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookOutput.event_type",
+        "message": "field `event_type` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_serde_default",
+        "location": "RecordHookOutput.event_type",
+        "message": "consider #[serde(default)] on `event_type` so defaults round-trip",
+        "severity": "hint"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookOutput.client_id",
+        "message": "field `client_id` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookOutput.client_id",
+        "message": "field `client_id` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_field_subid",
+        "location": "RecordHookOutput.topic",
+        "message": "field `topic` missing x-oscal-subid",
+        "severity": "fail"
+      },
+      {
+        "code": "missing_field_doc",
+        "location": "RecordHookOutput.topic",
+        "message": "field `topic` has no /// doc — UI label/tooltip will be empty",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_schema_seeded_test",
+        "location": null,
+        "message": "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "missing_subid_validity_test",
+        "location": null,
+        "message": "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
+        "severity": "warn"
+      },
+      {
+        "code": "external_surface",
+        "location": null,
+        "message": "external repomix source pack (universal): source=repomix:/srv/git/emqx/emqx.xml version=repomix nodes=0 elements=9934 — see --surface-out for full catalog",
+        "severity": "hint"
+      },
+      {
+        "code": "gadget_coverage_summary",
+        "location": null,
+        "message": "declared=25 introspected=9934 missing_in_plugin=9934 extra_in_plugin=25",
+        "severity": "hint"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*].field-id",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*].field-id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*].name",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*].name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*].type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.fields[*].type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.name",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-entry.type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-entry.type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].doc",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].doc` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].field-id",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].field-id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].name",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.fields[*].type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.name",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.priv.manifest-file.type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.priv.manifest-file.type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].default",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].default` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].doc",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].doc` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].field-id",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].field-id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].name",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].type[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.fields[*].type[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.full_nested_fields.type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].default",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].default` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].field-id",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].field-id` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].name",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].name` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].type[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.fields[*].type[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.type",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested.type` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs.fields",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs.fields` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs.fields[*]",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs.fields[*]` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_element_not_in_plugin",
+        "location": "avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs.fields[*].default",
+        "message": "external surface has `avro.apps.emqx_bridge_s3tables.test.sample_iceberg_schemas.nested_structs.fields[*].default` — not mirrored as a schemars field (expected until mapped)",
+        "severity": "warn"
+      },
+      {
+        "code": "surface_warn_cap",
+        "location": null,
+        "message": "omitted 9894 further surface_element_not_in_plugin WARNs (cap=40); full catalog in --surface-out",
+        "severity": "hint"
+      }
+    ]
+  },
+  "introspect": {
+    "surface_kind": "repomix",
+    "surface_source": "repomix:/srv/git/emqx/emqx.xml",
+    "files_by_kind": {
+      "avro": 16,
+      "csv": 10,
+      "json": 43,
+      "jsonschema": 57,
+      "proto": 71,
+      "python": 21,
+      "toml": 2,
+      "xml": 9,
+      "yaml": 123
+    },
+    "by_kind": {
+      "avro": 224,
+      "csv": 48,
+      "json": 1869,
+      "jsonschema": 1717,
+      "proto": 1315,
+      "python": 22,
+      "toml": 24,
+      "xml": 9,
+      "yaml": 4706
+    },
+    "element_path_count": 9934,
+    "gaps": {
+      "surface_paths_total": 9934,
+      "signal_paths_considered": 1342,
+      "covered_approx": 25,
+      "missing_from_plugin": 1317,
+      "missing_cli_commands": [],
+      "missing_config_fields": [],
+      "missing_by_group": {
+        "other": 1290,
+        "python": 21,
+        "xml": 6
+      },
+      "delegated_paths": [],
+      "missing_paths_sample": [
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.annotations",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider.audiences",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider.authorization_url",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider.id",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider.issuer",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider.jwks_uri",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthProvider.jwt_locations",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthRequirement",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthRequirement.audiences",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthRequirement.provider_id",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.Authentication",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.Authentication.providers",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.Authentication.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthenticationRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthenticationRule.allow_without_credential",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthenticationRule.oauth",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthenticationRule.requirements",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.AuthenticationRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.JwtLocation",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.JwtLocation.cookie",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.JwtLocation.header",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.JwtLocation.query",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.OAuthRequirements",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.auth.message.OAuthRequirements.canonical_scopes",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.backend",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.backend.enum.PathTranslation",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.backend.message.Backend",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.backend.message.Backend.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.backend.message.BackendRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.billing",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.billing.message.Billing",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.billing.message.Billing.metrics",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.billing.message.Billing.monitored_resource",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.billing.message.BillingDestination",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryDestination",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryDestination.CLIENT_LIBRARY_DESTINATION_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryDestination.GITHUB",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryDestination.PACKAGE_MANAGER",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.ADS",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.CLIENT_LIBRARY_ORGANIZATION_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.CLOUD",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.GENERATIVE_AI",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.GEO",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.PHOTOS",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.SHOPPING",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.ClientLibraryOrganization.STREET_VIEW",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.FlowControlLimitExceededBehaviorProto",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.FlowControlLimitExceededBehaviorProto.BLOCK",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.FlowControlLimitExceededBehaviorProto.IGNORE",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.FlowControlLimitExceededBehaviorProto.THROW_EXCEPTION",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.enum.FlowControlLimitExceededBehaviorProto.UNSET_BEHAVIOR",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingConfigProto",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingConfigProto.batch_descriptor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingConfigProto.thresholds",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingDescriptorProto",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingDescriptorProto.batched_field",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingDescriptorProto.discriminator_fields",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingDescriptorProto.subresponse_field",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.delay_threshold",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.element_count_limit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.element_count_threshold",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.flow_control_byte_limit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.flow_control_element_limit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.flow_control_limit_exceeded_behavior",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.request_byte_limit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.BatchingSettingsProto.request_byte_threshold",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.cpp_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.dotnet_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.go_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.java_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.launch_stage",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.node_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.php_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.python_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.rest_numeric_enums",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ClientLibrarySettings.ruby_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.CommonLanguageSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.CommonLanguageSettings.destinations",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.CommonLanguageSettings.reference_docs_uri",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.CommonLanguageSettings.selective_gapic_generation",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.CppSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.CppSettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.DotnetSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.DotnetSettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.DotnetSettings.forced_namespace_aliases",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.DotnetSettings.handwritten_signatures",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.DotnetSettings.ignored_resources",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.ExperimentalFeatures",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.GoSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.GoSettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.JavaSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.JavaSettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.JavaSettings.library_package",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.LongRunning",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.MethodSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.MethodSettings.initial_poll_delay",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.MethodSettings.max_poll_delay",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.MethodSettings.poll_delay_multiplier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.MethodSettings.total_poll_timeout",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.NodeSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.NodeSettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PhpSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PhpSettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PhpSettings.library_package",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.api_short_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.codeowner_github_teams",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.doc_tag_prefix",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.documentation_uri",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.github_label",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.library_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.method_settings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.new_issue_uri",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.organization",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.proto_reference_documentation_uri",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.Publishing.rest_reference_documentation_uri",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PythonSettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PythonSettings.protobuf_pythonic_types_enabled",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PythonSettings.rest_async_io_enabled",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.PythonSettings.unversioned_package_disabled",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.RubySettings",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.RubySettings.common",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.SelectiveGapicGeneration",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.SelectiveGapicGeneration.generate_omitted_as_internal",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.message.SelectiveGapicGeneration.methods",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.client.service.Foo",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.enum.ChangeType",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.enum.ChangeType.ADDED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.enum.ChangeType.CHANGE_TYPE_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.enum.ChangeType.MODIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.enum.ChangeType.REMOVED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.Advice",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.Advice.description",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.ConfigChange",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.ConfigChange.advices",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.ConfigChange.change_type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.ConfigChange.element",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.ConfigChange.new_value",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.config_change.message.ConfigChange.old_value",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.consumer",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.consumer.enum.PropertyType",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.consumer.message.ProjectProperties",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.consumer.message.ProjectProperties.properties",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.consumer.message.Property",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.Context",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.Context.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.ContextRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.ContextRule.allowed_request_extensions",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.ContextRule.allowed_response_extensions",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.ContextRule.provided",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.ContextRule.requested",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.context.message.ContextRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.control",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.control.message.Control",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.control.message.Control.environment",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.control.message.Control.method_policies",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.BucketOptions",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.BucketOptions.num_finite_buckets",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.BucketOptions.offset",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.BucketOptions.width",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Distribution",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Distribution.max",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Distribution.min",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exemplar",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exemplar.attachments",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exemplar.timestamp",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exemplar.value",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Explicit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Explicit.bounds",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exponential",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exponential.growth_factor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exponential.num_finite_buckets",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Exponential.scale",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Linear",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.distribution.message.Range",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation.documentation_root_url",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation.overview",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation.pages",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation.service_root_url",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Documentation.summary",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.DocumentationRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.DocumentationRule.deprecation_description",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.DocumentationRule.description",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.DocumentationRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.documentation.message.Page",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.endpoint",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.endpoint.message.Endpoint",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.endpoint.message.Endpoint.aliases",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.endpoint.message.Endpoint.allow_cors",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.error_reason",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.error_reason.enum.ErrorReason",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.error_reason.enum.ErrorReason.ERROR_REASON_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.FIELD_BEHAVIOR_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.IDENTIFIER",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.IMMUTABLE",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.INPUT_ONLY",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.NON_EMPTY_DEFAULT",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.OPTIONAL",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.OUTPUT_ONLY",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.REQUIRED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_behavior.enum.FieldBehavior.UNORDERED_LIST",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_info",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_info.enum.Format",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_info.message.FieldInfo",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_info.message.TypeReference",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.field_info.message.TypeReference.type_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.CustomHttpPattern",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.CustomHttpPattern.kind",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.GetMessageRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.Http",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.Http.fully_decode_reserved_expansion",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.Http.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.HttpRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.HttpRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.Message",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.message.UpdateMessageRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.http.service.Messaging",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.message.GetResourceRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.message.HttpBody",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.message.HttpBody.content_type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.message.HttpBody.data",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.message.HttpBody.extensions",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.service.CaldavService",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.httpbody.service.ResourceService",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.label",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.label.enum.ValueType",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.label.message.LabelDescriptor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.ALPHA",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.BETA",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.DEPRECATED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.EARLY_ACCESS",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.GA",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.LAUNCH_STAGE_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.PRELAUNCH",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.launch_stage.enum.LaunchStage.UNIMPLEMENTED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.log",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.log.message.LogDescriptor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.log.message.LogDescriptor.description",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.log.message.LogDescriptor.display_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.log.message.LogDescriptor.labels",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.logging",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.logging.message.Logging",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.logging.message.Logging.logs",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.logging.message.Logging.monitored_resource",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.logging.message.LoggingDestination",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.MetricKind",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.TimeSeriesResourceHierarchyLevel",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.BOOL",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.DISTRIBUTION",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.DOUBLE",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.INT64",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.MONEY",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.STRING",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.enum.ValueType.VALUE_TYPE_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.message.Metric",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.message.Metric.type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.message.MetricDescriptor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.metric.message.MetricDescriptorMetadata",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitored_resource",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitored_resource.message.MonitoredResource",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitored_resource.message.MonitoredResource.type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitored_resource.message.MonitoredResourceDescriptor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitored_resource.message.MonitoredResourceMetadata",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitoring",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitoring.message.Monitoring",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitoring.message.Monitoring.metrics",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitoring.message.Monitoring.monitored_resource",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.monitoring.message.MonitoringDestination",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.FieldPolicy",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.FieldPolicy.resource_permission",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.FieldPolicy.resource_type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.FieldPolicy.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.MethodPolicy",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.MethodPolicy.request_policies",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.policy.message.MethodPolicy.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.MetricRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.MetricRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.Quota",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.Quota.limits",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.Quota.metric_rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit.default_limit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit.description",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit.duration",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit.free_tier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit.max_limit",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.quota.message.QuotaLimit.metric",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.enum.History",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.enum.Style",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.enum.Style.DECLARATIVE_FRIENDLY",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.enum.Style.STYLE_UNSPECIFIED",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.GetIamPolicyRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.InspectTemplate",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.ListLogEntriesRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.LogEntry",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.ResourceDescriptor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.ResourceReference",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.resource.message.Topic",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.routing",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.routing.message.Request",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.routing.message.RoutingParameter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.routing.message.RoutingParameter.field",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.routing.message.RoutingRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.routing.message.RoutingRule.routing_parameters",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.apis",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.authentication",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.backend",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.billing",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.config_version",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.context",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.control",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.documentation",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.endpoints",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.enums",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.http",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.id",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.logging",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.logs",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.metrics",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.monitored_resources",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.monitoring",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.producer_project_id",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.publishing",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.quota",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.source_info",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.system_parameters",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.title",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.types",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.service.message.Service.usage",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.source_info",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.source_info.message.SourceInfo",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.source_info.message.SourceInfo.source_files",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameter.http_header",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameter.url_query_parameter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameterRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameterRule.parameters",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameterRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameters",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.system_parameter.message.SystemParameters.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.Usage",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.Usage.producer_notification_channel",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.Usage.requirements",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.Usage.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.UsageRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.UsageRule.allow_unregistered_calls",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.UsageRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.usage.message.UsageRule.skip_service_control",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.visibility",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.visibility.message.Visibility",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.visibility.message.Visibility.rules",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.visibility.message.VisibilityRule",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.visibility.message.VisibilityRule.restriction",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.api.visibility.message.VisibilityRule.selector",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.enum.RequestStatsView",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.enum.Type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CellChunk",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CheckAndMutateRowRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CheckAndMutateRowRequest.table_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CheckAndMutateRowResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CheckAndMutateRowResponse.predicate_matched",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ChunkInfo",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CloseStream",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CloseStream.continuation_tokens",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CloseStream.new_partitions",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.CloseStream.status",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.DataChange",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.Entry",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ExecuteQueryRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ExecuteQueryRequest.instance_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ExecuteQueryResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ExecuteQueryResponse.metadata",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ExecuteQueryResponse.results",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.GenerateInitialChangeStreamPartitionsRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.GenerateInitialChangeStreamPartitionsRequest.table_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.GenerateInitialChangeStreamPartitionsResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.GenerateInitialChangeStreamPartitionsResponse.partition",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.Heartbeat",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.Heartbeat.continuation_token",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.Heartbeat.estimated_low_watermark",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowRequest.table_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsRequest.idempotency",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsRequest.mutations",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsRequest.row_key",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsResponse.index",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutateRowsResponse.status",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.MutationChunk",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PingAndWarmRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PingAndWarmResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PrepareQueryRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PrepareQueryRequest.instance_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PrepareQueryResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PrepareQueryResponse.metadata",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PrepareQueryResponse.prepared_query",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.PrepareQueryResponse.valid_until",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.RateLimitInfo",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.RateLimitInfo.factor",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.RateLimitInfo.period",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadChangeStreamRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadChangeStreamRequest.table_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadChangeStreamResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadChangeStreamResponse.chunked_value_offset",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadChangeStreamResponse.chunked_value_size",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadChangeStreamResponse.last_chunk",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadModifyWriteRowRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadModifyWriteRowRequest.table_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadModifyWriteRowResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadModifyWriteRowResponse.row",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.commit_row",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.family_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.labels",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.qualifier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.reset_row",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.row_key",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.timestamp_micros",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.value",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.ReadRowsResponse.value_size",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.SampleRowKeysRequest",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.SampleRowKeysRequest.table_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.SampleRowKeysResponse",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.SampleRowKeysResponse.offset_bytes",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.message.SampleRowKeysResponse.row_key",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.service.Bigtable",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.bigtable.service.Bigtable.rpc.ReadRows",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.AddToCell",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.AddToCell.column_qualifier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.AddToCell.family_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.AddToCell.input",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.AddToCell.timestamp",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ArrayValue",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ArrayValue.values",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Cell",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Cell.labels",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Cell.timestamp_micros",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Cell.value",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Chain",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Column",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Column.cells",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Column.qualifier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ColumnMetadata",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ColumnMetadata.type",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ColumnRange",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ColumnRange.family_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ColumnRange.start_qualifier_closed",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.ColumnRange.start_qualifier_open",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Condition",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Condition.false_filter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Condition.predicate_filter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Condition.true_filter",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromColumn",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromColumn.column_qualifier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromColumn.family_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromColumn.time_range",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromFamily",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromFamily.family_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.DeleteFromRow",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Family",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Family.columns",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Idempotency",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Idempotency.start_time",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Idempotency.token",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Interleave",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.Interleave.filters",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.MergeToCell",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.MergeToCell.column_qualifier",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.MergeToCell.family_name",
+        "proto.apps.emqx_bridge_bigtable.scripts.protos.google.bigtable.v2.data.message.MergeToCell.input"
+      ],
+      "note": "Introspected findings not represented in the plugin .rs — this is the gap list. Full catalog is --surface-out."
+    }
+  }
+}

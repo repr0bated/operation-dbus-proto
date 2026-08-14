@@ -11,10 +11,9 @@ wait_dep() {
     done
 }
 
-# This service starts LAST. It binds a fabric address that only exists once the
-# network is up, and op-grpc-bridge aborts the whole process on a failed bind
-# (server.rs: `TcpListener::bind(bind_addr)?` → EADDRNOTAVAIL), so starting it
-# before ovsbr0-svc-addr is a crash loop, not a degraded start.
+# Start after the NetMaker container has published broker.sock, but before the
+# host netclient joins. The bridge binds loopback only, so it does not need the
+# netmaker mesh address to exist first.
 #
 # Nothing in the boot path calls back into this service: ovs-vswitchd
 # materializes the topology from conf.db and the ovsbr0-* units use plain `ip`.
@@ -25,23 +24,27 @@ wait_dep opdbus-grants
 wait_dep dbus
 wait_dep op-session-bus
 wait_dep ovsdb-server
-wait_dep ovsbr0-svc-addr
-wait_dep netclient
-wait_dep incus-ct-qdrant
+wait_dep incus-ct-netmaker
+# Qdrant is optional here. The bridge initializes its semantic shuttle
+# best-effort and must still open :8090 for NetMaker, D-Bus, and gRPC when
+# vector search is unavailable.
 
 set -a
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+[ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
+[ -r /etc/op-dbus/netmaker-api.env ] && . /etc/op-dbus/netmaker-api.env
 set +a
 
-# Bind loopback (op-web) + netmaker mesh IP (laptop/peers). Never 0.0.0.0 —
-# that steals every iface and races mesh relays. Wait for 100.69.0.1 is covered
-# by wait_dep netclient above.
-MESH_IP="${NETMAKER_MESH_IP:-100.69.0.1}"
-FABRIC_BIND="127.0.0.1:8090,${MESH_IP}:8090,127.0.0.1:50051,${MESH_IP}:50051"
+# One TLS TCP door: :8090 demuxes MQTT/WebSocket `/mqtt`, gRPC-Web, and native
+# gRPC. Bind loopback before netclient; mesh/svc0 publications relay back to
+# this listener after their addresses exist. Local non-TCP clients use the UDS.
+FABRIC_BIND="127.0.0.1:${NETMAKER_BROKER_PORT:-8090}"
 export ZEROCLAW_BIND_ADDR="$FABRIC_BIND"
 export GRPC_BIND="$FABRIC_BIND"
+export EMQX_BROKER_SOCKET="${NETMAKER_BROKER_SOCKET:-/run/ghostbridge/NetMaker/broker.sock}"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
-unset ZEROCLAW_TLS_BIND_ADDR
+export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
+export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
 export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
 [ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"

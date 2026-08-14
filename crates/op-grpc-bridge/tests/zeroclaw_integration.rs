@@ -17,8 +17,10 @@ use op_grpc_bridge::proto::zeroclaw::{
     zeroclaw_service_client::ZeroclawServiceClient, GetSchemaRequest, WatchSchemaRequest,
 };
 use op_grpc_bridge::schema_loader::SchemaLoader;
-use op_grpc_bridge::server::build_axum_app;
+use op_grpc_bridge::server::{build_axum_app, build_axum_app_with_mqtt_socket};
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UnixListener};
 use tokio::time::timeout;
 use tonic::metadata::MetadataValue;
 
@@ -144,6 +146,107 @@ async fn should_serve_schema_over_grpc_web() {
     assert_eq!(parsed["version"], "1.0.0");
     assert_eq!(inner.trace_id, "integration-test-trace");
     assert_eq!(inner.footprint, "integration-test-footprint");
+}
+
+#[tokio::test]
+async fn mqtt_path_upgrades_through_the_broker_unix_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let schema_path = dir.path().join("live-schema.json");
+    let broker_socket = dir.path().join("broker.sock");
+    write_schema(
+        &schema_path,
+        &json!({
+            "zeroclaw": [{
+                "name": "zeroclaw",
+                "version": "1.0.0",
+                "kind": "llm",
+                "description": "test schema"
+            }]
+        }),
+    );
+
+    let broker_listener = UnixListener::bind(&broker_socket).unwrap();
+    let broker_task = tokio::spawn(async move {
+        let (mut stream, _) = broker_listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        let request = String::from_utf8(request).unwrap();
+        assert!(request.starts_with("GET /mqtt HTTP/1.1"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("sec-websocket-protocol: mqtt"));
+
+        stream
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\n\
+Connection: Upgrade\r\n\
+Upgrade: websocket\r\n\
+Sec-WebSocket-Protocol: mqtt\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
+        let mut payload = [0_u8; 4];
+        stream.read_exact(&mut payload).await.unwrap();
+        stream.write_all(&payload).await.unwrap();
+    });
+
+    let loader = Arc::new(SchemaLoader::new(&schema_path).unwrap());
+    let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+        op_state_store::ChainConfig::default(),
+    )));
+    let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+    let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(event_chain, ovsdb));
+    let operation_server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine);
+    let app = build_axum_app_with_mqtt_socket(loader, operation_server, broker_socket);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    client
+        .write_all(
+            b"GET /mqtt HTTP/1.1\r\n\
+Host: 127.0.0.1\r\n\
+Connection: Upgrade\r\n\
+Upgrade: websocket\r\n\
+Sec-WebSocket-Version: 13\r\n\
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+Sec-WebSocket-Protocol: mqtt\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    let response_headers = timeout(Duration::from_secs(5), async {
+        let mut response = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !response.ends_with(b"\r\n\r\n") {
+            client.read_exact(&mut byte).await.unwrap();
+            response.push(byte[0]);
+        }
+        response
+    })
+    .await
+    .unwrap();
+    let response_headers = String::from_utf8(response_headers).unwrap();
+    assert!(response_headers.starts_with("HTTP/1.1 101 Switching Protocols"));
+    assert!(response_headers
+        .to_ascii_lowercase()
+        .contains("sec-websocket-protocol: mqtt"));
+
+    let payload = [0x82, 0x02, 0xca, 0xfe];
+    client.write_all(&payload).await.unwrap();
+    let mut echoed = [0_u8; 4];
+    timeout(Duration::from_secs(5), client.read_exact(&mut echoed))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(echoed, payload);
+    broker_task.await.unwrap();
 }
 
 #[tokio::test]

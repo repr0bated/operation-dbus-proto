@@ -13,7 +13,7 @@ use axum::extract::ConnectInfo as AxumConnectInfo;
 use op_identity::FootprintVerifyError;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
-use tonic::transport::server::TcpConnectInfo;
+use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 use tonic::{Request, Status};
 
 use crate::mutation_engine::MutationEngine;
@@ -117,6 +117,11 @@ pub fn bridge_capability_identity(extensions: &tonic::Extensions) -> Option<Ghos
 pub fn connect_info_peer_addr(req: &Request<()>) -> Option<SocketAddr> {
     if let Some(info) = req.extensions().get::<TcpConnectInfo>() {
         if let Some(addr) = info.remote_addr() {
+            return Some(addr);
+        }
+    }
+    if let Some(info) = req.extensions().get::<TlsConnectInfo<TcpConnectInfo>>() {
+        if let Some(addr) = info.get_ref().remote_addr() {
             return Some(addr);
         }
     }

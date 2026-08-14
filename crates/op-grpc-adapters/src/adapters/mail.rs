@@ -314,7 +314,12 @@ impl MailService for MailAdapter {
             Ok(s) => s,
             Err(_) => tokio::net::UnixStream::connect(ALT_SMTP_SOCK)
                 .await
-                .map_err(|e| Status::unavailable(format!("SMTP sockets unavailable at {} / {}: {}", self.smtp_addr, ALT_SMTP_SOCK, e)))?,
+                .map_err(|e| {
+                    Status::unavailable(format!(
+                        "SMTP sockets unavailable at {} / {}: {}",
+                        self.smtp_addr, ALT_SMTP_SOCK, e
+                    ))
+                })?,
         };
 
         // Build a minimal RFC 5321 SMTP transaction over the unix socket

@@ -36,7 +36,7 @@ impl Default for WgcfConfig {
             enabled: true,
             fwmark: 0x51820,
             wireguard_port: 51820,
-            config_path: "/etc/wireguard/wgcf.conf".to_string(),
+            config_path: "/etc/wireguard/wgcf-egress.conf".to_string(),
         }
     }
 }

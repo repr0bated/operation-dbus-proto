@@ -230,16 +230,14 @@ impl GenerationContext {
                 .to_string(),
             "".to_string(),
             "## Dataset (from sealed plugin schemas)".to_string(),
-            "Use tools to refine or search; the payloads below are already loaded."
-                .to_string(),
+            "Use tools to refine or search; the payloads below are already loaded.".to_string(),
             "".to_string(),
         ];
 
         for schema in &self.schemas {
             parts.push(format!("### {}", schema.name));
             parts.push(
-                serde_json::to_string_pretty(&schema.raw_json)
-                    .unwrap_or_else(|_| "{}".to_string()),
+                serde_json::to_string_pretty(&schema.raw_json).unwrap_or_else(|_| "{}".to_string()),
             );
             parts.push("".to_string());
         }

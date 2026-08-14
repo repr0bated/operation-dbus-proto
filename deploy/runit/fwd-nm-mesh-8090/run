@@ -1,9 +1,13 @@
 #!/bin/sh
 exec 2>&1
+[ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
+BROKER_PORT="${NETMAKER_BROKER_PORT:-8090}"
+MESH_IP="${NETMAKER_MESH_IP:-100.69.0.1}"
 # gRPC / tonic-web bridge on mesh IP 100.69.0.1:8090 — laptop/peers reach
-# op-grpc-bridge without svc0 or loopback. Same pattern as fwd-nm-mesh-8081.
-until [ -S /run/opdbus/grpc.sock ]; do sleep 1; done
-until ip -4 addr show netmaker 2>/dev/null | grep -q "100.69.0.1/"; do sleep 1; done
+# op-grpc-bridge without svc0 or loopback. Forward to the TCP listener rather
+# than grpc.sock so the `/mqtt` WebSocket demux remains on the path.
+until ss -lnt | grep -q "127.0.0.1:${BROKER_PORT}"; do sleep 1; done
+until ip -4 addr show netmaker 2>/dev/null | grep -q "${MESH_IP}/"; do sleep 1; done
 /usr/local/libexec/3tched/runit-ready-signal fwd-nm-mesh-8090 2>/dev/null || true
 exec /usr/local/libexec/3tched/socket-relay \
-    tcp-listen 100.69.0.1 8090 unix-connect /run/opdbus/grpc.sock
+    tcp-listen "$MESH_IP" "$BROKER_PORT" tcp-connect 127.0.0.1 "$BROKER_PORT"

@@ -336,13 +336,14 @@ impl OvsdbClient {
 
     /// Delete a port from a bridge
     pub async fn delete_port(&self, bridge: &str, port: &str) -> Result<()> {
+        let port_uuid = self.find_named_row_uuid("Port", port).await?;
         let del_ops = json!([
             {
                 "op": "mutate",
                 "table": "Bridge",
                 "where": [["name", "==", bridge]],
                 "mutations": [
-                    ["ports", "delete", ["name", port]]
+                    ["ports", "delete", ["set", [["uuid", &port_uuid]]]]
                 ]
             },
             {

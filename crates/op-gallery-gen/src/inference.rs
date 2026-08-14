@@ -194,7 +194,10 @@ impl InferenceLoop {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> Result<ChatResponse> {
-        let url = format!("{}/v1/chat/completions", self.endpoint.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.endpoint.trim_end_matches('/')
+        );
 
         // Empty model → bridge uses ZeroClaw's selected model. Literal
         // "default" is rejected when a real model is selected.

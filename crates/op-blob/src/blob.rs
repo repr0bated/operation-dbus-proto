@@ -101,11 +101,27 @@ pub struct BlobManifest {
     /// only); its session persists for the life of the account.
     #[serde(default)]
     pub identity: Option<crate::identity::BlobIdentity>,
+    /// fwmark a consumer sets on a socket to send this plugin's UI stream out
+    /// the UI tunnel (wgcf-uiStream, table 52888) rather than the host's
+    /// public IP. Stamped here at seal, so the mark travels with the blob and
+    /// is read from SHM instead of being hardcoded at each call site.
+    ///
+    /// Not to be confused with the tunnel's own WireGuard underlay mark
+    /// (0x52888): setting that on an application socket loops the tunnel into
+    /// itself. This is the *exit* mark, and it is what the `ip rule` matches.
+    #[serde(default = "default_forui")]
+    pub forui: u32,
     pub methods: Vec<MethodManifest>,
 }
 
 fn default_blob_type() -> String {
     "active_reflection".to_string()
+}
+
+/// UI-stream exit mark — matches `ip rule ... fwmark 0x52889 lookup 52888`
+/// installed by wgcf-uiStream's PostUp.
+fn default_forui() -> u32 {
+    0x52889
 }
 
 /// Owned, unsealed blob. `seal()` produces the immutable byte image.
@@ -206,6 +222,7 @@ pub fn blobify_canonical(
         },
         grpc: GrpcIdentity { services, files },
         identity,
+        forui: default_forui(),
         methods,
     };
 
