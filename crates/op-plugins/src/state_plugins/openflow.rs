@@ -122,6 +122,9 @@ pub struct FlowEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FlowAction {
+    /// Add a protocol header to a packet (currently `ethernet`).
+    Encap { header: String },
+
     /// Output to port
     Output { port: String },
 
@@ -439,6 +442,13 @@ impl OpenFlowPlugin {
                 actions.push(FlowAction::Normal);
             } else if action == "drop" {
                 actions.push(FlowAction::Drop);
+            } else if let Some(header) = action
+                .strip_prefix("encap(")
+                .and_then(|value| value.strip_suffix(')'))
+            {
+                actions.push(FlowAction::Encap {
+                    header: header.to_string(),
+                });
             } else if let Some(port) = action.strip_prefix("output:") {
                 actions.push(FlowAction::Output {
                     port: port.to_string(),
@@ -502,6 +512,7 @@ impl OpenFlowPlugin {
     #[allow(dead_code)]
     fn action_to_string(&self, action: &FlowAction) -> String {
         match action {
+            FlowAction::Encap { header } => format!("encap({header})"),
             FlowAction::Output { port } => format!("output:{}", port),
             FlowAction::LoadRegister { register, value } => {
                 format!("load:{}->NXM_NX_REG{}[]", value, register)

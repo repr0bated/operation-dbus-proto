@@ -66,5 +66,36 @@
     "cookie": 3694151570867355650,
     "idle_timeout": 0,
     "hard_timeout": 0
+  },
+  {
+    "table": 0,
+    "priority": 200,
+    "match_fields": {
+      "in_port": "netmaker",
+      "packet_type": "(1,0x800)"
+    },
+    "actions": [
+      {
+        "type": "encap",
+        "header": "ethernet"
+      },
+      {
+        "type": "set_field",
+        "field": "eth_src",
+        "value": "02:00:64:45:00:01"
+      },
+      {
+        "type": "set_field",
+        "field": "eth_dst",
+        "value": "port_mac:ovsbr0"
+      },
+      {
+        "type": "output",
+        "port": "LOCAL"
+      }
+    ],
+    "cookie": 3694151570867355650,
+    "idle_timeout": 0,
+    "hard_timeout": 0
   }
 ]

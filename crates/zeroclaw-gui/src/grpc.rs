@@ -10,8 +10,12 @@
 use anyhow::{anyhow, Context, Result};
 use bytes::{Buf, BufMut};
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage, Kind, MessageDescriptor};
+use prost_reflect::{
+    DescriptorPool, DynamicMessage, Kind, MessageDescriptor, MethodDescriptor, ServiceDescriptor,
+};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::task::AbortHandle;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
@@ -47,6 +51,12 @@ use tonic_reflection::pb::v1::{
 pub struct ReflectionRegistry {
     pool: Arc<RwLock<Option<DescriptorPool>>>,
     channel: Arc<RwLock<Option<Channel>>>,
+    /// Descriptor pools decoded from sealed plugin blobs, keyed by plugin id.
+    /// Populated by [`ReflectionRegistry::refresh_from_blobs`]; independent of
+    /// the server-reflection `pool` above, which needs a live connection.
+    blob_pools: Arc<RwLock<HashMap<String, DescriptorPool>>>,
+    /// `generation` of the blob catalog manifest the pools were built from.
+    last_generation: Arc<RwLock<u64>>,
 }
 
 impl ReflectionRegistry {
@@ -108,6 +118,161 @@ impl ReflectionRegistry {
             *g = Some(ch);
         }
     }
+}
+
+// ----------------- blob-backed descriptor pools -----------------
+
+/// Outcome of a [`ReflectionRegistry::refresh_from_blobs`] pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobRefresh {
+    /// Manifest generation was unchanged; pools left alone.
+    Unchanged { generation: u64 },
+    /// Pools rebuilt. `plugins` counts blobs whose descriptor set decoded.
+    Reloaded { generation: u64, plugins: usize },
+}
+
+impl ReflectionRegistry {
+    /// Rebuild [`Self::blob_pools`] from the default SHM blob catalog.
+    ///
+    /// Unlike [`bootstrap`], this needs no connection: the sealed blobs carry
+    /// their own `FileDescriptorSet`, so the console can populate an explorer
+    /// tree before (or without) reaching a server.
+    pub fn refresh_from_blobs(&self) -> Result<BlobRefresh> {
+        self.refresh_from_blobs_in(Path::new(op_blob::catalog::DEFAULT_SHM_DIR))
+    }
+
+    /// `refresh_from_blobs`, against an explicit catalog directory.
+    pub fn refresh_from_blobs_in(&self, dir: &Path) -> Result<BlobRefresh> {
+        let generation = read_manifest_generation(dir);
+
+        // Cheap staleness gate: the catalog bumps `generation` on every write,
+        // so an unchanged value means the sealed bytes are the ones we hold.
+        if let Ok(last) = self.last_generation.read() {
+            if *last == generation && generation != 0 {
+                return Ok(BlobRefresh::Unchanged { generation });
+            }
+        }
+
+        let store = op_blob::catalog::BlobStore::open(dir)
+            .with_context(|| format!("opening blob catalog at {}", dir.display()))?;
+
+        let mut pools = HashMap::new();
+        for blob in store.plugin_object_blobs() {
+            let plugin_id = blob.manifest.plugin_id.clone();
+            match DescriptorPool::decode(blob.descriptor_set.as_slice()) {
+                Ok(pool) => {
+                    pools.insert(plugin_id, pool);
+                }
+                Err(e) => {
+                    // One malformed blob must not blank the whole explorer.
+                    eprintln!("[zeroclaw] blob {plugin_id}: descriptor decode failed: {e}");
+                }
+            }
+        }
+
+        let plugins = pools.len();
+        if let Ok(mut g) = self.blob_pools.write() {
+            *g = pools;
+        }
+        if let Ok(mut g) = self.last_generation.write() {
+            *g = generation;
+        }
+        Ok(BlobRefresh::Reloaded {
+            generation,
+            plugins,
+        })
+    }
+
+    #[allow(dead_code)] // surfaced by the task 10 reflection tree
+    pub fn blob_generation(&self) -> u64 {
+        self.last_generation.read().map(|g| *g).unwrap_or(0)
+    }
+
+    #[allow(dead_code)] // surfaced by the task 10 reflection tree
+    pub fn blob_plugin_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .blob_pools
+            .read()
+            .map(|g| g.keys().cloned().collect())
+            .unwrap_or_default();
+        ids.sort();
+        ids
+    }
+
+    /// Every service across the reflection pool and all blob pools, de-duped
+    /// by fully-qualified name and sorted.
+    pub fn all_services(&self) -> Vec<ServiceDescriptor> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for pool in self.pools() {
+            for svc in pool.services() {
+                if seen.insert(svc.full_name().to_string()) {
+                    out.push(svc);
+                }
+            }
+        }
+        out.sort_by(|a, b| a.full_name().cmp(b.full_name()));
+        out
+    }
+
+    /// Every method across every service, for tree population.
+    #[allow(dead_code)] // populates the task 10 reflection tree
+    pub fn all_methods(&self) -> Vec<MethodDescriptor> {
+        let mut out: Vec<MethodDescriptor> = self
+            .all_services()
+            .into_iter()
+            // `methods()` borrows the service, so each service's methods are
+            // collected before the descriptor goes out of scope.
+            .flat_map(|svc| svc.methods().collect::<Vec<_>>())
+            .collect();
+        out.sort_by(|a, b| a.full_name().cmp(b.full_name()));
+        out
+    }
+
+    /// Resolve a method by path. Accepts `pkg.Service/Method`,
+    /// `/pkg.Service/Method`, and the fully-qualified `pkg.Service.Method`.
+    pub fn resolve_method(&self, path: &str) -> Option<MethodDescriptor> {
+        let trimmed = path.trim_start_matches('/');
+        let (service, method) = match trimmed.split_once('/') {
+            Some((s, m)) => (s.to_string(), m.to_string()),
+            // Fully-qualified: split the final segment off as the method name.
+            None => {
+                let (s, m) = trimmed.rsplit_once('.')?;
+                (s.to_string(), m.to_string())
+            }
+        };
+        self.all_services()
+            .into_iter()
+            .find(|s| s.full_name() == service)?
+            .methods()
+            .find(|m| m.name() == method)
+    }
+
+    /// Reflection pool first (it reflects what the server actually serves),
+    /// then blob pools.
+    fn pools(&self) -> Vec<DescriptorPool> {
+        let mut pools = Vec::new();
+        if let Some(pool) = self.pool() {
+            pools.push(pool);
+        }
+        if let Ok(g) = self.blob_pools.read() {
+            let mut ids: Vec<&String> = g.keys().collect();
+            ids.sort();
+            for id in ids {
+                pools.push(g[id].clone());
+            }
+        }
+        pools
+    }
+}
+
+/// `generation` from a blob catalog `.manifest.json`, or 0 when absent.
+fn read_manifest_generation(dir: &Path) -> u64 {
+    std::fs::read(dir.join(".manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|v| v.get("generation").and_then(Value::as_u64))
+        .unwrap_or(0)
 }
 
 // ----------------- bootstrap -----------------
@@ -463,6 +628,58 @@ pub async fn invoke_unary(
         .methods()
         .find(|m| m.name() == method)
         .ok_or_else(|| anyhow!("unknown method {service}/{method}"))?;
+
+    invoke_unary_on(channel, &m, request_json).await
+}
+
+/// Open a server-streaming RPC against an explicit channel and descriptor.
+///
+/// Returns the raw framed stream; the caller decodes each frame against
+/// `m.output()`. Used by the `grpc.stream_subscribe` action handler, which
+/// needs to own the read loop so it can cancel it by stream id.
+pub async fn open_server_stream(
+    channel: Channel,
+    m: &MethodDescriptor,
+    request_json: &Value,
+) -> Result<tonic::Streaming<Vec<u8>>> {
+    if !m.is_server_streaming() || m.is_client_streaming() {
+        return Err(anyhow!(
+            "{} is not server-streaming",
+            m.full_name()
+        ));
+    }
+
+    let req_msg = DynamicMessage::deserialize(m.input(), request_json)
+        .context("request JSON does not match input schema")?;
+    let req_bytes = req_msg.encode_to_vec();
+
+    let path = format!("/{}/{}", m.parent_service().full_name(), m.name());
+    let mut grpc = tonic::client::Grpc::new(channel);
+    grpc.ready()
+        .await
+        .map_err(|e| anyhow!("channel not ready: {e}"))?;
+    let mut request = Request::new(req_bytes);
+    attach_ghostbridge_identity(&mut request);
+    let resp = grpc
+        .server_streaming(request, path.parse()?, BytesCodec)
+        .await
+        .map_err(|s: Status| anyhow!("gRPC {}: {}", s.code(), s.message()))?;
+    Ok(resp.into_inner())
+}
+
+/// Unary invocation against an explicit channel and an already-resolved
+/// method descriptor.
+///
+/// Split out of [`invoke_unary`] so the action bus can dial through
+/// [`crate::conn::ConnectionPool`] and resolve through blob pools, neither of
+/// which the registry's single `channel`/`pool` pair covers.
+pub async fn invoke_unary_on(
+    channel: Channel,
+    m: &MethodDescriptor,
+    request_json: &Value,
+) -> Result<Value> {
+    let service = m.parent_service().full_name().to_string();
+    let method = m.name().to_string();
     if m.is_client_streaming() || m.is_server_streaming() {
         return Err(anyhow!("only unary methods are supported by the Explorer"));
     }
@@ -829,4 +1046,132 @@ fn once_stream<T: Send + 'static>(
         let _ = tx.send(item).await;
     });
     ReceiverStream::new(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A catalog directory containing one real sealed blob, removed on drop.
+    struct TempCatalog {
+        dir: std::path::PathBuf,
+    }
+
+    impl TempCatalog {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "zeroclaw-gui-blobs-{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self { dir }
+        }
+
+        fn seal_demo_plugin(&self) {
+            let schema = op_blob::demo::unix_socket_schema();
+            let blob = op_blob::blob::blobify(&schema);
+            let mut store = op_blob::catalog::BlobStore::open(&self.dir).unwrap();
+            store.write(&blob).unwrap();
+        }
+    }
+
+    impl Drop for TempCatalog {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn refresh_from_blobs_lists_services_without_a_connection() {
+        let catalog = TempCatalog::new("services");
+        catalog.seal_demo_plugin();
+
+        let reg = ReflectionRegistry::new();
+        let refresh = reg.refresh_from_blobs_in(&catalog.dir).unwrap();
+
+        assert!(
+            matches!(refresh, BlobRefresh::Reloaded { plugins: 1, .. }),
+            "unexpected refresh outcome: {refresh:?}"
+        );
+        assert_eq!(reg.blob_plugin_ids().len(), 1);
+        // No `bootstrap` ran, so anything listed came from the sealed blob.
+        assert!(reg.pool().is_none());
+        assert!(
+            !reg.all_services().is_empty(),
+            "expected services from the blob descriptor set"
+        );
+        assert!(!reg.all_methods().is_empty());
+    }
+
+    #[test]
+    fn resolve_method_finds_a_known_path() {
+        let catalog = TempCatalog::new("resolve");
+        catalog.seal_demo_plugin();
+        let reg = ReflectionRegistry::new();
+        reg.refresh_from_blobs_in(&catalog.dir).unwrap();
+
+        let method = reg.all_methods().into_iter().next().unwrap();
+        let service = method.parent_service().full_name().to_string();
+        let name = method.name().to_string();
+
+        // `service/Method`
+        let found = reg.resolve_method(&format!("{service}/{name}")).unwrap();
+        assert_eq!(found.full_name(), method.full_name());
+        // Leading slash, as it appears in a gRPC path.
+        let found = reg.resolve_method(&format!("/{service}/{name}")).unwrap();
+        assert_eq!(found.full_name(), method.full_name());
+        // Fully-qualified dotted form.
+        let found = reg.resolve_method(&format!("{service}.{name}")).unwrap();
+        assert_eq!(found.full_name(), method.full_name());
+    }
+
+    #[test]
+    fn resolve_method_returns_none_for_unknown_paths() {
+        let reg = ReflectionRegistry::new();
+        assert!(reg.resolve_method("no.Such/Method").is_none());
+        assert!(reg.resolve_method("garbage").is_none());
+        assert!(reg.resolve_method("").is_none());
+    }
+
+    #[test]
+    fn unchanged_generation_skips_the_reload() {
+        let catalog = TempCatalog::new("generation");
+        catalog.seal_demo_plugin();
+        let reg = ReflectionRegistry::new();
+
+        let first = reg.refresh_from_blobs_in(&catalog.dir).unwrap();
+        let generation = match first {
+            BlobRefresh::Reloaded { generation, .. } => generation,
+            other => panic!("expected a reload, got {other:?}"),
+        };
+        assert!(generation > 0, "catalog should have written a generation");
+
+        let second = reg.refresh_from_blobs_in(&catalog.dir).unwrap();
+        assert_eq!(second, BlobRefresh::Unchanged { generation });
+        assert_eq!(reg.blob_generation(), generation);
+
+        // Re-sealing bumps the manifest generation, which un-gates the reload.
+        catalog.seal_demo_plugin();
+        let third = reg.refresh_from_blobs_in(&catalog.dir).unwrap();
+        assert!(
+            matches!(third, BlobRefresh::Reloaded { .. }),
+            "a bumped generation must force a reload, got {third:?}"
+        );
+    }
+
+    #[test]
+    fn refresh_on_an_empty_directory_is_not_an_error() {
+        let catalog = TempCatalog::new("empty");
+        let reg = ReflectionRegistry::new();
+
+        let refresh = reg.refresh_from_blobs_in(&catalog.dir).unwrap();
+
+        assert!(matches!(refresh, BlobRefresh::Reloaded { plugins: 0, .. }));
+        assert!(reg.all_services().is_empty());
+    }
 }

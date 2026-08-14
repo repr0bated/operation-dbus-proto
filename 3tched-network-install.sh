@@ -11,9 +11,10 @@
 #   ovsbr0  fail_mode=standalone datapath_type=system
 #     LOCAL ovsbr0  10.200.0.1/24   fabric + OpenFlow controller address
 #     1     pub0    188.68.58.237/22 public L3, wears eth0's MAC, default route
-#     2     svc0    10.0.0.2/24  entrance / tonic helpers
-#                    10.0.0.1/24 belongs on decoy wg0, not host svc0
-#     3     grpc0   10.200.0.2/24   gRPC plane (op-grpc-bridge :8090)
+#     2     3tched  10.0.0.2/24     incoming identity
+#                    10.200.0.2/24  incoming identity
+#     3     svc0    10.0.0.3/24     Tonic service (:8090)
+#                    10.0.0.1/24 belongs on decoy wg0, not this host
 #     4     eth0    physical uplink, enslaved LAST, no L3 of its own
 #   controller  tcp:10.200.0.1:6653 (op-of-controller), two cookie classes:
 #     FALLBACK 0x3344434800000001 — table=0 priority=0 actions=NORMAL, the
@@ -139,18 +140,16 @@ UPLINK_PHYS=eth0
 PUBLIC_PORT=pub0
 PUBLIC_ADDR=188.68.58.237/22
 PUBLIC_GW=188.68.56.1
-INTERNAL_PORTS="svc0 grpc0"
-GRPC_PORT=grpc0
-GRPC_ADDR=10.200.0.2/24
+INTERNAL_PORTS="3tched svc0"
 BRIDGE_ADDR=10.200.0.1/24
-BRIDGE_SVC_ADDRS="10.0.0.2/24@svc0"
+BRIDGE_SVC_ADDRS="10.0.0.2/24@3tched 10.200.0.2/24@3tched 10.0.0.3/24@svc0"
 OF_CONTROLLER_LISTEN=10.200.0.1:6653
 OF_CONTROLLER_ENDPOINT=tcp:10.200.0.1:6653
+OF_PROTOCOLS=OpenFlow10,OpenFlow13,OpenFlow15
+OF_STATIC_FDB=ovsbr0:eth0:0:00:00:5e:00:01:0a
 NETMAKER_NET=100.69.0.0/16
 NETMAKER_CT=netmaker
 NETMAKER_INCUS_NAME=NetMaker
-NETMAKER_EGRESS_NET=10.0.0.0/24
-NETMAKER_EGRESS_DEV=svc0
 
 capture_live() {
     log "Capturing live network state..."
@@ -159,23 +158,23 @@ capture_live() {
     [ -n "$a" ] && PUBLIC_ADDR="$a"
     a="$(ip -4 route show default 2>/dev/null | awk '/dev '"$PUBLIC_PORT"'/ {print $3; exit}')"
     [ -n "$a" ] && PUBLIC_GW="$a"
-    a="$(ip -4 -o addr show dev "$GRPC_PORT" scope global 2>/dev/null | awk '{print $4; exit}')"
-    [ -n "$a" ] && GRPC_ADDR="$a"
     a="$(ip -4 -o addr show dev "$BRIDGE" scope global 2>/dev/null | awk '{print $4; exit}')"
     [ -n "$a" ] && BRIDGE_ADDR="$a"
     local svc=""
-    while read -r addr; do
-        # 10.0.0.1/24 is decoy wg0. Do not copy it onto host svc0.
-        case "$addr" in
-            10.0.0.1/*|10.0.0.1) continue ;;
-        esac
-        [ -n "$addr" ] && svc="$svc $addr@svc0"
-    done < <(ip -4 -o addr show dev svc0 scope global 2>/dev/null | awk '{print $4}')
+    local port addr
+    for port in $INTERNAL_PORTS; do
+        while read -r addr; do
+            # 10.0.0.1 belongs on decoy wg0. Never capture it onto the host.
+            case "$addr" in
+                10.0.0.1/*|10.0.0.1) continue ;;
+            esac
+            [ -n "$addr" ] && svc="$svc $addr@$port"
+        done < <(ip -4 -o addr show dev "$port" scope global 2>/dev/null | awk '{print $4}')
+    done
     [ -n "$svc" ] && BRIDGE_SVC_ADDRS="${svc# }"
     log "  public  $PUBLIC_ADDR via $PUBLIC_GW on $PUBLIC_PORT"
-    log "  grpc    $GRPC_ADDR on $GRPC_PORT"
     log "  fabric  $BRIDGE_ADDR on $BRIDGE"
-    log "  svc     $BRIDGE_SVC_ADDRS"
+    log "  internal $BRIDGE_SVC_ADDRS"
 }
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
@@ -218,7 +217,7 @@ fi
 # ── 2. network.conf ───────────────────────────────────────────────────────────
 log "Writing $NET_CONF"
 if $DRY_RUN; then
-    echo "  would write $NET_CONF (BRIDGE=$BRIDGE PUBLIC_ADDR=$PUBLIC_ADDR GRPC_ADDR=$GRPC_ADDR)"
+    echo "  would write $NET_CONF (BRIDGE=$BRIDGE PUBLIC_ADDR=$PUBLIC_ADDR INTERNAL=$BRIDGE_SVC_ADDRS)"
 else
     install -d -m 0755 "$CONF_DIR"
     cat >"$NET_CONF" <<EOF
@@ -234,9 +233,9 @@ else
 # Model:
 #   - eth0 enslaved last, no L3 on eth0
 #   - pub0: public uplink L3, wears eth0's MAC (provider filters on it)
-#   - svc0: entrance 10.0.0.2/24 — tonic helpers (mail, Netmaker)
-#     10.0.0.1/24 is decoy wg0, never a host svc0 address
-#   - grpc0: gRPC plane (10.200.0.2:8090) — op-grpc-bridge + cognitive MCP
+#   - 3tched: single incoming port carrying 10.0.0.2 and 10.200.0.2
+#   - svc0: Tonic service at 10.0.0.3:8090
+#   - 10.0.0.1/24 is decoy wg0, never a host internal-port address
 #   - ovsbr0 LOCAL: fabric address, also the OpenFlow controller address
 #   - every container is socket-only: /run/ghostbridge bind mount, no NIC,
 #     no incus proxy devices. That rule is about CONTAINERS.
@@ -260,8 +259,6 @@ PUBLIC_ADDR=$PUBLIC_ADDR
 PUBLIC_GW=$PUBLIC_GW
 
 INTERNAL_PORTS="$INTERNAL_PORTS"
-GRPC_PORT=$GRPC_PORT
-GRPC_ADDR=$GRPC_ADDR
 
 BRIDGE_ADDR=$BRIDGE_ADDR
 BRIDGE_SVC_ADDRS="$BRIDGE_SVC_ADDRS"
@@ -269,17 +266,17 @@ BRIDGE_SVC_ADDRS="$BRIDGE_SVC_ADDRS"
 # OpenFlow: OVS dials the controller, never the other way around.
 OF_CONTROLLER_LISTEN=$OF_CONTROLLER_LISTEN
 OPENFLOW_CONTROLLER=$OF_CONTROLLER_ENDPOINT
+OF_PROTOCOLS=$OF_PROTOCOLS
 OF_STATIC_FLOWS_FILE=$STATIC_FLOWS
 OF_FLOW_PAIRS=
+OF_STATIC_FDB=$OF_STATIC_FDB
 
 NETMAKER_NET=$NETMAKER_NET
 NETMAKER_CT=$NETMAKER_CT
 NETMAKER_INCUS_NAME=$NETMAKER_INCUS_NAME
-NETMAKER_EGRESS_NET=$NETMAKER_EGRESS_NET
-NETMAKER_EGRESS_DEV=$NETMAKER_EGRESS_DEV
 NETMAKER_PORT=netmaker
 BRIDGE_MTU=1420
-NETMAKER_MTU=1420
+NETMAKER_MTU=1500
 IDENTITY_HOST=10.10.0.5
 IDENTITY_VIA=100.69.0.2
 IDENTITY_DEV=netmaker

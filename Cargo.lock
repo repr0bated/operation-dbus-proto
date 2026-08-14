@@ -11314,6 +11314,7 @@ dependencies = [
  "hyper 1.11.0",
  "hyper-util",
  "include_dir",
+ "op-blob",
  "parking_lot",
  "prost 0.13.5",
  "prost-reflect",

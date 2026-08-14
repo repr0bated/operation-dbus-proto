@@ -3,7 +3,7 @@
 /usr/local/libexec/3tched/runit-ready-signal fwd-443
 exec 2>&1
 
-until ip -4 addr show dev svc0 2>/dev/null | grep -q "10\\.0\\.0\\.2/"; do sleep 1; done
+until ip -4 addr show dev 3tched 2>/dev/null | grep -q "10\\.0\\.0\\.2/"; do sleep 1; done
 
 REALITY=/run/ghostbridge/xray-reality.sock
 MAIL=/run/ghostbridge/mail-web.sock

@@ -27,13 +27,14 @@ UPLINK="${UPLINK_PHYS:-eth0}"
 FAIL_MODE="${FAIL_MODE:-standalone}"
 DATAPATH="${DATAPATH_TYPE:-system}"
 # OpenFlow versions the bridge accepts. Set at creation so a fresh provision
-# matches a long-running host: op-of-controller speaks 1.3, while ovs-ofctl and
-# other CLI clients still default to 1.0. Allow both, or those clients fail
+# matches a long-running host: op-of-controller speaks 1.5, while ovs-ofctl and
+# other CLI clients may still default to 1.0. Allow all deployed versions, or
+# those clients fail
 # version negotiation, vswitchd drops the socket, and the caller sees only the
 # misleading "failed to connect to socket (Broken pipe)". Leaving the column
 # empty is not equivalent — OVS then defaults to OpenFlow10 alone and the
 # controller cannot connect at all.
-OF_PROTOCOLS="${OF_PROTOCOLS:-OpenFlow10,OpenFlow13}"
+OF_PROTOCOLS="${OF_PROTOCOLS:-OpenFlow10,OpenFlow13,OpenFlow15}"
 MIGRATE_IP=true
 DRY_RUN=false
 

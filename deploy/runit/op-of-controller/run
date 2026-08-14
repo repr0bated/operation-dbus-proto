@@ -10,6 +10,9 @@ wait_dep() {
     done
 }
 wait_dep ovsbr0-svc-addr
+# Symbolic `netmaker` flows must not race the typed rovs_commands add_port.
+# Later PortStatus events force a controller reconnect and fresh discovery.
+wait_dep netmaker-ovs-attach
 set -a
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
 [ -r /etc/op-dbus/network.conf ] && . /etc/op-dbus/network.conf

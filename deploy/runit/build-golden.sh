@@ -28,6 +28,7 @@
 #   build-golden.sh --golden-only   # skip touching the running host
 #   build-golden.sh --live-only     # skip the subvolume
 #   build-golden.sh --no-restart    # install live but leave services running old code
+#   build-golden.sh --replace-service NAME  # replace one hand-tuned run definition
 #   build-golden.sh --dry-run
 #
 # Requires root for the subvolume and the live install. Never builds: run
@@ -47,6 +48,7 @@ DO_GOLDEN=1
 DO_LIVE=1
 DO_RESTART=1
 DRY_RUN=0
+REPLACE_SERVICES=""
 
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
@@ -75,6 +77,11 @@ while [ $# -gt 0 ]; do
         --golden-only) DO_LIVE=0 ;;
         --live-only)   DO_GOLDEN=0 ;;
         --no-restart)  DO_RESTART=0 ;;
+        --replace-service)
+            shift
+            [ $# -gt 0 ] || die "--replace-service requires a service name"
+            REPLACE_SERVICES="$REPLACE_SERVICES $1"
+            ;;
         --dry-run)     DRY_RUN=1 ;;
         -h|--help)     sed -n '2,35p' "$SCRIPT_PATH"; exit 0 ;;
         *)             die "unknown option: $1" ;;
@@ -200,6 +207,9 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../config/openflow-static-flows.json" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/openflow-static-flows.json" \
             "$GOLDEN_DIR/etc/openflow-static-flows.json"
+    [ -f "$SCRIPT_DIR/../config/network.conf" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/network.conf" \
+            "$GOLDEN_DIR/etc/network.conf"
 
     # MANIFEST: what this snapshot is, and the hashes to prove the running host
     # matches it.
@@ -315,6 +325,12 @@ install_live() {
     [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
             /etc/op-dbus/netmaker-broker.env
+    [ -f "$SCRIPT_DIR/../config/openflow-static-flows.json" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/openflow-static-flows.json" \
+            /etc/op-dbus/openflow-static-flows.json
+    [ -f "$SCRIPT_DIR/../config/network.conf" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/network.conf" \
+            /etc/op-dbus/network.conf
 
     # Service definitions: install new ones, never clobber a hand-tuned run
     # script that differs (the host copy is authoritative until an operator says
@@ -324,8 +340,15 @@ install_live() {
         svc=$(basename "$svc_dir")
         dest="$RUNIT_SV_DIR/$svc/run"
         if [ -f "$dest" ] && ! cmp -s "${svc_dir}run" "$dest"; then
-            warn "$dest differs from the repo copy — leaving the host version alone"
-            continue
+            case " $REPLACE_SERVICES " in
+                *" $svc "*)
+                    warn "$dest differs from the repo copy — replacing by explicit request"
+                    ;;
+                *)
+                    warn "$dest differs from the repo copy — leaving the host version alone"
+                    continue
+                    ;;
+            esac
         fi
         run install -Dm755 "${svc_dir}run" "$dest"
         [ -f "${svc_dir}log/run" ] &&

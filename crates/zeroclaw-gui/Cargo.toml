@@ -42,7 +42,10 @@ thiserror = "1"
 parking_lot = "0.12"
 ehttp = { version = "0.5", features = ["native-async"] }
 dirs-next = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Sealed plugin blobs — descriptor sets for the reflection registry.
+op-blob = { path = "../op-blob" }
 include_dir = { version = "0.7", optional = true }
 
 [features]

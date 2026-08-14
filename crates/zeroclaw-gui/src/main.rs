@@ -1,5 +1,6 @@
 //! Entry point — native eframe shell + background tokio runtime for tonic.
 mod accountability;
+mod actions;
 mod app;
 mod auth;
 mod catalog;
@@ -23,6 +24,15 @@ fn main() -> eframe::Result<()> {
     let _enter = rt.enter();
 
     let registry = ReflectionRegistry::new();
+
+    // Sealed blobs carry their own descriptor sets, so the explorer has a
+    // method tree before (and without) a reflection handshake. Failure here is
+    // not fatal — reflection below may still populate the registry.
+    match registry.refresh_from_blobs() {
+        Ok(refresh) => eprintln!("[zeroclaw] blob catalog: {refresh:?}"),
+        Err(e) => eprintln!("[zeroclaw] blob catalog unavailable: {e:#}"),
+    }
+
     let chat_transport: Option<std::sync::Arc<crate::chat::ChatTransport>> = {
         let endpoint =
             std::env::var("ZEROCLAW_GRPC").unwrap_or_else(|_| "http://127.0.0.1:8090".into());

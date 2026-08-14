@@ -1,4 +1,4 @@
-//! OpenFlow 1.3 controller for ovsbr0
+//! OpenFlow 1.5 controller for ovsbr0
 //!
 //! Listens on OF_CONTROLLER_LISTEN (default 10.200.0.1:6653) for OVS to
 //! connect, then installs bidirectional flows between the configured port pairs.

@@ -1,7 +1,9 @@
 //! Root app — topbar + collapsible sidebar + routed content.
+use crate::actions::{grpc_call::GrpcCallHandler, grpc_stream::GrpcStreamHandler, ActionBus};
 use crate::auth::AuthState;
 use crate::catalog::{interpret, static_pages::StaticPages};
 use crate::chat::ChatTransport;
+use crate::conn::ConnectionPool;
 use crate::grpc::{InvokeHandle, ReflectionRegistry};
 use crate::nav::{route_title, Route, TopTab, GROUPS};
 use crate::pagedata::PageDataHub;
@@ -42,6 +44,11 @@ pub struct ZeroClawApp {
     /// Live D-Bus plugin data (via PluginService/CallMethod) for pages that
     /// declare a `source`.
     pub page_data: PageDataHub,
+    /// Dispatch surface for every side-effecting operation a component
+    /// triggers. Components emit `ActionRequest`s; they never do I/O inline.
+    pub actions: Arc<ActionBus>,
+    /// Shared, lazily-dialled gRPC channels behind the action handlers.
+    pub connections: ConnectionPool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,6 +66,16 @@ impl ZeroClawApp {
     pub fn new_with_registry(_cc: &CreationContext<'_>, registry: ReflectionRegistry) -> Self {
         let auth = AuthState::load();
         let connected = auth.token.is_some();
+        let connections = ConnectionPool::new();
+        let actions = Arc::new(ActionBus::new());
+        actions.register(Arc::new(GrpcCallHandler::new(
+            registry.clone(),
+            connections.clone(),
+        )));
+        actions.register(Arc::new(GrpcStreamHandler::new(
+            registry.clone(),
+            connections.clone(),
+        )));
         Self {
             route: Route::Overview,
             top_tab: TopTab::Console,
@@ -76,6 +93,8 @@ impl ZeroClawApp {
             chat_rx_slot: Arc::new(Mutex::new(None)),
             static_pages: StaticPages::new(),
             page_data: PageDataHub::new(),
+            actions,
+            connections,
         }
     }
 

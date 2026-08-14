@@ -25,13 +25,13 @@ DATAPATH="${DATAPATH_TYPE:-system}"
 
 # OpenFlow versions the bridge accepts. Must be set here, because this script
 # deletes and recreates the Bridge row — anything applied to the old row by hand
-# does not carry over. op-of-controller speaks 1.3, while ovs-ofctl and other CLI
-# clients still default to 1.0 — allow both, or those clients fail version
+# does not carry over. op-of-controller speaks 1.5, while ovs-ofctl and other CLI
+# clients may still default to 1.0 — allow both, or those clients fail version
 # negotiation and vswitchd drops the socket, which surfaces at the caller as the
 # misleading "failed to connect to socket (Broken pipe)". Leaving the column
 # empty is not equivalent: OVS then defaults to OpenFlow10 alone and the
 # controller cannot connect at all.
-OF_PROTOCOLS="${OF_PROTOCOLS:-OpenFlow10,OpenFlow13}"
+OF_PROTOCOLS="${OF_PROTOCOLS:-OpenFlow10,OpenFlow13,OpenFlow15}"
 
 [ -d "/sys/class/net/$PHYS" ] || {
     echo "ovsbr0-seed: uplink $PHYS is absent — refusing to seed" >&2
@@ -87,7 +87,7 @@ add_port "$BRIDGE" "internal" "br"
 # Public port: carries the uplink MAC and, later, the public address.
 add_port "$PUB" "internal" "pub" ",\"other_config\":[\"map\",[[\"hwaddr\",\"$MAC\"]]]"
 n=0
-for p in ${INTERNAL_PORTS:-svc0 grpc0}; do
+for p in ${INTERNAL_PORTS:-3tched svc0}; do
     n=$((n + 1))
     [ "$p" = "$PUB" ] && continue
     add_port "$p" "internal" "int$n"
