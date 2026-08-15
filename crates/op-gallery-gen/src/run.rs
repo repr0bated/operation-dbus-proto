@@ -100,7 +100,7 @@ pub async fn run_gallery_fill(
         config.zeroclaw_endpoint.clone(),
         config.max_turns,
     ));
-    let validator = SpecValidator::new();
+    let validator = SpecValidator::with_catalog(config.load_catalog()?);
 
     let target = config.target_count;
     let max_retries_per_slot: usize = 3;
@@ -112,14 +112,17 @@ pub async fn run_gallery_fill(
 
     let stats = store.stats();
     tracing::info!(
+        // Two distinct catalogs: `blob_catalog` is the sealed plugin state the
+        // model reads from, `component_catalog` is the vocabulary it may emit.
         "Starting gallery fill: target={}, concurrency={}, endpoint={}, mcp={}, qdrant={}, \
-         catalog_hash={}, gallery={}/{} ({} stable core)",
+         blob_catalog={}, component_catalog={}, gallery={}/{} ({} stable core)",
         target,
         MAX_CONCURRENCY,
         config.zeroclaw_endpoint,
         config.enable_mcp,
         config.enable_qdrant,
         &ctx.catalog_hash[..ctx.catalog_hash.len().min(12)],
+        validator.catalog_hash().map_or("none", |h| &h[..12]),
         stats.current_size,
         stats.max_size,
         stats.stable_core_count,

@@ -98,89 +98,101 @@ pub enum ProgressEvent {
     Error { message: String },
 }
 
-/// Render the gallery-gen session UI as a json-render spec.
+/// Render the gallery-gen session as a json-render spec.
 ///
-/// This spec is rendered by the same DSL interpreter as gallery elements.
-/// It provides: tier toggles, guidance input, generate/cancel buttons, and
-/// a progress log.
+/// Reports the session's configuration and state; it does not offer controls,
+/// because the catalog declares no input components (no toggle, no text or
+/// number input, no button group). The operator changes a session through the
+/// chat/HTTP path, and this spec shows what that produced. Anything else here
+/// would be a component the renderer cannot render.
+///
+/// Progress lines are bound rather than baked in: the log grows while this spec
+/// stays fixed, so the host feeds `/progress_log` and the renderer follows it.
 pub fn render_session_spec(session: &GalleryGenSession) -> serde_json::Value {
+    // `card` and `badge` do not accept the same tones — the catalog gives badge
+    // an extra `info` — so the mapping is per component rather than shared.
+    let (card_tone, badge_tone) = match session.state {
+        SessionState::Configuring => ("default", "default"),
+        SessionState::Running => ("default", "info"),
+        SessionState::Completed => ("ok", "ok"),
+        SessionState::Cancelled => ("warn", "warn"),
+    };
+
     serde_json::json!({
         "root": "session-root",
         "elements": {
             "session-root": {
-                "type": "stack",
-                "props": { "dir": "v", "gap": 12 },
-                "children": ["header", "config-panel", "actions", "progress-log"]
+                "type": "container",
+                "props": {},
+                "children": ["header", "config-panel", "progress-panel"]
             },
             "header": {
                 "type": "heading",
-                "props": { "text": "Gallery Generation Session", "size": 20 }
+                "props": { "text": "Gallery Generation Session", "level": 2 }
             },
             "config-panel": {
                 "type": "card",
-                "props": { "title": "Configuration" },
-                "children": ["tier-baseline", "tier-mcp", "tier-qdrant", "target-input", "guidance-input"]
+                "props": { "title": "Configuration", "tone": "default" },
+                "children": [
+                    "session-id",
+                    "tier-baseline",
+                    "tier-mcp",
+                    "tier-qdrant",
+                    "target-count",
+                    "guidance"
+                ]
+            },
+            "session-id": {
+                "type": "kv",
+                "props": { "label": "Session", "value": session.session_id, "kind": null }
             },
             "tier-baseline": {
-                "type": "kv_pair",
-                "props": { "key": "Baseline", "value": "ON (always)" }
+                "type": "kv",
+                "props": { "label": "Baseline", "value": "on (always)", "kind": null }
             },
             "tier-mcp": {
-                "type": "toggle",
+                "type": "kv",
                 "props": {
-                    "label": "MCP Cross-Discovery",
-                    "bind": "/tiers/mcp_enabled"
+                    "label": "MCP cross-discovery",
+                    "value": if session.tiers.mcp_enabled { "on" } else { "off" },
+                    "kind": null
                 }
             },
             "tier-qdrant": {
-                "type": "toggle",
+                "type": "kv",
                 "props": {
-                    "label": "Qdrant Semantic Search",
-                    "bind": "/tiers/qdrant_enabled"
-                },
-                "visible": "/tiers/mcp_enabled"
-            },
-            "target-input": {
-                "type": "number_input",
-                "props": {
-                    "label": "Target Specs",
-                    "bind": "/target_count",
-                    "min": 1,
-                    "max": 200,
-                    "step": 1
+                    "label": "Qdrant semantic search",
+                    "value": if session.tiers.qdrant_enabled { "on" } else { "off" },
+                    "kind": null
                 }
             },
-            "guidance-input": {
-                "type": "text_input",
+            "target-count": {
+                "type": "kv",
+                "props": { "label": "Target specs", "value": session.target_count, "kind": null }
+            },
+            "guidance": {
+                "type": "kv",
                 "props": {
-                    "label": "Operator Guidance (optional)",
-                    "bind": "/operator_guidance",
-                    "placeholder": "e.g., focus on network observability, for a compliance auditor"
+                    "label": "Operator guidance",
+                    "value": session.operator_guidance.clone().unwrap_or_else(|| "(none)".to_string()),
+                    "kind": null
                 }
             },
-            "actions": {
-                "type": "button_group",
-                "props": {
-                    "buttons": [
-                        { "label": "Generate", "variant": "default" },
-                        { "label": "Cancel", "variant": "destructive" }
-                    ]
-                }
+            "progress-panel": {
+                "type": "card",
+                "props": { "title": "Progress", "tone": card_tone },
+                "children": ["state-badge", "progress-log"]
+            },
+            "state-badge": {
+                "type": "badge",
+                "props": { "text": format!("{:?}", session.state), "tone": badge_tone }
             },
             "progress-log": {
-                "type": "card",
-                "props": { "title": "Progress" },
-                "children": ["log-stream"]
-            },
-            "log-stream": {
-                "type": "log_stream",
-                "props": {
-                    "bind": "/progress_log",
-                    "autoScroll": true,
-                    "maxHeight": "400px"
-                }
+                "type": "code",
+                "props": { "content": { "$state": "/progress_log" } }
             }
-        }
+        },
+        "state": { "progress_log": "" }
     })
 }
 
@@ -204,4 +216,59 @@ pub fn destroy_session(_session: GalleryGenSession) {
     // 3. No entries written to disk
     // 4. RunProgress atomics are reset at next run start
     // The drop is the cleanup.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CatalogGuard, SpecValidator};
+
+    fn validator() -> SpecValidator {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/json-render");
+        SpecValidator::with_catalog(CatalogGuard::load(&dir).expect("catalog artifact"))
+    }
+
+    /// This spec ships hand-written, so it is held to the same gate as generated
+    /// specs. Without this test it is the one spec in the system that can name a
+    /// component the renderer does not have and never be told — which is how it
+    /// came to be written entirely in a retired dialect.
+    #[test]
+    fn every_session_state_renders_an_admissible_spec() {
+        let validator = validator();
+
+        for state in [
+            SessionState::Configuring,
+            SessionState::Running,
+            SessionState::Completed,
+            SessionState::Cancelled,
+        ] {
+            let mut session = create_session("gallery-gen-1".to_string());
+            session.state = state;
+            session.tiers.mcp_enabled = true;
+            session.operator_guidance = Some("focus on network observability".to_string());
+
+            let spec = render_session_spec(&session);
+            let result = validator.validate(&spec);
+            assert!(
+                result.valid,
+                "session spec for {:?} must be admissible: {:?}",
+                session.state, result.errors
+            );
+        }
+    }
+
+    #[test]
+    fn the_spec_reports_the_session_it_was_given() {
+        let mut session = create_session("gallery-gen-7".to_string());
+        session.target_count = 12;
+        session.tiers.qdrant_enabled = true;
+
+        let spec = render_session_spec(&session);
+        let elements = &spec["elements"];
+        assert_eq!(elements["session-id"]["props"]["value"], "gallery-gen-7");
+        assert_eq!(elements["target-count"]["props"]["value"], 12);
+        assert_eq!(elements["tier-qdrant"]["props"]["value"], "on");
+        assert_eq!(elements["tier-mcp"]["props"]["value"], "off");
+    }
 }

@@ -378,50 +378,62 @@ impl InferenceLoop {
         tools
     }
 
-    /// Extract a spec from model output.
+    /// Assemble a spec from model output.
+    ///
+    /// The contract the catalog's prompt states is a JSONL patch stream, so that
+    /// is what is read. A model that ignores it and emits a whole spec object is
+    /// still accepted — the turn's work is usable and the gate validates it
+    /// either way — but the deviation is logged, because output drifting from
+    /// the prompt is worth seeing rather than absorbing.
     fn extract_spec(&self, content: &str) -> Result<serde_json::Value> {
-        // Try to parse as direct JSON
-        if let Ok(spec) = serde_json::from_str::<serde_json::Value>(content) {
-            if spec.get("root").is_some() && spec.get("elements").is_some() {
-                return Ok(spec);
+        match crate::spec_stream::assemble(content) {
+            Ok((spec, stats)) => {
+                tracing::debug!(
+                    "Assembled spec from {} patch operations ({} non-patch lines ignored)",
+                    stats.applied,
+                    stats.ignored
+                );
+                Ok(spec)
             }
-        }
-
-        // Try to extract from markdown code block
-        if let Some(json_start) = content.find("```json") {
-            let json_start = json_start + 7;
-            if let Some(json_end) = content[json_start..].find("```") {
-                let json_str = &content[json_start..json_start + json_end].trim();
-                if let Ok(spec) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if spec.get("root").is_some() && spec.get("elements").is_some() {
-                        return Ok(spec);
+            Err(stream_error) => {
+                let whole = extract_json_object(content)
+                    .filter(|value| value.get("root").is_some() && value.get("elements").is_some());
+                match whole {
+                    Some(spec) => {
+                        tracing::warn!(
+                            "Model emitted a whole spec object instead of the JSONL patch stream \
+                             the catalog prompt requests; accepting it. Stream error was: {}",
+                            stream_error
+                        );
+                        Ok(spec)
                     }
+                    None => Err(stream_error),
                 }
             }
         }
-
-        // Try to extract from generic code block
-        if let Some(code_start) = content.find("```") {
-            let code_start = code_start + 3;
-            // Skip language identifier if present
-            let code_start = if let Some(newline_pos) = content[code_start..].find('\n') {
-                code_start + newline_pos + 1
-            } else {
-                code_start
-            };
-
-            if let Some(code_end) = content[code_start..].find("```") {
-                let code_str = &content[code_start..code_start + code_end].trim();
-                if let Ok(spec) = serde_json::from_str::<serde_json::Value>(code_str) {
-                    if spec.get("root").is_some() && spec.get("elements").is_some() {
-                        return Ok(spec);
-                    }
-                }
-            }
-        }
-
-        anyhow::bail!("No valid spec found in model output")
     }
+}
+
+/// Pull a JSON object out of model prose, bare or fenced.
+fn extract_json_object(content: &str) -> Option<serde_json::Value> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(content.trim()) {
+        return Some(value);
+    }
+
+    let mut rest = content;
+    while let Some(fence) = rest.find("```") {
+        let after_fence = &rest[fence + 3..];
+        // Skip a language tag if the fence carries one.
+        let body_start = after_fence.find('\n').map_or(after_fence.len(), |n| n + 1);
+        let body = &after_fence[body_start..];
+        let Some(end) = body.find("```") else { break };
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(body[..end].trim()) {
+            return Some(value);
+        }
+        rest = &body[end..];
+    }
+
+    None
 }
 
 /// Resolve Ghostbridge identity for op-web `/v1/chat/completions`.

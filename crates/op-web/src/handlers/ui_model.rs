@@ -435,6 +435,9 @@ pub async fn start_generation(
         enable_mcp: config.enable_mcp,
         enable_qdrant: config.enable_qdrant,
         max_turns: 10,
+        // Where the exported json-render catalog lives; the run loads the
+        // vocabulary from it and refuses to start if it cannot.
+        catalog_dir: op_gallery_gen::default_catalog_dir(),
     };
 
     // Reset progress and mark as running

@@ -7,7 +7,12 @@ import {
   type DashboardStreamState,
 } from "@/lib/dashboard-stream";
 
-const STREAM_EVENT_TYPES = ["state_update", "audit_event", "system_stats"] as const;
+const STREAM_EVENT_TYPES = [
+  "state_update",
+  "schema_update",
+  "audit_event",
+  "system_stats",
+] as const;
 
 export function useDashboardEventStream() {
   const [state, setState] = useState<DashboardStreamState>(() =>

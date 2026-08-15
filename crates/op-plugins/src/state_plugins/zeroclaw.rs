@@ -3737,11 +3737,6 @@ pub mod inspector_gadget_generated {
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.approver-channel@v1"))]
         pub approver_channel: Option<String>,
 
-        /// Discovered from Repomix path `struct.zeroclaw_config.ApprovalRoute.on_no_approver`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.on-no-approver@v1"))]
-        pub on_no_approver: Option<String>,
-
         /// Discovered from Repomix path `struct.zeroclaw_config.ApprovalRoute.timeout_secs`. Review before promotion.
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.timeout-secs@v1"))]
@@ -3826,11 +3821,6 @@ pub mod inspector_gadget_generated {
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.model-provider@v1"))]
         pub model_provider: Option<String>,
-
-        /// Discovered from Repomix path `struct.zeroclaw_config.BuilderSubmission.peer_groups`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.peer-groups@v1"))]
-        pub peer_groups: Option<String>,
 
         /// Discovered from Repomix path `struct.zeroclaw_config.BuilderSubmission.risk_profile`. Review before promotion.
         #[serde(default)]
@@ -3961,11 +3951,6 @@ pub mod inspector_gadget_generated {
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.configfieldentry@v1"))]
         pub configfieldentry: Option<String>,
-
-        /// Discovered from Repomix path `struct.zeroclaw_config.ConfigFieldEntry.alias_source`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.alias-source@v1"))]
-        pub alias_source: Option<String>,
 
         /// Discovered from Repomix path `struct.zeroclaw_config.ConfigFieldEntry.enum_variants`. Review before promotion.
         #[serde(default)]
@@ -4647,11 +4632,6 @@ pub mod inspector_gadget_generated {
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.ignore@v1"))]
         pub ignore: Option<String>,
 
-        /// Discovered from Repomix path `struct.zeroclaw_config.PeerGroupConfig.output_modality`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.output-modality@v1"))]
-        pub output_modality: Option<String>,
-
         /// Discovered from Repomix path `struct.zeroclaw_config.PerSenderTracker`. Review before promotion.
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.persendertracker@v1"))]
@@ -4882,16 +4862,6 @@ pub mod inspector_gadget_generated {
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.config-path@v1"))]
         pub config_path: Option<String>,
 
-        /// Discovered from Repomix path `struct.zeroclaw_config.SecurityPolicy.data_dir`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.data-dir@v1"))]
-        pub data_dir: Option<String>,
-
-        /// Discovered from Repomix path `struct.zeroclaw_config.SecurityPolicy.delegation_policy`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.delegation-policy@v1"))]
-        pub delegation_policy: Option<String>,
-
         /// Discovered from Repomix path `struct.zeroclaw_config.SecurityPolicy.firejail_args`. Review before promotion.
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.firejail-args@v1"))]
@@ -4992,11 +4962,6 @@ pub mod inspector_gadget_generated {
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.timestamp@v1"))]
         pub timestamp: Option<String>,
 
-        /// Discovered from Repomix path `struct.zeroclaw_config.TranscriptionProviders.local_whisper`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.local-whisper@v1"))]
-        pub local_whisper: Option<String>,
-
         /// Discovered from Repomix path `struct.zeroclaw_config.TrustConfig`. Review before promotion.
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.trustconfig@v1"))]
@@ -5086,11 +5051,6 @@ pub mod inspector_gadget_generated {
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.extra-headers@v1"))]
         pub extra_headers: Option<String>,
-
-        /// Discovered from Repomix path `struct.zeroclaw_config.V1Config.model_providers`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.model-providers@v1"))]
-        pub model_providers: Option<String>,
 
         /// Discovered from Repomix path `struct.zeroclaw_config.V1Config.passthrough`. Review before promotion.
         #[serde(default)]
@@ -5247,20 +5207,10 @@ pub mod inspector_gadget_generated {
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.uri@v1"))]
         pub uri: Option<Vec<String>>,
 
-        /// Discovered from Repomix path `toml.dev.config.harness-test.risk_profiles`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.risk-profiles@v1"))]
-        pub risk_profiles: Option<String>,
-
         /// Discovered from Repomix path `toml.dev.config.harness-test.risk_profiles.default.level`. Review before promotion.
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.level@v1"))]
         pub level: Option<String>,
-
-        /// Discovered from Repomix path `toml.dev.config.harness-test.runtime_profiles`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.zeroclaw.runtime-profiles@v1"))]
-        pub runtime_profiles: Option<String>,
 
         /// Discovered from Repomix path `toml.dev.config.harness-test.runtime_profiles.default.context_compression`. Review before promotion.
         #[serde(default)]

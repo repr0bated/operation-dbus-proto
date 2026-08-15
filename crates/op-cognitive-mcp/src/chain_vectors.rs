@@ -609,13 +609,16 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    /// `QdrantError::ResponseError` holds qdrant-client's tonic `Status`, which
+    /// is a different type from the `tonic::Status` this crate's own services
+    /// use. The alias is what makes the two nameable in one file.
     #[test]
     fn already_exists_detection_matches_qdrant_wording() {
         assert!(super::is_already_exists(&QdrantError::ResponseError {
-            status: tonic::Status::already_exists("Collection `x` already exists!"),
+            status: tonic_qdrant::Status::already_exists("Collection `x` already exists!"),
         }));
         assert!(!super::is_already_exists(&QdrantError::ResponseError {
-            status: tonic::Status::internal("some other failure"),
+            status: tonic_qdrant::Status::internal("some other failure"),
         }));
     }
 

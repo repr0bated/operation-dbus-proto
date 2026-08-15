@@ -18,9 +18,18 @@ use std::io::{ErrorKind, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const SHM_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
+
+/// Sled layout/derivation version.
+///
+/// Bumped to 2 when the footprint's fourth term stopped being a scraped
+/// WireGuard peer port (which was structurally zero on this host) and became a
+/// caller-supplied transport port, and when writes became read-modify-write
+/// with an advance-only index. Records written under either rule are
+/// self-describing through this field; nothing re-derives stored footprints, so
+/// existing chain records keep their values rather than being reinterpreted.
+pub const SLED_SCHEMA_VERSION: u32 = 2;
 pub const SHM_XRAY_CONFIG: &str = "/dev/shm/xray-ghostbridge.json";
 pub const SCHEMA_BLOB_MAGIC: [u8; 8] = *b"OPBLOB01";
 pub const SCHEMA_BLOB_VERSION: u32 = 1;
@@ -186,7 +195,7 @@ impl std::fmt::Display for SubidTaxonomy {
 ///   vector_id           [u8; 16]   offset 92   (Qdrant episode UUID)
 ///   reserved            [u8; 44]   offset 108
 #[repr(C)]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct IdentitySled {
     /// Raw Curve25519 WireGuard peer key.
     pub wireguard_pubkey: [u8; 32],
@@ -1057,8 +1066,6 @@ fn route_to_outbound(_footprint: &str, _trace_id: &str, route: &XrayRoute) -> Op
 
 // ── WireGuard-driven sled writer ─────────────────────────────────────────────
 
-static MUTATION_INDEX: AtomicU64 = AtomicU64::new(0);
-
 /// Decode a base64 WireGuard public key (32-byte Curve25519) into raw bytes.
 fn decode_wg_pubkey(b64: &str) -> [u8; 32] {
     use base64::Engine;
@@ -1116,7 +1123,22 @@ pub fn etch_footprint(
     mutation_index: u64,
     source_port: u16,
 ) -> [u8; 32] {
-    let schema_catalog_hash = schema_catalog_hash().unwrap_or([0u8; 32]);
+    // A missing catalog hash used to fall back to zeros silently, which makes a
+    // footprint that binds *no contract* indistinguishable from one that binds a
+    // real one. The fallback stays — refusing to stamp would break the mutation
+    // path — but it is now audible, because it means the proof is weaker than it
+    // looks and that is worth knowing at the time it happens.
+    let schema_catalog_hash = match schema_catalog_hash() {
+        Some(hash) => hash,
+        None => {
+            tracing::warn!(
+                mutation_index,
+                "no published catalog hash; footprint binds zeros and cannot \
+                 attest which contract this session operated against"
+            );
+            [0u8; 32]
+        }
+    };
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(wireguard_pubkey);
@@ -1131,88 +1153,134 @@ pub fn etch_footprint(
 ///
 /// Returns 0 when the peer has no current endpoint (not connected, or a local self-write),
 /// so the footprint degrades gracefully to the port-less base.
-pub fn peer_source_port(peer_pubkey: &str) -> u16 {
-    let iface = env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string());
-    let out = match Command::new("wg")
-        .arg("show")
-        .arg(&iface)
-        .arg("dump")
-        .output()
-    {
-        Ok(o) if o.status.success() => o,
-        _ => return 0,
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        // peer fields: pubkey, psk, endpoint, allowed-ips, last-hs, rx, tx, keepalive
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() >= 3 && fields[0] == peer_pubkey {
-            let endpoint = fields[2];
-            if endpoint == "(none)" {
-                return 0;
-            }
-            return endpoint
-                .rsplit(":")
-                .next()
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(0);
-        }
-    }
-    0
-}
-
-/// Reads `GB_TRACE_ID` from environment to propagate an existing trace;
-/// if absent, mints a fresh UUID v4.  All extra metadata (subid, compliance,
-/// routing) lives in environment variables — the sled itself is the spec
-/// layout and nothing more.
-pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
-    let wireguard_pubkey = decode_wg_pubkey(peer_pubkey);
-    let mutation_index = MUTATION_INDEX.fetch_add(1, Ordering::Relaxed);
-
-    // Per-session WireGuard source port binds the footprint to the session
-    // network context (accountability loop); then the canonical Strike/Etch.
-    let source_port = peer_source_port(peer_pubkey);
-    let hashed_footprint = etch_footprint(&wireguard_pubkey, mutation_index, source_port);
-
-    // Trace propagation: reuse existing UUID if present, else mint v4
-    let trace_id: [u8; 16] = if let Ok(existing) = env::var("GB_TRACE_ID") {
-        hex::decode(existing.trim())
-            .ok()
-            .and_then(|v| v.try_into().ok())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes())
-    } else {
-        uuid::Uuid::new_v4().into_bytes()
-    };
-
-    let sled = IdentitySled {
-        wireguard_pubkey,
-        mutation_index,
-        hashed_footprint,
-        trace_id,
-        vector_id: [0u8; 16],
-        schema_version: 1,
-        reserved: [0u8; 44],
-    };
-    write_sled(&sled)
-}
-
-/// Write the sled with fully explicit fields — called from SchemaEngine on mutation.
+/// Transport port bound into a session's footprint.
 ///
-/// `trace_id` is passed as hex; if empty a fresh UUID v4 is minted.
+/// `0` means the session did not arrive over a routable transport — which is
+/// the normal case for a provisioned session container, whose only device is
+/// the shared `ghostbridge` Unix socket and which therefore has no peer
+/// endpoint at all. A non-zero value is supplied by a caller that genuinely
+/// knows the port the session arrived on.
+///
+/// This used to shell out to `wg show <iface> dump` with `WG_INTERFACE`
+/// defaulting to `wg0`. That was wrong twice over: subprocesses are forbidden
+/// on this path, and no interface named `wg0` exists on this host (they are
+/// `netmaker`, `wgcf-egress`, `wgcf-uiStream`), so every footprint ever
+/// written bound a silent zero while appearing to bind network context.
+/// Reading a real peer endpoint requires the WireGuard genetlink protocol; a
+/// caller that has it can pass the port in rather than have this guess.
+pub const TRANSPORT_PORT_NONE: u16 = 0;
+
+/// The position currently recorded in the sled, or `0` when no record is
+/// readable.
+///
+/// A caller that is refreshing identity rather than advancing the account
+/// passes this, so its write holds position instead of regressing it.
+pub fn current_mutation_index() -> u64 {
+    match read_sled() {
+        // SAFETY: `read_sled` hands back a pointer into a live mapping; the
+        // field is copied out before `_mmap` drops.
+        Ok((ptr, _mmap)) => unsafe { (*ptr).mutation_index },
+        Err(_) => 0,
+    }
+}
+
+/// Refresh the sled's WireGuard identity, holding the session's position.
+///
+/// Reads `GB_TRACE_ID` from the environment to propagate an existing trace.
+/// All extra metadata (subid, compliance, routing) lives in environment
+/// variables — the sled itself is the spec layout and nothing more.
+///
+/// This is not a mutation, so it does not advance `mutation_index`. It used to
+/// stamp a **process-local** counter starting at zero, which meant every
+/// process that calls it — op-mcp, op-cognitive-mcp, the bridge's sled
+/// dispatch — overwrote the pipeline's real position with its own first write.
+/// That is precisely the regression the advance-only guard in
+/// [`write_sled_advance`] exists to reject, so the counter is gone rather than
+/// merely blocked.
+pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
+    let trace_id_hex = env::var("GB_TRACE_ID").unwrap_or_default();
+    write_sled_advance(
+        peer_pubkey,
+        current_mutation_index(),
+        trace_id_hex.trim(),
+        TRANSPORT_PORT_NONE,
+    )
+}
+
+/// Write the sled for one mutation — called from SchemaEngine on mutation.
+///
+/// `trace_id_hex` is hex; if empty the session's established trace is kept.
+///
+/// Update the sled for one mutation, preserving everything the caller did not
+/// set.
+///
+/// This is a read-modify-write, not a reconstruction. The previous version
+/// rebuilt all seven fields on every call, which meant `vector_id` — the link
+/// binding vectorized reasoning episodes to this session — was zeroed by every
+/// single mutation, and any writer could silently move `mutation_index`
+/// backwards.
+///
+/// `mutation_index` advances only. The sled's role is to deliver a complete
+/// account of a session: given a container, which slice of the chain is its
+/// session and which contract it ran against. A counter that can regress
+/// cannot do that, and `hashed_footprint` is derived from the index, so a
+/// regression would also stamp an integrity value for a position the session
+/// has already passed.
+///
+/// `source_port` is [`TRANSPORT_PORT_NONE`] unless the caller knows the port
+/// the session actually arrived on.
 pub fn write_sled_full(
     peer_pubkey: &str,
     mutation_index: u64,
     trace_id_hex: &str,
 ) -> std::io::Result<()> {
-    let wireguard_pubkey = decode_wg_pubkey(peer_pubkey);
+    write_sled_advance(peer_pubkey, mutation_index, trace_id_hex, TRANSPORT_PORT_NONE)
+}
 
-    // Per-session WireGuard source port binds the footprint to the session
-    // network context (accountability loop); then the canonical Strike/Etch.
-    let source_port = peer_source_port(peer_pubkey);
+/// [`write_sled_full`] with an explicit transport port.
+pub fn write_sled_advance(
+    peer_pubkey: &str,
+    mutation_index: u64,
+    trace_id_hex: &str,
+    source_port: u16,
+) -> std::io::Result<()> {
+    // Read what is already recorded so this write supplements it rather than
+    // replacing it. A missing or unreadable sled starts from defaults.
+    let previous: Option<IdentitySled> = match read_sled() {
+        // SAFETY: `read_sled` hands back a pointer into a live, page-aligned
+        // mapping of exactly `IdentitySled::SIZE`; the record is copied out
+        // before `_mmap` drops, so nothing below borrows the mapping.
+        Ok((ptr, _mmap)) => Some(unsafe { *ptr }),
+        Err(_) => None,
+    };
+
+    let wireguard_pubkey = if peer_pubkey.is_empty() {
+        previous.map(|p| p.wireguard_pubkey).unwrap_or([0u8; 32])
+    } else {
+        decode_wg_pubkey(peer_pubkey)
+    };
+
+    // Advance-only: a stale writer must never roll the account backwards.
+    let previous_index = previous.map(|p| p.mutation_index).unwrap_or(0);
+    if mutation_index < previous_index {
+        tracing::debug!(
+            attempted = mutation_index,
+            current = previous_index,
+            "ignoring out-of-order sled write"
+        );
+        return Ok(());
+    }
+    let mutation_index = mutation_index.max(previous_index);
+
     let hashed_footprint = etch_footprint(&wireguard_pubkey, mutation_index, source_port);
 
     let trace_id: [u8; 16] = if trace_id_hex.is_empty() {
-        uuid::Uuid::new_v4().into_bytes()
+        // Preserve an established trace rather than minting a new one; a fresh
+        // uuid per mutation would sever the session's own continuity.
+        previous
+            .map(|p| p.trace_id)
+            .filter(|t| t != &[0u8; 16])
+            .unwrap_or_else(|| uuid::Uuid::new_v4().into_bytes())
     } else {
         hex::decode(trace_id_hex.trim())
             .ok()
@@ -1225,8 +1293,9 @@ pub fn write_sled_full(
         mutation_index,
         hashed_footprint,
         trace_id,
-        vector_id: [0u8; 16],
-        schema_version: 1,
+        // Owned by the vector path, never by a mutation write.
+        vector_id: previous.map(|p| p.vector_id).unwrap_or([0u8; 16]),
+        schema_version: SLED_SCHEMA_VERSION,
         reserved: [0u8; 44],
     };
     write_sled(&sled)

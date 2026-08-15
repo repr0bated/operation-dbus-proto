@@ -428,11 +428,19 @@ impl RemoteOperationClient {
     }
 
     /// Subscribe to state updates from a remote endpoint
+    /// Subscribe to state changes.
+    ///
+    /// The two hydration flags mirror the proto fields and are independent on
+    /// purpose, but a consumer that renders needs both: contracts give it the
+    /// shape, present state gives it the values, and one without the other
+    /// renders either empty forms or untyped blobs.
     pub async fn subscribe(
         &self,
         plugin_filters: Vec<String>,
         path_filters: Vec<String>,
         tag_filters: Vec<String>,
+        include_initial_state: bool,
+        include_schema: bool,
     ) -> Result<
         impl tokio_stream::Stream<Item = Result<StateUpdateMessage, GrpcClientError>>,
         GrpcClientError,
@@ -443,7 +451,8 @@ impl RemoteOperationClient {
             plugin_ids: plugin_filters,
             path_patterns: path_filters,
             tags: tag_filters,
-            include_initial_state: false,
+            include_initial_state,
+            include_schema,
         });
         attach_ghostbridge_metadata(&mut request)?;
 
@@ -456,17 +465,40 @@ impl RemoteOperationClient {
 
         Ok(tokio_stream::StreamExt::map(stream, |result| {
             result
-                .map(|update| StateUpdateMessage {
-                    plugin_id: update.plugin_id,
-                    object_path: update.object_path,
-                    property_name: if update.member_name.is_empty() {
-                        None
-                    } else {
-                        Some(update.member_name)
-                    },
-                    new_value: update.new_value.as_ref().map(prost_value_to_simd),
-                    event_id: update.event_id.to_string(),
-                    tags_touched: update.tags_touched,
+                .map(|update| {
+                    let change_type = change_type_name(update.change_type);
+                    StateUpdateMessage {
+                        change_id: update.change_id,
+                        plugin_id: update.plugin_id,
+                        object_path: update.object_path,
+                        property_name: if update.member_name.is_empty() {
+                            None
+                        } else {
+                            Some(update.member_name)
+                        },
+                        // Present on every frame that names a plugin, not just
+                        // contract frames: it is what a consumer compares
+                        // against the contract it is currently holding.
+                        schema_hash: if update.schema_hash.is_empty() {
+                            None
+                        } else {
+                            Some(update.schema_hash)
+                        },
+                        catalog_hash: update.catalog_hash,
+                        old_value: update.old_value.as_ref().map(prost_value_to_simd),
+                        new_value: update.new_value.as_ref().map(prost_value_to_simd),
+                        event_id: update.event_id.to_string(),
+                        event_hash: update.event_hash,
+                        tags_touched: update.tags_touched,
+                        actor_id: update.actor_id,
+                        timestamp: update.timestamp.map(|ts| {
+                            chrono::DateTime::from_timestamp(ts.seconds, ts.nanos.max(0) as u32)
+                                .unwrap_or_default()
+                                .to_rfc3339()
+                        }),
+                        change_type: change_type.to_string(),
+                        frame_kind: frame_kind_name(update.frame_kind).to_string(),
+                    }
                 })
                 .map_err(|e| GrpcClientError::StreamError(e.to_string()))
         }))
@@ -522,19 +554,78 @@ pub struct SetStateResult {
     pub effective_hash: String,
 }
 
-/// State update message from subscription
-#[derive(Debug, Clone)]
+/// State update message from subscription.
+///
+/// Every field the wire frame carries.
+///
+/// This is deliberately total rather than a useful subset: it is what
+/// downstream transports (op-web's SSE bridge) re-serialize wholesale, so a
+/// field omitted here is a field no browser subscriber can ever see. When the
+/// proto message grows, grow this with it instead of letting consumers choose.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StateUpdateMessage {
+    pub change_id: String,
     pub plugin_id: String,
     pub object_path: String,
     pub property_name: Option<String>,
+    pub old_value: Option<simd_json::OwnedValue>,
     pub new_value: Option<simd_json::OwnedValue>,
     pub event_id: String,
+    pub event_hash: String,
     pub tags_touched: Vec<String>,
+    pub actor_id: String,
+    /// RFC 3339, or `None` when the frame carried no timestamp.
+    pub timestamp: Option<String>,
+    /// Snake-case rendering of the proto `ChangeType`. Consumers that bridge
+    /// this to another transport need it to tell a contract frame from a value
+    /// frame; without it every frame looks like a property set.
+    pub change_type: String,
+    /// Snake-case rendering of the proto `StateFrameKind`: where in the stream
+    /// this frame sits (hydration, live update, keepalive).
+    pub frame_kind: String,
+    /// Hash of the contract the frame's plugin is published under. On a
+    /// `schema_migration` frame it identifies the contract in `new_value`; on
+    /// every other frame it says which contract the value should be read
+    /// against. `None` only when the frame names no plugin.
+    pub schema_hash: Option<String>,
+    /// Identity of the whole published catalog, on every frame including
+    /// keepalives. A consumer that sees this change without having received the
+    /// matching schema frame knows it missed one and must re-hydrate.
+    pub catalog_hash: String,
 }
 
-/// Chain event message from event stream
-#[derive(Debug, Clone)]
+/// Render a proto `ChangeType` discriminant as a stable snake-case name.
+/// Unknown discriminants degrade to "unspecified" rather than failing the
+/// stream — an older client must not drop frames a newer server adds.
+fn change_type_name(value: i32) -> &'static str {
+    match crate::proto::ChangeType::try_from(value) {
+        Ok(crate::proto::ChangeType::PropertySet) => "property_set",
+        Ok(crate::proto::ChangeType::PropertyDelete) => "property_delete",
+        Ok(crate::proto::ChangeType::MethodCall) => "method_call",
+        Ok(crate::proto::ChangeType::Signal) => "signal",
+        Ok(crate::proto::ChangeType::ObjectAdded) => "object_added",
+        Ok(crate::proto::ChangeType::ObjectRemoved) => "object_removed",
+        Ok(crate::proto::ChangeType::SchemaMigration) => "schema_migration",
+        Ok(crate::proto::ChangeType::Unspecified) | Err(_) => "unspecified",
+    }
+}
+
+/// Render a proto `StateFrameKind` discriminant as a stable snake-case name.
+fn frame_kind_name(value: i32) -> &'static str {
+    match crate::proto::StateFrameKind::try_from(value) {
+        Ok(crate::proto::StateFrameKind::InitialState) => "initial_state",
+        Ok(crate::proto::StateFrameKind::Update) => "update",
+        Ok(crate::proto::StateFrameKind::Heartbeat) => "heartbeat",
+        Ok(crate::proto::StateFrameKind::Unspecified) | Err(_) => "unspecified",
+    }
+}
+
+/// Chain event message from event stream.
+///
+/// Serialized wholesale by downstream transports for the same reason as
+/// [`StateUpdateMessage`]: the hashes are what make the record verifiable, so
+/// no hop gets to decide they are uninteresting.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ChainEventMessage {
     pub event_id: String,
     pub event_hash: String,

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Add the netclient WireGuard interface to ovsbr0 through the canonical typed
-# rovs_commands plugin after both netclient and the bridge are ready.
+# Keep the netclient WireGuard interface in the host routing stack.  Enslaving
+# it to OVS diverts decrypted traffic before local listeners (including :8080)
+# can receive it.  The legacy service name is retained for dependency stability.
 exec 2>&1
 export PATH="/usr/local/bin:/usr/bin:/usr/sbin:${PATH:-}"
 
@@ -15,7 +16,6 @@ wait_dep() {
 }
 
 wait_dep ovs-vswitchd
-wait_dep op-grpc-bridge
 wait_dep netclient
 
 set -a; [ -r /etc/op-dbus/network.conf ] && . /etc/op-dbus/network.conf; set +a
@@ -29,8 +29,8 @@ until [ -d "/sys/class/net/$IFACE" ]; do
     sleep 1
 done
 
-zcall rovs_commands add_port \
-    -a "{\"bridge_name\":\"$BRIDGE\",\"port_name\":\"$IFACE\"}"
+/usr/local/libexec/3tched/ovsdb-port del-port "$IFACE"
+ip link set dev "$IFACE" up
 /usr/local/libexec/3tched/runit-ready-signal netmaker-ovs-attach
-echo "netmaker-ovs-attach: rovs_commands added $IFACE to $BRIDGE"
+echo "netmaker-ovs-attach: $IFACE kept host-routed (detached from $BRIDGE)"
 exec pause

@@ -18,15 +18,21 @@
 //! `selected_model` fields.
 
 pub mod admission;
+pub mod catalog_guard;
 pub mod context;
 pub mod inference;
 pub mod qdrant;
 pub mod run;
 pub mod session;
+pub mod spec_stream;
 pub mod tools;
 pub mod validator;
 
 pub use admission::{try_admit, AdmissionResult, GalleryStats, GalleryStore, InMemoryGalleryStore};
+pub use catalog_guard::{
+    default_catalog_dir, CatalogGuard, CATALOG_MANIFEST_FILE, CATALOG_SCHEMA_FILE,
+    JSON_RENDER_DIR_ENV,
+};
 pub use context::{
     load_from_shm, read_catalog_hash_from_shm, CatalogLoadResult, GenerationContext, SchemaPayload,
 };
@@ -34,7 +40,7 @@ pub use inference::InferenceLoop;
 pub use run::{run_gallery_fill, RunProgress};
 pub use validator::SpecValidator;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Assemble a complete generation context from the live SHM blob catalog.
 ///
@@ -47,8 +53,16 @@ pub fn assemble_context(
     operator_guidance: Option<String>,
 ) -> Result<GenerationContext> {
     let catalog = context::load_from_shm()?;
+    // The component vocabulary is loaded from the same artifact the admission
+    // gate compiles, so what the model is told and what it is held to are one
+    // thing. Failing here is better than generating against a guess.
+    let component_catalog = GalleryGenConfig::default().load_catalog()?;
 
-    let mut ctx = GenerationContext::new(catalog.schemas, catalog.catalog_hash);
+    let mut ctx = GenerationContext::new(
+        catalog.schemas,
+        catalog.catalog_hash,
+        component_catalog.prompt().to_string(),
+    );
     ctx.mcp_enabled = enable_mcp;
     ctx.qdrant_enabled = enable_qdrant;
     ctx.operator_guidance = operator_guidance;
@@ -77,6 +91,14 @@ pub struct GalleryGenConfig {
 
     /// Maximum inference turns per spec (default: 10)
     pub max_turns: usize,
+
+    /// Directory holding the exported json-render catalog
+    /// (`catalog.schema.json` + `catalog.manifest.json`), from
+    /// `scripts/export-catalog-schema.mts` in the UI repo.
+    ///
+    /// Defaults to `schemas/json-render`, or `OPDBUS_JSON_RENDER_DIR` when set.
+    #[serde(default = "default_catalog_dir")]
+    pub catalog_dir: std::path::PathBuf,
 }
 
 impl Default for GalleryGenConfig {
@@ -88,6 +110,25 @@ impl Default for GalleryGenConfig {
             enable_mcp: false,
             enable_qdrant: false,
             max_turns: 10,
+            catalog_dir: default_catalog_dir(),
         }
+    }
+}
+
+impl GalleryGenConfig {
+    /// Load the catalog vocabulary this run will admit against.
+    ///
+    /// Fails rather than degrading to grammar-only checks: a run that cannot
+    /// read the catalog would fill the gallery with specs no renderer accepts,
+    /// and it would do it silently.
+    pub fn load_catalog(&self) -> Result<CatalogGuard> {
+        CatalogGuard::load(&self.catalog_dir).with_context(|| {
+            format!(
+                "loading the json-render catalog from {} (set {} to point elsewhere; regenerate \
+                 with scripts/export-catalog-schema.mts)",
+                self.catalog_dir.display(),
+                JSON_RENDER_DIR_ENV
+            )
+        })
     }
 }

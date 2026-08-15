@@ -42,7 +42,6 @@ members = [
     "crates/op-mcp-shim",
     "crates/op-gemma",
     "crates/op-gallery-gen",
-    "crates/zeroclaw-gui",
     "crates/op-dbus-cli",
 ]
 

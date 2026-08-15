@@ -84,6 +84,10 @@ pub struct AppState {
     pub broadcast_tx: broadcast::Sender<String>,
     /// SSE event broadcaster
     pub sse_broadcaster: Arc<SseEventBroadcaster>,
+    /// Last contract and state frame per key, replayed to each new SSE
+    /// subscriber so a browser that connects late still renders the whole
+    /// system instead of waiting for the next mutation.
+    pub hydration: Arc<crate::sse::HydrationCache>,
     /// Server start time
     pub start_time: std::time::Instant,
     /// Conversation history — JSON flat file, no SQLite, no drift.
@@ -198,6 +202,7 @@ impl AppState {
 
         // Create SSE broadcaster
         let sse_broadcaster = Arc::new(SseEventBroadcaster::new());
+        let hydration = Arc::new(crate::sse::HydrationCache::default());
 
         // Initialize privacy router components
         // User database in CozoDB — graph-native, no JSON drift.
@@ -273,6 +278,7 @@ impl AppState {
             provider_name,
             broadcast_tx,
             sse_broadcaster,
+            hydration,
             start_time: std::time::Instant::now(),
             conversations: Arc::new(crate::chat_store::ChatSessionStore::default_store().await?),
             user_store,
@@ -348,7 +354,11 @@ impl AppState {
             loop {
                 match state_clone
                     .grpc_client
-                    .subscribe(vec![], vec![], vec![])
+                    // Hydrate both contracts and present state on connect. A
+                    // browser attaching mid-life must render the whole system,
+                    // not just whichever plugins happen to mutate while it is
+                    // watching — that was why coverage looked partial.
+                    .subscribe(vec![], vec![], vec![], true, true)
                     .await
                 {
                     Ok(mut stream) => {
@@ -356,18 +366,49 @@ impl AppState {
                         while let Some(msg_result) = stream.next().await {
                             match msg_result {
                                 Ok(msg) => {
-                                    let data = simd_json::json!({
-                                        "plugin_id": msg.plugin_id,
-                                        "object_path": msg.object_path,
-                                        "property_name": msg.property_name,
-                                        "new_value": msg.new_value,
-                                        "event_id": msg.event_id,
-                                        "tags": msg.tags_touched,
-                                    });
-                                    if let Ok(json_str) = simd_json::to_string(&data) {
-                                        state_clone
-                                            .sse_broadcaster
-                                            .broadcast("state_update", &json_str);
+                                    // The whole frame goes across, not a
+                                    // hand-picked subset: this bridge is a
+                                    // transport hop, and a field dropped here
+                                    // is a field no browser subscriber can
+                                    // ever ask for. Only the SSE event *name*
+                                    // is decided here, so an EventSource
+                                    // listener can route contracts and values
+                                    // separately without parsing first.
+                                    let is_schema = msg.change_type == "schema_migration";
+                                    let event_name = if is_schema {
+                                        "schema_update"
+                                    } else {
+                                        "state_update"
+                                    };
+                                    match simd_json::serde::to_string(&msg) {
+                                        Ok(json_str) => {
+                                            // Keep the frame for replay before
+                                            // broadcasting it. Keepalives are
+                                            // not retained: they describe no
+                                            // subject, so replaying one would
+                                            // tell a late subscriber nothing.
+                                            if is_schema {
+                                                state_clone
+                                                    .hydration
+                                                    .record_schema(&msg.plugin_id, &json_str);
+                                            } else if msg.frame_kind != "heartbeat" {
+                                                let key = format!(
+                                                    "{}|{}|{}",
+                                                    msg.plugin_id,
+                                                    msg.object_path,
+                                                    msg.property_name.as_deref().unwrap_or(""),
+                                                );
+                                                state_clone
+                                                    .hydration
+                                                    .record_state(key, &json_str);
+                                            }
+                                            state_clone
+                                                .sse_broadcaster
+                                                .broadcast(event_name, &json_str);
+                                        }
+                                        Err(e) => {
+                                            warn!("failed to serialize state frame: {}", e);
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -400,18 +441,20 @@ impl AppState {
                         while let Some(msg_result) = stream.next().await {
                             match msg_result {
                                 Ok(msg) => {
-                                    let data = simd_json::json!({
-                                        "event_id": msg.event_id,
-                                        "plugin_id": msg.plugin_id,
-                                        "operation": msg.operation_type,
-                                        "target": msg.target,
-                                        "decision": msg.decision,
-                                        "tags": msg.tags_touched,
-                                    });
-                                    if let Ok(json_str) = simd_json::to_string(&data) {
-                                        state_clone
-                                            .sse_broadcaster
-                                            .broadcast("audit_event", &json_str);
+                                    // Same rule as the state bridge: forward
+                                    // the frame, do not curate it. The chain
+                                    // frame's hashes are what make an audit
+                                    // record verifiable downstream, and the
+                                    // old projection dropped them.
+                                    match simd_json::serde::to_string(&msg) {
+                                        Ok(json_str) => {
+                                            state_clone
+                                                .sse_broadcaster
+                                                .broadcast("audit_event", &json_str);
+                                        }
+                                        Err(e) => {
+                                            warn!("failed to serialize chain event: {}", e);
+                                        }
                                     }
                                 }
                                 Err(e) => {

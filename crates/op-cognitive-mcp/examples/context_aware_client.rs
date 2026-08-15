@@ -21,7 +21,9 @@
 //! ```
 
 use clap::Parser;
-use futures::StreamExt;
+// `futures` is not a dependency of this crate; tokio-stream is, and its
+// StreamExt covers every `futures_core::Stream`, including EventSource.
+use tokio_stream::StreamExt;
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;

@@ -466,7 +466,8 @@ mod tests {
             },
             raw_json: serde_json::json!({"name": "demo"}),
         };
-        GenerationContext::new(vec![schema], String::new())
+        // These tests exercise tool exposure, not prompt assembly.
+        GenerationContext::new(vec![schema], String::new(), String::new())
     }
 
     #[test]

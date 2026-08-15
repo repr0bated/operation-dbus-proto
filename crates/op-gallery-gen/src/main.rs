@@ -104,7 +104,11 @@ async fn run_generation(
     // TODO: Load plugin schemas from blobs
     let schemas = vec![];
 
-    let mut ctx = GenerationContext::new(schemas, String::new());
+    let mut ctx = GenerationContext::new(
+        schemas,
+        String::new(),
+        config.load_catalog()?.prompt().to_string(),
+    );
     ctx.mcp_enabled = mcp;
     ctx.qdrant_enabled = qdrant;
     ctx.operator_guidance = guidance;
@@ -126,11 +130,15 @@ fn run_validation(file: &str) -> Result<()> {
     let content = fs::read_to_string(file)?;
     let spec: serde_json::Value = serde_json::from_str(&content)?;
 
-    let validator = SpecValidator::new();
+    // Fail rather than fall back to grammar-only: "valid" without a vocabulary
+    // says nothing about whether the renderer would accept this spec.
+    let catalog = GalleryGenConfig::default().load_catalog()?;
+    let validator = SpecValidator::with_catalog(catalog);
     let result = validator.validate(&spec);
 
     if result.valid {
         println!("✓ Spec is valid");
+        println!("Catalog:   {}", validator.catalog_hash().unwrap_or("none"));
         println!("Signature: {}", result.signature);
     } else {
         println!("✗ Spec validation failed:");

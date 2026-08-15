@@ -160,6 +160,9 @@ pub struct StreamingBlockchain {
     retention_policy: RetentionPolicy,
     last_snapshot_time: Arc<RwLock<Instant>>,
     block_counter: Arc<RwLock<u64>>,
+    /// Durable record of the highest block number ever reserved, so startup
+    /// never has to walk the timing subvolume. See [`checkpoint_path`].
+    checkpoint: PathBuf,
 }
 
 impl StreamingBlockchain {
@@ -190,11 +193,43 @@ impl StreamingBlockchain {
         let snapshots_dir = base_path.join("snapshots");
         tokio::fs::create_dir_all(&snapshots_dir).await?;
 
-        // Resume from the highest block already on disk. Starting at 0 would
+        // Resume from the highest block already reserved. Starting at 0 would
         // renumber from block 1 on every restart and overwrite existing timing
         // records — silent destruction of the one artifact that cannot be
         // regenerated.
-        let resumed_from = highest_block_number(&timing_subvol).await?;
+        //
+        // The counter is checkpointed on every reservation, so the normal path
+        // is a single small read. Walking the timing subvolume is the fallback
+        // for a missing or unreadable checkpoint only: it holds one file per
+        // block (over 1.7M on the primary host), and scanning it cost minutes
+        // of startup and gigabytes of RSS on every boot.
+        let checkpoint = checkpoint_path(&base_path);
+        let resumed_from = match read_checkpoint(&checkpoint).await {
+            // Trust the checkpoint only if the block after it is genuinely
+            // absent. A checkpoint left behind by a writer that did not
+            // maintain it (an older build, a restored backup) would otherwise
+            // resume *inside* the existing chain and overwrite records. One
+            // stat catches that and costs nothing on the happy path.
+            Some(counter) if !block_exists(&timing_subvol, counter + 1).await => counter,
+            other => {
+                match other {
+                    Some(stale) => warn!(
+                        path = %checkpoint.display(),
+                        stale,
+                        "block counter checkpoint is behind the timing subvolume; ignoring it \
+                         and rescanning so existing blocks are never overwritten"
+                    ),
+                    None => warn!(
+                        path = %checkpoint.display(),
+                        "block counter checkpoint missing or unreadable; falling back to a full \
+                         scan of the timing subvolume (slow, once)"
+                    ),
+                }
+                let scanned = highest_block_number(&timing_subvol).await?;
+                write_checkpoint(&checkpoint, scanned).await?;
+                scanned
+            }
+        };
 
         info!(
             "Streaming blockchain initialized at {:?} with {} interval, resuming after block {}",
@@ -210,6 +245,7 @@ impl StreamingBlockchain {
             retention_policy: RetentionPolicy::from_env(),
             last_snapshot_time: Arc::new(RwLock::new(Instant::now())),
             block_counter: Arc::new(RwLock::new(resumed_from)),
+            checkpoint,
         })
     }
 
@@ -260,6 +296,11 @@ impl StreamingBlockchain {
             *counter += 1;
             *counter
         };
+
+        // Persist the reservation *before* the block lands, so the checkpoint is
+        // never lower than the highest block on disk. A crash between the two
+        // can only skip a number, never re-issue one over an existing record.
+        write_checkpoint(&self.checkpoint, block_num).await?;
 
         // TIMING IS AUTHORITATIVE: Write timing record first (durable audit trail)
         // This is the source of truth - vectors are async projections
@@ -1224,6 +1265,45 @@ pub fn encode_vector(vector: &[f32]) -> Vec<u8> {
 
 /// Highest block number already written, so a restart appends instead of
 /// renumbering over existing records.
+/// Name of the block-counter checkpoint, kept beside the subvolumes rather than
+/// inside `timing/` so it is never mistaken for a block and never snapshotted.
+const BLOCK_COUNTER_CHECKPOINT: &str = ".block-counter";
+
+/// Path of the block-counter checkpoint for a chain rooted at `base_path`.
+fn checkpoint_path(base_path: &Path) -> PathBuf {
+    base_path.join(BLOCK_COUNTER_CHECKPOINT)
+}
+
+/// Whether a given block already exists in the timing subvolume. Used to catch
+/// a checkpoint that has fallen behind the chain it describes.
+async fn block_exists(timing_subvol: &Path, block_num: u64) -> bool {
+    tokio::fs::metadata(timing_subvol.join(timing_file_name(block_num)))
+        .await
+        .is_ok()
+}
+
+/// Read the highest reserved block number, or `None` when the checkpoint is
+/// absent or unusable. `None` means "fall back to the scan", which is always
+/// correct — just slow — so a corrupt checkpoint degrades rather than breaks.
+async fn read_checkpoint(path: &Path) -> Option<u64> {
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    raw.trim().parse::<u64>().ok()
+}
+
+/// Write the checkpoint atomically: a torn write that parsed as a *smaller*
+/// number would silently re-issue block numbers over existing records, so the
+/// value only ever becomes visible via `rename`.
+async fn write_checkpoint(path: &Path, counter: u64) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    tokio::fs::write(&tmp, counter.to_string())
+        .await
+        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .with_context(|| format!("failed to commit {}", path.display()))?;
+    Ok(())
+}
+
 async fn highest_block_number(timing_subvol: &Path) -> Result<u64> {
     let mut entries = match tokio::fs::read_dir(timing_subvol).await {
         Ok(entries) => entries,
@@ -1564,6 +1644,94 @@ mod tests {
             7,
             "a restart must append after the highest existing block, not overwrite from 1"
         );
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_round_trips_and_survives_corruption() {
+        let dir = std::env::temp_dir().join(format!("op-chain-ckpt-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = checkpoint_path(&dir);
+
+        assert_eq!(
+            read_checkpoint(&path).await,
+            None,
+            "a missing checkpoint must report None so the caller falls back to the scan"
+        );
+
+        write_checkpoint(&path, 1_699_572).await.unwrap();
+        assert_eq!(read_checkpoint(&path).await, Some(1_699_572));
+
+        // A corrupt checkpoint must degrade to the scan, never to a bogus
+        // counter that would re-issue block numbers over existing records.
+        tokio::fs::write(&path, b"not-a-number").await.unwrap();
+        assert_eq!(read_checkpoint(&path).await, None);
+
+        // No stray temp file is left behind by the atomic commit.
+        assert!(!path.with_extension("tmp").exists());
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The checkpoint exists so startup never walks `timing/`, which holds one
+    /// file per block. Guard that it is preferred over — and agrees with — the
+    /// scan it replaces.
+    #[tokio::test]
+    async fn checkpoint_is_preferred_over_scanning_timing() {
+        let dir = std::env::temp_dir().join(format!("op-chain-pref-{}", uuid::Uuid::new_v4()));
+        let timing = dir.join("timing");
+        tokio::fs::create_dir_all(&timing).await.unwrap();
+        tokio::fs::write(timing.join(timing_file_name(42)), b"{}")
+            .await
+            .unwrap();
+
+        let path = checkpoint_path(&dir);
+        let scanned = highest_block_number(&timing).await.unwrap();
+        write_checkpoint(&path, scanned).await.unwrap();
+
+        assert_eq!(read_checkpoint(&path).await, Some(42));
+        assert_eq!(
+            read_checkpoint(&path).await.unwrap(),
+            scanned,
+            "checkpoint must agree with the scan it replaces"
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// A checkpoint written by a build that did not maintain it (or restored
+    /// from a backup) is *behind* the chain. Resuming from it would renumber
+    /// over existing blocks — the one artifact that cannot be regenerated — so
+    /// it must be detected and ignored.
+    #[tokio::test]
+    async fn stale_checkpoint_is_detected_and_ignored() {
+        let dir = std::env::temp_dir().join(format!("op-chain-stale-{}", uuid::Uuid::new_v4()));
+        let timing = dir.join("timing");
+        tokio::fs::create_dir_all(&timing).await.unwrap();
+
+        for block in 1..=9u64 {
+            tokio::fs::write(timing.join(timing_file_name(block)), b"{}")
+                .await
+                .unwrap();
+        }
+
+        // Checkpoint claims 5, but blocks 6..=9 exist on disk.
+        write_checkpoint(&checkpoint_path(&dir), 5).await.unwrap();
+
+        assert!(
+            block_exists(&timing, 6).await,
+            "block after a stale checkpoint must be visible"
+        );
+        assert!(
+            !block_exists(&timing, 10).await,
+            "block after a current checkpoint must be absent"
+        );
+        assert_eq!(
+            highest_block_number(&timing).await.unwrap(),
+            9,
+            "the rescan fallback must land past every existing block"
+        );
+
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 

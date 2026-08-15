@@ -12,14 +12,13 @@ use op_cognitive_mcp::{CognitiveMemoryStore, ContextAwarenessEngine, SessionMana
 use op_mcp::tool_registry::ToolRegistry;
 use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
-use base64::Engine;
 use op_blockchain::{PluginFootprint, StreamingBlockchain};
 use op_identity::{read_sled, write_sled_full};
 use op_network::rovs_proxy::OvsdbDbusClient;
@@ -76,6 +75,18 @@ pub enum ChangeSource {
     Internal,
 }
 
+/// One plugin's sealed contract, held for stream hydration.
+///
+/// Both fields come out of the same [`op_blob::blobify_plugin_schema`] call that
+/// produced the sealed blob, so `schema_json` is byte-identical to the catalog's
+/// SCHEMA_JSON section and `schema_hash` is the hash covering exactly those
+/// bytes. Nothing here re-serializes or re-hashes the schema.
+#[derive(Debug, Clone)]
+pub struct SchemaSnapshot {
+    pub schema_hash: String,
+    pub schema_json: simd_json::OwnedValue,
+}
+
 pub struct MutationEngine {
     /// Authoritative Event Chain
     pub event_chain: Arc<RwLock<EventChain>>,
@@ -90,6 +101,17 @@ pub struct MutationEngine {
     chain_tx: broadcast::Sender<ChainEvent>,
     /// State cache for instant gRPC retrieval
     state_cache: Arc<RwLock<HashMap<String, simd_json::OwnedValue>>>,
+    /// Sealed plugin contracts, keyed by canonical plugin id.
+    ///
+    /// Populated by [`MutationEngine::seed_missing_plugin_projections`] at
+    /// startup — the same pass that seals the blobs — so a subscriber can be
+    /// handed the running contract at hydration without touching the catalog.
+    /// Ordered so hydration frames arrive in a stable sequence.
+    schema_cache: Arc<RwLock<BTreeMap<String, SchemaSnapshot>>>,
+    /// Identity of the published catalog, read from `op_blob`'s single
+    /// implementation after sealing — never recomputed here. Stamped on every
+    /// outgoing frame so a subscriber can detect drift without being told.
+    catalog_hash: Arc<RwLock<String>>,
     /// System D-Bus connection authority
     pub dbus_connection: Arc<OnceCell<Connection>>,
     /// Session bus connection for projection tree introspection
@@ -162,6 +184,31 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
     }
 }
 
+/// How many of the newest audit records to replay into the in-memory chain at
+/// startup. `OP_EVENT_CHAIN_REPLAY_LIMIT=0` restores the old unbounded rebuild.
+///
+/// The default is a window, not a cap on history: the durable trail on disk is
+/// untouched and complete. It exists because the boot path must not scale with
+/// total recorded history.
+const DEFAULT_REPLAY_LIMIT: usize = 50_000;
+
+fn replay_limit() -> usize {
+    std::env::var("OP_EVENT_CHAIN_REPLAY_LIMIT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_REPLAY_LIMIT)
+}
+
+/// Extract the block number from a `block-000000000042.json` timing record.
+///
+/// Selecting on the filename is what makes a bounded replay cheap: the newest
+/// records can be chosen without opening, reading, or parsing any of them.
+fn block_number_from_name(path: &std::path::Path) -> Option<u64> {
+    let stem = path.file_stem()?.to_str()?;
+    let digits = stem.strip_prefix("block-")?;
+    digits.parse::<u64>().ok()
+}
+
 impl MutationEngine {
     /// Create a new authoritative Mutation Engine
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
@@ -202,6 +249,8 @@ impl MutationEngine {
             change_tx,
             chain_tx,
             state_cache: Arc::new(RwLock::new(HashMap::new())),
+            schema_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            catalog_hash: Arc::new(RwLock::new(String::new())),
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
             signal_bus: Arc::new(OnceCell::new()),
@@ -285,6 +334,13 @@ impl MutationEngine {
     /// restored in the original order. Malformed or non-audit files (the
     /// timing directory also holds footprints written by other producers) are
     /// skipped with a `warn!` rather than aborting the rebuild.
+    ///
+    /// Only the newest [`replay_limit`] records are replayed. The boot path
+    /// must not rebuild the entire chain: the trail is append-only and the full
+    /// scan cost minutes of startup and tens of GB of RSS. Records older than
+    /// the window stay on disk and are still served from there, so nothing is
+    /// lost — but a `verify_range` starting at genesis must read the durable
+    /// trail rather than the in-memory chain.
     async fn rebuild_chain_from_disk(&self, timing_dir: &std::path::Path) -> usize {
         {
             let chain = self.event_chain.read().await;
@@ -309,15 +365,59 @@ impl MutationEngine {
             }
         };
 
-        // (event_id, event_json) — sorted before replay so linkage is exact.
-        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
-        let mut skipped = 0usize;
+        // Select the newest records by filename *before* reading any of them.
+        //
+        // The trail is append-only and grows without bound (over 1.7M records
+        // on the primary host). Reading and parsing all of it held every record
+        // in memory at once — tens of GB — and delayed the listener by minutes
+        // on every boot. Only the tail is needed to answer live queries; the
+        // full trail stays on disk, which remains the authority for
+        // verification from genesis.
+        let limit = replay_limit();
+        let mut newest: std::collections::BinaryHeap<(std::cmp::Reverse<u64>, std::path::PathBuf)> =
+            std::collections::BinaryHeap::new();
+        let mut candidates = 0usize;
 
         while let Ok(Some(entry)) = dir.next_entry().await {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
+            let Some(block) = block_number_from_name(&path) else {
+                continue;
+            };
+            candidates += 1;
+            newest.push((std::cmp::Reverse(block), path));
+            if limit > 0 && newest.len() > limit {
+                // Heap is ordered by Reverse(block), so the root is the OLDEST
+                // retained record — exactly the one to drop.
+                newest.pop();
+            }
+        }
+
+        let mut selected: Vec<std::path::PathBuf> = newest
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
+        // `into_sorted_vec` on Reverse(block) yields newest-first; replay must
+        // run oldest-first so `replay_event`'s ordering check passes.
+        selected.reverse();
+
+        if limit > 0 && candidates > selected.len() {
+            tracing::info!(
+                candidates,
+                replaying = selected.len(),
+                limit,
+                "audit trail truncated for replay; older records remain on disk"
+            );
+        }
+
+        // (event_id, event_json) — sorted before replay so linkage is exact.
+        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
+        let mut skipped = 0usize;
+
+        for path in selected {
             let bytes = match tokio::fs::read(&path).await {
                 Ok(bytes) => bytes,
                 Err(error) => {
@@ -395,6 +495,24 @@ impl MutationEngine {
                 event_id = event.event_id,
                 "audit durability write failed; event retained in memory only"
             );
+        }
+    }
+
+    /// Advance the identity sled to the chain position this mutation just took.
+    ///
+    /// The sled answers "given this container, which slice of the chain is its
+    /// session, and against which contract" — so it has to move for every
+    /// mutation. It used to be written on the property-set path only, which
+    /// left `mutation_index` naming the last property *set* rather than the
+    /// last mutation, and silently excluded every method call.
+    ///
+    /// Pubkey and trace are passed empty on purpose: they belong to the
+    /// session, not to any one mutation, and `write_sled_full` carries forward
+    /// whatever the record already holds. Re-reading the sled here to hand its
+    /// own values back would be a second reader of the thing being written.
+    fn advance_identity_sled(event_id: u64) {
+        if let Err(error) = write_sled_full("", event_id, "") {
+            tracing::warn!(%error, event_id, "sled write after mutation failed");
         }
     }
 
@@ -514,11 +632,18 @@ impl MutationEngine {
                 continue;
             }
 
+            // One blobify call per plugin: it yields both the canonical
+            // SCHEMA_JSON bytes and the hash that covers them. The catalog
+            // write, the hydration cache and the broadcast frame all read from
+            // this single value, so no consumer can see a schema and a hash
+            // that describe different contracts.
+            let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
+            let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
+
             // Auto-generate or refresh the sealed blob when the running
             // schema hash differs from the active SHM catalog.
+            let mut resealed = false;
             if let Some(store) = blob_store.as_mut() {
-                let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
-                let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
                 let schema_changed = store
                     .manifest(&canonical_id)
                     .map(|manifest| manifest.schema_hash.as_str())
@@ -532,12 +657,27 @@ impl MutationEngine {
                                 "sealed current plugin schema into SHM catalog"
                             );
                             sealed += 1;
+                            resealed = true;
                         }
                         Err(error) => {
                             tracing::warn!(plugin_id = %canonical_id, %error, "failed to seal current plugin schema");
                         }
                     }
                 }
+            }
+
+            // Cache the running contract for stream hydration. This happens
+            // whether or not the blob moved: a subscriber connecting later
+            // needs the contract regardless of when it was last sealed.
+            self.cache_plugin_schema(&canonical_id, &blob).await;
+
+            // A reseal during a live process is the only moment the contract
+            // actually changes under an existing subscriber. At startup there
+            // are none, so this send is a no-op by design — hydration is what
+            // carries schema to the UI. It exists for resealing paths that run
+            // after the bridge is serving.
+            if resealed {
+                self.broadcast_schema_change(&canonical_id).await;
             }
 
             if let Some(mut bytes) = op_core::projection_shm::read_projection_bytes(&plugin_id) {
@@ -564,6 +704,15 @@ impl MutationEngine {
                 .await;
             self.update_state_cache(plugin_id.clone(), seed_state).await;
             seeded += 1;
+        }
+
+        // Take the catalog identity after all sealing is done, from op_blob's
+        // single implementation. Recomputing it here would be a second
+        // derivation of a value that is only allowed to have one.
+        if let Some(store) = blob_store.as_ref() {
+            let hash = store.catalog_hash();
+            tracing::info!(catalog_hash = %hash, "published catalog identity");
+            *self.catalog_hash.write().await = hash;
         }
 
         tracing::info!(
@@ -1191,24 +1340,7 @@ impl MutationEngine {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Write the Identity Sled with the updated mutation index.
-        {
-            let (existing_pubkey_b64, existing_trace_hex) = if let Ok((ptr, _mmap)) = read_sled() {
-                unsafe {
-                    let sled = &*ptr;
-                    (
-                        base64::engine::general_purpose::STANDARD.encode(sled.wireguard_pubkey),
-                        sled.trace_id_hex(),
-                    )
-                }
-            } else {
-                (String::new(), String::new())
-            };
-            if let Err(e) =
-                write_sled_full(&existing_pubkey_b64, change.event_id, &existing_trace_hex)
-            {
-                tracing::warn!("sled write after mutation failed: {}", e);
-            }
-        }
+        Self::advance_identity_sled(change.event_id);
 
         Ok(MutationResult {
             success: true,
@@ -1333,6 +1465,10 @@ impl MutationEngine {
         // Same fan-out as process_authoritative_change: the event is already in
         // the chain and durable, so audit subscribers can see it now.
         let _ = self.chain_tx.send(event_summary.3);
+
+        // Same position record as the property-set path — a method call is a
+        // mutation and occupies a chain position like any other.
+        Self::advance_identity_sled(event_summary.0);
 
         // Dispatch to appropriate backend based on plugin_id
         let method_result: serde_json::Value = match plugin_id {
@@ -1864,6 +2000,110 @@ impl MutationEngine {
     pub async fn update_state_cache(&self, plugin_id: String, state: simd_json::OwnedValue) {
         let mut cache = self.state_cache.write().await;
         cache.insert(plugin_id, state);
+    }
+
+    /// Record one plugin's sealed contract for stream hydration.
+    ///
+    /// Takes the blob rather than a schema so the cached bytes are the sealed
+    /// bytes; parsing is the only transformation applied.
+    async fn cache_plugin_schema(&self, canonical_id: &str, blob: &op_blob::PluginObjectBlob) {
+        let mut bytes = blob.schema_json.clone().into_bytes();
+        let schema_json = match simd_json::to_owned_value(&mut bytes) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    plugin_id = %canonical_id,
+                    %error,
+                    "sealed schema JSON did not parse; plugin will hydrate without a contract"
+                );
+                return;
+            }
+        };
+        // Mirror into the in-process catalog the cognitive MCP tools read, so a
+        // model calling `blob_catalog` sees the same contract this engine puts
+        // on the stream instead of independently re-reading SHM. Parsed from
+        // the same sealed string, so the two views cannot describe different
+        // contracts. Startup-only work, once per plugin.
+        match serde_json::from_str::<serde_json::Value>(&blob.schema_json) {
+            Ok(value) => op_cognitive_mcp::live_schema::global().publish(
+                canonical_id,
+                blob.manifest.schema_hash.clone(),
+                value,
+            ),
+            Err(error) => tracing::warn!(
+                plugin_id = %canonical_id,
+                %error,
+                "sealed schema JSON did not parse for the MCP mirror; tools will read SHM"
+            ),
+        }
+
+        self.schema_cache.write().await.insert(
+            canonical_id.to_string(),
+            SchemaSnapshot {
+                schema_hash: blob.manifest.schema_hash.clone(),
+                schema_json,
+            },
+        );
+    }
+
+    /// Take a coherent copy of every known plugin contract, for a new stream
+    /// subscriber. Ordered by canonical plugin id.
+    pub async fn schema_snapshot(&self) -> Vec<(String, SchemaSnapshot)> {
+        self.schema_cache
+            .read()
+            .await
+            .iter()
+            .map(|(plugin_id, snapshot)| (plugin_id.clone(), snapshot.clone()))
+            .collect()
+    }
+
+    /// The contract currently published for one plugin, if any.
+    pub async fn plugin_schema(&self, canonical_id: &str) -> Option<SchemaSnapshot> {
+        self.schema_cache.read().await.get(canonical_id).cloned()
+    }
+
+    /// Hash of the contract one plugin is published under, or empty when the
+    /// plugin has no sealed contract in this process.
+    pub async fn plugin_schema_hash(&self, canonical_id: &str) -> String {
+        self.schema_cache
+            .read()
+            .await
+            .get(canonical_id)
+            .map(|snapshot| snapshot.schema_hash.clone())
+            .unwrap_or_default()
+    }
+
+    /// Identity of the published catalog. Empty before the seal pass has run.
+    pub async fn catalog_hash(&self) -> String {
+        self.catalog_hash.read().await.clone()
+    }
+
+    /// Announce a contract change on the state stream.
+    ///
+    /// Carries the sealed schema itself, not a pointer to it: the frame is the
+    /// delivery, so a consumer never has to reach back into the catalog. The
+    /// hash rides in `member_name` so a consumer can tell two contracts apart
+    /// without diffing them.
+    async fn broadcast_schema_change(&self, canonical_id: &str) {
+        let Some(snapshot) = self.plugin_schema(canonical_id).await else {
+            return;
+        };
+        let change = StateChange {
+            change_id: uuid::Uuid::new_v4().to_string(),
+            event_id: 0,
+            plugin_id: canonical_id.to_string(),
+            object_path: format!("/org/opdbus/v1/plugins/{canonical_id}"),
+            change_type: ChangeType::SchemaMigration,
+            member_name: Some(snapshot.schema_hash),
+            old_value: None,
+            new_value: snapshot.schema_json,
+            tags_touched: vec![],
+            event_hash: String::new(),
+            timestamp: chrono::Utc::now(),
+            actor_id: "schema_seal".to_string(),
+            source: ChangeSource::Internal,
+        };
+        let _ = self.change_tx.send(change);
     }
 
     /// Publish the current authoritative cache entry into the plugin's SHM
@@ -2769,6 +3009,70 @@ pub(crate) fn ovsdb_monitor_tables(
         return None;
     }
     update.as_object()
+}
+
+#[cfg(test)]
+mod replay_window_tests {
+    use super::{block_number_from_name, DEFAULT_REPLAY_LIMIT};
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn block_number_is_read_from_the_filename() {
+        assert_eq!(
+            block_number_from_name(Path::new("/t/block-000000000042.json")),
+            Some(42)
+        );
+        assert_eq!(
+            block_number_from_name(Path::new("/t/block-001709617.json")),
+            Some(1_709_617)
+        );
+        // Non-block records share the timing directory and must be ignored.
+        assert_eq!(block_number_from_name(Path::new("/t/vec-000001.bin")), None);
+        assert_eq!(block_number_from_name(Path::new("/t/unrelated.json")), None);
+        assert_eq!(block_number_from_name(Path::new("/t/block-abc.json")), None);
+    }
+
+    /// The bounded selection must keep the *newest* records and hand them back
+    /// oldest-first — replay rejects out-of-order events, so a reversed window
+    /// would drop everything after the first record.
+    #[test]
+    fn window_keeps_newest_and_replays_oldest_first() {
+        let limit = 3usize;
+        let mut newest: BinaryHeap<(Reverse<u64>, PathBuf)> = BinaryHeap::new();
+
+        for block in [10u64, 1, 7, 4, 9, 2] {
+            newest.push((
+                Reverse(block),
+                PathBuf::from(format!("/t/block-{block:012}.json")),
+            ));
+            if newest.len() > limit {
+                newest.pop();
+            }
+        }
+
+        let mut selected: Vec<PathBuf> = newest
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
+        selected.reverse();
+
+        let blocks: Vec<u64> = selected
+            .iter()
+            .map(|p| block_number_from_name(p).unwrap())
+            .collect();
+        assert_eq!(blocks, vec![7, 9, 10], "newest three, ascending");
+    }
+
+    #[test]
+    fn default_limit_is_bounded() {
+        assert!(
+            DEFAULT_REPLAY_LIMIT > 0,
+            "an unbounded default would restore the full-history rebuild this replaces"
+        );
+    }
 }
 
 #[cfg(test)]

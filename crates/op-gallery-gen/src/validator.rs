@@ -1,16 +1,23 @@
 //! Spec validator for gallery admission.
 //!
-//! Validates generated specs against the json-render.dev grammar:
-//! - Structure checks (root, elements, references)
-//! - Type checks (known components)
-//! - Prop schema validation
-//! - Children validation
-//! - Bind path validation
-//! - Cycle detection
-//! - Signature deduplication
+//! Two layers, deliberately separable:
+//!
+//! - **Grammar** (always): root exists, `elements` is an object, every child
+//!   reference resolves, no cycles, plus the dedup signature. These hold for any
+//!   json-render spec regardless of which components a host app declares.
+//! - **Vocabulary** (when a [`CatalogGuard`] is attached): which components
+//!   exist, which props they take, which accept children. This crate cannot know
+//!   that on its own — it belongs to the app's catalog — so it is loaded from the
+//!   catalog's own export rather than restated here. See [`crate::catalog_guard`].
+//!
+//! A validator built with [`SpecValidator::new`] checks grammar only, and will
+//! admit a spec naming a component no renderer has. Admission paths must attach
+//! a catalog.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+use crate::catalog_guard::CatalogGuard;
 
 /// Spec validation result.
 #[derive(Debug, Clone)]
@@ -34,48 +41,34 @@ pub struct ValidationError {
 
 /// Spec validator.
 pub struct SpecValidator {
-    /// Known component types
-    stable_core: HashSet<&'static str>,
+    /// The component vocabulary, when one has been supplied. `None` means
+    /// grammar-only validation.
+    catalog: Option<CatalogGuard>,
 }
 
 impl SpecValidator {
-    /// Create a new spec validator.
+    /// Create a grammar-only validator.
+    ///
+    /// Structure, references and cycles are checked; component names and props
+    /// are not, because without a catalog there is nothing to check them
+    /// against. Use [`Self::with_catalog`] for admission.
     pub fn new() -> Self {
+        Self { catalog: None }
+    }
+
+    /// Create a validator that also enforces a catalog's vocabulary.
+    pub fn with_catalog(catalog: CatalogGuard) -> Self {
         Self {
-            stable_core: [
-                // Layout
-                "stack",
-                "card",
-                "separator",
-                "space",
-                // Text
-                "heading",
-                "label",
-                "muted",
-                // Status
-                "status_pill",
-                // Action
-                "button",
-                "button_group",
-                // Data Display
-                "kv_pair",
-                "table",
-                "log_stream",
-                "flow_table",
-                "metric_card",
-                // Form
-                "text_input",
-                "number_input",
-                "select",
-                "toggle",
-                // Dynamic
-                "repeat",
-                "schema_form",
-            ]
-            .iter()
-            .cloned()
-            .collect(),
+            catalog: Some(catalog),
         }
+    }
+
+    /// Digest of the catalog artifact in force, if any.
+    ///
+    /// Worth logging next to a spec's signature: it records which vocabulary the
+    /// spec was admitted against.
+    pub fn catalog_hash(&self) -> Option<&str> {
+        self.catalog.as_ref().map(CatalogGuard::hash)
     }
 
     /// Validate a spec.
@@ -115,40 +108,26 @@ impl SpecValidator {
             errors.push(e);
         }
 
-        // 3. Type check
+        // 3. Element shape: `type` is required by the grammar itself.
         for (id, element) in elements {
-            if let Err(e) = self.check_type(id, element) {
+            if let Err(e) = self.check_type_present(id, element) {
                 errors.push(e);
             }
         }
 
-        // 4. Prop schema check
-        for (id, element) in elements {
-            if let Err(e) = self.check_props(id, element) {
-                errors.push(e);
+        // 4. Vocabulary: component names, props, slots, binds, visibility.
+        if let Some(catalog) = &self.catalog {
+            for (id, element) in elements {
+                catalog.check_element(id, element, &mut errors);
             }
         }
 
-        // 5. Children check
-        for (id, element) in elements {
-            if let Err(e) = self.check_children(id, element, elements) {
-                errors.push(e);
-            }
-        }
-
-        // 6. Bind path check
-        for (id, element) in elements {
-            if let Err(e) = self.check_bind_paths(id, element) {
-                errors.push(e);
-            }
-        }
-
-        // 7. Cycle check
+        // 5. Cycle check
         if let Err(e) = self.check_cycles(&root_id, elements) {
             errors.push(e);
         }
 
-        // 8. Generate signature
+        // 6. Generate signature
         let signature = self.compute_signature(spec);
 
         ValidationResult {
@@ -222,187 +201,22 @@ impl SpecValidator {
         Ok(())
     }
 
-    /// Check that element type is known.
-    fn check_type(&self, id: &str, element: &serde_json::Value) -> Result<(), ValidationError> {
-        let type_name = element
-            .get("type")
-            .and_then(|t| t.as_str())
-            .ok_or_else(|| ValidationError {
-                code: "E_MISSING_TYPE".to_string(),
-                message: format!("Element '{}' missing 'type' field", id),
-            })?;
-
-        if !self.stable_core.contains(type_name) {
-            // Allow novelty types with a warning (not an error)
-            tracing::warn!("Element '{}' uses novelty type: {}", id, type_name);
-        }
-
-        Ok(())
-    }
-
-    /// Check props against component schemas.
-    fn check_props(&self, id: &str, element: &serde_json::Value) -> Result<(), ValidationError> {
-        let type_name = element.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-        let props = element.get("props").and_then(|p| p.as_object());
-
-        match type_name {
-            "heading" => {
-                if let Some(p) = props {
-                    if !p.contains_key("text") && !p.contains_key("bind") {
-                        return Err(ValidationError {
-                            code: "E_PROP_SCHEMA".to_string(),
-                            message: format!(
-                                "Element '{}' (heading) requires 'text' or 'bind' prop",
-                                id
-                            ),
-                        });
-                    }
-                }
-            }
-            "label" => {
-                if let Some(p) = props {
-                    if !p.contains_key("text") && !p.contains_key("bind") {
-                        return Err(ValidationError {
-                            code: "E_PROP_SCHEMA".to_string(),
-                            message: format!(
-                                "Element '{}' (label) requires 'text' or 'bind' prop",
-                                id
-                            ),
-                        });
-                    }
-                }
-            }
-            "status_pill" => match props {
-                Some(p) if !p.contains_key("bind") => {
-                    return Err(ValidationError {
-                        code: "E_PROP_SCHEMA".to_string(),
-                        message: format!("Element '{}' (status_pill) requires 'bind' prop", id),
-                    });
-                }
-                None => {
-                    return Err(ValidationError {
-                        code: "E_PROP_SCHEMA".to_string(),
-                        message: format!("Element '{}' (status_pill) requires 'bind' prop", id),
-                    });
-                }
-                _ => {}
-            },
-            "button" => {
-                if let Some(p) = props {
-                    if !p.contains_key("label") {
-                        return Err(ValidationError {
-                            code: "E_PROP_SCHEMA".to_string(),
-                            message: format!("Element '{}' (button) requires 'label' prop", id),
-                        });
-                    }
-                }
-            }
-            "table" => {
-                if let Some(p) = props {
-                    if !p.contains_key("bind") {
-                        return Err(ValidationError {
-                            code: "E_PROP_SCHEMA".to_string(),
-                            message: format!("Element '{}' (table) requires 'bind' prop", id),
-                        });
-                    }
-                    if !p.contains_key("columns") {
-                        return Err(ValidationError {
-                            code: "E_PROP_SCHEMA".to_string(),
-                            message: format!("Element '{}' (table) requires 'columns' prop", id),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
-    /// Check children are valid for each component.
-    fn check_children(
-        &self,
-        _id: &str,
-        element: &serde_json::Value,
-        _elements: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<(), ValidationError> {
-        let type_name = element.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-        let children = element.get("children").and_then(|c| c.as_array());
-
-        // Components that don't accept children
-        let no_children = [
-            "heading",
-            "label",
-            "muted",
-            "status_pill",
-            "button",
-            "separator",
-            "space",
-            "kv_pair",
-            "table",
-            "log_stream",
-            "flow_table",
-            "metric_card",
-            "text_input",
-            "number_input",
-            "select",
-            "toggle",
-        ];
-
-        if no_children.contains(&type_name) && children.is_some() {
-            return Err(ValidationError {
-                code: "E_CHILDREN_NOT_ALLOWED".to_string(),
-                message: format!("Component '{}' does not accept children", type_name),
-            });
-        }
-
-        // Components that require children
-        let requires_children = ["stack", "card"];
-
-        if requires_children.contains(&type_name) {
-            match children {
-                Some(arr) if arr.is_empty() => {
-                    return Err(ValidationError {
-                        code: "E_CHILDREN_REQUIRED".to_string(),
-                        message: format!("Component '{}' requires non-empty children", type_name),
-                    });
-                }
-                None => {
-                    return Err(ValidationError {
-                        code: "E_CHILDREN_REQUIRED".to_string(),
-                        message: format!("Component '{}' requires children", type_name),
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Check bind paths start with '/'.
-    fn check_bind_paths(
+    /// Check that an element declares a `type`.
+    ///
+    /// Whether that type exists is a catalog question, answered by
+    /// [`CatalogGuard::check_element`]; that it is present at all is grammar.
+    fn check_type_present(
         &self,
         id: &str,
         element: &serde_json::Value,
     ) -> Result<(), ValidationError> {
-        if let Some(props) = element.get("props").and_then(|p| p.as_object()) {
-            if let Some(bind) = props.get("bind").and_then(|b| b.as_str()) {
-                if !bind.starts_with('/') {
-                    return Err(ValidationError {
-                        code: "E_BIND_PATH".to_string(),
-                        message: format!(
-                            "Invalid bind path '{}' in element '{}' (must start with '/')",
-                            bind, id
-                        ),
-                    });
-                }
-            }
+        match element.get("type").and_then(|t| t.as_str()) {
+            Some(_) => Ok(()),
+            None => Err(ValidationError {
+                code: "E_MISSING_TYPE".to_string(),
+                message: format!("Element '{}' missing 'type' field", id),
+            }),
         }
-
-        Ok(())
     }
 
     /// Check for cycles in element tree.

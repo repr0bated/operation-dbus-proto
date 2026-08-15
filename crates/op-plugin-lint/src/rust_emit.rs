@@ -159,12 +159,29 @@ fn candidate_fields(config_paths: &[String], cli_paths: &[String]) -> Vec<(Strin
         .filter_map(|path| {
             let leaf = path.rsplit('.').next().unwrap_or(path);
             let name = rust_ident(leaf);
-            if name.is_empty() || !seen.insert(name.clone()) {
+            // Dedup on the protobuf JSON name, not the Rust ident: a type path
+            // (`AliasSource`) and a field path (`ConfigFieldEntry.alias_source`)
+            // yield distinct idents that collide once camel-cased, which makes
+            // the whole descriptor pool unloadable. First path wins.
+            if name.is_empty() || !seen.insert(json_name_key(&name)) {
                 None
             } else {
                 Some((name, path.clone()))
             }
         })
+        .collect()
+}
+
+/// Collision key for a field name, matching how protobuf derives `json_name`:
+/// camel-case, compared case-insensitively. `alias_source` and `aliassource`
+/// are different Rust idents but the same key, and emitting both is what makes
+/// `prost_reflect` reject the sealed blob with "camel-case name of field ...
+/// conflicts with field ...".
+fn json_name_key(ident: &str) -> String {
+    ident
+        .chars()
+        .filter(|c| *c != '_')
+        .map(|c| c.to_ascii_lowercase())
         .collect()
 }
 
@@ -403,6 +420,28 @@ mod tests {
         let got = candidate_fields(&paths, &[]);
         assert_eq!(got[0].0, "default_model");
         assert_eq!(got[1].0, "type_field");
+    }
+
+    /// Regression: a type path and a field path that differ only by separators
+    /// must not both be emitted — camel-cased they are one protobuf field, and
+    /// the duplicate makes the sealed blob's descriptor pool fail to decode.
+    #[test]
+    fn camel_case_colliding_candidates_are_emitted_once() {
+        let paths = vec![
+            "enum.zeroclaw_config.AliasSource".into(),
+            "struct.zeroclaw_config.ConfigFieldEntry.alias_source".into(),
+            "struct.zeroclaw_config.Runtime.model_providers".into(),
+            "enum.zeroclaw_config.ModelProviders".into(),
+        ];
+        let got = candidate_fields(&paths, &[]);
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["aliassource", "model_providers"]);
+
+        let mut keys: Vec<String> = got.iter().map(|(n, _)| json_name_key(n)).collect();
+        let before = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), before, "emitted fields must have unique json names");
     }
 
     #[test]

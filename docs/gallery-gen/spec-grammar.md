@@ -1,266 +1,66 @@
-# json-render.dev Spec Grammar
+# Spec grammar
 
-This document defines the formal grammar for json-render.dev specifications. Every generated spec must conform to this grammar to be admitted to the gallery.
+This file used to restate json-render's output contract by hand. The contract
+itself now travels with the catalog export
+(`schemas/json-render/catalog.prompt.md`), which is what the model is given; see
+`json-render-catalog.md` in this directory for the export and how to regenerate
+it. What is documented here is only what this repo adds on top.
 
-## Top-Level Structure
+## What the model emits
 
-```json
-{
-  "root": "<element-id>",
-  "elements": {
-    "<id>": { "<element-def>" }
-  }
-}
+A JSONL stream of RFC 6902 patch operations, one JSON object per line, applied to
+an empty document until it becomes a spec. `add`, `replace` and `remove` are the
+operations in use; state patches follow the elements that read them so a renderer
+can fill in progressively.
+
+```jsonl
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"card","props":{"title":"Mesh","tone":"ok"},"children":["peers"]}}
+{"op":"add","path":"/elements/peers","value":{"type":"statCard","props":{"label":"Peers","value":{"$state":"/netmaker/peers"},"sub":null,"variant":"ok"}}}
+{"op":"add","path":"/state/netmaker/peers","value":7}
 ```
 
-### Constraints
+`op_gallery_gen::spec_stream::assemble` turns that stream into the stored spec. It
+tolerates prose and code fences around the JSONL (models drift; a turn is too
+expensive to discard over a sentence) and refuses anything that would invent
+content the model did not describe: an unsupported operation, a gap in an array,
+a path that is not a JSON Pointer.
 
-- `root` MUST reference an element ID defined in `elements`
-- `elements` MUST be a non-empty object
-- All element IDs MUST be unique strings
-- No forward references (all referenced IDs must exist)
-- No cycles in the element tree
+## What admission checks
 
-## Element Definition
+`op_gallery_gen::validator::SpecValidator` has two layers, and the split matters:
 
-```json
-{
-  "type": "<component-name>",
-  "props": { <component-props> },
-  "children": ["<id>", ...],
-  "visible": true | false | "<bind-path>",
-  "repeat": {
-    "bind": "<array-path>",
-    "as": "<item-var>"
-  },
-  "watch": ["<bind-path>", ...]
-}
-```
+- **Grammar**, always on: `root` exists and resolves, `elements` is an object,
+  every child reference exists, no cycles, plus the dedup signature.
+- **Vocabulary**, only with a catalog attached (`SpecValidator::with_catalog`):
+  component names, declared props and their types, required props, undeclared
+  props, children on leaf components, `visible` conditions, and JSON Pointer
+  syntax for `$state`/`$bindState`.
 
-### Required Fields
+A validator without a catalog cannot reject a component name — it has no
+vocabulary to reject it against — so every admission path attaches one and fails
+closed when the artifact is missing or its digest does not match.
 
-| Field | Type | Constraint |
-|-------|------|------------|
-| `type` | string | MUST be a legal component from the catalog |
+Props holding a directive (`{"$state": …}`, `{"$cond": …}`, `{"$template": …}`)
+are checked for pointer shape but never for type: a directive's resolved type is a
+property of runtime state, not of the spec. Two thirds of the live shell spec's
+elements bind at least one prop, so type-checking them would reject valid work.
 
-### Optional Fields
+## Error codes
 
-| Field | Type | Constraint |
-|-------|------|------------|
-| `props` | object | MUST match component's prop schema |
-| `children` | array | Array of element IDs |
-| `visible` | boolean or string | If string, MUST be a bind path |
-| `repeat` | object | See repeat spec below |
-| `watch` | array | Array of bind paths |
-
-## Component Names (Stable Core)
-
-These are the stable-core component types guaranteed to be available:
-
-**Layout:**
-- `stack`, `card`, `separator`, `space`
-
-**Text:**
-- `heading`, `label`, `muted`
-
-**Status:**
-- `status_pill`
-
-**Action:**
-- `button`, `button_group`
-
-**Data Display:**
-- `kv_pair`, `table`, `log_stream`, `flow_table`, `metric_card`
-
-**Form:**
-- `text_input`, `number_input`, `select`, `toggle`
-
-**Dynamic:**
-- `repeat`, `schema_form`
-
-## Prop Validation Rules
-
-### Common Prop Patterns
-
-#### Bind Path
-A bind path is a JSON pointer string starting with `/`:
-
-```json
-{ "bind": "/status/health" }
-```
-
-Valid patterns:
-- `/field` — top-level field
-- `/nested/field` — nested field
-- `/array/0/item` — array index
-- `../../relative` — relative path (inside repeat context)
-
-#### Text Props
-Components that display text accept either:
-- `text`: static string
-- `bind`: live data path
-
-These are mutually exclusive. A validation error occurs if both or neither are present.
-
-#### Array Binding
-Components that iterate over arrays (`table`, `repeat`, `flow_table`) require:
-- `bind`: path to an array field in plugin state
-
-The interpreter validates the bound value is an array at render time.
-
-### Component-Specific Prop Schemas
-
-#### stack
-```json
-{
-  "dir": { "enum": ["v", "h"], "default": "v" },
-  "gap": { "type": "number", "minimum": 0 }
-}
-```
-
-#### card
-```json
-{
-  "title": { "type": "string" },
-  "description": { "type": "string" }
-}
-```
-
-#### heading
-```json
-{
-  "text": { "type": "string", "required": true },
-  "size": { "type": "number", "minimum": 10, "maximum": 48, "default": 16 }
-}
-```
-
-#### label
-```json
-{
-  "text": { "type": "string" },
-  "bind": { "type": "string", "pattern": "^/" }
-}
-```
-One of `text` or `bind` required.
-
-#### status_pill
-```json
-{
-  "bind": { "type": "string", "pattern": "^/", "required": true }
-}
-```
-
-#### button
-```json
-{
-  "label": { "type": "string", "required": true },
-  "variant": { "enum": ["default", "outline", "destructive"], "default": "default" },
-  "on_click": { "type": "object" }
-}
-```
-
-#### table
-```json
-{
-  "bind": { "type": "string", "pattern": "^/", "required": true },
-  "columns": {
-    "type": "array",
-    "items": {
-      "type": "object",
-      "properties": {
-        "key": { "type": "string", "required": true },
-        "label": { "type": "string", "required": true },
-        "width": { "type": "number" }
-      }
-    },
-    "required": true
-  }
-}
-```
-
-#### repeat
-```json
-{
-  "bind": { "type": "string", "pattern": "^/", "required": true },
-  "child": { "$ref": "#/definitions/element", "required": true }
-}
-```
-
-## Children Validation
-
-- `children` MUST be an array of strings
-- Each string MUST reference an existing element ID
-- Components that don't accept children (`label`, `button`, etc.) MUST NOT have a `children` field
-- Components that require children (`stack`, `card`) MUST have a non-empty `children` field
-
-## Visibility Rules
-
-The `visible` field controls conditional rendering:
-
-```json
-{ "visible": true }           // always visible
-{ "visible": false }          // never visible
-{ "visible": "/status/ok" }   // visible when status.ok is truthy
-```
-
-## Repeat Semantics
-
-The `repeat` field creates a repeated template:
-
-```json
-{
-  "type": "stack",
-  "repeat": {
-    "bind": "/items",
-    "as": "item"
-  },
-  "children": ["item-card"]
-}
-```
-
-Inside the repeated context:
-- Relative bind paths resolve against each array item
-- The `as` variable name can be used in nested expressions
-
-## Watch Bindings
-
-The `watch` array declares which paths the element depends on:
-
-```json
-{
-  "type": "label",
-  "props": { "bind": "/counter" },
-  "watch": ["/counter"]
-}
-```
-
-When any watched path changes, the element re-renders.
-
-## Validation Algorithm
-
-When a spec is submitted for gallery admission:
-
-1. **Structure check**: Verify top-level `root` and `elements` fields exist
-2. **Reference check**: Ensure `root` exists in `elements`, all children IDs exist
-3. **Type check**: Verify every `type` is a known component
-4. **Prop schema check**: Validate each element's `props` against component schema
-5. **Children check**: Verify children are allowed and valid for each component
-6. **Bind path check**: Ensure all bind paths start with `/`
-7. **Cycle check**: Traverse element tree, reject if cycles detected
-8. **Signature check**: Dedupe against existing gallery signatures
-
-If all checks pass, the spec is eligible for admission to the gallery.
-
-## Error Messages
-
-| Error Code | Message |
-|------------|---------|
-| `E_UNKNOWN_TYPE` | Unknown component type: `<type>` |
-| `E_MISSING_ROOT` | Root element ID not found in elements |
-| `E_DANGLING_REF` | Element `<id>` references non-existent child `<child-id>` |
-| `E_CYCLE` | Cycle detected in element tree: `<path>` |
-| `E_PROP_SCHEMA` | Invalid props for `<type>`: `<reason>` |
-| `E_CHILDREN_NOT_ALLOWED` | Component `<type>` does not accept children |
-| `E_CHILDREN_REQUIRED` | Component `<type>` requires children |
-| `E_BIND_PATH` | Invalid bind path: `<path>` |
-| `E_DUPLICATE_SIGNATURE` | Spec signature already exists in gallery |
+| Code | Layer | Meaning |
+|---|---|---|
+| `E_INVALID_SPEC` | grammar | not a JSON object |
+| `E_MISSING_ROOT` | grammar | no `root`, or it names an element that does not exist |
+| `E_MISSING_ELEMENTS` | grammar | no `elements` object |
+| `E_MISSING_TYPE` | grammar | element without a `type` |
+| `E_DANGLING_REF` | grammar | child id with no element |
+| `E_CYCLE` | grammar | element tree is not a tree |
+| `E_UNKNOWN_COMPONENT` | catalog | component the catalog does not declare |
+| `E_UNKNOWN_PROP` | catalog | prop the component does not declare |
+| `E_PROP_REQUIRED` | catalog | declared-required prop absent |
+| `E_PROP_SCHEMA` | catalog | prop value fails the catalog's schema |
+| `E_PROPS_NOT_OBJECT` | catalog | `props` is not an object |
+| `E_CHILDREN_NOT_ALLOWED` | catalog | children on a component with no slots |
+| `E_VISIBLE_SCHEMA` | catalog | `visible` is not a valid visibility condition |
+| `E_BIND_PATH` | catalog | `$state`/`$bindState` value is not a JSON Pointer |

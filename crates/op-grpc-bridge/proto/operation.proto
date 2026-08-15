@@ -89,6 +89,11 @@ message SubscribeRequest {
   repeated string tags = 3;
   // Include initial state snapshot
   bool include_initial_state = 4;
+  // Include the running plugin contracts at hydration. Each arrives as a frame
+  // with change_type CHANGE_TYPE_SCHEMA_MIGRATION, member_name = schema hash,
+  // and new_value = the sealed PluginSchema JSON. Independent of
+  // include_initial_state: a consumer may want contracts without present state.
+  bool include_schema = 5;
 }
 
 message StateChange {
@@ -118,6 +123,16 @@ message StateChange {
   string actor_id = 12;
   // Stream framing: initial static-tree state, a live update, or keepalive.
   StateFrameKind frame_kind = 13;
+  // Hash of the contract this frame's plugin is currently published under.
+  // Empty only when the frame names no plugin (keepalives). A subscriber
+  // compares it against the contract it is holding: a mismatch means it
+  // missed a schema frame and must re-hydrate.
+  string schema_hash = 14;
+  // Identity of the whole published catalog — blake3 over the sorted
+  // (plugin_id, schema_hash) pairs. Present on EVERY frame, keepalives
+  // included, so an otherwise idle subscriber still has something to compare
+  // against and can detect drift it never received an event for.
+  string catalog_hash = 15;
 }
 
 enum StateFrameKind {

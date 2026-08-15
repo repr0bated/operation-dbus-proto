@@ -1088,10 +1088,28 @@ impl StateSync for OperationGrpcServer {
         } else {
             Vec::new()
         };
+        // Contracts hydrate ahead of present state so a consumer that renders
+        // from schema has the shape before the first value arrives.
+        let initial_schemas = if req.include_schema {
+            self.mutation_engine.schema_snapshot().await
+        } else {
+            Vec::new()
+        };
+
+        let engine = self.mutation_engine.clone();
 
         let stream = stream! {
+            for (plugin_id, snapshot) in initial_schemas {
+                let mut frame = schema_state_frame(plugin_id, &snapshot);
+                stamp_identity(&engine, &mut frame).await;
+                if state_frame_matches(&frame, &plugin_filters, &path_filters, &tag_filters) {
+                    yield Ok(frame);
+                }
+            }
+
             for (plugin_id, state) in initial_state {
-                let frame = initial_state_frame(plugin_id, state);
+                let mut frame = initial_state_frame(plugin_id, state);
+                stamp_identity(&engine, &mut frame).await;
                 if state_frame_matches(&frame, &plugin_filters, &path_filters, &tag_filters) {
                     yield Ok(frame);
                 }
@@ -1104,12 +1122,17 @@ impl StateSync for OperationGrpcServer {
                     result = rx.recv() => {
                         match result {
                             Ok(update) => {
-                                let frame = proto_state_change(&update);
+                                let mut frame = proto_state_change(&update);
+                                stamp_identity(&engine, &mut frame).await;
                                 if state_frame_matches(&frame, &plugin_filters, &path_filters, &tag_filters) {
                                     yield Ok(frame);
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
+                                // The subscriber just lost frames it will never
+                                // see. The next stamped frame is what lets it
+                                // notice, which is why the hashes ride on
+                                // everything rather than only on schema frames.
                                 warn!("Subscriber lagged, missed {} updates", n);
                                 continue;
                             }
@@ -1117,7 +1140,9 @@ impl StateSync for OperationGrpcServer {
                         }
                     }
                     _ = heartbeat.tick() => {
-                        yield Ok(heartbeat_state_frame());
+                        let mut frame = heartbeat_state_frame();
+                        stamp_identity(&engine, &mut frame).await;
+                        yield Ok(frame);
                     }
                 }
             }
@@ -1747,6 +1772,9 @@ fn proto_state_change(change: &crate::mutation_engine::StateChange) -> ProtoStat
         timestamp: Some(proto_timestamp(change.timestamp)),
         actor_id: change.actor_id.clone(),
         frame_kind: ProtoStateFrameKind::Update as i32,
+        // Filled by `stamp_identity` before the frame leaves.
+        schema_hash: String::new(),
+        catalog_hash: String::new(),
     }
 }
 
@@ -1765,6 +1793,52 @@ fn initial_state_frame(plugin_id: String, state: simd_json::OwnedValue) -> Proto
         timestamp: Some(proto_timestamp(Utc::now())),
         actor_id: "state_sync_initial_state".to_string(),
         frame_kind: ProtoStateFrameKind::InitialState as i32,
+        schema_hash: String::new(),
+        catalog_hash: String::new(),
+    }
+}
+
+/// A hydration frame carrying one plugin's sealed contract.
+///
+/// `frame_kind` is INITIAL_STATE because this is part of the hydration stage;
+/// `change_type` is what says the payload is a contract rather than present
+/// state. Keeping the two axes separate is why no new frame kind is needed.
+fn schema_state_frame(
+    plugin_id: String,
+    snapshot: &crate::mutation_engine::SchemaSnapshot,
+) -> ProtoStateChange {
+    ProtoStateChange {
+        change_id: format!("schema:{plugin_id}:{}", snapshot.schema_hash),
+        event_id: 0,
+        object_path: format!("/org/opdbus/v1/plugins/{plugin_id}"),
+        plugin_id,
+        change_type: ProtoChangeType::SchemaMigration as i32,
+        // The hash has a field of its own now; member_name is left to mean
+        // what it means on every other frame — a property or method name.
+        member_name: String::new(),
+        old_value: None,
+        new_value: Some(simd_to_prost_value(&snapshot.schema_json)),
+        tags_touched: Vec::new(),
+        event_hash: String::new(),
+        timestamp: Some(proto_timestamp(Utc::now())),
+        actor_id: "schema_hydration".to_string(),
+        frame_kind: ProtoStateFrameKind::InitialState as i32,
+        schema_hash: snapshot.schema_hash.clone(),
+        catalog_hash: String::new(),
+    }
+}
+
+/// Fill in the identity fields every outgoing frame carries.
+///
+/// Done in one place, after the frame is otherwise built, so no frame path can
+/// forget them: the whole point of stamping the catalog hash on keepalives is
+/// that a subscriber which has received nothing else still learns the catalog
+/// moved. A frame that already knows its own contract hash (a schema frame)
+/// keeps it.
+async fn stamp_identity(engine: &MutationEngine, frame: &mut ProtoStateChange) {
+    frame.catalog_hash = engine.catalog_hash().await;
+    if frame.schema_hash.is_empty() && !frame.plugin_id.is_empty() {
+        frame.schema_hash = engine.plugin_schema_hash(&frame.plugin_id).await;
     }
 }
 
@@ -1783,6 +1857,10 @@ fn heartbeat_state_frame() -> ProtoStateChange {
         timestamp: Some(proto_timestamp(Utc::now())),
         actor_id: "state_sync_keepalive".to_string(),
         frame_kind: ProtoStateFrameKind::Heartbeat as i32,
+        // No plugin, so no contract hash — but the catalog hash is stamped on,
+        // and that is what makes an idle stream able to report drift at all.
+        schema_hash: String::new(),
+        catalog_hash: String::new(),
     }
 }
 

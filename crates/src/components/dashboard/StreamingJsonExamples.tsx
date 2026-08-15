@@ -21,7 +21,7 @@ function renderEventTitle(event: DashboardStreamEvent) {
 
   if (event.type === "audit_event") {
     const payload = event.payload as AuditEventPayload;
-    return `${payload.operation} -> ${payload.target}`;
+    return `${payload.operation_type} -> ${payload.target}`;
   }
 
   return event.type;

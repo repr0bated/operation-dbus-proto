@@ -25,15 +25,21 @@ install -d -m 0755 /dev/shm/opdbus/plugin-blobs
 install -d -m 0755 /var/lib/opdbus-runtime /var/lib/netmaker-runtime
 install -d -m 0755 -o svlog -g svlog /var/log/op-dbus
 
-# Seal plugin blobs before op-grpc-bridge starts: the bridge hydrates its gRPC
+# Stage plugin blobs before op-grpc-bridge starts: the bridge hydrates its gRPC
 # reflection from this catalog and retry-loops against an empty tmpfs.
+#
+# Stage, do not seal. Sealing loads every plugin and calls schema_live(), which
+# probes real backends — on the boot path that makes startup depend on service
+# ordering and costs minutes. `stage-shm` copies the catalog captured by the
+# last deliberate `opblob seal-shm && opblob persist` (a build-time act), and
+# falls back to a one-time seal only when nothing has been persisted yet.
 if [ -x /usr/local/bin/opblob ]; then
-    /usr/local/bin/opblob seal-shm >/dev/null
+    /usr/local/bin/opblob stage-shm >/dev/null
     find /dev/shm/opdbus/plugin-blobs -maxdepth 1 -type f \
         \( -name '*.blob' -o -name '.manifest.json' \) \
         -exec chmod 0644 {} +
 else
-    echo "warning: /usr/local/bin/opblob missing — blob catalog not sealed"
+    echo "warning: /usr/local/bin/opblob missing — blob catalog not staged"
 fi
 
 # Host Ghostbridge identity sled. It lives in tmpfs and must be re-seeded every
