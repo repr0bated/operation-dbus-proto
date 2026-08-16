@@ -1,15 +1,26 @@
 #!/bin/sh
-# Public :443 SNI demux — mail.* to mail-web.sock (Caddy TLS), else Reality.
+# Public :443 SNI demux — mail.* to the mail container's web.sock, else Reality.
+# Bound on the public IP, svc0 (10.0.0.2) and netmaker (100.69.0.1).
 /usr/local/libexec/3tched/runit-ready-signal fwd-443
 exec 2>&1
 
 until ip -4 addr show dev 3tched 2>/dev/null | grep -q "10\\.0\\.0\\.2/"; do sleep 1; done
 
 REALITY=/run/ghostbridge/xray-reality.sock
-MAIL=/run/ghostbridge/mail-web.sock
+MAIL=/run/ghostbridge/mail/web.sock
 until [ -S "$REALITY" ]; do sleep 1; done
-until [ -S "$MAIL" ]; do sleep 1; done
-chmod 666 "$REALITY" "$MAIL" 2>/dev/null || true
+
+# Reality is REQUIRED (it is --default and it is the cover story: a probe to
+# :443 that gets connection-refused from an IP that used to serve a valid
+# apple.com handshake is exactly the inconsistency active probing looks for).
+#
+# Mail is OPTIONAL. It only backs the two mail.* SNI maps. Blocking on it took
+# public :443 down entirely — mail-web.sock depends on 127.0.0.1:8440, which
+# nothing provides since the Incus proxy devices were retired, so this waited
+# forever and Reality went dark with it. Wait briefly, then serve without mail.
+i=0
+while [ ! -S "$MAIL" ] && [ "$i" -lt 30 ]; do i=$((i+1)); sleep 1; done
+chmod 666 "$REALITY" 2>/dev/null || true
 chmod 1777 /run/ghostbridge 2>/dev/null || true
 
 pkill -f "socat TCP-LISTEN:443,bind=188.68.58.237" 2>/dev/null || true
@@ -17,9 +28,34 @@ pkill -f "socat TCP-LISTEN:443,bind=10.0.0.2" 2>/dev/null || true
 pkill -f "/usr/local/libexec/3tched/sni-demux.py" 2>/dev/null || true
 sleep 0.2
 
-exec /usr/local/libexec/3tched/sni-demux.py \
-  --listen 188.68.58.237:443 \
-  --listen 10.0.0.2:443 \
-  --map mail.3tched.com="$MAIL" \
-  --map mail.ghostbridge.tech="$MAIL" \
-  --default "$REALITY"
+# Listen set. Public and svc0 are always bound; the netmaker address is bound
+# when it exists. The 100.69.0.1 SNI map was already here but nothing listened
+# on that address, so webmail over the mesh was connection-refused while every
+# mail protocol port (25/143/465/587/993, mail-port-fabric) worked.
+#
+# netclient may bring the interface up after this service starts, so wait for
+# it — but bounded, and serve the other two doors if it never appears. Reality
+# must not go dark waiting on the mesh.
+i=0
+while ! ip -4 addr show dev netmaker 2>/dev/null | grep -q "100\\.69\\.0\\.1/" \
+      && [ "$i" -lt 30 ]; do i=$((i+1)); sleep 1; done
+
+set -- --listen 188.68.58.237:443 --listen 10.0.0.2:443
+if ip -4 addr show dev netmaker 2>/dev/null | grep -q "100\\.69\\.0\\.1/"; then
+    set -- "$@" --listen 100.69.0.1:443
+else
+    echo "fwd-443: 100.69.0.1 absent - webmail not served over netmaker"
+fi
+
+if [ -S "$MAIL" ]; then
+    chmod 666 "$MAIL" 2>/dev/null || true
+    set -- "$@" \
+      --map mail.3tched.com="$MAIL" \
+      --map 10.0.0.2="$MAIL" \
+      --map 100.69.0.1="$MAIL" \
+      --map mail.ghostbridge.tech="$MAIL"
+else
+    echo "fwd-443: $MAIL absent - serving Reality only (mail SNI unavailable)"
+fi
+
+exec /usr/local/libexec/3tched/sni-demux.py "$@" --default "$REALITY"
