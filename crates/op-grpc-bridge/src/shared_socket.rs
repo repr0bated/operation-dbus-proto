@@ -123,8 +123,16 @@ impl CanonicalPeerIdentity {
     /// against, so the two cannot disagree. An account whose arrival was never
     /// anchored yields an invalid identity rather than a blank one that would
     /// pass presence checks.
+    /// Validity is anchoring, and nothing else.
+    ///
+    /// An empty `trace_id` used to make an account invalid, which meant a
+    /// freshly provisioned container could not connect: `provision_container`
+    /// mints the anchor but leaves the trace blank. That was the wrong test
+    /// anyway — a trace correlates *one connection*, so it belongs to the
+    /// arrival, not to the lifelong account. The accept path mints one when the
+    /// record has none.
     pub fn from_record(record: ContainerIdentitySled) -> Self {
-        let is_valid = record.is_anchored() && !record.trace_id.is_empty();
+        let is_valid = record.is_anchored();
         Self {
             genesis_hex: record.genesis.unwrap_or_default(),
             trace_id_hex: record.trace_id,
@@ -273,7 +281,15 @@ pub fn uds_identity_interceptor(
         ))
     })?;
 
-    inject_canonical_identity(req, CanonicalPeerIdentity::from_record(record))
+    let mut identity = CanonicalPeerIdentity::from_record(record);
+    if identity.trace_id_hex.is_empty() {
+        // One trace per connection. The account record may carry none — a
+        // provisioned container starts without one — and a correlation id is
+        // exactly the kind of thing an arrival owns rather than an account.
+        identity.trace_id_hex = hex::encode(uuid::Uuid::now_v7().as_bytes());
+    }
+
+    inject_canonical_identity(req, identity)
 }
 
 #[allow(clippy::result_large_err)]
