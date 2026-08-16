@@ -26,9 +26,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use base64::Engine;
-use op_cozo_store::{CozoGraphShuttle, IdentitySledRecord};
+use op_cozo_store::{CozoGraphShuttle, GenesisInputsRecord, IdentitySledRecord};
 use op_plugins::state_plugins::identity_sled::{
-    ContainerIdentitySled, IdentitySledState, SessionEvent, SledBtrfsDevice,
+    ContainerIdentitySled, IdentitySledState, SessionEvent, SledBtrfsDevice, RECORD_FORMAT,
 };
 use op_plugins::state_plugins::incus::{IncusInstance, IncusPlugin};
 use op_plugins::state_plugins::incus_device::Device;
@@ -86,7 +86,7 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         interface: sled.interface.clone(),
         peer_ip: sled.peer_ip.clone().unwrap_or_default(),
         mutation_index: sled.mutation_index as i64,
-        hashed_footprint: sled.hashed_footprint.clone(),
+        genesis: sled.genesis.clone().unwrap_or_default(),
         trace_id: sled.trace_id.clone(),
         schema_version: sled.schema_version as i64,
         vector_id: sled.vector_id.clone(),
@@ -108,6 +108,24 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         // own); otherwise unix seconds a temporary/consumer identity
         // (e.g. Lovable) stops being valid.
         expires_at: sled.expires_at.unwrap_or(0),
+        arrival_timestamp: sled.arrival_timestamp,
+        chain_head_at_arrival: sled.chain_head_at_arrival.clone(),
+        catalog_hash_at_arrival: sled.catalog_hash_at_arrival.clone(),
+        head_timestamp_at_arrival: sled.head_timestamp_at_arrival,
+    }
+}
+
+/// The genesis inputs of one sled, for the `identity_genesis` relation.
+fn sled_to_genesis_inputs(sled: &ContainerIdentitySled) -> GenesisInputsRecord {
+    GenesisInputsRecord {
+        session_id: sled.session_id.clone(),
+        arrival_timestamp: sled.arrival_timestamp,
+        chain_head_at_arrival: sled.chain_head_at_arrival.clone(),
+        catalog_hash_at_arrival: sled.catalog_hash_at_arrival.clone(),
+        head_timestamp_at_arrival: sled.head_timestamp_at_arrival,
+        schema_content_hash: op_plugins::state_plugins::identity_sled::SCHEMA_CONTENT_HASH
+            .trim()
+            .to_string(),
     }
 }
 
@@ -134,7 +152,7 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         interface: rec.interface.clone(),
         peer_ip: (!rec.peer_ip.is_empty()).then(|| rec.peer_ip.clone()),
         mutation_index: rec.mutation_index.max(0) as u64,
-        hashed_footprint: rec.hashed_footprint.clone(),
+        genesis: (!rec.genesis.is_empty()).then(|| rec.genesis.clone()),
         trace_id: rec.trace_id.clone(),
         schema_version: rec.schema_version.max(0) as u32,
         vector_id: rec.vector_id.clone(),
@@ -147,6 +165,10 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         last_seen_at: rec.last_seen_at,
         active: rec.active,
         expires_at: (rec.expires_at != 0).then_some(rec.expires_at),
+        arrival_timestamp: rec.arrival_timestamp,
+        chain_head_at_arrival: rec.chain_head_at_arrival.clone(),
+        catalog_hash_at_arrival: rec.catalog_hash_at_arrival.clone(),
+        head_timestamp_at_arrival: rec.head_timestamp_at_arrival,
     }
 }
 
@@ -238,7 +260,7 @@ fn host_identity_from_raw_sled() -> anyhow::Result<ContainerIdentitySled> {
             .unwrap_or_else(|_| "netmaker".to_string()),
         peer_ip: std::env::var("IDENTITY_SLED_HOST_PEER_IP").ok(),
         mutation_index: sled.mutation_index,
-        hashed_footprint: hex::encode(sled.hashed_footprint),
+        genesis: Some(hex::encode(sled.hashed_footprint)),
         trace_id: sled.trace_id_hex(),
         schema_version: sled.schema_version,
         vector_id: sled.vector_id_hex(),
@@ -251,6 +273,10 @@ fn host_identity_from_raw_sled() -> anyhow::Result<ContainerIdentitySled> {
         // Read fresh from shared memory every call (not a stored/cached
         // term), so there's nothing to expire independently here.
         expires_at: None,
+        arrival_timestamp: 0,
+        chain_head_at_arrival: String::new(),
+        catalog_hash_at_arrival: String::new(),
+        head_timestamp_at_arrival: 0,
     })
 }
 
@@ -379,7 +405,7 @@ pub async fn dispatch_identity_sled_method(
                     // write_identity sled does — a stable, once-minted
                     // credential (mutation_index/source_port both 0), not
                     // recomputed on every call.
-                    if sled.hashed_footprint.is_empty() {
+                    if sled.genesis.as_deref().unwrap_or_default().is_empty() {
                         if let Some(footprint) = base64::engine::general_purpose::STANDARD
                             .decode(pubkey.trim())
                             .ok()
@@ -392,7 +418,7 @@ pub async fn dispatch_identity_sled_method(
                                 ))
                             })
                         {
-                            sled.hashed_footprint = footprint;
+                            sled.genesis = Some(footprint);
                         }
                     }
                     sled.mutation_index += 1;
@@ -419,7 +445,7 @@ pub async fn dispatch_identity_sled_method(
                     // per-connection proof. The caller (provisioning tool) hands
                     // the resulting footprint + trace_id to the consumer to present
                     // on every request for the life of its term.
-                    let (hashed_footprint, trace_id) = base64::engine::general_purpose::STANDARD
+                    let (genesis, trace_id) = base64::engine::general_purpose::STANDARD
                         .decode(pubkey.trim())
                         .ok()
                         .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
@@ -437,9 +463,9 @@ pub async fn dispatch_identity_sled_method(
                         interface,
                         peer_ip,
                         mutation_index: 0,
-                        hashed_footprint,
+                        genesis: Some(genesis),
                         trace_id,
-                        schema_version: 1,
+                        schema_version: RECORD_FORMAT,
                         vector_id: String::new(),
                         blob_ref,
                         btrfs_device,
@@ -448,6 +474,10 @@ pub async fn dispatch_identity_sled_method(
                         last_seen_at: ts,
                         active: true,
                         expires_at: ttl_seconds.map(|ttl| ts + ttl),
+                        arrival_timestamp: 0,
+                        chain_head_at_arrival: String::new(),
+                        catalog_hash_at_arrival: String::new(),
+                        head_timestamp_at_arrival: 0,
                     };
                     cache.sleds.push(sled.clone());
                     cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -562,9 +592,9 @@ pub async fn dispatch_identity_sled_method(
                 interface: String::new(),
                 peer_ip: None,
                 mutation_index: 0,
-                hashed_footprint: String::new(),
+                genesis: None,
                 trace_id: String::new(),
-                schema_version: 0,
+                schema_version: RECORD_FORMAT,
                 vector_id: String::new(),
                 blob_ref,
                 btrfs_device,
@@ -573,6 +603,10 @@ pub async fn dispatch_identity_sled_method(
                 last_seen_at: ts,
                 active: true,
                 expires_at: ttl_seconds.map(|ttl| ts + ttl),
+                arrival_timestamp: 0,
+                chain_head_at_arrival: String::new(),
+                catalog_hash_at_arrival: String::new(),
+                head_timestamp_at_arrival: 0,
             };
             let mut cache = read_cache(engine).await;
             cache.sleds.retain(|s| s.session_id != session_id);
