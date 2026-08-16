@@ -198,11 +198,11 @@ fn is_known_mcp_agent(headers: &HeaderMap) -> bool {
 /// matching a known MCP client (Codex, Cursor, Claude, etc.).
 async fn wireguard_auth_middleware(
     State(validator): State<Arc<dyn AuthValidator>>,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    headers: HeaderMap,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
+    let connect_info = request.extensions().get::<ConnectInfo<SocketAddr>>().copied();
+    let headers = request.headers().clone();
     // /health is always open
     if request.uri().path() == "/health" {
         return Ok(next.run(request).await);

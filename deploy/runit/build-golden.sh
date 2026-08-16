@@ -169,6 +169,8 @@ build_golden() {
             run install -Dm755 "${svc_dir}finish" "$GOLDEN_DIR/sv/$svc/finish"
         [ -f "${svc_dir}check" ] &&
             run install -Dm755 "${svc_dir}check" "$GOLDEN_DIR/sv/$svc/check"
+        [ -f "${svc_dir}down" ] &&
+            run install -Dm644 "${svc_dir}down" "$GOLDEN_DIR/sv/$svc/down"
     done
     for helper in "$SCRIPT_DIR/libexec-3tched"/*; do
         [ -f "$helper" ] || continue
@@ -355,6 +357,11 @@ install_live() {
             run install -Dm755 "${svc_dir}log/run" "$RUNIT_SV_DIR/$svc/log/run"
         [ -f "${svc_dir}check" ] &&
             run install -Dm755 "${svc_dir}check" "$RUNIT_SV_DIR/$svc/check"
+        if [ -f "${svc_dir}down" ]; then
+            run install -Dm644 "${svc_dir}down" "$RUNIT_SV_DIR/$svc/down"
+        else
+            run rm -f "$RUNIT_SV_DIR/$svc/down"
+        fi
     done
     for helper in "$SCRIPT_DIR/libexec-3tched"/*; do
         [ -f "$helper" ] || continue

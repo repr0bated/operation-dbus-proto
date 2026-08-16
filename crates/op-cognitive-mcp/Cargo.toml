@@ -26,7 +26,7 @@ qdrant-client = "1.17"
 reqwest = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-axum = { version = "0.7", features = ["json", "http2"] }
+axum = { version = "0.8", features = ["json", "http2"] }
 uuid = { version = "1.0", features = ["v4", "v5"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
@@ -35,6 +35,7 @@ cozo = { workspace = true }
 
 # gRPC (CognitiveToolService — mounted on op-grpc-bridge :50051)
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 prost = { workspace = true }
 
 # RAG pipeline
@@ -67,12 +68,4 @@ name = "op-chain-vectors"
 path = "src/bin/op-chain-vectors.rs"
 
 [build-dependencies]
-tonic-build = { version = "0.12" }
-
-[dev-dependencies]
-# qdrant-client 1.19 is built against tonic 0.14, while this crate's own gRPC
-# surface is on the workspace's tonic 0.12. Both are in the tree; they are
-# different types with the same name. Tests that construct a `QdrantError`
-# need qdrant's tonic specifically, so it is aliased rather than shadowing the
-# `tonic` the rest of the crate means. Dev-only: nothing ships with two tonics.
-tonic-qdrant = { package = "tonic", version = "0.14.6" }
+tonic-prost-build = { workspace = true }

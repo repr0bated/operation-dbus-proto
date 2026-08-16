@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //   2. Add it to the compile_protos list below
     //   3. Add rerun-if-changed below
     //   4. Add the generated server/client to grpc_server.rs
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
         .file_descriptor_set_path(out_dir.join("operation_descriptor.bin"))
@@ -236,7 +236,7 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
     for set in sets {
         writeln!(
             rust,
-            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::with_interceptor(server.clone(), intercept.clone())));",
+            "        routes = routes.add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), crate::proto::plugin_methods::{}::{}::with_interceptor(server.clone(), intercept.clone())));",
             set.server_module, set.server_type
         )
         .unwrap();

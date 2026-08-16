@@ -619,7 +619,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // it the socket is h2-only and rejects browser gRPC-Web. Matches the TCP/axum side.
     let tonic_server = tonic::transport::Server::builder()
         .accept_http1(true)
-        .layer(tonic::service::interceptor(
+        .layer(tonic::service::InterceptorLayer::new(
             crate::shared_socket::uds_identity_interceptor,
         ))
         .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
@@ -628,7 +628,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let shared_server = shared_incoming.map(|incoming| {
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .layer(tonic::service::interceptor(
+            .layer(tonic::service::InterceptorLayer::new(
                 crate::shared_socket::uds_identity_interceptor,
             ))
             .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))

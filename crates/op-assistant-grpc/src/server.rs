@@ -144,27 +144,39 @@ impl AssistantGrpcServer {
 
         let mut builder = Server::builder()
             .accept_http1(true)
-            .add_service(tonic_web::enable(agent))
-            .add_service(tonic_web::enable(session))
-            .add_service(tonic_web::enable(task))
-            .add_service(tonic_web::enable(model))
-            .add_service(tonic_web::enable(cron))
-            .add_service(tonic_web::enable(soul))
-            .add_service(tonic_web::enable(namespace))
-            .add_service(tonic_web::enable(memory));
+            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), agent))
+            .add_service(tower::Layer::layer(
+                &tonic_web::GrpcWebLayer::new(),
+                session,
+            ))
+            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), task))
+            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), model))
+            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), cron))
+            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), soul))
+            .add_service(tower::Layer::layer(
+                &tonic_web::GrpcWebLayer::new(),
+                namespace,
+            ))
+            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), memory));
 
         if self.cfg.enable_reflection {
             let reflection = tonic_reflection::server::Builder::configure()
                 .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
                 .build_v1()?;
-            builder = builder.add_service(tonic_web::enable(reflection));
+            builder = builder.add_service(tower::Layer::layer(
+                &tonic_web::GrpcWebLayer::new(),
+                reflection,
+            ));
         }
 
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
             .set_serving::<AgentServiceServer<AgentServiceImpl>>()
             .await;
-        builder = builder.add_service(tonic_web::enable(health_service));
+        builder = builder.add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            health_service,
+        ));
 
         builder.serve(addr).await?;
         Ok(())

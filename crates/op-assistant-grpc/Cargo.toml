@@ -11,7 +11,9 @@ op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 
 # gRPC
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 tonic-web = { workspace = true }
+tower = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
 prost = { workspace = true }
@@ -46,7 +48,7 @@ chrono = { workspace = true }
 hex = { workspace = true }
 
 [build-dependencies]
-tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -203,10 +203,10 @@ pub fn extract_ip(headers: &HeaderMap, addr: Option<&SocketAddr>) -> String {
 /// `is_trusted_proxy()` peers, and (c) carry a short-lived HMAC-signed token
 /// rather than a static secret.
 pub async fn ip_security_middleware(
-    connect_info: Option<ConnectInfo<SocketAddr>>,
     mut request: Request,
     next: Next,
 ) -> Response {
+    let connect_info = request.extensions().get::<ConnectInfo<SocketAddr>>().copied();
     let headers = request.headers();
     let addr = connect_info.map(|ci| ci.0);
     // `client_ip` is informational only; we feed the same value into

@@ -102,9 +102,9 @@ zbus = { version = "5", features = ["tokio"] }
 zbus_xml = "5"
 
 # Web
-axum = { version = "0.7", features = ["ws", "macros", "tokio"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "fs", "trace", "compression-gzip"] }
+axum = { version = "0.8", features = ["ws", "macros", "tokio"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }
 
 # HTTP client
 reqwest = { version = "0.11", features = ["json", "stream"] }
@@ -142,14 +142,15 @@ glob = "0.3"
 mime_guess = "2.0"
 
 # gRPC
-tonic = { version = "0.12", features = ["tls", "tls-roots", "tls-webpki-roots"] }
-prost = "0.13"
-prost-types = "0.13"
-tonic-build = "0.12"
-tonic-reflection = "0.12"
-prost-reflect = { version = "0.14", features = ["serde"] }
-tonic-health = "0.12"
-tonic-web = "0.12"
+tonic = { version = "0.14.6", features = ["tls-native-roots", "tls-webpki-roots"] }
+tonic-prost = "0.14.6"
+prost = "0.14.4"
+prost-types = "0.14.4"
+tonic-prost-build = "0.14.6"
+tonic-reflection = "0.14.6"
+prost-reflect = { version = "0.16.5", features = ["serde"] }
+tonic-health = "0.14.6"
+tonic-web = "0.14.6"
 
 # Databases
 rusqlite = { version = "0.37", features = ["bundled"] }

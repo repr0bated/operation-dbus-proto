@@ -178,31 +178,42 @@ pub async fn run_orchestration_server(
 
     tonic::transport::Server::builder()
         .accept_http1(true)
-        .add_service(tonic_web::enable(AgentLifecycleServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(AgentExecutionServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(MemoryServiceServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            AgentLifecycleServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            AgentExecutionServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            MemoryServiceServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
             SequentialThinkingServiceServer::from_arc(server.clone()),
         ))
-        .add_service(tonic_web::enable(ContextManagerServiceServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(RustProServiceServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(BackendArchitectServiceServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(WorkstackServiceServer::from_arc(
-            server.clone(),
-        )))
-        .add_service(tonic_web::enable(reflection))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            ContextManagerServiceServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            RustProServiceServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            BackendArchitectServiceServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            WorkstackServiceServer::from_arc(server.clone()),
+        ))
+        .add_service(tower::Layer::layer(
+            &tonic_web::GrpcWebLayer::new(),
+            reflection,
+        ))
         .serve(addr)
         .await
 }

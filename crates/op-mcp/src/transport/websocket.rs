@@ -91,7 +91,7 @@ async fn handle_ws_connection<H: McpHandler>(socket: WebSocket, state: Arc<WsSta
         "protocol": crate::PROTOCOL_VERSION
     });
 
-    if let Err(e) = sender.send(Message::Text(welcome.to_string())).await {
+    if let Err(e) = sender.send(Message::Text(welcome.to_string().into())).await {
         error!(error = %e, "Failed to send welcome");
         return;
     }
@@ -102,7 +102,10 @@ async fn handle_ws_connection<H: McpHandler>(socket: WebSocket, state: Arc<WsSta
             Ok(Message::Text(text)) => {
                 debug!(request = %text, "WebSocket request");
 
-                let mut text_mut = text.clone();
+                // axum 0.8 hands `Message::Text` back as `Utf8Bytes`, which is
+                // immutable behind its Deref. simd_json parses in place, so it
+                // needs an owned buffer of its own.
+                let mut text_mut = text.as_str().to_owned();
                 let response = match unsafe { simd_json::from_str::<McpRequest>(&mut text_mut) } {
                     Ok(request) => state.handler.handle_request(request).await,
                     Err(e) => {
@@ -113,7 +116,7 @@ async fn handle_ws_connection<H: McpHandler>(socket: WebSocket, state: Arc<WsSta
 
                 let response_json = simd_json::to_string(&response).unwrap_or_default();
 
-                if let Err(e) = sender.send(Message::Text(response_json)).await {
+                if let Err(e) = sender.send(Message::Text(response_json.into())).await {
                     error!(error = %e, "Failed to send response");
                     break;
                 }

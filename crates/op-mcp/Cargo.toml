@@ -8,7 +8,7 @@ description = "Unified MCP Protocol Server with multiple transport and mode supp
 default = []
 op-chat = []
 code_search = []
-grpc = ["tonic", "prost", "tonic-build", "tonic-reflection", "tonic-health", "tonic-web"]
+grpc = ["tonic", "tonic-prost", "prost", "tonic-prost-build", "tonic-reflection", "tonic-health", "tonic-web"]
 
 [dependencies]
 # Core
@@ -27,8 +27,8 @@ uuid = { version = "1.0", features = ["v4"] }
 prost-types = { workspace = true }
 
 # HTTP/WebSocket
-axum = { version = "0.7", features = ["ws"] }
-tower-http = { version = "0.5", features = ["cors"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
 reqwest.workspace = true
 
 # D-Bus (for agent executor)
@@ -39,10 +39,12 @@ clap = { version = "4.0", features = ["derive", "env"] }
 
 # gRPC (optional)
 tonic = { workspace = true, optional = true }
+tonic-prost = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 tonic-reflection = { workspace = true, optional = true }
 tonic-health = { workspace = true, optional = true }
 tonic-web = { workspace = true, optional = true }
+tower = { workspace = true }
 
 # Internal crates
 op-core = { path = "../op-core" }
@@ -55,7 +57,7 @@ op-state-store = { path = "../op-state-store" }
 op-network = { path = "../op-network" }
 
 [build-dependencies]
-tonic-build = { workspace = true, optional = true }
+tonic-prost-build = { workspace = true, optional = true }
 
 [[bin]]
 name = "op-mcp-server"

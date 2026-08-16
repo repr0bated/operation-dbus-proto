@@ -37,7 +37,7 @@ pub struct McpError {
     pub data: ::core::option::Option<::prost_types::Struct>,
 }
 /// Subscribe to server events
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SubscribeRequest {
     /// "tools", "agents", "resources"
     #[prost(string, repeated, tag = "1")]
@@ -45,7 +45,7 @@ pub struct SubscribeRequest {
     #[prost(string, optional, tag = "2")]
     pub session_id: ::core::option::Option<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct McpEvent {
     #[prost(string, tag = "1")]
     pub event_type: ::prost::alloc::string::String,
@@ -56,7 +56,7 @@ pub struct McpEvent {
     #[prost(uint32, tag = "4")]
     pub sequence: u32,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HealthResponse {
     #[prost(bool, tag = "1")]
     pub healthy: bool,
@@ -72,7 +72,7 @@ pub struct HealthResponse {
     pub uptime_secs: u64,
 }
 /// Initialize session
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitializeRequest {
     #[prost(string, tag = "1")]
     pub client_name: ::prost::alloc::string::String,
@@ -83,7 +83,7 @@ pub struct InitializeRequest {
     #[prost(string, repeated, tag = "4")]
     pub capabilities: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitializeResponse {
     #[prost(string, tag = "1")]
     pub protocol_version: ::prost::alloc::string::String,
@@ -100,7 +100,7 @@ pub struct InitializeResponse {
     pub session_id: ::prost::alloc::string::String,
 }
 /// Tool operations with structured arguments
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListToolsRequest {
     #[prost(string, optional, tag = "1")]
     pub category: ::core::option::Option<::prost::alloc::string::String>,
@@ -154,7 +154,7 @@ pub struct ToolParameter {
     #[prost(string, repeated, tag = "5")]
     pub enum_values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetToolSchemaRequest {
     #[prost(string, tag = "1")]
     pub tool_name: ::prost::alloc::string::String,
@@ -199,7 +199,7 @@ pub mod tool_arguments {
         Generic(::prost_types::Struct),
     }
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileSystemArgs {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
@@ -210,7 +210,7 @@ pub struct FileSystemArgs {
     #[prost(message, optional, tag = "4")]
     pub mode: ::core::option::Option<FileMode>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileMode {
     #[prost(uint32, tag = "1")]
     pub mode: u32,
@@ -266,7 +266,7 @@ pub struct CallToolResponse {
     pub duration_ms: u64,
 }
 /// Streaming tool output
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ToolOutput {
     #[prost(enumeration = "OutputType", tag = "1")]
     pub output_type: i32,
@@ -448,7 +448,7 @@ pub mod mcp_service_client {
     }
     impl<T> McpServiceClient<T>
     where
-        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T: tonic::client::GrpcService<tonic::body::Body>,
         T::Error: Into<StdError>,
         T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
         <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
@@ -469,13 +469,13 @@ pub mod mcp_service_client {
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
             T: tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
+                http::Request<tonic::body::Body>,
                 Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
                 >,
             >,
             <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
+                http::Request<tonic::body::Body>,
             >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             McpServiceClient::new(InterceptedService::new(inner, interceptor))
@@ -524,7 +524,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/Call",
             );
@@ -548,7 +548,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/Subscribe",
             );
@@ -573,7 +573,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/Stream",
             );
@@ -595,7 +595,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/Health",
             );
@@ -620,7 +620,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/Initialize",
             );
@@ -645,7 +645,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/ListTools",
             );
@@ -669,7 +669,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/GetToolSchema",
             );
@@ -693,7 +693,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/CallTool",
             );
@@ -717,7 +717,7 @@ pub mod mcp_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/op.mcp.v1.McpService/CallToolStreaming",
             );
@@ -883,7 +883,7 @@ pub mod mcp_service_server {
         B: Body + std::marker::Send + 'static,
         B::Error: Into<StdError> + std::marker::Send + 'static,
     {
-        type Response = http::Response<tonic::body::BoxBody>;
+        type Response = http::Response<tonic::body::Body>;
         type Error = std::convert::Infallible;
         type Future = BoxFuture<Self::Response, Self::Error>;
         fn poll_ready(
@@ -922,7 +922,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CallSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -968,7 +968,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SubscribeSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1014,7 +1014,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = StreamSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1054,7 +1054,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = HealthSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1099,7 +1099,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = InitializeSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1144,7 +1144,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListToolsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1189,7 +1189,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetToolSchemaSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1234,7 +1234,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CallToolSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1281,7 +1281,7 @@ pub mod mcp_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CallToolStreamingSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1298,7 +1298,9 @@ pub mod mcp_service_server {
                 }
                 _ => {
                     Box::pin(async move {
-                        let mut response = http::Response::new(empty_body());
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
                         let headers = response.headers_mut();
                         headers
                             .insert(

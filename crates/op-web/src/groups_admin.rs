@@ -280,8 +280,11 @@ async fn save_profile(
 }
 
 /// Get access zone for client IP
-async fn get_access_zone(connect_info: Option<ConnectInfo<SocketAddr>>) -> Json<Value> {
-    let ip = connect_info
+async fn get_access_zone(request: axum::extract::Request) -> Json<Value> {
+    let ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied()
         .map(|ci| ci.0.ip().to_string())
         .unwrap_or_else(|| "0.0.0.0".to_string());
     let zone = op_core::security::AccessZone::from_ip(&ip);
