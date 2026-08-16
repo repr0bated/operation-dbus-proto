@@ -993,9 +993,30 @@ impl MutationEngine {
         // Take the catalog identity after all sealing is done, from op_blob's
         // single implementation. Recomputing it here would be a second
         // derivation of a value that is only allowed to have one.
-        if let Some(store) = blob_store.as_ref() {
-            let hash = store.catalog_hash();
-            tracing::info!(catalog_hash = %hash, "published catalog identity");
+        if blob_store.is_some() {
+            // Read the identity back from the sealed manifest rather than from
+            // `store.catalog_hash()`. Both are "the catalog hash", and they
+            // disagreed: on 2026-08-16 the engine published
+            // 107b1adb916d9cc4… at 19:38:57 while the sealer wrote
+            // 90fcbc8e8a8d38fb… to the manifest two seconds later, and every
+            // genesis bound the manifest's value because `mint_genesis` reads
+            // it through `schema_catalog_hash()`. Frames then advertised a
+            // catalog identity no anchor referred to.
+            //
+            // The manifest is the one that persists and the one A.N.N.A.
+            // compares against, so it is the authority; this is a read of it,
+            // not a second derivation.
+            let hash = op_identity::schema_bridge::schema_catalog_hash()
+                .map(hex::encode)
+                .unwrap_or_default();
+            if hash.is_empty() {
+                tracing::warn!(
+                    "sealed catalog manifest unreadable; StateSync frames will carry no \
+                     catalog identity and genesis minting has nothing to bind"
+                );
+            } else {
+                tracing::info!(catalog_hash = %hash, "published catalog identity (from sealed manifest)");
+            }
             *self.catalog_hash.write().await = hash;
         }
 
@@ -2360,9 +2381,23 @@ impl MutationEngine {
             .unwrap_or_default()
     }
 
-    /// Identity of the published catalog. Empty before the seal pass has run.
+    /// Identity of the published catalog, read at the moment it is asked for.
+    ///
+    /// This used to return a value cached during the seal pass, and that value
+    /// was always one generation stale: the engine reads the manifest ~2s
+    /// before the sealer commits it (measured 2026-08-16 — engine read
+    /// `107b1adb…` at 21:15:13.271, sealer wrote `90fcbc8e…` at 21:15:15), so
+    /// every StateSync frame advertised the *superseded* catalog while genesis
+    /// anchors bound the current one. Reading here removes the window entirely
+    /// rather than compensating for it; the manifest is a small tmpfs file and
+    /// is the authority both this and `mint_genesis` consult.
+    ///
+    /// Falls back to the cached value only if the manifest is unreadable.
     pub async fn catalog_hash(&self) -> String {
-        self.catalog_hash.read().await.clone()
+        match op_identity::schema_bridge::schema_catalog_hash() {
+            Some(hash) => hex::encode(hash),
+            None => self.catalog_hash.read().await.clone(),
+        }
     }
 
     /// Announce a contract change on the state stream.

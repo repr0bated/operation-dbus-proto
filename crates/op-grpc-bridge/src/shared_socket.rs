@@ -69,7 +69,9 @@ fn account_id_for_cgroup(pid: i32) -> Option<String> {
         // cgroup v2: "0::/lxc.payload.<name>/init.scope"; v1 lines carry a
         // controller list first, but the payload segment reads the same.
         let path = line.rsplit_once(':')?.1;
-        let after = path.split('/').find_map(|seg| seg.strip_prefix(PAYLOAD_PREFIX))?;
+        let after = path
+            .split('/')
+            .find_map(|seg| seg.strip_prefix(PAYLOAD_PREFIX))?;
         (!after.is_empty()).then(|| after.to_owned())
     })
 }
@@ -144,19 +146,55 @@ impl CanonicalPeerIdentity {
     /// path want [`anchor_this_arrival`] instead, which mints when the account
     /// has arrived for the first time.
     pub fn from_session(session_id: &str) -> Self {
-        let engine = match crate::interceptor::engine_handle() {
-            Some(engine) => engine,
-            None => return Self::invalid(),
+        // In-process: read the engine's state cache, the same record the
+        // interceptor gates on.
+        if let Some(engine) = crate::interceptor::engine_handle() {
+            let record = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    crate::identity_sled_dispatch::session_record_for_actor(
+                        engine.as_ref(),
+                        session_id,
+                    ),
+                )
+            });
+            return record.map(Self::from_record).unwrap_or_else(Self::invalid);
+        }
+        // Out of process: no engine is registered, so read the plugin's
+        // present state in SHM, which exists for exactly these consumers.
+        //
+        // Without this, every process that is not the bridge — op-web above
+        // all — resolves no identity and refuses its own gRPC calls before
+        // they reach the wire ("Host session identity is unavailable"). That
+        // took the whole dashboard down: identity lookup had moved from the
+        // world-readable global sled into a cache only the bridge can see.
+        Self::from_state(session_id)
+    }
+
+    /// Read one session's record from the identity_sled state in SHM.
+    ///
+    /// `/dev/shm/opdbus/state/identity_sled.json` is the plugin's present
+    /// state — the same records, written by the engine on every mutation.
+    /// Reading it is not a second source of truth; it is the one source, read
+    /// by consumers that cannot reach the engine's in-process cache.
+    fn from_state(session_id: &str) -> Self {
+        const STATE: &str = "/dev/shm/opdbus/state/identity_sled.json";
+        let path =
+            std::env::var("IDENTITY_SLED_STATE").unwrap_or_else(|_| STATE.to_string());
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Self::invalid();
         };
-        let record = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
-                crate::identity_sled_dispatch::session_record_for_actor(
-                    engine.as_ref(),
-                    session_id,
-                ),
-            )
-        });
-        record.map(Self::from_record).unwrap_or_else(Self::invalid)
+        let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return Self::invalid();
+        };
+        state
+            .get("sleds")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .find(|sled| sled.get("session_id").and_then(|v| v.as_str()) == Some(session_id))
+            .and_then(|sled| serde_json::from_value::<ContainerIdentitySled>(sled.clone()).ok())
+            .map(Self::from_record)
+            .unwrap_or_else(Self::invalid)
     }
 }
 
@@ -232,9 +270,11 @@ fn anchor_this_arrival(account_id: &str) -> Option<ContainerIdentitySled> {
     let engine = crate::interceptor::engine_handle()?;
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let record =
-                crate::identity_sled_dispatch::session_record_for_actor(engine.as_ref(), account_id)
-                    .await?;
+            let record = crate::identity_sled_dispatch::session_record_for_actor(
+                engine.as_ref(),
+                account_id,
+            )
+            .await?;
             if record.is_anchored() {
                 return Some(record);
             }
@@ -266,8 +306,8 @@ pub fn uds_identity_interceptor(
     let cred = extract_peer_cred(&req).ok_or_else(|| {
         tonic::Status::unauthenticated("UDS peer credentials unavailable — connection rejected")
     })?;
-    let bridge_uid =
-        bridge_uid().map_err(|_| tonic::Status::internal("Unable to resolve bridge process uid"))?;
+    let bridge_uid = bridge_uid()
+        .map_err(|_| tonic::Status::internal("Unable to resolve bridge process uid"))?;
 
     let account_id = account_id_for_peer(&cred, bridge_uid).ok_or_else(|| {
         tonic::Status::unauthenticated(
@@ -389,5 +429,4 @@ mod tests {
 
         assert_eq!(error.code(), Code::Unauthenticated);
     }
-
 }

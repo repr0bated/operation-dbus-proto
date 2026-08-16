@@ -556,8 +556,8 @@ pub fn verify_session_genesis(
         let by_pubkey = wireguard_pubkey
             .map(|p| !p.is_empty() && s.wireguard_pubkey == p)
             .unwrap_or(false);
-        let by_genesis = !request_genesis_hex.is_empty()
-            && s.genesis.as_deref() == Some(request_genesis_hex);
+        let by_genesis =
+            !request_genesis_hex.is_empty() && s.genesis.as_deref() == Some(request_genesis_hex);
         by_trace || by_pubkey || by_genesis
     });
 
@@ -1077,6 +1077,41 @@ const SHM_LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 /// catalog manifest's `catalog_hash`; falls back to the legacy SchemaEngine
 /// manifest, then the monolith, on hosts not yet re-sealed. `None` if no
 /// artifact exists.
+/// The catalog identity this one superseded, when the manifest carries it.
+///
+/// Pairs with [`schema_catalog_hash`] to give verification a two-deep window: a
+/// genesis minted moments before a reseal binds the superseded hash, and would
+/// otherwise name a catalog nothing publishes any more. Deliberately a window
+/// and not a history — the durable record of which contract a session ran
+/// against belongs on the chain, not in a tmpfs file.
+pub fn schema_catalog_hash_previous() -> Option<[u8; 32]> {
+    for manifest in [SHM_BLOB_MANIFEST_PATH, SHM_LEGACY_MANIFEST_PATH] {
+        if let Ok(bytes) = std::fs::read(manifest) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(hex_str) = v
+                    .get("previous_catalog_hash")
+                    .and_then(|h| h.as_str())
+                    .filter(|h| !h.is_empty())
+                {
+                    if let Ok(raw) = hex::decode(hex_str) {
+                        if let Ok(arr) = <[u8; 32]>::try_from(raw.as_slice()) {
+                            return Some(arr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether `hash` names a catalog this host currently publishes — either the
+/// live one or the one it just replaced.
+pub fn is_known_catalog_hash(hash: &[u8; 32]) -> bool {
+    schema_catalog_hash().is_some_and(|c| &c == hash)
+        || schema_catalog_hash_previous().is_some_and(|p| &p == hash)
+}
+
 pub fn schema_catalog_hash() -> Option<[u8; 32]> {
     for manifest in [SHM_BLOB_MANIFEST_PATH, SHM_LEGACY_MANIFEST_PATH] {
         if let Ok(bytes) = std::fs::read(manifest) {

@@ -238,12 +238,19 @@ impl ActiveReflectionCatalog {
     fn write_manifest(&self) -> io::Result<()> {
         let path = self.dir.join(MANIFEST_FILENAME);
         let generation = Self::read_manifest_generation(&path).wrapping_add(1);
+        // The hash this write supersedes. A genesis minted moments before a
+        // reseal binds it, and would otherwise name a catalog nothing publishes
+        // any more — so the manifest carries a two-deep window and verification
+        // accepts either. Deliberately a window, not a history: the durable
+        // record of what a session ran against is the chain, not this file.
+        let previous_catalog_hash = Self::read_catalog_hash(&self.dir).unwrap_or_default();
         let mut plugins = std::collections::BTreeMap::new();
         for (id, e) in &self.entries {
             plugins.insert(id.clone(), e.manifest.schema_hash.clone());
         }
         let manifest = serde_json::json!({
             "catalog_hash": self.catalog_hash(),
+            "previous_catalog_hash": previous_catalog_hash,
             "generation": generation,
             "plugins": plugins,
         });

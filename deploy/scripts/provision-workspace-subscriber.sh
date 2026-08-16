@@ -10,7 +10,7 @@
 #   - Host owns /run/ghostbridge/container.sock (shared fabric)
 #   - CT gets disk bind of /run/ghostbridge only
 #   - Optional host loopbacks for app listeners; no eth0
-#   - btrfs seed on pool `default`; fstorage.img via btrfs device add
+#   - btrfs seed on pool `3tched-storage`; fstorage.img via btrfs device add
 #   - Memory namespaces on the single cognitive/cozo leaf (host fabric)
 #
 # Identity: prefer EXISTING keys (--pubkey / --identity-dir). Generate only
@@ -51,9 +51,14 @@ RUNTIME_ROOT="${OPDBUS_IDENTITY_ROOT:-/var/lib/opdbus-runtime/identities}"
 SHARED_GHOSTBRIDGE="${GHOSTBRIDGE_DIR:-/run/ghostbridge}"
 SHARED_CONTAINER_SOCK="${GHOSTBRIDGE_SOCKET_PATH:-/run/ghostbridge/container.sock}"
 HOST_GRPC_SOCK="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
-STORAGE_POOL="${IDENTITY_STORAGE_POOL:-default}"
-# Local noble fingerprint when present; else remote alias.
-DEFAULT_IMAGE="${IDENTITY_SEED_IMAGE:-3a639373bb7a}"
+STORAGE_POOL="${IDENTITY_STORAGE_POOL:-3tched-storage}"
+# Identity volumes live beside the pool, never inside it (see ensure_identity_volume).
+IDENTITY_VOLUME_ROOT="${IDENTITY_VOLUME_ROOT:-/opt/incus-storage}"
+# Local seed image. Prefer the ALIAS over a fingerprint: fingerprints change
+# every time the image is re-imported, and 3a639373bb7a (the pre-migration
+# seed) no longer exists on this host — provisioning died on "Image not
+# found" until this was corrected.
+DEFAULT_IMAGE="${IDENTITY_SEED_IMAGE:-raccoon}"
 COGNITIVE_HTTP="${COGNITIVE_MCP_HTTP:-http://10.200.0.2:3003/mcp}"
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
@@ -107,6 +112,62 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+# Identity containers are NIC-less, so package installation from inside the
+# running container cannot resolve or reach the Ubuntu mirrors. Install the
+# template's required recovery tools through the rootfs using the host network.
+# btrfs-progs must be present before fstorage is attached so a provisioned
+# workspace always carries the tooling needed for `btrfs device remove`.
+install_base_packages_chroot() {
+    _name="$1"
+    _root="/var/lib/incus/storage-pools/${STORAGE_POOL}/containers/${_name}/rootfs"
+
+    if [ ! -d "$_root" ]; then
+        echo "    WARN: rootfs not found at $_root — package install skipped"
+        return 1
+    fi
+
+    _resolver_tmp=$(mktemp -d /tmp/opdbus-identity-resolver.XXXXXX)
+    cp /etc/resolv.conf "$_resolver_tmp/stub-resolv.conf"
+    mkdir -p "$_root/run/systemd/resolve"
+
+    _resolver_mounted=false
+    _devnull_mounted=false
+    cleanup_identity_chroot() {
+        if [ "$_devnull_mounted" = "true" ]; then
+            umount "$_root/dev/null" 2>/dev/null || true
+        fi
+        if [ "$_resolver_mounted" = "true" ]; then
+            umount "$_root/run/systemd/resolve" 2>/dev/null || true
+        fi
+        rm -rf "$_resolver_tmp"
+    }
+    trap cleanup_identity_chroot EXIT HUP INT TERM
+
+    mount --bind "$_resolver_tmp" "$_root/run/systemd/resolve"
+    _resolver_mounted=true
+    if [ -e "$_root/dev/null" ] && mount --bind /dev/null "$_root/dev/null" 2>/dev/null; then
+        _devnull_mounted=true
+    fi
+
+    if [ -x "$_root/usr/bin/apt-get" ]; then
+        chroot "$_root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+            apt-get update -qq || true
+        chroot "$_root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends \
+            curl ca-certificates btrfs-progs iproute2
+    elif [ -x "$_root/usr/bin/pacman" ]; then
+        chroot "$_root" pacman -Sy --noconfirm curl btrfs-progs iproute2
+    else
+        echo "    WARN: unknown package manager in $_root — package install skipped"
+        cleanup_identity_chroot
+        trap - EXIT HUP INT TERM
+        return 1
+    fi
+
+    cleanup_identity_chroot
+    trap - EXIT HUP INT TERM
 }
 
 # session_id = blake3 derive_key("op-identity session-id v1", pubkey)[:16] as UUID
@@ -323,6 +384,44 @@ safe_delete_container() {
     fi
     echo "    incus delete $_name --force"
     incus delete "$_name" --force
+}
+
+# Persistent storage: one btrfs subvolume per identity, SIBLING of the pool,
+# bind-mounted into the CT as a disk device.
+#
+# Replaces the loop-image + `btrfs device add` model, which never gave a
+# container private storage at all: `device add` adds a member device to a
+# *filesystem*, so the image only expanded whatever filesystem happened to hold
+# the CT rootfs. Worse, the filesystem then could not mount unless something ran
+# `losetup` for those images at boot, and nothing on this host ever did — that is
+# exactly how `3tched-incus` came up short two devices after a reboot and took
+# /opt/incus-storage, the cargo target and the bun cache down with it.
+#
+# Sibling, not nested: a subvolume inside the pool would have to be sent
+# individually on any future move, the same way all ten pool subvolumes did.
+ensure_identity_volume() {
+    _role="$1"
+    _vol="${IDENTITY_VOLUME_ROOT}/@identity-${_role}"
+    if [ -d "$_vol" ]; then
+        echo "    identity volume exists: $_vol"
+        return 0
+    fi
+    if ! btrfs subvolume create "$_vol" >/dev/null 2>&1; then
+        echo "    WARN: could not create identity volume at $_vol"
+        return 1
+    fi
+    echo "    created identity volume: $_vol"
+}
+
+attach_identity_volume() {
+    _name="$1"
+    _role="$2"
+    _vol="${IDENTITY_VOLUME_ROOT}/@identity-${_role}"
+    [ -d "$_vol" ] || return 0
+    incus config device add "$_name" persist disk \
+        source="$_vol" path=/opt/run-mounts/persist 2>/dev/null || \
+        incus config device set "$_name" persist source="$_vol" 2>/dev/null || true
+    echo "    persist device → $_vol (CT: /opt/run-mounts/persist)"
 }
 
 # Persistent storage: btrfs device add of a host loop image onto the CT seed
@@ -588,18 +687,10 @@ if [ "$NO_START" != "true" ]; then
         2>/dev/null || true
 fi
 
-# ── 2. Base OS packages (inside CT) ──────────────────────────────────────────
+# ── 2. Base OS packages (host-network rootfs chroot) ─────────────────────────
 if [ "$NO_START" != "true" ] && incus info "$CONTAINER_ID" 2>/dev/null | grep -q 'Status: RUNNING'; then
     echo "[2] Base OS packages..."
-    if incus exec "$CONTAINER_ID" -- test -x /usr/bin/apt-get 2>/dev/null; then
-        incus exec "$CONTAINER_ID" -- apt-get update -qq 2>/dev/null || true
-        incus exec "$CONTAINER_ID" -- apt-get install -y --no-install-recommends \
-            curl ca-certificates wireguard-tools iproute2 2>/dev/null || true
-    elif incus exec "$CONTAINER_ID" -- test -x /usr/bin/pacman 2>/dev/null; then
-        incus exec "$CONTAINER_ID" -- pacman -Sy --noconfirm curl wireguard-tools iproute2 2>/dev/null || true
-    else
-        echo "    (unknown package manager — skip)"
-    fi
+    install_base_packages_chroot "$CONTAINER_ID"
 
     # Materialize keys inside CT from host identity dir (already bind-mounted RO)
     incus exec "$CONTAINER_ID" -- sh -c '
@@ -629,11 +720,18 @@ if [ "$GHOSTBRIDGE" = "true" ]; then
     echo "    GhostBridge: shared UDS path (no Netmaker CT NIC registration required for control plane)"
 fi
 
-# ── 4. fstorage (btrfs device add onto seed) ─────────────────────────────────
-echo "[4] fstorage..."
-ensure_fstorage "$FSTORAGE_IMG" "$FSTORAGE_GIB"
-if [ "$NO_START" != "true" ]; then
-    attach_fstorage_best_effort "$FSTORAGE_IMG" "$CONTAINER_ID"
+# ── 4. Persistent storage (identity volume, sibling of the pool) ─────────────
+echo "[4] Persistent storage..."
+if [ "${LEGACY_FSTORAGE:-0}" = "1" ]; then
+    # Old loop-image model, kept only for deliberate rollback. See the comment
+    # on ensure_identity_volume for why it is not the default.
+    ensure_fstorage "$FSTORAGE_IMG" "$FSTORAGE_GIB"
+    if [ "$NO_START" != "true" ]; then
+        attach_fstorage_best_effort "$FSTORAGE_IMG" "$CONTAINER_ID"
+    fi
+else
+    ensure_identity_volume "$ROLE"
+    attach_identity_volume "$CONTAINER_ID" "$ROLE"
 fi
 
 # ── 5. Shared socket registration (metadata) ─────────────────────────────────
