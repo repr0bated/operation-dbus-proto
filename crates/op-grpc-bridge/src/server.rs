@@ -219,7 +219,7 @@ impl ZeroclawService for ZeroclawGrpcService {
         let mut response = TonicResponse::new(SchemaResponse {
             schema_json,
             trace_id: context.trace_id.clone(),
-            footprint: context.footprint.clone(),
+            footprint: context.genesis.clone().unwrap_or_default(),
         });
         inject_trace_metadata(&mut response, &context);
         Ok(response)
@@ -253,13 +253,17 @@ impl ZeroclawService for ZeroclawGrpcService {
 }
 
 fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceContext) {
-    if let (Ok(trace_id), Ok(footprint)) = (context.trace_id.parse(), context.footprint.parse()) {
+    if let Ok(trace_id) = context.trace_id.parse() {
         response
             .metadata_mut()
             .insert("x-ghostbridge-trace-id", trace_id);
-        response
-            .metadata_mut()
-            .insert("x-ghostbridge-footprint", footprint);
+    }
+    if let Some(genesis) = context.genesis.as_deref() {
+        if let Ok(genesis) = genesis.parse() {
+            response
+                .metadata_mut()
+                .insert("x-ghostbridge-genesis", genesis);
+        }
     }
 }
 

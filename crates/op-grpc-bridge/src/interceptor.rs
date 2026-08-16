@@ -170,9 +170,19 @@ fn ghostbridge_interceptor_with_validator(
             .get(crate::grpc_server::DECLARED_CAPABILITY_HEADER)
             .and_then(|v| v.to_str().ok())
             == Some("human_principal.write");
-        let identity = validator
+        let mut identity = validator
             .validate_with_bootstrap(&wire, source, now, registration_bootstrap)
             .map_err(Status::from)?;
+        let engine =
+            engine_handle().ok_or_else(|| Status::internal("MutationEngine Memory Unreachable"))?;
+        let session = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(engine.ensure_session_context(&identity.human_pubkey))
+        })
+        .ok_or_else(|| {
+            Status::unauthenticated("Assertion identity has no anchored session genesis")
+        })?;
+        identity.session_genesis = session.genesis_hex;
         req.extensions_mut().insert(identity);
         return Ok(req);
     }
@@ -280,24 +290,28 @@ fn verify_per_identity(
 /// THE GATEKEEPER: legacy Ghostbridge footprint path (byte-for-byte when assertion absent).
 #[allow(clippy::result_large_err)]
 fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
+    let genesis_value = req
+        .metadata()
+        .get("x-ghostbridge-genesis")
+        .or_else(|| req.metadata().get("x-ghostbridge-footprint"))
+        .cloned();
     let trace_value = req
         .metadata()
         .get("x-ghostbridge-trace-id")
         .or_else(|| req.metadata().get("x-wireguard-pubkey"))
         .cloned();
 
-    if footprint_value.is_none() || trace_value.is_none() {
+    if genesis_value.is_none() || trace_value.is_none() {
         return Err(Status::unauthenticated(
             "A.N.N.A. Scribe: Missing Ghostbridge Identity Sled. Connection Dropped.",
         ));
     }
 
-    let request_footprint = footprint_value
+    let request_genesis = genesis_value
         .as_ref()
         .unwrap()
         .to_str()
-        .map_err(|_| Status::invalid_argument("Invalid footprint header encoding"))?;
+        .map_err(|_| Status::invalid_argument("Invalid genesis header encoding"))?;
 
     let pubkey_value = req.metadata().get("x-wireguard-pubkey").cloned();
     let raw_trace_value = req.metadata().get("x-ghostbridge-trace-id").cloned();
@@ -312,10 +326,10 @@ fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>
         .transpose()
         .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?;
     if pubkey_str.is_some() || trace_str.is_some() {
-        if let Some(outcome) = verify_per_identity(pubkey_str, trace_str, request_footprint) {
+        if let Some(outcome) = verify_per_identity(pubkey_str, trace_str, request_genesis) {
             let session_id = outcome?;
             req.extensions_mut().insert(GhostbridgeIdentity {
-                footprint: request_footprint.to_string(),
+                footprint: request_genesis.to_string(),
                 session_id,
             });
             return Ok(req);
@@ -335,14 +349,14 @@ fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>
         tokio::runtime::Handle::current().block_on(
             crate::identity_sled_dispatch::session_record_for_actor(
                 engine.as_ref(),
-                request_footprint,
+                request_genesis,
             ),
         )
     });
     match record {
         Some(sled) => {
             req.extensions_mut().insert(GhostbridgeIdentity {
-                footprint: request_footprint.to_string(),
+                footprint: request_genesis.to_string(),
                 session_id: sled.session_id,
             });
             Ok(req)
@@ -381,6 +395,7 @@ pub fn registration_interceptor(req: Request<()>) -> Result<Request<()>, Status>
 pub(crate) mod tests {
     use super::*;
     use crate::human_principal_dispatch::tests::{pk, register, temp_cozo};
+    use crate::identity_sled_dispatch::tests::{sled_engine, write_identity};
     use crate::oracle_assertion::tests::{
         signed_with_fields, source_at, test_ip, test_issuer, trust_store_for_issuer,
     };
@@ -426,6 +441,14 @@ pub(crate) mod tests {
     fn validator_for_tests() -> Arc<AssertionValidator> {
         let issuer = test_issuer();
         Arc::new(AssertionValidator::new(trust_store_for_issuer(&issuer)))
+    }
+
+    async fn anchor_assertion_session(pubkey: &str) {
+        let (engine, _shm) = sled_engine();
+        write_identity(engine.as_ref(), pubkey)
+            .await
+            .expect("write assertion session identity");
+        set_engine(engine);
     }
 
     #[test]
@@ -507,6 +530,10 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mutation_engine_unreachable_returns_internal() {
+        if engine_handle().is_some() {
+            eprintln!("skipping: another interceptor test registered an engine");
+            return;
+        }
         if op_identity::read_sled().is_ok() {
             eprintln!("skipping: live IdentitySled present in shared memory");
             return;
@@ -535,6 +562,7 @@ pub(crate) mod tests {
         let issuer = test_issuer();
         let pubkey = pk(41);
         register(&pubkey, "interceptor").await.expect("register");
+        anchor_assertion_session(&pubkey).await;
         let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
             trust_store_for_issuer(&issuer),
         )));
@@ -566,6 +594,7 @@ pub(crate) mod tests {
         let issuer = test_issuer();
         let pubkey = pk(42);
         register(&pubkey, "shadow").await.expect("register");
+        anchor_assertion_session(&pubkey).await;
         let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
             trust_store_for_issuer(&issuer),
         )));
@@ -643,6 +672,7 @@ pub(crate) mod tests {
                 principal_id: "did:op:human:test".to_string(),
                 human_pubkey: pubkey.clone(),
                 footprint: derive_human_footprint(&pubkey),
+                session_genesis: "11".repeat(32),
                 expires_at: 1_700_000_300,
             });
             ex
@@ -700,6 +730,7 @@ pub(crate) mod tests {
             principal_id: "did:op:human:shadow".to_string(),
             human_pubkey: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=".to_string(),
             footprint: human_fp,
+            session_genesis: "22".repeat(32),
             expires_at: 1_700_000_300,
         });
         ex.insert(GhostbridgeIdentity {
@@ -753,6 +784,7 @@ pub(crate) mod tests {
             principal_id: "did:op:human:pref".to_string(),
             human_pubkey: "pk".to_string(),
             footprint: human_fp,
+            session_genesis: "38".repeat(32),
             expires_at: 1,
         });
         ex.insert(GhostbridgeIdentity {

@@ -17,7 +17,7 @@
 //! The socket path is configurable via `GHOSTBRIDGE_SOCKET_PATH` env var,
 //! defaulting to `/run/ghostbridge/container.sock`.
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
 
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -26,6 +26,47 @@ use tracing::info;
 
 /// Default path for the shared container socket.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/ghostbridge/container.sock";
+
+/// Comma-separated `uid=session_id` entries provisioned alongside Incus
+/// subuid mappings. The map is parsed once, so request metadata cannot alter
+/// the transport-to-session binding.
+const UID_SESSION_MAP_ENV: &str = "GHOSTBRIDGE_UID_SESSION_MAP";
+
+static UID_SESSION_MAP: OnceLock<HashMap<u32, String>> = OnceLock::new();
+
+fn parse_uid_session_map(value: &str) -> HashMap<u32, String> {
+    value
+        .split(',')
+        .filter_map(|entry| {
+            let (uid, session_id) = entry.trim().split_once('=')?;
+            let uid = uid.trim().parse::<u32>().ok()?;
+            let session_id = session_id.trim();
+            (!session_id.is_empty()).then(|| (uid, session_id.to_owned()))
+        })
+        .collect()
+}
+
+fn uid_session_map() -> &'static HashMap<u32, String> {
+    UID_SESSION_MAP.get_or_init(|| {
+        std::env::var(UID_SESSION_MAP_ENV)
+            .map(|value| parse_uid_session_map(&value))
+            .unwrap_or_default()
+    })
+}
+
+fn session_id_for_uid(uid: u32, bridge_uid: u32) -> Option<String> {
+    if uid == 0 || uid == bridge_uid {
+        crate::identity_sled_dispatch::host_session_id()
+    } else {
+        uid_session_map().get(&uid).cloned()
+    }
+}
+
+#[cfg(unix)]
+fn bridge_uid() -> std::io::Result<u32> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(std::fs::metadata("/proc/self")?.uid())
+}
 
 /// Resolved canonical identity from peer credentials.
 ///
@@ -36,7 +77,7 @@ pub const DEFAULT_SOCKET_PATH: &str = "/run/ghostbridge/container.sock";
 #[derive(Debug, Clone)]
 pub struct CanonicalPeerIdentity {
     /// The hex-encoded session genesis for the host ("container zero").
-    pub footprint_hex: String,
+    pub genesis_hex: String,
     /// The hex-encoded trace_id from the host's session record.
     pub trace_id_hex: String,
     /// Whether the identity is valid (record exists and is non-zero).
@@ -46,7 +87,7 @@ pub struct CanonicalPeerIdentity {
 impl CanonicalPeerIdentity {
     fn invalid() -> Self {
         Self {
-            footprint_hex: String::new(),
+            genesis_hex: String::new(),
             trace_id_hex: String::new(),
             is_valid: false,
         }
@@ -60,20 +101,16 @@ impl CanonicalPeerIdentity {
     /// GhostbridgeInterceptor validates against — the same source, never the
     /// shared global sled. Returns an invalid identity when no engine has been
     /// registered or the host record has not been provisioned yet.
-    pub fn from_sled() -> Self {
+    pub fn from_session(session_id: &str) -> Self {
         let engine = match crate::interceptor::engine_handle() {
             Some(engine) => engine,
-            None => return Self::invalid(),
-        };
-        let session_id = match crate::identity_sled_dispatch::host_session_id() {
-            Some(session_id) => session_id,
             None => return Self::invalid(),
         };
         let record = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(
                 crate::identity_sled_dispatch::session_record_for_actor(
                     engine.as_ref(),
-                    &session_id,
+                    session_id,
                 ),
             )
         });
@@ -82,7 +119,7 @@ impl CanonicalPeerIdentity {
                 let genesis = sled.genesis.unwrap_or_default();
                 let is_valid = !genesis.is_empty() && !sled.trace_id.is_empty();
                 Self {
-                    footprint_hex: genesis,
+                    genesis_hex: genesis,
                     trace_id_hex: sled.trace_id,
                     is_valid,
                 }
@@ -169,7 +206,16 @@ pub fn uds_identity_interceptor(
         ));
     }
 
-    let identity = CanonicalPeerIdentity::from_sled();
+    let peer_uid = extract_peer_cred(&req)
+        .map(|cred| cred.uid())
+        .ok_or_else(|| {
+            tonic::Status::unauthenticated("UDS peer credentials unavailable — connection rejected")
+        })?;
+    let bridge_uid = bridge_uid()
+        .map_err(|_| tonic::Status::internal("Unable to resolve bridge process uid"))?;
+    let session_id = session_id_for_uid(peer_uid, bridge_uid)
+        .ok_or_else(|| tonic::Status::unauthenticated("UDS peer uid is not mapped to a session"))?;
+    let identity = CanonicalPeerIdentity::from_session(&session_id);
 
     inject_canonical_identity(req, identity)
 }
@@ -185,17 +231,17 @@ fn inject_canonical_identity(
         ));
     }
 
-    // Inject the canonical footprint so the GhostbridgeInterceptor passes.
-    let fp = identity
-        .footprint_hex
+    // Inject the canonical session genesis so the GhostbridgeInterceptor passes.
+    let genesis = identity
+        .genesis_hex
         .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
-        .map_err(|_| tonic::Status::internal("Failed to encode footprint header"))?;
+        .map_err(|_| tonic::Status::internal("Failed to encode genesis header"))?;
     let tr = identity
         .trace_id_hex
         .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
         .map_err(|_| tonic::Status::internal("Failed to encode trace_id header"))?;
 
-    req.metadata_mut().insert("x-ghostbridge-footprint", fp);
+    req.metadata_mut().insert("x-ghostbridge-genesis", genesis);
     req.metadata_mut().insert("x-ghostbridge-trace-id", tr);
 
     Ok(req)
@@ -208,7 +254,7 @@ mod tests {
 
     fn valid_identity() -> CanonicalPeerIdentity {
         CanonicalPeerIdentity {
-            footprint_hex: "11".repeat(32),
+            genesis_hex: "11".repeat(32),
             trace_id_hex: "22".repeat(16),
             is_valid: true,
         }
@@ -218,7 +264,7 @@ mod tests {
     fn canonical_identity_overwrites_caller_metadata() {
         let mut request = tonic::Request::new(());
         request.metadata_mut().insert(
-            "x-ghostbridge-footprint",
+            "x-ghostbridge-genesis",
             "spoofed".parse().expect("test metadata"),
         );
         request.metadata_mut().insert(
@@ -232,8 +278,8 @@ mod tests {
         assert_eq!(
             request
                 .metadata()
-                .get("x-ghostbridge-footprint")
-                .expect("footprint")
+                .get("x-ghostbridge-genesis")
+                .expect("genesis")
                 .to_str()
                 .expect("ASCII footprint"),
             "11".repeat(32)
@@ -254,7 +300,7 @@ mod tests {
         let error = inject_canonical_identity(
             tonic::Request::new(()),
             CanonicalPeerIdentity {
-                footprint_hex: String::new(),
+                genesis_hex: String::new(),
                 trace_id_hex: String::new(),
                 is_valid: false,
             },
@@ -270,5 +316,14 @@ mod tests {
             .expect_err("non-UDS request must not enter the UDS identity path");
 
         assert_eq!(error.code(), Code::Unauthenticated);
+    }
+
+    #[test]
+    fn uid_to_session_mapping() {
+        let map = parse_uid_session_map("100000=session-one, 200000 = session-two, malformed, 7=");
+
+        assert_eq!(map.get(&100000).map(String::as_str), Some("session-one"));
+        assert_eq!(map.get(&200000).map(String::as_str), Some("session-two"));
+        assert!(!map.contains_key(&7));
     }
 }

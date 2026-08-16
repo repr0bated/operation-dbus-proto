@@ -664,28 +664,28 @@ impl std::fmt::Display for GrpcClientError {
 impl std::error::Error for GrpcClientError {}
 
 fn attach_ghostbridge_metadata<T>(request: &mut Request<T>) -> Result<(), GrpcClientError> {
-    let (sled_ptr, _mmap) = op_identity::read_sled()
-        .map_err(|e| GrpcClientError::RequestFailed(format!("Identity Sled unreadable: {e}")))?;
-    let sled = unsafe { &*sled_ptr };
-
-    if !sled.is_sled_valid() {
+    let session_id = crate::identity_sled_dispatch::host_session_id().ok_or_else(|| {
+        GrpcClientError::RequestFailed(
+            "Host session id is unavailable; refusing unauthenticated gRPC call".to_string(),
+        )
+    })?;
+    let identity = crate::shared_socket::CanonicalPeerIdentity::from_session(&session_id);
+    if !identity.is_valid {
         return Err(GrpcClientError::RequestFailed(
-            "Identity Sled is invalid; refusing unauthenticated gRPC call".to_string(),
+            "Host session identity is unavailable; refusing unauthenticated gRPC call".to_string(),
         ));
     }
 
-    let footprint = hex::encode(sled.hashed_footprint);
-    let trace_id = sled.trace_id_hex();
     let metadata = request.metadata_mut();
     metadata.insert(
-        "x-ghostbridge-footprint",
-        MetadataValue::try_from(footprint).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
+        "x-ghostbridge-genesis",
+        MetadataValue::try_from(identity.genesis_hex).map_err(|e| {
+            GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
         })?,
     );
     metadata.insert(
         "x-ghostbridge-trace-id",
-        MetadataValue::try_from(trace_id)
+        MetadataValue::try_from(identity.trace_id_hex)
             .map_err(|e| GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}")))?,
     );
 
@@ -698,9 +698,9 @@ fn attach_supplied_ghostbridge_metadata<T>(
 ) -> Result<(), GrpcClientError> {
     let metadata = request.metadata_mut();
     metadata.insert(
-        "x-ghostbridge-footprint",
+        "x-ghostbridge-genesis",
         MetadataValue::try_from(identity.footprint.as_str()).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
+            GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
         })?,
     );
     if let Some(trace_id) = identity.trace_id.as_deref() {

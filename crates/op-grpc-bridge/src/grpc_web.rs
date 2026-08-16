@@ -23,12 +23,13 @@ use tower_http::cors::{AllowOrigin, Cors, CorsLayer};
 
 const MAX_AGE: Duration = Duration::from_secs(86400);
 
-const ALLOW_HEADERS: [HeaderName; 7] = [
+const ALLOW_HEADERS: [HeaderName; 8] = [
     HeaderName::from_static("x-grpc-web"),
     HeaderName::from_static("content-type"),
     HeaderName::from_static("x-user-agent"),
     HeaderName::from_static("grpc-timeout"),
     HeaderName::from_static("x-ghostbridge-footprint"),
+    HeaderName::from_static("x-ghostbridge-genesis"),
     HeaderName::from_static("x-ghostbridge-trace-id"),
     HeaderName::from_static("x-wireguard-pubkey"),
 ];

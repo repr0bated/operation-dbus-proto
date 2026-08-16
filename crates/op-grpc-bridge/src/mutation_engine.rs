@@ -608,7 +608,8 @@ impl MutationEngine {
         }
         // Restart-warm: after a cold start the map is empty but the records
         // hydrated from Cozo already carry their anchors.
-        let record = crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
+        let record =
+            crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
         let genesis_hex = record.genesis.clone().filter(|g| !g.is_empty())?;
         let context = SessionContext {
             genesis_hex,
@@ -635,7 +636,8 @@ impl MutationEngine {
         if let Some(found) = self.session_context_for_actor(actor_id).await {
             return Some(found);
         }
-        let record = crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
+        let record =
+            crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
         match self
             .mint_and_store_genesis(&record.session_id, &record.wireguard_pubkey)
             .await
@@ -727,14 +729,15 @@ impl MutationEngine {
             .ok()
             .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
             .unwrap_or([0u8; 32]);
-        let catalog_hash_bytes = op_identity::schema_bridge::schema_catalog_hash().unwrap_or_else(|| {
-            tracing::warn!(
-                session_id,
-                "no published catalog hash at arrival; the anchor binds zeros \
+        let catalog_hash_bytes =
+            op_identity::schema_bridge::schema_catalog_hash().unwrap_or_else(|| {
+                tracing::warn!(
+                    session_id,
+                    "no published catalog hash at arrival; the anchor binds zeros \
                  and cannot attest which contract this session operated against"
-            );
-            [0u8; 32]
-        });
+                );
+                [0u8; 32]
+            });
         let arrival_timestamp = chrono::Utc::now().timestamp();
 
         let genesis = mint_genesis(
@@ -1623,7 +1626,8 @@ impl MutationEngine {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Advance this session's own record to the new chain position.
-        self.advance_session_record(change.event_id, &actor_id).await;
+        self.advance_session_record(change.event_id, &actor_id)
+            .await;
 
         Ok(MutationResult {
             success: true,
@@ -3479,10 +3483,7 @@ mod session_genesis_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn mint_and_store_genesis_refuses_incomplete_input() {
         let (engine, _shm) = sled_engine();
-        assert!(engine
-            .mint_and_store_genesis("", &pk(0x61))
-            .await
-            .is_err());
+        assert!(engine.mint_and_store_genesis("", &pk(0x61)).await.is_err());
         assert!(engine
             .mint_and_store_genesis("session-no-key", "not-base64!!")
             .await
@@ -3495,7 +3496,9 @@ mod session_genesis_tests {
     async fn second_mutation_reads_stored_genesis() {
         let (engine, _shm) = sled_engine();
         let pubkey = pk(0x62);
-        let identity = write_identity(engine.as_ref(), &pubkey).await.expect("write");
+        let identity = write_identity(engine.as_ref(), &pubkey)
+            .await
+            .expect("write");
         let minted = identity.genesis.clone().expect("genesis");
 
         // Both handles the mutation path may hold resolve the same anchor.
@@ -3515,14 +3518,19 @@ mod session_genesis_tests {
     async fn genesis_none_triggers_remint() {
         let (engine, _shm) = sled_engine();
         let pubkey = pk(0x63);
-        let identity = write_identity(engine.as_ref(), &pubkey).await.expect("write");
+        let identity = write_identity(engine.as_ref(), &pubkey)
+            .await
+            .expect("write");
         let session_id = identity.session_id.clone();
         let original = identity.genesis.clone().expect("genesis");
 
         crate::identity_sled_dispatch::tests::clear_genesis(engine.as_ref(), &session_id).await;
         engine.forget_session_context(&session_id).await;
         assert!(
-            engine.session_context_for_actor(&session_id).await.is_none(),
+            engine
+                .session_context_for_actor(&session_id)
+                .await
+                .is_none(),
             "a record with no anchor must not resolve a session context"
         );
 
@@ -3542,7 +3550,10 @@ mod session_genesis_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn anonymous_actor_anchors_nothing() {
         let (engine, _shm) = sled_engine();
-        assert!(engine.ensure_session_context(ANONYMOUS_ACTOR).await.is_none());
+        assert!(engine
+            .ensure_session_context(ANONYMOUS_ACTOR)
+            .await
+            .is_none());
         assert!(engine.ensure_session_context("").await.is_none());
         assert!(engine.ensure_session_context("who-dis").await.is_none());
     }
@@ -3557,7 +3568,10 @@ mod session_genesis_tests {
             wireguard_pubkey: "cGs=".to_string(),
         };
         let footprint = event_to_footprint(&chain_event("session-one"), Some(&session));
-        assert_eq!(metadata_str(&footprint, "session_genesis"), session.genesis_hex);
+        assert_eq!(
+            metadata_str(&footprint, "session_genesis"),
+            session.genesis_hex
+        );
         assert_eq!(metadata_str(&footprint, "session_id"), session.session_id);
         assert_eq!(
             metadata_str(&footprint, "wireguard_pubkey"),
@@ -3628,5 +3642,142 @@ mod session_genesis_tests {
                 assert_eq!(metadata_str(fp, "session_id"), session.session_id);
             }
         }
+    }
+
+    /// VAL-GENESIS-030 (`offline_reverification`): stored mint inputs are
+    /// sufficient to re-derive each session anchor after extracting
+    /// interleaved events. The first session deliberately arrives one event
+    /// after its recorded chain head, exercising the ancestor-not-parent rule.
+    #[test]
+    fn offline_reverification() {
+        fn hash32(value: &str) -> [u8; 32] {
+            hex::decode(value)
+                .ok()
+                .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+                .unwrap_or([0; 32])
+        }
+
+        fn is_ancestor(events: &[ChainEvent], ancestor: &str, descendant: &str) -> bool {
+            let by_hash: HashMap<&str, &ChainEvent> = events
+                .iter()
+                .map(|event| (event.event_hash.as_str(), event))
+                .collect();
+            let mut cursor = descendant;
+            while cursor != ancestor {
+                let Some(event) = by_hash.get(cursor) else {
+                    return false;
+                };
+                if event.prev_hash == cursor {
+                    return false;
+                }
+                cursor = &event.prev_hash;
+            }
+            true
+        }
+
+        let events = chain_events(&[
+            "bootstrap",
+            "session-two-gap",
+            "session-one",
+            "session-two",
+            "session-one",
+            "session-two",
+        ]);
+        let head = &events[0];
+        let catalog = [0x77; 32];
+        let one_key = [0x11; 32];
+        let two_key = [0x22; 32];
+        let head_hash = hash32(&head.event_hash);
+        let head_timestamp = head.timestamp.timestamp();
+
+        let one_stamp = GenesisStamp {
+            session_id: "session-one".into(),
+            wireguard_pubkey: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                one_key,
+            ),
+            genesis_hex: hex::encode(mint_genesis(
+                &one_key,
+                &head_hash,
+                head_timestamp,
+                &catalog,
+                1_700_000_101,
+            )),
+            arrival_timestamp: 1_700_000_101,
+            chain_head_at_arrival: head.event_hash.clone(),
+            catalog_hash_at_arrival: hex::encode(catalog),
+            head_timestamp_at_arrival: head_timestamp,
+        };
+        let two_stamp = GenesisStamp {
+            session_id: "session-two".into(),
+            wireguard_pubkey: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                two_key,
+            ),
+            genesis_hex: hex::encode(mint_genesis(
+                &two_key,
+                &head_hash,
+                head_timestamp,
+                &catalog,
+                1_700_000_102,
+            )),
+            arrival_timestamp: 1_700_000_102,
+            chain_head_at_arrival: head.event_hash.clone(),
+            catalog_hash_at_arrival: hex::encode(catalog),
+            head_timestamp_at_arrival: head_timestamp,
+        };
+        let one = SessionContext {
+            genesis_hex: one_stamp.genesis_hex.clone(),
+            session_id: one_stamp.session_id.clone(),
+            wireguard_pubkey: one_stamp.wireguard_pubkey.clone(),
+        };
+        let two = SessionContext {
+            genesis_hex: two_stamp.genesis_hex.clone(),
+            session_id: two_stamp.session_id.clone(),
+            wireguard_pubkey: two_stamp.wireguard_pubkey.clone(),
+        };
+
+        let footprints: Vec<_> = events[1..]
+            .iter()
+            .map(|event| {
+                let session = if event.actor_id.contains("one") {
+                    &one
+                } else {
+                    &two
+                };
+                event_to_footprint(event, Some(session))
+            })
+            .collect();
+
+        for (stamp, key) in [(&one_stamp, one_key), (&two_stamp, two_key)] {
+            let recomputed = mint_genesis(
+                &key,
+                &hash32(&stamp.chain_head_at_arrival),
+                stamp.head_timestamp_at_arrival,
+                &hash32(&stamp.catalog_hash_at_arrival),
+                stamp.arrival_timestamp,
+            );
+            assert_eq!(hex::encode(recomputed), stamp.genesis_hex);
+
+            let slice: Vec<_> = footprints
+                .iter()
+                .filter(|fp| metadata_str(fp, "session_genesis") == stamp.genesis_hex)
+                .collect();
+            assert!(!slice.is_empty());
+            let first_hash = slice[0].content_hash.as_str();
+            assert!(is_ancestor(
+                &events,
+                &stamp.chain_head_at_arrival,
+                first_hash
+            ));
+        }
+
+        for pair in events.windows(2) {
+            assert_eq!(pair[1].prev_hash, pair[0].event_hash);
+        }
+        assert_ne!(
+            events[2].prev_hash, one_stamp.chain_head_at_arrival,
+            "session-one arrival includes a deliberate intervening mutation"
+        );
     }
 }

@@ -27,6 +27,8 @@ pub struct HumanPrincipalIdentity {
     pub principal_id: String,
     pub human_pubkey: String,
     pub footprint: [u8; 32],
+    /// Verified session anchor, populated by the bridge after assertion validation.
+    pub session_genesis: String,
     pub expires_at: i64,
 }
 
@@ -352,6 +354,7 @@ impl AssertionValidator {
                     principal_id: derive_principal_id(human_pubkey),
                     human_pubkey: human_pubkey.to_string(),
                     footprint: derive_human_footprint(human_pubkey),
+                    session_genesis: String::new(),
                     expires_at,
                 });
             }
@@ -365,6 +368,7 @@ impl AssertionValidator {
             principal_id: derive_principal_id(human_pubkey),
             human_pubkey: human_pubkey.to_string(),
             footprint: derive_human_footprint(human_pubkey),
+            session_genesis: String::new(),
             expires_at,
         })
     }
