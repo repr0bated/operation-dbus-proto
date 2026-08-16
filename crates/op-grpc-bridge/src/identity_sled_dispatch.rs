@@ -16,11 +16,10 @@
 //! creates the Incus instance (named by the derived session_id) and writes
 //! the sled in one mutation; a sled exists ⟺ its container exists.
 //!
-//! Compatibility: when the written identity is the host's own ("container
-//! zero"), the legacy raw sled at `/dev/shm/plugin_schema.dat` is also
-//! refreshed via `op_identity::schema_bridge::write_sled_from_wg`, because
-//! AnnaScribe still gates arrivals on that file. That projection goes away
-//! when AnnaScribe reads the sealed blob directly.
+//! Authoritative store: the per-session record in this plugin's state cache
+//! (projected to `/dev/shm/opdbus/state/identity_sled.json`, durable in Cozo)
+//! IS the identity. The legacy global 152-byte sled at
+//! `/dev/shm/plugin_schema.dat` is not written and not consulted.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;

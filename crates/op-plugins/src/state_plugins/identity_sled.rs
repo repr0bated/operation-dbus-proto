@@ -5,8 +5,8 @@
 //! pubkey) keys the record; the host itself is "container zero" — the same
 //! kind of object, not a special case. This replaces the bespoke pre-schema
 //! `#[repr(C)]` sled at `/dev/shm/plugin_schema.dat` as the schema'd,
-//! reflectable identity surface; the raw sled file remains a compatibility
-//! projection written by the dispatcher until AnnaScribe migrates.
+//! reflectable identity surface; that global last-write-wins file is retired
+//! and no longer written or read by any identity path.
 //!
 //! The session event ledger ("snowball") methods replace the flat
 //! `/dev/shm/snowball_session.log`; every call is already notarized in the

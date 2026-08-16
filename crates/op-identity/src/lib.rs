@@ -3,7 +3,6 @@
 
 #![deny(rustdoc::broken_intra_doc_links)]
 
-pub mod anna_scribe;
 pub mod gcloud_auth;
 pub mod identity_vault;
 pub mod oracle_assertion;
@@ -15,7 +14,6 @@ pub mod session_genesis;
 pub mod token; // Keeping for now if needed internally
 pub mod wireguard;
 
-pub use anna_scribe::{AnnaScribe, SessionLedger};
 pub use gcloud_auth::GCloudAuth;
 pub use recovery::{
     derive_keypair, generate_seed, load_mnemonic_local, mnemonic_to_seed, provision_local_identity,

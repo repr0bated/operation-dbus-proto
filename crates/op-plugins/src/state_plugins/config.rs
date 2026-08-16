@@ -36,8 +36,8 @@ pub struct ConfigSchemaState {
 
 fn example_configs() -> JsonValue {
     serde_json::json!({
-        "anna_scribe": {
-            "snowball_path": "/var/lib/op-dbus/snowball"
+        "identity_sled": {
+            "cozo_path": "/var/lib/op-dbus/identity-cozo"
         }
     })
 }
