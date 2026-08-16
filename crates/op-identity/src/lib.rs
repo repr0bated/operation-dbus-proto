@@ -11,6 +11,7 @@ pub mod recovery;
 pub mod registration;
 pub mod schema_bridge;
 pub mod session;
+pub mod session_genesis;
 pub mod token; // Keeping for now if needed internally
 pub mod wireguard;
 
