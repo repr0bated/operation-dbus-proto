@@ -1,4 +1,6 @@
 #!/bin/sh
+# Retired: Qdrant HTTP is container-local only. The published door is gRPC
+# (uds-qdrant-grpc → 10.200.0.2:6334). Leave this service down.
 # NIC-less publication: host TCP -> ghostbridge UDS -> container loopback.
 # Replaces the Incus proxy device that used to bind 10.0.0.2:6333. Same listen
 # address, so consumers are unaffected; only the mechanism changed.
