@@ -30,40 +30,64 @@ pub const DEFAULT_SOCKET_PATH: &str = "/run/ghostbridge/container.sock";
 /// Resolved canonical identity from peer credentials.
 ///
 /// This is NOT minted from cgroup names or caller-supplied metadata. It is read
-/// from the authoritative IdentitySled in shared memory after the transport is
-/// proven to be a Unix socket.
+/// from the host's own session record (the authoritative identity source)
+/// after the transport is proven to be a Unix socket — never the global
+/// 152-byte sled projection, which no longer carries an identity verdict.
 #[derive(Debug, Clone)]
 pub struct CanonicalPeerIdentity {
-    /// The hex-encoded hashed_footprint from the IdentitySled.
+    /// The hex-encoded session genesis for the host ("container zero").
     pub footprint_hex: String,
-    /// The hex-encoded trace_id from the IdentitySled.
+    /// The hex-encoded trace_id from the host's session record.
     pub trace_id_hex: String,
-    /// Whether the identity is valid (sled exists and is non-zero).
+    /// Whether the identity is valid (record exists and is non-zero).
     pub is_valid: bool,
 }
 
 impl CanonicalPeerIdentity {
-    /// Resolve the canonical identity from the shared-memory sled.
+    fn invalid() -> Self {
+        Self {
+            footprint_hex: String::new(),
+            trace_id_hex: String::new(),
+            is_valid: false,
+        }
+    }
+
+    /// Resolve the canonical identity of the host ("container zero") from its
+    /// own session record in the authoritative state cache.
     ///
-    /// For UDS connections, the peer credential is the acceptable anchor
-    /// but the identity itself comes from the sled — the same source that
-    /// the GhostbridgeInterceptor validates against.
+    /// For UDS connections, the peer credential is the acceptable transport
+    /// anchor, but the identity itself is the session record the
+    /// GhostbridgeInterceptor validates against — the same source, never the
+    /// shared global sled. Returns an invalid identity when no engine has been
+    /// registered or the host record has not been provisioned yet.
     pub fn from_sled() -> Self {
-        match op_identity::read_sled() {
-            Ok((sled_ptr, _mmap)) => {
-                let sled = unsafe { &*sled_ptr };
-                let is_valid = sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
+        let engine = match crate::interceptor::engine_handle() {
+            Some(engine) => engine,
+            None => return Self::invalid(),
+        };
+        let session_id = match crate::identity_sled_dispatch::host_session_id() {
+            Some(session_id) => session_id,
+            None => return Self::invalid(),
+        };
+        let record = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                crate::identity_sled_dispatch::session_record_for_actor(
+                    engine.as_ref(),
+                    &session_id,
+                ),
+            )
+        });
+        match record {
+            Some(sled) => {
+                let genesis = sled.genesis.unwrap_or_default();
+                let is_valid = !genesis.is_empty() && !sled.trace_id.is_empty();
                 Self {
-                    footprint_hex: hex::encode(sled.hashed_footprint),
-                    trace_id_hex: sled.trace_id_hex(),
+                    footprint_hex: genesis,
+                    trace_id_hex: sled.trace_id,
                     is_valid,
                 }
             }
-            Err(_) => Self {
-                footprint_hex: String::new(),
-                trace_id_hex: String::new(),
-                is_valid: false,
-            },
+            None => Self::invalid(),
         }
     }
 }

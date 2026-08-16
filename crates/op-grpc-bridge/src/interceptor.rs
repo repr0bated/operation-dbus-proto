@@ -40,6 +40,13 @@ pub fn set_engine(engine: Arc<MutationEngine>) {
     *ENGINE.write().expect("engine lock poisoned") = Some(engine);
 }
 
+/// Read-only handle to the registered engine, for sync code paths (e.g. the
+/// UDS identity interceptor) that resolve a session record without owning the
+/// engine. Returns `None` until `set_engine` has run.
+pub(crate) fn engine_handle() -> Option<Arc<MutationEngine>> {
+    ENGINE.read().expect("engine lock poisoned").clone()
+}
+
 /// Per-serving-instance interceptor carrying its own assertion validator.
 #[derive(Clone)]
 pub struct GhostbridgeInterceptorWithValidator {

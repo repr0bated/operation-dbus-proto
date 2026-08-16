@@ -451,7 +451,7 @@ fn now() -> i64 {
 /// session id is derived. `None` means the host has not been registered as a
 /// session yet, which is a missing record — not a licence to read a shared
 /// last-write-wins file and call whatever is in it the host's identity.
-fn host_session_id() -> Option<String> {
+pub(crate) fn host_session_id() -> Option<String> {
     if let Ok(session_id) = std::env::var("IDENTITY_SLED_HOST_SESSION_ID") {
         let session_id = session_id.trim().to_string();
         if !session_id.is_empty() {
