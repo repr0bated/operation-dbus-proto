@@ -523,33 +523,70 @@ pub enum FootprintVerifyError {
     Mismatch,
 }
 
-/// Verify a request-supplied hex-encoded footprint against the live
-/// IdentitySled in shared memory. This is the ONE place the Ghostbridge
-/// "Absolute Base" check lives — every gRPC ingress must call this rather
-/// than re-implementing the sled read + compare, so the two checks can never
-/// drift apart again (see SIGNALS.md: op-cognitive-mcp's interceptor had
-/// silently regressed to a presence-only check while op-grpc-bridge's stayed
-/// correct).
-pub fn verify_ghostbridge_footprint(
-    request_footprint_hex: &str,
+/// Verify a request-supplied hex-encoded **session genesis** against the
+/// caller's own session record, resolved from the per-session identity
+/// projection in shared memory.
+///
+/// The footprint a peer presents is now the session genesis minted by
+/// `op_identity::session_genesis::mint_genesis` — not the v2 Temporary Hash.
+/// We resolve the session record by whichever handle the caller also presents
+/// (WireGuard pubkey, trace id, or the genesis itself) and require its stored
+/// `genesis` to equal the presented one. A record that cannot be resolved, or
+/// a mismatch, fails closed.
+///
+/// This reads the projected `identity_sled` state — one JSON file per session,
+/// never the global 152-byte `/dev/shm/plugin_schema.dat` (which no longer
+/// carries an identity verdict).
+pub fn verify_session_genesis(
+    request_genesis_hex: &str,
+    trace_id: Option<&str>,
+    wireguard_pubkey: Option<&str>,
 ) -> Result<(), FootprintVerifyError> {
-    let (sled_ptr, _mmap) = read_sled().map_err(|_| FootprintVerifyError::SledUnreachable)?;
-    let sled = unsafe { &*sled_ptr };
+    use op_core::projection_shm::projection_file_path;
 
-    if sled.hashed_footprint == [0u8; 32] || sled.trace_id == [0u8; 16] {
-        return Err(FootprintVerifyError::InvalidSled);
+    let path = projection_file_path("identity_sled");
+    let bytes = std::fs::read(&path).map_err(|_| FootprintVerifyError::SledUnreachable)?;
+    let cache: SessionCacheLite =
+        serde_json::from_slice(&bytes).map_err(|_| FootprintVerifyError::InvalidSled)?;
+
+    let record = cache.sleds.into_iter().find(|s| {
+        let by_trace = trace_id
+            .map(|t| !t.is_empty() && s.trace_id == t)
+            .unwrap_or(false);
+        let by_pubkey = wireguard_pubkey
+            .map(|p| !p.is_empty() && s.wireguard_pubkey == p)
+            .unwrap_or(false);
+        let by_genesis = !request_genesis_hex.is_empty()
+            && s.genesis.as_deref() == Some(request_genesis_hex);
+        by_trace || by_pubkey || by_genesis
+    });
+
+    match record {
+        Some(s) if s.genesis.as_deref() == Some(request_genesis_hex) => Ok(()),
+        _ => Err(FootprintVerifyError::Mismatch),
     }
+}
 
-    let expected_footprint = hex::encode(sled.hashed_footprint);
-    if request_footprint_hex != expected_footprint {
-        return Err(FootprintVerifyError::Mismatch);
-    }
+#[derive(serde::Deserialize)]
+struct SessionCacheLite {
+    #[serde(default)]
+    sleds: Vec<SessionRecordLite>,
+}
 
-    Ok(())
+#[derive(serde::Deserialize)]
+struct SessionRecordLite {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    wireguard_pubkey: String,
+    #[serde(default)]
+    trace_id: String,
+    #[serde(default)]
+    genesis: Option<String>,
 }
 
 #[cfg(test)]
-mod ghostbridge_footprint_tests {
+mod identity_sled_tests {
     use super::*;
     use std::io::Write;
 
@@ -560,65 +597,6 @@ mod ghostbridge_footprint_tests {
             size, 152,
             "IdentitySled must be exactly 152 bytes per spec, got {size} bytes"
         );
-    }
-
-    /// Write a raw `IdentitySled` to `path`, point `OP_SLED_PATH` at it, and
-    /// exercise `verify_ghostbridge_footprint` — the one shared check both
-    /// gRPC gatekeepers call. Single test function (not several) so the
-    /// process-global `OP_SLED_PATH` env var isn't racing across parallel
-    /// test threads.
-    #[test]
-    fn verify_ghostbridge_footprint_covers_all_branches() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("op-identity-test-sled-{}.dat", std::process::id()));
-        let path_str = path.to_str().unwrap().to_string();
-        // SAFETY: this test owns the env var for its whole body and runs as
-        // a single test function, so there's no cross-thread interleaving.
-        unsafe { std::env::set_var("OP_SLED_PATH", &path_str) };
-
-        // 1. Sled file missing entirely -> SledUnreachable.
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(
-            verify_ghostbridge_footprint("anything"),
-            Err(FootprintVerifyError::SledUnreachable)
-        );
-
-        // 2. Sled present but zero-initialized -> InvalidSled.
-        let zeroed = IdentitySled::default();
-        write_raw_sled_for_test(&path, &zeroed);
-        assert_eq!(
-            verify_ghostbridge_footprint("anything"),
-            Err(FootprintVerifyError::InvalidSled)
-        );
-
-        // 3. Valid sled, wrong footprint -> Mismatch.
-        let valid = IdentitySled {
-            hashed_footprint: [0xBB; 32],
-            trace_id: [0xEE; 16],
-            ..IdentitySled::default()
-        };
-        write_raw_sled_for_test(&path, &valid);
-        assert_eq!(
-            verify_ghostbridge_footprint(&hex::encode([0xAA; 32])),
-            Err(FootprintVerifyError::Mismatch)
-        );
-
-        // 4. Valid sled, matching footprint -> Ok.
-        assert_eq!(
-            verify_ghostbridge_footprint(&hex::encode([0xBB; 32])),
-            Ok(())
-        );
-
-        let _ = std::fs::remove_file(&path);
-        unsafe { std::env::remove_var("OP_SLED_PATH") };
-    }
-
-    fn write_raw_sled_for_test(path: &std::path::Path, sled: &IdentitySled) {
-        let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
-        };
-        let mut f = std::fs::File::create(path).expect("create test sled file");
-        f.write_all(bytes).expect("write test sled bytes");
     }
 }
 
@@ -1118,36 +1096,6 @@ pub fn schema_catalog_hash() -> Option<[u8; 32]> {
         .map(|bytes| *blake3::hash(&bytes).as_bytes())
 }
 
-pub fn etch_footprint(
-    wireguard_pubkey: &[u8; 32],
-    mutation_index: u64,
-    source_port: u16,
-) -> [u8; 32] {
-    // A missing catalog hash used to fall back to zeros silently, which makes a
-    // footprint that binds *no contract* indistinguishable from one that binds a
-    // real one. The fallback stays — refusing to stamp would break the mutation
-    // path — but it is now audible, because it means the proof is weaker than it
-    // looks and that is worth knowing at the time it happens.
-    let schema_catalog_hash = match schema_catalog_hash() {
-        Some(hash) => hash,
-        None => {
-            tracing::warn!(
-                mutation_index,
-                "no published catalog hash; footprint binds zeros and cannot \
-                 attest which contract this session operated against"
-            );
-            [0u8; 32]
-        }
-    };
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(wireguard_pubkey);
-    hasher.update(&schema_catalog_hash);
-    hasher.update(&mutation_index.to_le_bytes());
-    hasher.update(&source_port.to_le_bytes());
-    hasher.finalize().into()
-}
-
 /// Per-session WireGuard source port observed for peer_pubkey, parsed from
 /// `wg show <iface> dump` (`iface` from `WG_INTERFACE`, default `wg0`).
 ///
@@ -1184,29 +1132,6 @@ pub fn current_mutation_index() -> u64 {
     }
 }
 
-/// Refresh the sled's WireGuard identity, holding the session's position.
-///
-/// Reads `GB_TRACE_ID` from the environment to propagate an existing trace.
-/// All extra metadata (subid, compliance, routing) lives in environment
-/// variables — the sled itself is the spec layout and nothing more.
-///
-/// This is not a mutation, so it does not advance `mutation_index`. It used to
-/// stamp a **process-local** counter starting at zero, which meant every
-/// process that calls it — op-mcp, op-cognitive-mcp, the bridge's sled
-/// dispatch — overwrote the pipeline's real position with its own first write.
-/// That is precisely the regression the advance-only guard in
-/// [`write_sled_advance`] exists to reject, so the counter is gone rather than
-/// merely blocked.
-pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
-    let trace_id_hex = env::var("GB_TRACE_ID").unwrap_or_default();
-    write_sled_advance(
-        peer_pubkey,
-        current_mutation_index(),
-        trace_id_hex.trim(),
-        TRANSPORT_PORT_NONE,
-    )
-}
-
 /// Write the sled for one mutation — called from SchemaEngine on mutation.
 ///
 /// `trace_id_hex` is hex; if empty the session's established trace is kept.
@@ -1229,20 +1154,11 @@ pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
 ///
 /// `source_port` is [`TRANSPORT_PORT_NONE`] unless the caller knows the port
 /// the session actually arrived on.
-pub fn write_sled_full(
-    peer_pubkey: &str,
-    mutation_index: u64,
-    trace_id_hex: &str,
-) -> std::io::Result<()> {
-    write_sled_advance(peer_pubkey, mutation_index, trace_id_hex, TRANSPORT_PORT_NONE)
-}
-
-/// [`write_sled_full`] with an explicit transport port.
 pub fn write_sled_advance(
     peer_pubkey: &str,
     mutation_index: u64,
     trace_id_hex: &str,
-    source_port: u16,
+    _source_port: u16,
 ) -> std::io::Result<()> {
     // Read what is already recorded so this write supplements it rather than
     // replacing it. A missing or unreadable sled starts from defaults.
@@ -1272,9 +1188,13 @@ pub fn write_sled_advance(
     }
     let mutation_index = mutation_index.max(previous_index);
 
+    // `hashed_footprint` is retired: it is no longer minted or verified
+    // anywhere (the session genesis is the authoritative wristband — see
+    // `session_genesis`). Keep a previously-stamped value if present;
+    // otherwise leave it zero rather than etching a new v2 Temporary Hash.
     let hashed_footprint = match previous {
         Some(p) if p.hashed_footprint != [0u8; 32] => p.hashed_footprint,
-        _ => etch_footprint(&wireguard_pubkey, mutation_index, source_port),
+        _ => [0u8; 32],
     };
 
     let trace_id: [u8; 16] = if trace_id_hex.is_empty() {
@@ -1302,116 +1222,6 @@ pub fn write_sled_advance(
         reserved: [0u8; 44],
     };
     write_sled(&sled)
-}
-
-/// Watch for new WireGuard peers using `ip monitor` — fires instantly on handshake,
-/// no polling delay. Re-writes the sled and xray config on each new peer.
-/// Runs forever; call from a thread.
-pub fn watch_wireguard_handshakes(iface: &str) {
-    let iface = iface.to_string();
-
-    // `ip monitor route` on the host fires the instant a WireGuard peer route
-    // appears — no polling delay. WireGuard (wg0) now runs on the host, so we
-    // invoke `ip` directly instead of `incus exec wg-xray -- ip ...` (the
-    // wg-xray container is deprecated and stopped).
-    let mut monitor = loop {
-        match Command::new("ip")
-            .args(["monitor", "route"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(child) => break child,
-            Err(e) => {
-                tracing::warn!("ip monitor route spawn failed: {} — retrying in 5s", e);
-                std::thread::sleep(std::time::Duration::from_secs(5));
-            }
-        }
-    };
-
-    let stdout = monitor.stdout.take().expect("piped");
-    let reader = std::io::BufReader::new(stdout);
-
-    // Track the last pubkey we wrote the sled for — don't re-write for same peer.
-    let mut last_pubkey = String::new();
-
-    use std::io::BufRead;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
-
-        // Only act on route additions — deletions fire when a peer drops,
-        // which is not a reason to rewrite the sled.
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("Deleted") || trimmed.starts_with("del") {
-            continue;
-        }
-
-        // Read current peers from the host WireGuard interface immediately
-        // (wg0 now runs on the host; the deprecated wg-xray container is gone).
-        let Ok(out) = Command::new("wg")
-            .args(["show", &iface, "latest-handshakes"])
-            .output()
-        else {
-            continue;
-        };
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            let mut parts = line.split('\t');
-            let (Some(pubkey), Some(ts_str)) = (parts.next(), parts.next()) else {
-                continue;
-            };
-            let ts: u64 = ts_str.trim().parse().unwrap_or(0);
-            // Only act on handshakes within the last 30 seconds (one keepalive window).
-            if ts == 0 || now.saturating_sub(ts) > 30 {
-                continue;
-            }
-            if pubkey == last_pubkey {
-                continue;
-            }
-
-            tracing::info!(peer = %pubkey, "WireGuard peer → updating identity sled");
-            last_pubkey = pubkey.to_string();
-
-            if let Err(e) = write_sled_from_wg(pubkey) {
-                tracing::warn!("write_sled_from_wg failed: {}", e);
-                continue;
-            }
-
-            if let Ok((ptr, _mmap)) = read_sled() {
-                let sled = unsafe { &*ptr };
-                let footprint_hex = hex::encode(sled.hashed_footprint);
-                let trace_id = sled.trace_id_hex();
-                let Ok(profile) = env::var("NEXTDNS_PROFILE_ID") else {
-                    continue;
-                };
-                let Ok(uuid) = env::var("XRAY_UUID") else {
-                    continue;
-                };
-                let Ok(privkey) = env::var("XRAY_PRIVATE_KEY") else {
-                    continue;
-                };
-                let Ok(short) = env::var("XRAY_SHORT_ID") else {
-                    continue;
-                };
-                if let Err(e) =
-                    write_xray_config(&footprint_hex, &trace_id, &profile, &uuid, &privkey, &short)
-                {
-                    tracing::warn!("write_xray_config failed: {}", e);
-                }
-            }
-        }
-    }
-
-    // ip monitor exited — respawn the thread.
-    tracing::warn!("ip monitor exited — restarting watcher in 2s");
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    watch_wireguard_handshakes(&iface);
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -1464,9 +1274,10 @@ pub fn run_schema_shuttle() -> Result<(), Box<dyn std::error::Error>> {
     // running `xray run -config /dev/shm/xray-ghostbridge.json`.
     reload_xray()?;
 
-    // 6. Watch for new WireGuard handshakes and keep the sled current
-    let iface = env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string());
-    std::thread::spawn(move || watch_wireguard_handshakes(&iface));
+    // The WireGuard-handshake watcher that used to keep the global sled current
+    // is gone with the global sled (Task 9): the session record is now the
+    // authoritative identity, minted and advanced through the mutation engine,
+    // not scraped from `ip monitor`.
 
     Ok(())
 }

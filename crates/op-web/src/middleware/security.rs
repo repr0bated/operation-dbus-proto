@@ -267,21 +267,21 @@ fn ghostbridge_headers_ok(headers: &HeaderMap) -> Result<(), StatusCode> {
         .filter(|s| !s.is_empty())
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let has_trace = headers
+    let trace_id = headers
         .get("x-ghostbridge-trace-id")
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
-        .is_some_and(|s| !s.is_empty());
-    let has_pubkey = headers
+        .filter(|s| !s.is_empty());
+    let wireguard_pubkey = headers
         .get("x-wireguard-pubkey")
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
-        .is_some_and(|s| !s.is_empty());
-    if !has_trace && !has_pubkey {
+        .filter(|s| !s.is_empty());
+    if trace_id.is_none() && wireguard_pubkey.is_none() {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    match op_identity::verify_ghostbridge_footprint(footprint) {
+    match op_identity::verify_session_genesis(footprint, trace_id, wireguard_pubkey) {
         Ok(()) => Ok(()),
         Err(FootprintVerifyError::Mismatch) | Err(FootprintVerifyError::InvalidSled) => {
             Err(StatusCode::FORBIDDEN)

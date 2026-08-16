@@ -6,7 +6,7 @@
 //! Clients do not need a local sled; optional Ghostbridge headers, when
 //! present, must still match the live sled.
 
-use op_identity::{verify_ghostbridge_footprint, FootprintVerifyError, IdentitySled};
+use op_identity::{verify_session_genesis, FootprintVerifyError, IdentitySled};
 use tonic::{metadata::MetadataMap, Request, Status};
 use tracing::info;
 
@@ -79,7 +79,7 @@ pub fn authorize_on_connection(metadata: &MetadataMap) -> Result<TunnelIdentity,
     let sled = read_sled_identity()?;
 
     if let Some(footprint) = optional_header(metadata, FOOTPRINT_HEADER)? {
-        verify_ghostbridge_footprint(footprint).map_err(|error| match error {
+        verify_session_genesis(footprint, None, None).map_err(|error| match error {
             FootprintVerifyError::SledUnreachable => {
                 Status::internal("Identity Sled unreachable in SHM")
             }
@@ -87,7 +87,7 @@ pub fn authorize_on_connection(metadata: &MetadataMap) -> Result<TunnelIdentity,
                 "Identity Sled invalid; no valid mutation has landed yet",
             ),
             FootprintVerifyError::Mismatch => Status::permission_denied(
-                "Temporal Hash Mismatch. Presented footprint != Identity Sled on connection.",
+                "Temporal Hash Mismatch. Presented genesis != session record on connection.",
             ),
         })?;
     }
