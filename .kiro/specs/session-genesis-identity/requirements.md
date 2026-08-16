@@ -74,7 +74,7 @@ moved on. The spec succeeds if every fact has one author and no transcribers.
 | HC-8 | Every new object carries uuid + subid from seven-category taxonomy | CLAUDE.md |
 | HC-9 | No WireGuard on main host; no SNI front on public :443; gRPC at 10.0.0.2:8090 mesh-private | topology lock |
 | HC-10 | No new gRPC proto service packages; no per-service TCP ports | CLAUDE.md |
-| HC-11 | No container has a NIC; OVS packet tagging is not the identity carrier | PROMPT §7 |
+| HC-11 | OVS packet tagging is not the identity carrier **for the host→container hop** — containers are nic-less and that hop is a UDS with no packets to steer. Note the corrected premise: the WireGuard `netmaker` interface **is** an `ovsbr0` port (the mesh↔fabric junction, carried by L3→`encap(ethernet)` flows), so mesh traffic *does* traverse OVS. "OVS sees nothing" is false in general; it is true only of the container hop | PROMPT §7, corrected 2026-08-16 against the live fabric |
 | HC-12 | No TransportBindingIndex (source-IP table populated by handshake watcher) | handoff spec §1.3 |
 | HC-13 | One writer per field — seven writers cannot be made to agree; agreement must be structural (derived from the same event) not maintained | follow-up constraint 1 |
 | HC-14 | Nothing restated — each fact authored in exactly one place; the PluginSchema, the `#[repr(C)]` fixed layout, tool inputs, gRPC shapes, UI renderers, validators all generated or derived from that one author | follow-up constraint 2 |
