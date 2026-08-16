@@ -1,6 +1,6 @@
 #!/bin/sh
 # Public :443 SNI demux — mail.* to the mail container's web.sock, else Reality.
-# Bound on the public IP, svc0 (10.0.0.2) and netmaker (100.69.0.1).
+# Bound on the public IP and svc0 (10.0.0.2). Mesh webmail is uds-mail-web.
 /usr/local/libexec/3tched/runit-ready-signal fwd-443
 exec 2>&1
 
@@ -28,31 +28,16 @@ pkill -f "socat TCP-LISTEN:443,bind=10.0.0.2" 2>/dev/null || true
 pkill -f "/usr/local/libexec/3tched/sni-demux.py" 2>/dev/null || true
 sleep 0.2
 
-# Listen set. Public and svc0 are always bound; the netmaker address is bound
-# when it exists. The 100.69.0.1 SNI map was already here but nothing listened
-# on that address, so webmail over the mesh was connection-refused while every
-# mail protocol port (25/143/465/587/993, mail-port-fabric) worked.
-#
-# netclient may bring the interface up after this service starts, so wait for
-# it — but bounded, and serve the other two doors if it never appears. Reality
-# must not go dark waiting on the mesh.
-i=0
-while ! ip -4 addr show dev netmaker 2>/dev/null | grep -q "100\\.69\\.0\\.1/" \
-      && [ "$i" -lt 30 ]; do i=$((i+1)); sleep 1; done
-
+# Listen set. Public and svc0 only. The netmaker address (100.69.0.1:443) is
+# served by uds-mail-web, which relays it straight to the mail CT's web.sock --
+# on the mesh that address serves one thing, so SNI demuxing buys nothing and
+# a bare IP with no SNI would fall to Reality instead of reaching webmail.
 set -- --listen 188.68.58.237:443 --listen 10.0.0.2:443
-if ip -4 addr show dev netmaker 2>/dev/null | grep -q "100\\.69\\.0\\.1/"; then
-    set -- "$@" --listen 100.69.0.1:443
-else
-    echo "fwd-443: 100.69.0.1 absent - webmail not served over netmaker"
-fi
-
 if [ -S "$MAIL" ]; then
     chmod 666 "$MAIL" 2>/dev/null || true
     set -- "$@" \
       --map mail.3tched.com="$MAIL" \
       --map 10.0.0.2="$MAIL" \
-      --map 100.69.0.1="$MAIL" \
       --map mail.ghostbridge.tech="$MAIL"
 else
     echo "fwd-443: $MAIL absent - serving Reality only (mail SNI unavailable)"
