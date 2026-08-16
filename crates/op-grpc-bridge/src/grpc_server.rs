@@ -31,6 +31,21 @@ use uuid::Uuid;
 use crate::interceptor::{self, load_capability_grants, GhostbridgeIdentity};
 use crate::oracle_assertion::{AssertionValidator, DecoyTrustStore};
 
+/// The actor id an audited event is stamped with for a gRPC request: the
+/// verified session identity the interceptor already resolved, never the
+/// self-asserted `actor_id` the client sent in the request body. The
+/// interceptor authenticated the caller and bound it to a session; reusing
+/// that verdict means every mutation the bridge records carries the
+/// `session_id` / genesis that `MutationEngine::session_context_for_actor`
+/// keys on — so footprinted chain events always resolve back to a session.
+fn effective_actor_id(identity: Option<&GhostbridgeIdentity>, fallback: &str) -> String {
+    match identity {
+        Some(id) if !id.session_id.is_empty() => id.session_id.clone(),
+        Some(id) => id.footprint.clone(),
+        None => fallback.to_string(),
+    }
+}
+
 fn root_disk_used_percent() -> Option<f64> {
     use std::ffi::CString;
     use std::mem::MaybeUninit;
@@ -1208,7 +1223,7 @@ impl StateSync for OperationGrpcServer {
                     Some(req.member_name.clone())
                 },
                 value,
-                req.actor_id.clone(),
+                effective_actor_id(identity.as_ref(), &req.actor_id),
                 capability_id,
             )
             .await;
@@ -1369,7 +1384,7 @@ impl PluginService for OperationGrpcServer {
                 &req.method_name,
                 &json_args,
                 capability_id.as_deref(),
-                &req.actor_id,
+                &effective_actor_id(identity.as_ref(), &req.actor_id),
             )
             .await;
 
@@ -1442,6 +1457,7 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
 
@@ -1453,7 +1469,7 @@ impl PluginService for OperationGrpcServer {
                 ChangeType::PropertySet,
                 Some(req.property_name),
                 value,
-                req.actor_id,
+                effective_actor_id(identity.as_ref(), &req.actor_id),
                 if req.capability_id.is_empty() {
                     None
                 } else {
