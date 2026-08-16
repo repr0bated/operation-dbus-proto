@@ -10,7 +10,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
-use op_identity::FootprintVerifyError;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
@@ -236,7 +235,19 @@ fn verify_per_identity(
         Ok(value) => value.get("identity").cloned()?,
         Err(_) => return None,
     };
-    let hashed_footprint = identity.get("hashed_footprint")?.as_str()?.to_string();
+    // `genesis` is the authoritative verdict (Task 7); `hashed_footprint` is
+    // retained only as a transitional fallback for pre-migration records that
+    // have not yet been re-keyed. Either match is accepted, and a missing
+    // stored value fails closed via the `?` above.
+    let stored = identity
+        .get("genesis")
+        .or_else(|| identity.get("hashed_footprint"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let stored = match stored {
+        Some(s) => s,
+        None => return None,
+    };
     let expires_at = identity.get("expires_at").and_then(|v| v.as_i64());
 
     if let Some(expires_at) = expires_at {
@@ -247,7 +258,7 @@ fn verify_per_identity(
         }
     }
 
-    if hashed_footprint != request_footprint {
+    if stored != request_footprint {
         return None;
     }
 
@@ -304,31 +315,35 @@ fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>
         }
     }
 
-    op_identity::verify_ghostbridge_footprint(request_footprint).map_err(|error| match error {
-        FootprintVerifyError::SledUnreachable => {
-            Status::internal("MutationEngine Memory Unreachable")
-        }
-        FootprintVerifyError::InvalidSled => {
-            Status::failed_precondition("A.N.N.A. Scribe: Invalid Schema State. Cease and Desist.")
-        }
-        FootprintVerifyError::Mismatch => Status::permission_denied(
-            "A.N.N.A. Scribe: Temporal Hash Mismatch. \
-             Session footprint is out of sync with current Btrfs mutation.",
-        ),
-    })?;
-
-    let session_id = trace_value
-        .as_ref()
-        .expect("trace checked above")
-        .to_str()
-        .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?
-        .to_string();
-    req.extensions_mut().insert(GhostbridgeIdentity {
-        footprint: request_footprint.to_string(),
-        session_id,
+    // Fallback: no identifying header beyond the self-asserted footprint. The
+    // footprint IS the session genesis now, so resolve the session record by it
+    // and fail closed when no record matches — an unknown genesis is no
+    // identity, not a licence to admit.
+    let engine = ENGINE.read().expect("engine lock poisoned").clone();
+    let engine = match engine {
+        Some(engine) => engine,
+        None => return Err(Status::internal("MutationEngine Memory Unreachable")),
+    };
+    let record = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            crate::identity_sled_dispatch::session_record_for_actor(
+                engine.as_ref(),
+                request_footprint,
+            ),
+        )
     });
-
-    Ok(req)
+    match record {
+        Some(sled) => {
+            req.extensions_mut().insert(GhostbridgeIdentity {
+                footprint: request_footprint.to_string(),
+                session_id: sled.session_id,
+            });
+            Ok(req)
+        }
+        None => Err(Status::permission_denied(
+            "A.N.N.A. Scribe: Unknown session genesis. Connection Dropped.",
+        )),
+    }
 }
 
 #[derive(Clone, Debug)]
