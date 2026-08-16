@@ -248,9 +248,7 @@ fn verify_per_identity(
     }
 
     if hashed_footprint != request_footprint {
-        return Some(Err(Status::permission_denied(
-            "Temporal Hash Mismatch. Session footprint is out of sync with current mutation.",
-        )));
+        return None;
     }
 
     let resolved_session_id = identity

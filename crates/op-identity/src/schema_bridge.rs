@@ -1223,9 +1223,9 @@ pub fn write_sled_from_wg(peer_pubkey: &str) -> std::io::Result<()> {
 /// `mutation_index` advances only. The sled's role is to deliver a complete
 /// account of a session: given a container, which slice of the chain is its
 /// session and which contract it ran against. A counter that can regress
-/// cannot do that, and `hashed_footprint` is derived from the index, so a
-/// regression would also stamp an integrity value for a position the session
-/// has already passed.
+/// cannot do that. `hashed_footprint` is minted once and then kept: it is the
+/// session wristband. Re-etching it from the index on every write made every
+/// in-flight client fail the interceptor.
 ///
 /// `source_port` is [`TRANSPORT_PORT_NONE`] unless the caller knows the port
 /// the session actually arrived on.
@@ -1272,7 +1272,10 @@ pub fn write_sled_advance(
     }
     let mutation_index = mutation_index.max(previous_index);
 
-    let hashed_footprint = etch_footprint(&wireguard_pubkey, mutation_index, source_port);
+    let hashed_footprint = match previous {
+        Some(p) if p.hashed_footprint != [0u8; 32] => p.hashed_footprint,
+        _ => etch_footprint(&wireguard_pubkey, mutation_index, source_port),
+    };
 
     let trace_id: [u8; 16] = if trace_id_hex.is_empty() {
         // Preserve an established trace rather than minting a new one; a fresh
