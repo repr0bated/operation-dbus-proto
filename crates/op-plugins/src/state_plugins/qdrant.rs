@@ -27,8 +27,8 @@ const PLUGIN_DESCRIPTION: &str =
     "Qdrant vector search engine — collections, vector config, HNSW, optimizers";
 const PLUGIN_DISPLAY_NAME: &str = "GB.Qdrant";
 
-const DEFAULT_QDRANT_HTTP_ENDPOINT: &str = "http://10.200.0.2:6333";
-const DEFAULT_QDRANT_GRPC_ENDPOINT: &str = "http://127.0.0.1:6334";
+const DEFAULT_QDRANT_HTTP_ENDPOINT: &str = "http://127.0.0.1:6333";
+const DEFAULT_QDRANT_GRPC_ENDPOINT: &str = "http://10.200.0.2:6334";
 
 // ── State structs with schemars::JsonSchema ──────────────────────────────────
 
