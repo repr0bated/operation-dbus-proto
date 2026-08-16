@@ -8,7 +8,7 @@
 
 use clap::Parser;
 use op_cognitive_mcp::CognitiveMcpServer;
-use op_identity::{write_sled_from_wg, WireGuardIdentity};
+
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -55,30 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    let wg_id = WireGuardIdentity::with_interface(&cli.wg_interface);
-    match wg_id.get_local_pubkey() {
-        Ok(pubkey) => {
-            info!(
-                interface = %cli.wg_interface,
-                pubkey = %pubkey,
-                "Writing WireGuard identity sled to /dev/shm/plugin_schema.dat"
-            );
-            if let Err(e) = write_sled_from_wg(&pubkey) {
-                warn!(
-                    error = %e,
-                    "Failed to write identity sled — outbound gRPC auth may not work"
-                );
-            }
-        }
-        Err(e) => {
-            warn!(
-                interface = %cli.wg_interface,
-                error = %e,
-                "Could not read WireGuard public key — identity sled not written; \
-                 set WG_PUBKEY env var to override"
-            );
-        }
-    }
+    // Identity is no longer projected through the legacy 152-byte sled at
+    // `/dev/shm/plugin_schema.dat`. The session genesis is minted at arrival
+    // by the MutationEngine; this process only needs its own WireGuard pubkey
+    // for outbound auth, not a shared last-write-wins file every process
+    // raced to overwrite.
 
     info!(db = %cli.db, wg_interface = %cli.wg_interface, "Starting Cognitive MCP Server");
 

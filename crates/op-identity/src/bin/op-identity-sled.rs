@@ -1,11 +1,10 @@
 use anyhow::{bail, Context, Result};
-use op_identity::schema_bridge::{write_sled_from_wg, IdentitySled, SHM_SLED_PATH};
+use op_identity::schema_bridge::{IdentitySled, SHM_SLED_PATH};
 use serde::Serialize;
 use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::mem;
-use std::process::Command;
 
 const COMPACT_SLED_SIZE: usize = 80;
 const COMPACT_MUTATION_OFFSET: usize = 32;
@@ -15,10 +14,6 @@ const COMPACT_FOOTPRINT_OFFSET: usize = 48;
 #[derive(Debug)]
 struct Args {
     path: String,
-    iface: String,
-    pubkey: Option<String>,
-    trace_id: Option<String>,
-    refresh: bool,
     pretty: bool,
 }
 
@@ -41,17 +36,6 @@ struct SledView {
 fn main() -> Result<()> {
     let args = parse_args()?;
 
-    if args.refresh {
-        let pubkey = match args.pubkey.as_deref() {
-            Some(pubkey) => pubkey.to_string(),
-            None => read_wg_pubkey(&args.iface)?,
-        };
-        if let Some(trace_id) = args.trace_id.as_deref() {
-            env::set_var("GB_TRACE_ID", normalize_trace_id(trace_id)?);
-        }
-        write_sled_from_wg(&pubkey).context("failed to refresh sled from WireGuard public key")?;
-    }
-
     let view = read_sled_view(&args.path)?;
 
     if args.pretty {
@@ -67,10 +51,6 @@ fn parse_args() -> Result<Args> {
     let mut args = env::args().skip(1);
     let mut parsed = Args {
         path: env::var("OP_IDENTITY_SLED_PATH").unwrap_or_else(|_| SHM_SLED_PATH.to_string()),
-        iface: env::var("WG_INTERFACE").unwrap_or_else(|_| "wg0".to_string()),
-        pubkey: env::var("WG_PUBKEY").ok(),
-        trace_id: env::var("GB_TRACE_ID").ok(),
-        refresh: false,
         pretty: false,
     };
 
@@ -79,22 +59,6 @@ fn parse_args() -> Result<Args> {
             "--path" => {
                 parsed.path = args.next().context("--path requires a file path")?;
             }
-            "--iface" | "-i" => {
-                parsed.iface = args.next().context("--iface requires an interface name")?;
-            }
-            "--pubkey" => {
-                parsed.pubkey = Some(
-                    args.next()
-                        .context("--pubkey requires a WireGuard public key")?,
-                );
-            }
-            "--trace-id" => {
-                parsed.trace_id = Some(
-                    args.next()
-                        .context("--trace-id requires a hex or UUID value")?,
-                );
-            }
-            "--refresh" => parsed.refresh = true,
             "--pretty" => parsed.pretty = true,
             "--help" | "-h" => {
                 print_help();
@@ -110,39 +74,11 @@ fn parse_args() -> Result<Args> {
 fn print_help() {
     println!(
         "op-identity-sled\n\n\
-Usage:\n  op-identity-sled [--path FILE] [--iface IFACE] [--pubkey KEY] [--trace-id ID] [--refresh] [--pretty]\n\n\
-Options:\n  --path FILE     Read sled from FILE instead of /dev/shm/plugin_schema.dat\n  -i, --iface     WireGuard interface used with --refresh, default wg0\n  --pubkey KEY    Detached WireGuard public key used with --refresh instead of wg show\n  --trace-id ID   Detached random wristband trace ID, as UUID or 32 hex chars\n  --refresh       Rewrite the sled from --pubkey, WG_PUBKEY, or wg show <iface> public-key\n  --pretty        Print a compact human-readable view instead of JSON\n\n\
+    Usage:\n  op-identity-sled [--path FILE] [--pretty]\n\n\
+Options:\n  --path FILE     Read sled from FILE instead of /dev/shm/plugin_schema.dat\n  --pretty        Print a compact human-readable view instead of JSON\n\n\
 The reader accepts both the canonical op-identity sled and the legacy 80-byte\n\
 bridge sled used by older Ghostbridge components.\n"
     );
-}
-
-fn read_wg_pubkey(iface: &str) -> Result<String> {
-    let output = Command::new("wg")
-        .args(["show", iface, "public-key"])
-        .output()
-        .with_context(|| format!("failed to run wg show {iface} public-key"))?;
-
-    if !output.status.success() {
-        bail!(
-            "wg show {iface} public-key failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    let pubkey = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if pubkey.is_empty() {
-        bail!("wg show {iface} public-key returned an empty key");
-    }
-    Ok(pubkey)
-}
-
-fn normalize_trace_id(trace_id: &str) -> Result<String> {
-    let compact = trace_id.trim().replace('-', "");
-    if compact.len() != 32 || !compact.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("--trace-id must be a UUID or 32 hex characters");
-    }
-    Ok(compact)
 }
 
 fn read_sled_view(path: &str) -> Result<SledView> {
