@@ -1,24 +1,42 @@
 //! Shared Unix Domain Socket — Full Tonic Data Plane
 //!
-//! Serves the identical gRPC service stack over a single host-side UDS that
-//! thousands of containers connect to. The Unix peer credential proves that
-//! the request arrived on the UDS transport; the canonical Ghostbridge
-//! footprint still comes from the authoritative shared-memory sled.
+//! One host-side UDS carries the whole gRPC stack for every container. There is
+//! deliberately **one** socket, not one per container, so the peer has to be
+//! identified from kernel state rather than from the path it arrived on.
 //!
-//! ## Identity Model
+//! ## Two lifetimes, do not conflate them
+//!
+//! - **Account** — lifelong. `Argon2(PSK, salt = wireguard_pubkey)`, and the
+//!   container's name IS that value. One per human. Never re-minted. This is
+//!   the thing `ContainerIdentitySled.session_id` holds. (The field is still
+//!   named `session_id` on the wire, in the plugin schema and in Cozo; renaming
+//!   it changes the schema hash and therefore the published catalog hash, so it
+//!   is a deliberate one-shot change, not something to do in passing.)
+//! - **Connection** — transient. Many per account, one per accept on this
+//!   socket. The genesis anchor belongs to *this* lifetime: it binds the chain
+//!   head and the arrival timestamp, which are properties of an arrival, not of
+//!   an account.
+//!
+//! ## What happens on accept
 //!
 //! ```text
-//! Container connects → UDS accept → require tonic::UdsConnectInfo.peer_cred
-//!   → resolve canonical session_id from /dev/shm/plugin_schema.dat
-//!   → inject x-ghostbridge-footprint + x-ghostbridge-trace-id
-//!   → same GhostbridgeInterceptor applies
+//! container connects → UDS accept → UdsConnectInfo.peer_cred (kernel)
+//!   → peer pid → /proc/<pid>/cgroup → lxc.payload.<name> → account id
+//!   → that account's record; no anchor yet? mint one now (this arrival)
+//!   → inject x-ghostbridge-genesis + x-ghostbridge-trace-id
+//!   → the normal GhostbridgeInterceptor gate applies
 //! ```
 //!
-//! The socket path is configurable via `GHOSTBRIDGE_SOCKET_PATH` env var,
-//! defaulting to `/run/ghostbridge/container.sock`.
+//! Minting on accept is what makes first contact possible. Minting on "first
+//! authenticated mutation" cannot bootstrap: the gate refuses the request that
+//! would have created the anchor it is demanding.
+//!
+//! Socket path: `GHOSTBRIDGE_SOCKET_PATH`, default
+//! `/run/ghostbridge/container.sock`.
 
-use std::{collections::HashMap, path::PathBuf, sync::OnceLock};
+use std::path::PathBuf;
 
+use op_plugins::state_plugins::identity_sled::ContainerIdentitySled;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::server::UdsConnectInfo;
@@ -27,39 +45,43 @@ use tracing::info;
 /// Default path for the shared container socket.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/ghostbridge/container.sock";
 
-/// Comma-separated `uid=session_id` entries provisioned alongside Incus
-/// subuid mappings. The map is parsed once, so request metadata cannot alter
-/// the transport-to-session binding.
-const UID_SESSION_MAP_ENV: &str = "GHOSTBRIDGE_UID_SESSION_MAP";
+// A `uid=session_id` map used to live here, fed by GHOSTBRIDGE_UID_SESSION_MAP.
+// It was removed rather than configured: it presumed per-container subuid
+// ranges, and this host gives every container the same idmap, so the map could
+// never select among accounts. See `account_id_for_cgroup`.
 
-static UID_SESSION_MAP: OnceLock<HashMap<u32, String>> = OnceLock::new();
-
-fn parse_uid_session_map(value: &str) -> HashMap<u32, String> {
-    value
-        .split(',')
-        .filter_map(|entry| {
-            let (uid, session_id) = entry.trim().split_once('=')?;
-            let uid = uid.trim().parse::<u32>().ok()?;
-            let session_id = session_id.trim();
-            (!session_id.is_empty()).then(|| (uid, session_id.to_owned()))
-        })
-        .collect()
-}
-
-fn uid_session_map() -> &'static HashMap<u32, String> {
-    UID_SESSION_MAP.get_or_init(|| {
-        std::env::var(UID_SESSION_MAP_ENV)
-            .map(|value| parse_uid_session_map(&value))
-            .unwrap_or_default()
+/// The account a connecting peer belongs to, resolved from kernel state.
+///
+/// The peer's uid cannot answer this. Every container on this host shares one
+/// idmap (`Hostid 1000000, Nsid 0, Maprange 1000000000`), so root in *every*
+/// container is uid 1000000 here — one uid for all accounts. The peer's **pid**
+/// does answer it: Incus places each container's processes in
+/// `0::/lxc.payload.<container-name>/…`, and the container's name IS the
+/// account id (Argon2 of the WireGuard pubkey). Both the pid and the cgroup are
+/// kernel-supplied, so nothing the caller sends can change the answer.
+///
+/// A peer with no `lxc.payload.` segment is a host process, which maps to the
+/// host's own account ("container zero").
+fn account_id_for_cgroup(pid: i32) -> Option<String> {
+    const PAYLOAD_PREFIX: &str = "lxc.payload.";
+    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+    cgroup.lines().find_map(|line| {
+        // cgroup v2: "0::/lxc.payload.<name>/init.scope"; v1 lines carry a
+        // controller list first, but the payload segment reads the same.
+        let path = line.rsplit_once(':')?.1;
+        let after = path.split('/').find_map(|seg| seg.strip_prefix(PAYLOAD_PREFIX))?;
+        (!after.is_empty()).then(|| after.to_owned())
     })
 }
 
-fn session_id_for_uid(uid: u32, bridge_uid: u32) -> Option<String> {
-    if uid == 0 || uid == bridge_uid {
-        crate::identity_sled_dispatch::host_session_id()
-    } else {
-        uid_session_map().get(&uid).cloned()
+fn account_id_for_peer(cred: &tokio::net::unix::UCred, bridge_uid: u32) -> Option<String> {
+    if let Some(account) = cred.pid().and_then(account_id_for_cgroup) {
+        return Some(account);
     }
+    let uid = cred.uid();
+    (uid == 0 || uid == bridge_uid)
+        .then(crate::identity_sled_dispatch::host_session_id)
+        .flatten()
 }
 
 #[cfg(unix)]
@@ -68,19 +90,21 @@ fn bridge_uid() -> std::io::Result<u32> {
     Ok(std::fs::metadata("/proc/self")?.uid())
 }
 
-/// Resolved canonical identity from peer credentials.
+/// What gets stamped onto a peer's requests once the kernel has told us who it
+/// is.
 ///
-/// This is NOT minted from cgroup names or caller-supplied metadata. It is read
-/// from the host's own session record (the authoritative identity source)
-/// after the transport is proven to be a Unix socket — never the global
-/// 152-byte sled projection, which no longer carries an identity verdict.
+/// The cgroup names the *account*; the values below come from that account's
+/// record, which is the same record the GhostbridgeInterceptor checks against.
+/// Nothing here is derived from the cgroup name itself or from caller-supplied
+/// metadata, and nothing reads the retired 152-byte global sled.
 #[derive(Debug, Clone)]
 pub struct CanonicalPeerIdentity {
-    /// The hex-encoded session genesis for the host ("container zero").
+    /// Hex genesis anchoring this account's arrival.
     pub genesis_hex: String,
-    /// The hex-encoded trace_id from the host's session record.
+    /// Hex trace_id from the account's record.
     pub trace_id_hex: String,
-    /// Whether the identity is valid (record exists and is non-zero).
+    /// False when the account has no record, no trace, or an arrival that was
+    /// never anchored — see [`ContainerIdentitySled::is_anchored`].
     pub is_valid: bool,
 }
 
@@ -93,14 +117,24 @@ impl CanonicalPeerIdentity {
         }
     }
 
-    /// Resolve the canonical identity of the host ("container zero") from its
-    /// own session record in the authoritative state cache.
+    /// What this peer will present downstream, taken from its account record.
     ///
-    /// For UDS connections, the peer credential is the acceptable transport
-    /// anchor, but the identity itself is the session record the
-    /// GhostbridgeInterceptor validates against — the same source, never the
-    /// shared global sled. Returns an invalid identity when no engine has been
-    /// registered or the host record has not been provisioned yet.
+    /// The record is the same one the GhostbridgeInterceptor validates
+    /// against, so the two cannot disagree. An account whose arrival was never
+    /// anchored yields an invalid identity rather than a blank one that would
+    /// pass presence checks.
+    pub fn from_record(record: ContainerIdentitySled) -> Self {
+        let is_valid = record.is_anchored() && !record.trace_id.is_empty();
+        Self {
+            genesis_hex: record.genesis.unwrap_or_default(),
+            trace_id_hex: record.trace_id,
+            is_valid,
+        }
+    }
+
+    /// Read an account's identity without anchoring it. Callers on the accept
+    /// path want [`anchor_this_arrival`] instead, which mints when the account
+    /// has arrived for the first time.
     pub fn from_session(session_id: &str) -> Self {
         let engine = match crate::interceptor::engine_handle() {
             Some(engine) => engine,
@@ -114,18 +148,7 @@ impl CanonicalPeerIdentity {
                 ),
             )
         });
-        match record {
-            Some(sled) => {
-                let genesis = sled.genesis.unwrap_or_default();
-                let is_valid = !genesis.is_empty() && !sled.trace_id.is_empty();
-                Self {
-                    genesis_hex: genesis,
-                    trace_id_hex: sled.trace_id,
-                    is_valid,
-                }
-            }
-            None => Self::invalid(),
-        }
+        record.map(Self::from_record).unwrap_or_else(Self::invalid)
     }
 }
 
@@ -189,35 +212,68 @@ pub fn extract_peer_cred<T>(request: &tonic::Request<T>) -> Option<tokio::net::u
         .and_then(|info| info.peer_cred)
 }
 
-/// UDS identity interceptor.
+/// Mint this arrival's anchor for an account that has none yet.
 ///
-/// For the UDS path, we inject the canonical footprint and trace_id from the
-/// sled into the request metadata so the downstream GhostbridgeInterceptor
-/// sees the same headers it expects from the Xray/HTTP path.
+/// Provisioning creates the account record (name, pubkey, trace) but cannot
+/// mint the anchor, because an anchor binds a chain head and an arrival
+/// timestamp — facts that only exist once someone actually arrives. This is
+/// that moment.
 ///
-/// This is the UDS equivalent of Xray injecting `X-Ghostbridge-Footprint`.
+/// Returns the account's record as it stands afterwards.
+fn anchor_this_arrival(account_id: &str) -> Option<ContainerIdentitySled> {
+    let engine = crate::interceptor::engine_handle()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let record =
+                crate::identity_sled_dispatch::session_record_for_actor(engine.as_ref(), account_id)
+                    .await?;
+            if record.is_anchored() {
+                return Some(record);
+            }
+            if let Err(error) = engine
+                .mint_and_store_genesis(account_id, &record.wireguard_pubkey)
+                .await
+            {
+                tracing::warn!(%error, account_id, "could not anchor this arrival");
+                return Some(record);
+            }
+            crate::identity_sled_dispatch::session_record_for_actor(engine.as_ref(), account_id)
+                .await
+        })
+    })
+}
+
+/// UDS identity interceptor — the fabric's equivalent of xray stamping the
+/// identity header, for peers that arrive over the shared socket instead of
+/// over TLS.
+///
+/// Nothing here trusts the caller: the account comes from the peer's cgroup and
+/// the anchor comes from that account's record, both read after the kernel has
+/// told us who connected. Whatever the caller put in these headers is
+/// overwritten.
 #[allow(clippy::result_large_err)]
 pub fn uds_identity_interceptor(
     req: tonic::Request<()>,
 ) -> Result<tonic::Request<()>, tonic::Status> {
-    if extract_peer_cred(&req).is_none() {
-        return Err(tonic::Status::unauthenticated(
-            "UDS peer credentials unavailable — connection rejected",
-        ));
-    }
+    let cred = extract_peer_cred(&req).ok_or_else(|| {
+        tonic::Status::unauthenticated("UDS peer credentials unavailable — connection rejected")
+    })?;
+    let bridge_uid =
+        bridge_uid().map_err(|_| tonic::Status::internal("Unable to resolve bridge process uid"))?;
 
-    let peer_uid = extract_peer_cred(&req)
-        .map(|cred| cred.uid())
-        .ok_or_else(|| {
-            tonic::Status::unauthenticated("UDS peer credentials unavailable — connection rejected")
-        })?;
-    let bridge_uid = bridge_uid()
-        .map_err(|_| tonic::Status::internal("Unable to resolve bridge process uid"))?;
-    let session_id = session_id_for_uid(peer_uid, bridge_uid)
-        .ok_or_else(|| tonic::Status::unauthenticated("UDS peer uid is not mapped to a session"))?;
-    let identity = CanonicalPeerIdentity::from_session(&session_id);
+    let account_id = account_id_for_peer(&cred, bridge_uid).ok_or_else(|| {
+        tonic::Status::unauthenticated(
+            "UDS peer belongs to no known account — not in an lxc.payload cgroup, and not the host",
+        )
+    })?;
 
-    inject_canonical_identity(req, identity)
+    let record = anchor_this_arrival(&account_id).ok_or_else(|| {
+        tonic::Status::unauthenticated(format!(
+            "no identity record for account '{account_id}' — provision it before connecting"
+        ))
+    })?;
+
+    inject_canonical_identity(req, CanonicalPeerIdentity::from_record(record))
 }
 
 #[allow(clippy::result_large_err)]
@@ -318,12 +374,4 @@ mod tests {
         assert_eq!(error.code(), Code::Unauthenticated);
     }
 
-    #[test]
-    fn uid_to_session_mapping() {
-        let map = parse_uid_session_map("100000=session-one, 200000 = session-two, malformed, 7=");
-
-        assert_eq!(map.get(&100000).map(String::as_str), Some("session-one"));
-        assert_eq!(map.get(&200000).map(String::as_str), Some("session-two"));
-        assert!(!map.contains_key(&7));
-    }
 }

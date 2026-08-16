@@ -278,6 +278,7 @@ pub(crate) async fn stored_genesis(engine: &MutationEngine, session_id: &str) ->
         .sleds
         .iter()
         .find(|sled| sled.session_id == session_id)
+        .filter(|sled| sled.is_anchored())
         .and_then(|sled| sled.genesis.clone())
         .filter(|genesis| !genesis.is_empty())
 }
@@ -338,8 +339,12 @@ pub(crate) async fn store_genesis(
         .find(|sled| sled.session_id == stamp.session_id)
     {
         Some(sled) => {
-            if let Some(existing) = sled.genesis.clone().filter(|g| !g.is_empty()) {
-                return Ok(existing);
+            // An anchored account is never re-anchored. A record that merely
+            // carries a v2 `hashed_footprint` in `genesis` is NOT anchored —
+            // see `ContainerIdentitySled::is_anchored` — so it gets minted
+            // properly here rather than keeping a value nothing can verify.
+            if sled.is_anchored() {
+                return Ok(sled.genesis.clone().unwrap_or_default());
             }
             sled.genesis = Some(stamp.genesis_hex.clone());
             sled.arrival_timestamp = stamp.arrival_timestamp;

@@ -121,6 +121,26 @@ pub struct ContainerIdentitySled {
     pub head_timestamp_at_arrival: i64,
 }
 
+impl ContainerIdentitySled {
+    /// Whether this account's arrival has been anchored by `mint_genesis`.
+    ///
+    /// A non-empty `genesis` is not sufficient on its own. A version-2 record's
+    /// `hashed_footprint` lands in `genesis` through the serde alias above, so
+    /// it *looks* anchored while carrying a value that was never minted and has
+    /// no inputs behind it — nothing could re-derive or re-verify it. An anchor
+    /// counts only when the inputs it was minted from came with it.
+    ///
+    /// This is the one definition of "anchored". The accept path uses it to
+    /// decide whether to mint, and the write path uses it to decide whether a
+    /// record may be overwritten; if they disagreed, a v2 record would be
+    /// rejected forever by one and refused a mint by the other.
+    pub fn is_anchored(&self) -> bool {
+        self.genesis.as_deref().is_some_and(|g| !g.is_empty())
+            && self.arrival_timestamp != 0
+            && !self.chain_head_at_arrival.is_empty()
+    }
+}
+
 /// The btrfs device that IS the sled's persistence. The record of truth lives
 /// in Cozo (the device registry); the physical attach is `btrfs device add`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
