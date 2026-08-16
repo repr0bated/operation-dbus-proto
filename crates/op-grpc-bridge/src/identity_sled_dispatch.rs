@@ -443,37 +443,24 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-fn host_identity_from_raw_sled() -> anyhow::Result<ContainerIdentitySled> {
-    let (ptr, _mmap) = op_identity::schema_bridge::read_sled()?;
-    let sled = unsafe { &*ptr };
-    let wireguard_pubkey = base64::engine::general_purpose::STANDARD.encode(sled.wireguard_pubkey);
-    let ts = now();
-
-    Ok(ContainerIdentitySled {
-        session_id: op_identity::session::derive_session_id(&wireguard_pubkey),
-        wireguard_pubkey,
-        interface: std::env::var("IDENTITY_SLED_HOST_INTERFACE")
-            .unwrap_or_else(|_| "netmaker".to_string()),
-        peer_ip: std::env::var("IDENTITY_SLED_HOST_PEER_IP").ok(),
-        mutation_index: sled.mutation_index,
-        genesis: Some(hex::encode(sled.hashed_footprint)),
-        trace_id: sled.trace_id_hex(),
-        schema_version: sled.schema_version,
-        vector_id: sled.vector_id_hex(),
-        blob_ref: Some(op_identity::schema_bridge::SHM_SLED_PATH.to_string()),
-        btrfs_device: None,
-        instance: None,
-        session_started_at: ts,
-        last_seen_at: ts,
-        active: sled.is_sled_valid(),
-        // Read fresh from shared memory every call (not a stored/cached
-        // term), so there's nothing to expire independently here.
-        expires_at: None,
-        arrival_timestamp: 0,
-        chain_head_at_arrival: String::new(),
-        catalog_hash_at_arrival: String::new(),
-        head_timestamp_at_arrival: 0,
-    })
+/// The host's own session id — "container zero" under its own record.
+///
+/// Read from the environment, never from the global 152-byte sled and never
+/// from a subprocess: `IDENTITY_SLED_HOST_SESSION_ID` when the operator names
+/// it outright, otherwise derived from `WG_PUBKEY` the same way every other
+/// session id is derived. `None` means the host has not been registered as a
+/// session yet, which is a missing record — not a licence to read a shared
+/// last-write-wins file and call whatever is in it the host's identity.
+fn host_session_id() -> Option<String> {
+    if let Ok(session_id) = std::env::var("IDENTITY_SLED_HOST_SESSION_ID") {
+        let session_id = session_id.trim().to_string();
+        if !session_id.is_empty() {
+            return Some(session_id);
+        }
+    }
+    let pubkey = std::env::var("WG_PUBKEY").ok()?;
+    let pubkey = pubkey.trim();
+    (!pubkey.is_empty()).then(|| op_identity::session::derive_session_id(pubkey))
 }
 
 fn arg_str(args: &JsonValue, key: &str) -> String {
@@ -519,11 +506,18 @@ pub async fn dispatch_identity_sled_method(
 ) -> anyhow::Result<JsonValue> {
     match method {
         "get_identity" => {
-            let session_id = arg_str(args, "session_id");
+            let mut session_id = arg_str(args, "session_id");
             let trace_id = arg_str(args, "trace_id");
             if session_id.is_empty() && trace_id.is_empty() {
-                let identity = host_identity_from_raw_sled()?;
-                return Ok(serde_json::json!({ "identity": identity }));
+                // Empty = the host ("container zero"). It is the same kind of
+                // object as every other session, so it is read the same way:
+                // its own record out of the authoritative state cache.
+                session_id = host_session_id().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no host session id: set IDENTITY_SLED_HOST_SESSION_ID or WG_PUBKEY, \
+                         or name a session_id / trace_id"
+                    )
+                })?;
             }
 
             ensure_hydrated(engine).await;
@@ -758,7 +752,7 @@ pub async fn dispatch_identity_sled_method(
             let ttl_seconds = arg_i64(args, "ttl_seconds");
             let sled = ContainerIdentitySled {
                 session_id: session_id.clone(),
-                wireguard_pubkey: pubkey,
+                wireguard_pubkey: pubkey.clone(),
                 interface: String::new(),
                 peer_ip: None,
                 mutation_index: 0,
@@ -784,6 +778,22 @@ pub async fn dispatch_identity_sled_method(
             cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
             write_cache(engine, &cache).await?;
             persist_sled(&sled).await;
+
+            // Provisioning IS arrival, here as in `write_identity`: the
+            // container the caller was just handed carries the anchor it must
+            // present, minted against the real chain head by the one author.
+            let sled = match engine.mint_and_store_genesis(&session_id, &pubkey).await {
+                Ok(_) => stored_session(engine, &session_id).await.unwrap_or(sled),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        %session_id,
+                        "session anchor not minted at provisioning; the next \
+                         authenticated request will mint it"
+                    );
+                    sled
+                }
+            };
 
             Ok(serde_json::json!({ "identity": sled }))
         }
