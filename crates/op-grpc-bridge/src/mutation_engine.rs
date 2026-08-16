@@ -20,7 +20,7 @@ use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
 use op_blockchain::{PluginFootprint, StreamingBlockchain};
-use op_identity::{read_sled, write_sled_full};
+use op_identity::session_genesis::mint_genesis;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::blockchain_plugin::{
     AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
@@ -87,6 +87,46 @@ pub struct SchemaSnapshot {
     pub schema_json: simd_json::OwnedValue,
 }
 
+/// Actor label for a mutation that arrived with no identity at all.
+///
+/// It names no session, so it anchors none: the mutation is still notarized in
+/// the chain, but its session stamp is empty rather than borrowed from whoever
+/// wrote a shared file last.
+pub const ANONYMOUS_ACTOR: &str = "anonymous";
+
+/// The verified identity of the session a mutation belongs to.
+///
+/// Assembled once, at arrival, by [`MutationEngine::mint_and_store_genesis`]
+/// and read from there by every consumer. Nothing recomputes the genesis: the
+/// interceptor compares this value, the chain stamper embeds it, the UDS
+/// injector presents it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionContext {
+    /// Hex blake3 session genesis — the immutable anchor.
+    pub genesis_hex: String,
+    /// Session identifier (container name / derived session id).
+    pub session_id: String,
+    /// WireGuard public key (base64) that owns this session.
+    pub wireguard_pubkey: String,
+}
+
+/// The genesis and the inputs it was minted from, written to the session
+/// record exactly once at arrival.
+///
+/// The inputs are stored because the genesis is irreproducible without them —
+/// `arrival_timestamp` cannot be recovered after the fact — which is what makes
+/// offline re-verification possible (FR-3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GenesisStamp {
+    pub session_id: String,
+    pub wireguard_pubkey: String,
+    pub genesis_hex: String,
+    pub arrival_timestamp: i64,
+    pub chain_head_at_arrival: String,
+    pub catalog_hash_at_arrival: String,
+    pub head_timestamp_at_arrival: i64,
+}
+
 pub struct MutationEngine {
     /// Authoritative Event Chain
     pub event_chain: Arc<RwLock<EventChain>>,
@@ -139,6 +179,14 @@ pub struct MutationEngine {
     cognitive_tool_registry: std::sync::RwLock<Option<Arc<ToolRegistry>>>,
     /// Context engine tuple for Task 3 (context-awareness routes).
     cognitive_context_engine: std::sync::RwLock<Option<CognitiveContextState>>,
+    /// Verified session identities, keyed by session_id.
+    ///
+    /// Populated at arrival by [`MutationEngine::mint_and_store_genesis`] and
+    /// read (never recomputed) by the chain stamper and the per-session record
+    /// writer. This is a projection of the session records for the mutation
+    /// path, not a second store of the genesis: the record is authoritative and
+    /// every entry here was written from it.
+    sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -261,6 +309,7 @@ impl MutationEngine {
             zeroclaw_runtime: Arc::new(zeroclaw_runtime),
             cognitive_tool_registry: std::sync::RwLock::new(None),
             cognitive_context_engine: std::sync::RwLock::new(None),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -489,7 +538,11 @@ impl MutationEngine {
         let Some(sink) = self.audit_sink.get() else {
             return;
         };
-        if let Err(error) = sink.add_footprint(event_to_footprint(event)).await {
+        let session = self.session_context_for_actor(&event.actor_id).await;
+        if let Err(error) = sink
+            .add_footprint(event_to_footprint(event, session.as_ref()))
+            .await
+        {
             tracing::warn!(
                 %error,
                 event_id = event.event_id,
@@ -498,22 +551,250 @@ impl MutationEngine {
         }
     }
 
-    /// Advance the identity sled to the chain position this mutation just took.
+    /// Advance the session's own record to the chain position this mutation
+    /// just took.
     ///
-    /// The sled answers "given this container, which slice of the chain is its
-    /// session, and against which contract" — so it has to move for every
-    /// mutation. It used to be written on the property-set path only, which
-    /// left `mutation_index` naming the last property *set* rather than the
-    /// last mutation, and silently excluded every method call.
+    /// The record answers "given this session, which slice of the chain is it,
+    /// and against which contract" — so it has to move for every mutation.
     ///
-    /// Pubkey and trace are passed empty on purpose: they belong to the
-    /// session, not to any one mutation, and `write_sled_full` carries forward
-    /// whatever the record already holds. Re-reading the sled here to hand its
-    /// own values back would be a second reader of the thing being written.
-    fn advance_identity_sled(event_id: u64) {
-        if let Err(error) = write_sled_full("", event_id, "") {
-            tracing::warn!(%error, event_id, "sled write after mutation failed");
+    /// This is the mutation-path writer of FR-6: it owns `mutation_index` and
+    /// `genesis` and touches nothing else, so it can never overwrite the
+    /// stream path's liveness fields. `mutation_index` advances only. A
+    /// mutation that belongs to no known session advances nothing — a chain
+    /// position belongs to a session or to no record at all; it is never
+    /// written to a shared last-write-wins file.
+    async fn advance_session_record(&self, event_id: u64, actor_id: &str) {
+        let Some(session) = self.ensure_session_context(actor_id).await else {
+            return;
+        };
+        if let Err(error) = crate::identity_sled_dispatch::advance_mutation_index(
+            self,
+            &session.session_id,
+            event_id,
+        )
+        .await
+        {
+            tracing::warn!(%error, event_id, "session record advance failed");
         }
+    }
+
+    /// The verified session identity for `session_id`, if one has arrived.
+    pub async fn session_context(&self, session_id: &str) -> Option<SessionContext> {
+        self.sessions.read().await.get(session_id).cloned()
+    }
+
+    /// Resolve the session a mutation belongs to from its actor.
+    ///
+    /// Accepts whichever handle the caller happens to hold — the session id,
+    /// the WireGuard pubkey, the trace, or the genesis itself — because all of
+    /// them are fields of the same record. Nothing is derived here: the record
+    /// is the author and this is a read of it, warmed into the in-process map
+    /// so the chain stamper does not re-read per event.
+    pub async fn session_context_for_actor(&self, actor_id: &str) -> Option<SessionContext> {
+        if actor_id.is_empty() || actor_id == ANONYMOUS_ACTOR {
+            return None;
+        }
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(found) = sessions.get(actor_id) {
+                return Some(found.clone());
+            }
+            if let Some(found) = sessions
+                .values()
+                .find(|ctx| ctx.wireguard_pubkey == actor_id || ctx.genesis_hex == actor_id)
+            {
+                return Some(found.clone());
+            }
+        }
+        // Restart-warm: after a cold start the map is empty but the records
+        // hydrated from Cozo already carry their anchors.
+        let record = crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
+        let genesis_hex = record.genesis.clone().filter(|g| !g.is_empty())?;
+        let context = SessionContext {
+            genesis_hex,
+            session_id: record.session_id,
+            wireguard_pubkey: record.wireguard_pubkey,
+        };
+        self.register_session_context(context.clone()).await;
+        Some(context)
+    }
+
+    /// The session identity for `actor_id`, minting the anchor when this is the
+    /// session's arrival (FR-1: arrival is mutation one).
+    ///
+    /// A record that exists with no genesis is a session that has not arrived
+    /// yet — either its first mutation is happening now, or the process
+    /// restarted before the mint reached Cozo (§5.2). Both are handled the
+    /// same way: mint inline, once, before the mutation proceeds. An actor with
+    /// no record at all mints nothing; a chain position belongs to a session or
+    /// to no record at all.
+    pub async fn ensure_session_context(&self, actor_id: &str) -> Option<SessionContext> {
+        if actor_id.is_empty() || actor_id == ANONYMOUS_ACTOR {
+            return None;
+        }
+        if let Some(found) = self.session_context_for_actor(actor_id).await {
+            return Some(found);
+        }
+        let record = crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
+        match self
+            .mint_and_store_genesis(&record.session_id, &record.wireguard_pubkey)
+            .await
+        {
+            Ok(_) => self.session_context(&record.session_id).await,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    session_id = %record.session_id,
+                    "session arrival could not be anchored; the mutation is \
+                     recorded without a session stamp"
+                );
+                None
+            }
+        }
+    }
+
+    /// Publish a session identity for the mutation path to stamp.
+    pub async fn register_session_context(&self, context: SessionContext) {
+        self.sessions
+            .write()
+            .await
+            .insert(context.session_id.clone(), context);
+    }
+
+    /// Drop the in-process projection of one session's identity.
+    ///
+    /// The record stays authoritative; this only discards the mutation path's
+    /// warm copy, so the next lookup re-reads the record. Session teardown and
+    /// crash-recovery re-mint both go through here rather than mutating the map
+    /// in place.
+    pub async fn forget_session_context(&self, session_id: &str) {
+        self.sessions.write().await.remove(session_id);
+    }
+
+    /// Mint this session's genesis, store it, and return it (FR-1).
+    ///
+    /// Called once per session, at arrival — the first authenticated mutation.
+    /// A session that already carries a genesis gets that stored value back;
+    /// the formula is never evaluated twice for one session.
+    ///
+    /// The sequence is the durability contract of §5.2: mint, write the record
+    /// (cache + SHM projection + inline Cozo persist), record the arrival event
+    /// in the chain, then return. Arrival is mutation one, so every login is
+    /// durable, auditable, and sliceable like any other mutation.
+    ///
+    /// OSCAL subid: `mut.service.session-genesis.mint@v1`
+    pub async fn mint_and_store_genesis(
+        &self,
+        session_id: &str,
+        wireguard_pubkey: &str,
+    ) -> anyhow::Result<String> {
+        if session_id.is_empty() {
+            anyhow::bail!("session genesis requires a session_id");
+        }
+        // An already-minted session is never re-minted, not even here.
+        if let Some(existing) =
+            crate::identity_sled_dispatch::stored_genesis(self, session_id).await
+        {
+            let context = SessionContext {
+                genesis_hex: existing.clone(),
+                session_id: session_id.to_string(),
+                wireguard_pubkey: wireguard_pubkey.to_string(),
+            };
+            self.register_session_context(context).await;
+            return Ok(existing);
+        }
+
+        let pubkey_bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            wireguard_pubkey.trim(),
+        )
+        .ok()
+        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!("session genesis requires a 32-byte base64 WireGuard pubkey")
+        })?;
+
+        let (chain_head_hex, head_timestamp) = {
+            let chain = self.event_chain.read().await;
+            let head_ts = chain
+                .events()
+                .last()
+                .map(|event| event.timestamp.timestamp())
+                .unwrap_or(0);
+            (chain.last_hash().to_string(), head_ts)
+        };
+        let chain_head_bytes = hex::decode(&chain_head_hex)
+            .ok()
+            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+            .unwrap_or([0u8; 32]);
+        let catalog_hash_bytes = op_identity::schema_bridge::schema_catalog_hash().unwrap_or_else(|| {
+            tracing::warn!(
+                session_id,
+                "no published catalog hash at arrival; the anchor binds zeros \
+                 and cannot attest which contract this session operated against"
+            );
+            [0u8; 32]
+        });
+        let arrival_timestamp = chrono::Utc::now().timestamp();
+
+        let genesis = mint_genesis(
+            &pubkey_bytes,
+            &chain_head_bytes,
+            head_timestamp,
+            &catalog_hash_bytes,
+            arrival_timestamp,
+        );
+
+        let stamp = GenesisStamp {
+            session_id: session_id.to_string(),
+            wireguard_pubkey: wireguard_pubkey.to_string(),
+            genesis_hex: hex::encode(genesis),
+            arrival_timestamp,
+            chain_head_at_arrival: chain_head_hex,
+            catalog_hash_at_arrival: hex::encode(catalog_hash_bytes),
+            head_timestamp_at_arrival: head_timestamp,
+        };
+
+        // Inline: the record is durable (or logged as not) before the caller is
+        // told the session exists.
+        let stored = crate::identity_sled_dispatch::store_genesis(self, &stamp).await?;
+
+        self.register_session_context(SessionContext {
+            genesis_hex: stored.clone(),
+            session_id: session_id.to_string(),
+            wireguard_pubkey: wireguard_pubkey.to_string(),
+        })
+        .await;
+
+        self.record_session_arrival(session_id).await;
+        Ok(stored)
+    }
+
+    /// Record the session's first chain entry — arrival is mutation one.
+    ///
+    /// The stated consequence of FR-6: every login writes to the chain, so a
+    /// session that only ever reads still has a real first element and a
+    /// bounded span. The genesis is NOT in the event payload; it reaches the
+    /// durable record through `event_to_footprint`'s session stamp, which reads
+    /// the session context this arrival just registered.
+    ///
+    /// OSCAL subid: `evt.service.session-genesis.arrival@v1`
+    async fn record_session_arrival(&self, session_id: &str) {
+        let args = serde_json::json!({ "session_id": session_id }).to_string();
+        let event = {
+            let mut chain = self.event_chain.write().await;
+            chain
+                .record_method_call(
+                    session_id.to_string(),
+                    "identity_sled".to_string(),
+                    "session_arrival".to_string(),
+                    Some("identity_sled.write".to_string()),
+                    &args,
+                )
+                .clone()
+        };
+        self.persist_audit_event(&event).await;
+        let _ = self.chain_tx.send(event);
     }
 
     /// Store the session bus connection used for `Updated` signal emission.
@@ -1140,11 +1421,13 @@ impl MutationEngine {
         // event carries it in tags_touched (VAL-CROSS-020).
         let mut event_tags: Vec<String> = Vec::new();
 
-        // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
-        // when the caller omitted it. The Sled carries the WireGuard footprint +
-        // trace_id — that identity is authoritative for every mutation.
+        // A caller that names no actor is anonymous. This used to read the
+        // global 152-byte sled at `/dev/shm/plugin_schema.dat` and label the
+        // mutation with whatever session wrote that file last — the shared
+        // last-write-wins store FR-6 retires. Identity arrives with the
+        // request or not at all.
         let actor_id = if actor_id.is_empty() {
-            sled_footprint().unwrap_or_else(|| "anonymous".to_string())
+            ANONYMOUS_ACTOR.to_string()
         } else {
             actor_id
         };
@@ -1332,15 +1615,15 @@ impl MutationEngine {
                 old_value,
                 authoritative_value.clone(),
                 event_tags, // Empty falls back to compute_tags in process_authoritative_change
-                actor_id,
+                actor_id.clone(),
                 capability_id,
                 ChangeSource::Grpc,
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Write the Identity Sled with the updated mutation index.
-        Self::advance_identity_sled(change.event_id);
+        // Advance this session's own record to the new chain position.
+        self.advance_session_record(change.event_id, &actor_id).await;
 
         Ok(MutationResult {
             success: true,
@@ -1468,7 +1751,7 @@ impl MutationEngine {
 
         // Same position record as the property-set path — a method call is a
         // mutation and occupies a chain position like any other.
-        Self::advance_identity_sled(event_summary.0);
+        self.advance_session_record(event_summary.0, actor_id).await;
 
         // Dispatch to appropriate backend based on plugin_id
         let method_result: serde_json::Value = match plugin_id {
@@ -2266,23 +2549,6 @@ pub enum ErrorCode {
     Internal,
 }
 
-/// Read the WireGuard footprint from the Sled (1:1 shared memory identity at
-/// `/dev/shm/plugin_schema.dat`). Returns the hex footprint used as the default
-/// `actor_id` when a caller omits identity.
-fn sled_footprint() -> Option<String> {
-    // SAFETY: read_sled returns a valid pointer to IdentitySled in shared memory
-    // for the lifetime of the process; we copy the footprint out and drop the ptr.
-    let (ptr, _mmap) = read_sled().ok()?;
-    unsafe {
-        let sled = &*ptr;
-        if sled.hashed_footprint != [0u8; 32] {
-            Some(hex::encode(sled.hashed_footprint))
-        } else {
-            None
-        }
-    }
-}
-
 /// Build the authoritative `unix_socket` projection state after a successful
 /// `createunixsocket` mutation. The mutation argument is not state; the state is
 /// the registered service list under the single shared container socket.
@@ -2354,8 +2620,14 @@ fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
 /// beside it exist for operators and tools grepping the timing directory
 /// directly.
 ///
-/// OSCAL subid: `evt.service.event-chain.persist@v1`
-fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
+/// The session stamp (FR-3) makes the durable chain sliceable by session and
+/// re-verifiable offline: `session_genesis` / `session_id` /
+/// `wireguard_pubkey` are copied from the session context the arrival minted.
+/// A mutation that belongs to no session carries the keys with empty values —
+/// present and honest, never absent.
+///
+/// OSCAL subid: `evt.service.event-chain.persist@v1`, `evt.service.event-chain.session-stamp@v1`
+fn event_to_footprint(event: &ChainEvent, session: Option<&SessionContext>) -> PluginFootprint {
     let mut metadata: HashMap<String, simd_json::OwnedValue> = HashMap::new();
     metadata.insert(
         "actor_id".to_string(),
@@ -2380,6 +2652,21 @@ fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
     metadata.insert(
         "decision".to_string(),
         simd_json::OwnedValue::from(format!("{:?}", event.decision)),
+    );
+    // Session identity stamp (FR-3).
+    let empty = SessionContext::default();
+    let session = session.unwrap_or(&empty);
+    metadata.insert(
+        "session_genesis".to_string(),
+        simd_json::OwnedValue::from(session.genesis_hex.as_str()),
+    );
+    metadata.insert(
+        "session_id".to_string(),
+        simd_json::OwnedValue::from(session.session_id.as_str()),
+    );
+    metadata.insert(
+        "wireguard_pubkey".to_string(),
+        simd_json::OwnedValue::from(session.wireguard_pubkey.as_str()),
     );
     // Lossless copy for replay. Serialized through serde_json (ChainEvent's
     // derive target) and re-parsed into simd_json for the footprint map.
@@ -3118,5 +3405,228 @@ mod ovsdb_monitor_tables_tests {
             parse_rovs_command_input(&args).expect("typed rovs add_port input");
         assert_eq!(input.bridge_name, "ovsbr0");
         assert_eq!(input.port_name, "netmaker");
+    }
+}
+
+#[cfg(test)]
+mod session_genesis_tests {
+    use super::*;
+    use crate::human_principal_dispatch::tests::pk;
+    use crate::identity_sled_dispatch::tests::{sled_engine, write_identity};
+    use op_state_store::ChainConfig;
+
+    /// One real chain event per actor, appended to a throwaway chain so the
+    /// event carries genuine `prev_hash` linkage rather than hand-built fields.
+    fn chain_events(actors: &[&str]) -> Vec<ChainEvent> {
+        let mut chain = EventChain::new(ChainConfig::default());
+        actors
+            .iter()
+            .map(|actor| {
+                chain
+                    .record_method_call(
+                        actor.to_string(),
+                        "identity_sled".to_string(),
+                        "write_identity".to_string(),
+                        Some("identity_sled.write".to_string()),
+                        "{}",
+                    )
+                    .clone()
+            })
+            .collect()
+    }
+
+    fn chain_event(actor_id: &str) -> ChainEvent {
+        chain_events(&[actor_id]).remove(0)
+    }
+
+    fn metadata_str(footprint: &PluginFootprint, key: &str) -> String {
+        footprint
+            .metadata
+            .get(key)
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| panic!("footprint metadata missing '{key}'"))
+    }
+
+    /// VAL-GENESIS-010 (`mint_and_store_genesis`): the first call mints, every
+    /// call after it returns the stored value — the formula is never evaluated
+    /// twice for one session.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mint_and_store_genesis_mints_exactly_once() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x60);
+        let session_id = op_identity::session::derive_session_id(&pubkey);
+
+        let first = engine
+            .mint_and_store_genesis(&session_id, &pubkey)
+            .await
+            .expect("mint");
+        assert_eq!(first.len(), 64);
+        assert_ne!(first, "0".repeat(64));
+
+        let second = engine
+            .mint_and_store_genesis(&session_id, &pubkey)
+            .await
+            .expect("second call reads the stored anchor");
+        assert_eq!(first, second, "genesis must never be re-minted");
+
+        let context = engine.session_context(&session_id).await.expect("context");
+        assert_eq!(context.genesis_hex, first);
+        assert_eq!(context.wireguard_pubkey, pubkey);
+    }
+
+    /// VAL-GENESIS-011: minting needs a session id and a real 32-byte pubkey;
+    /// neither is invented on the caller's behalf.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mint_and_store_genesis_refuses_incomplete_input() {
+        let (engine, _shm) = sled_engine();
+        assert!(engine
+            .mint_and_store_genesis("", &pk(0x61))
+            .await
+            .is_err());
+        assert!(engine
+            .mint_and_store_genesis("session-no-key", "not-base64!!")
+            .await
+            .is_err());
+    }
+
+    /// VAL-GENESIS-012 (`genesis_not_reminted`): a session's second mutation
+    /// reads the stored anchor rather than minting a fresh one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn second_mutation_reads_stored_genesis() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x62);
+        let identity = write_identity(engine.as_ref(), &pubkey).await.expect("write");
+        let minted = identity.genesis.clone().expect("genesis");
+
+        // Both handles the mutation path may hold resolve the same anchor.
+        for handle in [identity.session_id.as_str(), pubkey.as_str()] {
+            let context = engine
+                .ensure_session_context(handle)
+                .await
+                .unwrap_or_else(|| panic!("handle '{handle}' resolves a session"));
+            assert_eq!(context.genesis_hex, minted, "stored anchor reused");
+        }
+    }
+
+    /// VAL-GENESIS-013 (`genesis_none_triggers_remint`): a record hydrated with
+    /// no anchor (crash between mint and persist, §5.2) is treated as an
+    /// arrival — the next request mints a fresh genesis inline.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn genesis_none_triggers_remint() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x63);
+        let identity = write_identity(engine.as_ref(), &pubkey).await.expect("write");
+        let session_id = identity.session_id.clone();
+        let original = identity.genesis.clone().expect("genesis");
+
+        crate::identity_sled_dispatch::tests::clear_genesis(engine.as_ref(), &session_id).await;
+        engine.forget_session_context(&session_id).await;
+        assert!(
+            engine.session_context_for_actor(&session_id).await.is_none(),
+            "a record with no anchor must not resolve a session context"
+        );
+
+        let context = engine
+            .ensure_session_context(&session_id)
+            .await
+            .expect("arrival re-mints");
+        assert_eq!(context.genesis_hex.len(), 64);
+        assert_ne!(
+            context.genesis_hex, original,
+            "a re-mint is a new arrival: new chain head, new arrival timestamp"
+        );
+    }
+
+    /// VAL-GENESIS-014: an actor that names no session anchors nothing — the
+    /// mutation is still notarized, it just carries no session stamp.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn anonymous_actor_anchors_nothing() {
+        let (engine, _shm) = sled_engine();
+        assert!(engine.ensure_session_context(ANONYMOUS_ACTOR).await.is_none());
+        assert!(engine.ensure_session_context("").await.is_none());
+        assert!(engine.ensure_session_context("who-dis").await.is_none());
+    }
+
+    /// VAL-GENESIS-020 (`chain_carries_session_identity`): the durable
+    /// footprint carries all three session fields (FR-3).
+    #[test]
+    fn chain_carries_session_identity() {
+        let session = SessionContext {
+            genesis_hex: "ab".repeat(32),
+            session_id: "session-one".to_string(),
+            wireguard_pubkey: "cGs=".to_string(),
+        };
+        let footprint = event_to_footprint(&chain_event("session-one"), Some(&session));
+        assert_eq!(metadata_str(&footprint, "session_genesis"), session.genesis_hex);
+        assert_eq!(metadata_str(&footprint, "session_id"), session.session_id);
+        assert_eq!(
+            metadata_str(&footprint, "wireguard_pubkey"),
+            session.wireguard_pubkey
+        );
+    }
+
+    /// VAL-GENESIS-021: an unanchored event carries the stamp keys with empty
+    /// values — present and honest, never absent, so a slicing query cannot
+    /// mistake "no session" for "field not written yet".
+    #[test]
+    fn event_to_footprint_stamps_empty_session_when_unanchored() {
+        let footprint = event_to_footprint(&chain_event(ANONYMOUS_ACTOR), None);
+        for key in ["session_genesis", "session_id", "wireguard_pubkey"] {
+            assert_eq!(metadata_str(&footprint, key), "", "{key} must be present");
+        }
+    }
+
+    /// VAL-GENESIS-022 (`chain_sliceable_by_session`): two sessions' events
+    /// interleaved in one chain are recovered by filtering on session_genesis.
+    #[test]
+    fn chain_sliceable_by_session() {
+        let one = SessionContext {
+            genesis_hex: "11".repeat(32),
+            session_id: "session-one".to_string(),
+            wireguard_pubkey: "b25l".to_string(),
+        };
+        let two = SessionContext {
+            genesis_hex: "22".repeat(32),
+            session_id: "session-two".to_string(),
+            wireguard_pubkey: "dHdv".to_string(),
+        };
+
+        let actors: Vec<&str> = (0..6)
+            .map(|i| {
+                if i % 2 == 0 {
+                    one.session_id.as_str()
+                } else {
+                    two.session_id.as_str()
+                }
+            })
+            .collect();
+        let chain: Vec<PluginFootprint> = chain_events(&actors)
+            .iter()
+            .map(|event| {
+                let session = if event.actor_id == one.session_id {
+                    &one
+                } else {
+                    &two
+                };
+                event_to_footprint(event, Some(session))
+            })
+            .collect();
+
+        for session in [&one, &two] {
+            let slice: Vec<&PluginFootprint> = chain
+                .iter()
+                .filter(|fp| {
+                    fp.metadata
+                        .get("session_genesis")
+                        .and_then(|v| v.as_str())
+                        .map(|g| g == session.genesis_hex)
+                        .unwrap_or(false)
+                })
+                .collect();
+            assert_eq!(slice.len(), 3, "each session recovers its own segment");
+            for fp in slice {
+                assert_eq!(metadata_str(fp, "session_id"), session.session_id);
+            }
+        }
     }
 }

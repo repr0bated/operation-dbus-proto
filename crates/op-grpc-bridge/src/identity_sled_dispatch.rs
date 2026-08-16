@@ -34,7 +34,7 @@ use op_plugins::state_plugins::incus_device::Device;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 
-use crate::mutation_engine::MutationEngine;
+use crate::mutation_engine::{GenesisStamp, MutationEngine};
 
 /// Session events kept in present-state per session. The event chain is the
 /// durable ledger and Cozo `session_events` the queryable archive; the state
@@ -180,8 +180,13 @@ async fn ensure_hydrated(engine: &MutationEngine) {
         .get_or_init(|| async {
             let Some(cozo) = sled_cozo() else { return };
             let cozo = cozo.clone();
-            let rows = tokio::task::spawn_blocking(move || cozo.list_identity_sleds()).await;
-            let rows = match rows {
+            let rows = tokio::task::spawn_blocking(move || {
+                let sleds = cozo.list_identity_sleds()?;
+                let genesis = cozo.list_identity_genesis()?;
+                Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
+            })
+            .await;
+            let (mut rows, genesis_rows) = match rows {
                 Ok(Ok(rows)) => rows,
                 Ok(Err(e)) => {
                     tracing::warn!(error = %e, "identity sled hydration read failed");
@@ -195,6 +200,7 @@ async fn ensure_hydrated(engine: &MutationEngine) {
             if rows.is_empty() {
                 return;
             }
+            join_genesis_inputs(&mut rows, &genesis_rows);
             let mut cache = read_cache(engine).await;
             if !cache.sleds.is_empty() {
                 return;
@@ -208,17 +214,208 @@ async fn ensure_hydrated(engine: &MutationEngine) {
         .await;
 }
 
+/// Fold the durable genesis inputs onto their sled rows.
+///
+/// A row whose stored shape hash is not the shape this build compiles against
+/// keeps its genesis but loses the inputs, and is logged: a record misread
+/// against a stale shape is worse than one that has to be re-minted (§8).
+fn join_genesis_inputs(sleds: &mut [IdentitySledRecord], inputs: &[GenesisInputsRecord]) {
+    let expected_shape = op_plugins::state_plugins::identity_sled::SCHEMA_CONTENT_HASH.trim();
+    for sled in sleds.iter_mut() {
+        let Some(found) = inputs
+            .iter()
+            .find(|row| row.session_id == sled.session_id)
+        else {
+            continue;
+        };
+        if !found.schema_content_hash.is_empty() && found.schema_content_hash != expected_shape {
+            tracing::error!(
+                session_id = %sled.session_id,
+                stored = %found.schema_content_hash,
+                expected = %expected_shape,
+                "identity record shape drift; genesis inputs skipped and the \
+                 session must re-authenticate"
+            );
+            continue;
+        }
+        sled.arrival_timestamp = found.arrival_timestamp;
+        sled.chain_head_at_arrival = found.chain_head_at_arrival.clone();
+        sled.catalog_hash_at_arrival = found.catalog_hash_at_arrival.clone();
+        sled.head_timestamp_at_arrival = found.head_timestamp_at_arrival;
+    }
+}
+
 /// Persist one sled row to Cozo; failure is logged, not fatal — the event
 /// chain already notarized the mutation.
 async fn persist_sled(sled: &ContainerIdentitySled) {
     let Some(cozo) = sled_cozo() else { return };
     let cozo = cozo.clone();
     let rec = sled_to_record(sled);
-    match tokio::task::spawn_blocking(move || cozo.put_identity_sled(&rec)).await {
+    let inputs = (sled.arrival_timestamp != 0).then(|| sled_to_genesis_inputs(sled));
+    match tokio::task::spawn_blocking(move || {
+        cozo.put_identity_sled(&rec)?;
+        if let Some(inputs) = inputs {
+            cozo.put_identity_genesis(&inputs)?;
+        }
+        Ok::<_, op_cozo_store::CozoError>(())
+    })
+    .await
+    {
         Ok(Ok(())) => {}
         Ok(Err(e)) => tracing::warn!(error = %e, "identity sled Cozo persist failed"),
         Err(e) => tracing::warn!(error = %e, "identity sled Cozo persist task failed"),
     }
+}
+
+/// The genesis already stored for `session_id`, if the session has arrived.
+///
+/// One read of the authoritative store (the in-process state cache behind the
+/// SHM projection) — no hashing, no Cozo query, no second store consulted.
+pub(crate) async fn stored_genesis(engine: &MutationEngine, session_id: &str) -> Option<String> {
+    ensure_hydrated(engine).await;
+    read_cache(engine)
+        .await
+        .sleds
+        .iter()
+        .find(|sled| sled.session_id == session_id)
+        .and_then(|sled| sled.genesis.clone())
+        .filter(|genesis| !genesis.is_empty())
+}
+
+/// The whole session record for `session_id`, for callers that need the term
+/// (`expires_at`, `active`) beside the anchor.
+pub(crate) async fn stored_session(
+    engine: &MutationEngine,
+    session_id: &str,
+) -> Option<ContainerIdentitySled> {
+    ensure_hydrated(engine).await;
+    read_cache(engine)
+        .await
+        .sleds
+        .into_iter()
+        .find(|sled| sled.session_id == session_id)
+}
+
+/// The session record a caller's handle names, whichever handle it holds.
+///
+/// A session is named by its id, by the WireGuard pubkey that owns it, by the
+/// trace it propagates, or by the anchor it presents — all four are fields of
+/// the same record, so all four resolve through this one lookup rather than
+/// four call sites each deriving their own.
+pub(crate) async fn session_record_for_actor(
+    engine: &MutationEngine,
+    actor_id: &str,
+) -> Option<ContainerIdentitySled> {
+    if actor_id.is_empty() {
+        return None;
+    }
+    ensure_hydrated(engine).await;
+    read_cache(engine).await.sleds.into_iter().find(|sled| {
+        sled.session_id == actor_id
+            || sled.wireguard_pubkey == actor_id
+            || (!sled.trace_id.is_empty() && sled.trace_id == actor_id)
+            || sled.genesis.as_deref() == Some(actor_id)
+    })
+}
+
+/// Write one session's genesis and the inputs it was minted from.
+///
+/// The mutation path owns these fields (FR-6) and writes them exactly once: a
+/// record that already carries a genesis keeps it, and the stored value is
+/// returned instead. Liveness fields (`last_seen_at`, `active`, `peer_ip`,
+/// `session_started_at`) are never touched here — they belong to the stream
+/// path, so the two writers cannot disagree.
+pub(crate) async fn store_genesis(
+    engine: &MutationEngine,
+    stamp: &GenesisStamp,
+) -> anyhow::Result<String> {
+    ensure_hydrated(engine).await;
+    let mut cache = read_cache(engine).await;
+    let ts = now();
+    let record = match cache
+        .sleds
+        .iter_mut()
+        .find(|sled| sled.session_id == stamp.session_id)
+    {
+        Some(sled) => {
+            if let Some(existing) = sled.genesis.clone().filter(|g| !g.is_empty()) {
+                return Ok(existing);
+            }
+            sled.genesis = Some(stamp.genesis_hex.clone());
+            sled.arrival_timestamp = stamp.arrival_timestamp;
+            sled.chain_head_at_arrival = stamp.chain_head_at_arrival.clone();
+            sled.catalog_hash_at_arrival = stamp.catalog_hash_at_arrival.clone();
+            sled.head_timestamp_at_arrival = stamp.head_timestamp_at_arrival;
+            sled.schema_version = RECORD_FORMAT;
+            if sled.wireguard_pubkey.is_empty() {
+                sled.wireguard_pubkey = stamp.wireguard_pubkey.clone();
+            }
+            sled.clone()
+        }
+        None => {
+            // Arrival of a session that has no record yet: the arrival IS the
+            // record's creation, so the stream path has not run and the
+            // liveness fields start from this moment.
+            let sled = ContainerIdentitySled {
+                session_id: stamp.session_id.clone(),
+                wireguard_pubkey: stamp.wireguard_pubkey.clone(),
+                interface: String::new(),
+                peer_ip: None,
+                mutation_index: 0,
+                genesis: Some(stamp.genesis_hex.clone()),
+                trace_id: hex::encode(uuid::Uuid::new_v4().as_bytes()),
+                schema_version: RECORD_FORMAT,
+                vector_id: String::new(),
+                blob_ref: None,
+                btrfs_device: None,
+                instance: None,
+                session_started_at: ts,
+                last_seen_at: ts,
+                active: true,
+                expires_at: None,
+                arrival_timestamp: stamp.arrival_timestamp,
+                chain_head_at_arrival: stamp.chain_head_at_arrival.clone(),
+                catalog_hash_at_arrival: stamp.catalog_hash_at_arrival.clone(),
+                head_timestamp_at_arrival: stamp.head_timestamp_at_arrival,
+            };
+            cache.sleds.push(sled.clone());
+            cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+            sled
+        }
+    };
+    write_cache(engine, &cache).await?;
+    // Inline, awaited: `arrival_timestamp` is irreproducible, so a session
+    // whose genesis never reached Cozo is permanently unverifiable after a
+    // restart. A failed write is a warning, not a rejected first request.
+    persist_sled(&record).await;
+    Ok(stamp.genesis_hex.clone())
+}
+
+/// Advance one session's `mutation_index` to the chain position it just took.
+///
+/// Advance-only and field-disjoint: a stale writer cannot roll the account
+/// backwards, and nothing the stream path owns is written here.
+pub(crate) async fn advance_mutation_index(
+    engine: &MutationEngine,
+    session_id: &str,
+    event_id: u64,
+) -> anyhow::Result<()> {
+    let mut cache = read_cache(engine).await;
+    let Some(sled) = cache
+        .sleds
+        .iter_mut()
+        .find(|sled| sled.session_id == session_id)
+    else {
+        return Ok(());
+    };
+    if event_id <= sled.mutation_index {
+        return Ok(());
+    }
+    sled.mutation_index = event_id;
+    let record = sled.clone();
+    write_cache(engine, &cache).await?;
+    persist_sled(&record).await;
+    Ok(())
 }
 
 async fn read_cache(engine: &MutationEngine) -> SledCacheState {
@@ -398,28 +595,6 @@ pub async fn dispatch_identity_sled_method(
                     if btrfs_device.is_some() {
                         sled.btrfs_device = btrfs_device;
                     }
-                    // Self-heal: identities created via provision_container
-                    // never mint a footprint at all (a separate gap in that
-                    // path), so backfill it here the same way a brand-new
-                    // write_identity sled does — a stable, once-minted
-                    // credential (mutation_index/source_port both 0), not
-                    // recomputed on every call.
-                    if sled.genesis.as_deref().unwrap_or_default().is_empty() {
-                        if let Some(footprint) = base64::engine::general_purpose::STANDARD
-                            .decode(pubkey.trim())
-                            .ok()
-                            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-                            .map(|pubkey_bytes| {
-                                hex::encode(op_identity::schema_bridge::etch_footprint(
-                                    &pubkey_bytes,
-                                    0,
-                                    0,
-                                ))
-                            })
-                        {
-                            sled.genesis = Some(footprint);
-                        }
-                    }
                     sled.mutation_index += 1;
                     sled.last_seen_at = ts;
                     sled.active = true;
@@ -433,28 +608,12 @@ pub async fn dispatch_identity_sled_method(
                     sled.clone()
                 }
                 None => {
-                    // Etch a footprint + mint a trace_id for the new identity now,
-                    // at creation, rather than leaving both blank forever. Unlike
-                    // the host's WireGuard mesh sled (etched per-connection from a
-                    // live source_port), a per-identity Cozo sled — including
-                    // vendor/partner identities with no real WireGuard session,
-                    // e.g. a browser frontend — has no live connection to etch
-                    // against, so mutation_index/source_port are both 0: the
-                    // footprint is a stable credential minted once, not a rotating
-                    // per-connection proof. The caller (provisioning tool) hands
-                    // the resulting footprint + trace_id to the consumer to present
-                    // on every request for the life of its term.
-                    let (genesis, trace_id) = base64::engine::general_purpose::STANDARD
-                        .decode(pubkey.trim())
-                        .ok()
-                        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-                        .map(|pubkey_bytes| {
-                            let footprint =
-                                op_identity::schema_bridge::etch_footprint(&pubkey_bytes, 0, 0);
-                            let trace = *uuid::Uuid::new_v4().as_bytes();
-                            (hex::encode(footprint), hex::encode(trace))
-                        })
-                        .unwrap_or_default();
+                    // A brand-new record gets a trace_id now, at creation,
+                    // rather than staying blank forever. The identity anchor
+                    // is NOT minted here: the genesis belongs to a session
+                    // arrival, which needs the chain head, so it is minted
+                    // below (once the record exists) by the mutation engine.
+                    let trace_id = hex::encode(uuid::Uuid::new_v4().as_bytes());
 
                     let sled = ContainerIdentitySled {
                         session_id: session_id.clone(),
@@ -462,7 +621,7 @@ pub async fn dispatch_identity_sled_method(
                         interface,
                         peer_ip,
                         mutation_index: 0,
-                        genesis: Some(genesis),
+                        genesis: None,
                         trace_id,
                         schema_version: RECORD_FORMAT,
                         vector_id: String::new(),
@@ -486,15 +645,27 @@ pub async fn dispatch_identity_sled_method(
             write_cache(engine, &cache).await?;
             persist_sled(&identity).await;
 
-            // Container zero: refresh the legacy raw sled AnnaScribe gates on.
-            let host_pubkey = op_identity::wireguard::WireGuardIdentity::new()
-                .get_local_pubkey()
-                .unwrap_or_default();
-            if !host_pubkey.is_empty() && host_pubkey == pubkey {
-                if let Err(e) = op_identity::schema_bridge::write_sled_from_wg(&pubkey) {
-                    tracing::warn!(error = %e, "legacy sled projection write failed");
+            // Provisioning IS arrival for this session: mint the genesis
+            // against the real chain head now, so the record the caller is
+            // handed already carries the anchor it must present. One author
+            // (`mint_genesis`, reached through the engine), one write.
+            let identity = match engine
+                .mint_and_store_genesis(&identity.session_id, &pubkey)
+                .await
+            {
+                Ok(_) => stored_session(engine, &identity.session_id)
+                    .await
+                    .unwrap_or(identity),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        session_id = %identity.session_id,
+                        "session anchor not minted at provisioning; the next \
+                         authenticated request will mint it"
+                    );
+                    identity
                 }
-            }
+            };
 
             Ok(serde_json::json!({ "identity": identity }))
         }
@@ -794,4 +965,221 @@ pub async fn dispatch_identity_sled_method(
 pub async fn current_state(engine: &MutationEngine) -> IdentitySledState {
     let cache = read_cache(engine).await;
     IdentitySledState { sleds: cache.sleds }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::human_principal_dispatch::tests::{pk, temp_shm, test_engine};
+    use std::sync::Arc;
+
+    /// One temp Cozo store for the whole test process.
+    ///
+    /// `sled_cozo()` resolves its path exactly once (a `OnceLock`), so the
+    /// first test to touch it fixes the path for every test after it. Pointing
+    /// it at a tempdir here keeps the suite off the live
+    /// `/var/lib/op-dbus/identity-cozo`.
+    pub(crate) fn sled_cozo_sandbox() {
+        static SANDBOX: OnceLock<tempfile::TempDir> = OnceLock::new();
+        SANDBOX.get_or_init(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::env::set_var(
+                "IDENTITY_SLED_COZO_DB_PATH",
+                dir.path().join("identity-cozo"),
+            );
+            dir
+        });
+    }
+
+    /// An engine with the projection tree and the durable store both sandboxed.
+    pub(crate) fn sled_engine() -> (Arc<MutationEngine>, tempfile::TempDir) {
+        sled_cozo_sandbox();
+        let shm = temp_shm();
+        (test_engine(), shm)
+    }
+
+    /// Simulate the §5.2 crash window: the record survives but its anchor
+    /// never reached Cozo, so hydration produced `genesis: None`.
+    pub(crate) async fn clear_genesis(engine: &MutationEngine, session_id: &str) {
+        let mut cache = read_cache(engine).await;
+        if let Some(sled) = cache
+            .sleds
+            .iter_mut()
+            .find(|sled| sled.session_id == session_id)
+        {
+            sled.genesis = None;
+            sled.arrival_timestamp = 0;
+            sled.chain_head_at_arrival = String::new();
+            sled.catalog_hash_at_arrival = String::new();
+            sled.head_timestamp_at_arrival = 0;
+        }
+        write_cache(engine, &cache).await.expect("cache write");
+    }
+
+    pub(crate) async fn write_identity(
+        engine: &MutationEngine,
+        pubkey: &str,
+    ) -> anyhow::Result<ContainerIdentitySled> {
+        let out = dispatch_identity_sled_method(
+            engine,
+            "write_identity",
+            &serde_json::json!({ "wireguard_pubkey": pubkey }),
+        )
+        .await?;
+        Ok(serde_json::from_value(
+            out.get("identity").cloned().expect("identity in output"),
+        )?)
+    }
+
+    /// VAL-SLED-GEN-001 (`write_identity_mints_genesis`): provisioning a new
+    /// session produces a non-empty genesis, minted through `mint_genesis`
+    /// against the real chain head — never `etch_footprint`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn write_identity_mints_genesis() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x51);
+        let identity = write_identity(&engine, &pubkey).await.expect("write");
+
+        let genesis = identity.genesis.clone().expect("genesis minted");
+        assert_eq!(genesis.len(), 64, "genesis is hex blake3: {genesis}");
+        assert!(genesis.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(genesis, "0".repeat(64), "genesis must not be the sentinel");
+        assert_eq!(identity.schema_version, RECORD_FORMAT);
+        assert_ne!(
+            identity.arrival_timestamp, 0,
+            "arrival_timestamp is stored for offline re-verification"
+        );
+        assert!(
+            !identity.chain_head_at_arrival.is_empty(),
+            "the anchor binds the chain head it was minted against"
+        );
+    }
+
+    /// VAL-SLED-GEN-002: re-registering the same pubkey does not re-mint — the
+    /// anchor is immutable for the life of the session.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn write_identity_does_not_remint_existing_genesis() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x52);
+        let first = write_identity(&engine, &pubkey).await.expect("write");
+        let second = write_identity(&engine, &pubkey).await.expect("rewrite");
+        assert_eq!(
+            first.genesis, second.genesis,
+            "genesis must not be recomputed for an existing session"
+        );
+        assert_eq!(first.arrival_timestamp, second.arrival_timestamp);
+    }
+
+    /// VAL-SLED-GEN-003 (`mutation_does_not_overwrite_liveness`): the mutation
+    /// path owns `mutation_index` + `genesis` and touches nothing the stream
+    /// path owns (FR-6 field disjointness).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mutation_does_not_overwrite_liveness() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x53);
+        let identity = write_identity(&engine, &pubkey).await.expect("write");
+        let session_id = identity.session_id.clone();
+
+        // Stream path: set the liveness fields the mutation path must not touch.
+        {
+            let mut cache = read_cache(engine.as_ref()).await;
+            let sled = cache
+                .sleds
+                .iter_mut()
+                .find(|s| s.session_id == session_id)
+                .expect("record");
+            sled.last_seen_at = 4_242;
+            sled.active = true;
+            sled.peer_ip = Some("10.0.0.9".to_string());
+            sled.session_started_at = 1_111;
+            write_cache(engine.as_ref(), &cache).await.expect("cache");
+        }
+
+        advance_mutation_index(engine.as_ref(), &session_id, 9_001)
+            .await
+            .expect("advance");
+
+        let after = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("record");
+        assert_eq!(after.mutation_index, 9_001);
+        assert_eq!(after.last_seen_at, 4_242, "liveness field preserved");
+        assert!(after.active);
+        assert_eq!(after.peer_ip.as_deref(), Some("10.0.0.9"));
+        assert_eq!(after.session_started_at, 1_111);
+        assert_eq!(after.genesis, identity.genesis, "anchor preserved");
+    }
+
+    /// VAL-SLED-GEN-004 (`stream_does_not_overwrite_genesis`): a liveness
+    /// touch preserves the anchor and the chain position.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stream_does_not_overwrite_genesis() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x54);
+        let identity = write_identity(&engine, &pubkey).await.expect("write");
+        let session_id = identity.session_id.clone();
+        advance_mutation_index(engine.as_ref(), &session_id, 77)
+            .await
+            .expect("advance");
+
+        dispatch_identity_sled_method(
+            engine.as_ref(),
+            "touch_session",
+            &serde_json::json!({ "session_id": session_id }),
+        )
+        .await
+        .expect("touch");
+
+        let after = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("record");
+        assert_eq!(after.genesis, identity.genesis);
+        assert_eq!(after.mutation_index, 77);
+    }
+
+    /// VAL-SLED-GEN-005: `mutation_index` never regresses.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mutation_index_advances_only() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x55);
+        let identity = write_identity(&engine, &pubkey).await.expect("write");
+        let session_id = identity.session_id.clone();
+
+        advance_mutation_index(engine.as_ref(), &session_id, 500)
+            .await
+            .expect("advance");
+        advance_mutation_index(engine.as_ref(), &session_id, 10)
+            .await
+            .expect("stale write ignored");
+
+        let after = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("record");
+        assert_eq!(after.mutation_index, 500);
+    }
+
+    /// VAL-SLED-GEN-006: every handle on the record resolves the same session.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn session_record_resolves_by_any_handle() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x56);
+        let identity = write_identity(&engine, &pubkey).await.expect("write");
+        let genesis = identity.genesis.clone().expect("genesis");
+
+        for handle in [
+            identity.session_id.as_str(),
+            pubkey.as_str(),
+            identity.trace_id.as_str(),
+            genesis.as_str(),
+        ] {
+            let found = session_record_for_actor(engine.as_ref(), handle)
+                .await
+                .unwrap_or_else(|| panic!("handle '{handle}' must resolve the session"));
+            assert_eq!(found.session_id, identity.session_id);
+        }
+        assert!(session_record_for_actor(engine.as_ref(), "").await.is_none());
+        assert!(session_record_for_actor(engine.as_ref(), "nobody")
+            .await
+            .is_none());
+    }
 }
