@@ -26,16 +26,13 @@ mcpServers:
       - "@modelcontextprotocol/server-fetch"
   - name: cognitive-mcp
     type: http
-    url: http://10.200.0.2:3003/mcp
-    headers:
-      X-Ghostbridge-Footprint: mcp-client
-      X-Ghostbridge-Trace-ID: mcp-add-project
+    url: http://127.0.0.1:8080/mcp/agents/message
   - name: op-dbus-compact
     type: http
-    url: http://127.0.0.1:8080/mcp/compact
+    url: http://127.0.0.1:8090/mcp/compact
   - name: op-dbus-agents
     type: http
-    url: http://127.0.0.1:8080/mcp/agents
+    url: http://127.0.0.1:8080/mcp/agents/message
   - name: op-cognitive-mcp
     type: stdio
     command: /usr/local/bin/op-cognitive-mcp

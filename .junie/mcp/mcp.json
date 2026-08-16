@@ -1,11 +1,7 @@
 {
     "mcpServers": {
         "cognitive-mcp": {
-            "url": "http://10.200.0.2:3003/mcp",
-            "headers": {
-                "X-Ghostbridge-Footprint": "mcp-client",
-                "X-Ghostbridge-Trace-ID": "mcp-add-project"
-            }
+            "url": "http://127.0.0.1:8080/mcp/agents/message"
         },
         "op-web-compact": {
             "command": "/usr/local/bin/op-mcp-server",

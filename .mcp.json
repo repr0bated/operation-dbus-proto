@@ -7,7 +7,7 @@
     },
     "op-dbus-socket": {
       "command": "/usr/local/bin/op-mcp-server",
-      "args": ["--stdio", "-m", "cognitive"],
+      "args": ["--stdio", "-m", "compact"],
       "type": "stdio",
       "_comment": "Stdio adapter onto the single socket-authenticated control plane (all tools)."
     }

@@ -1,13 +1,21 @@
 {
   "mcpServers": {
-    "op-web-compact": {
-      "command": "/usr/local/bin/op-mcp-server",
-      "args": ["--stdio", "-m", "cognitive"],
-      "type": "stdio"
+    "op-dbus": {
+      "url": "unix:///run/ghostbridge/container.sock",
+      "type": "stdio",
+      "_comment": "Primary socket door: UDS control plane on /run/ghostbridge/container.sock"
+    },
+    "cognitive-mcp": {
+      "url": "http://127.0.0.1:8080/mcp/agents/message",
+      "type": "http",
+      "_comment": "Direct cognitive agents MCP server (low-latency, un-nested tools)"
     },
     "op-dbus-compact": {
-      "url": "http://127.0.0.1:8080/mcp/compact",
-      "type": "http"
+      "command": "/usr/local/bin/op-mcp-server",
+      "args": ["--stdio", "-m", "compact"],
+      "type": "stdio",
+      "_comment": "Stdio adapter into socket control plane"
     }
   }
 }
+

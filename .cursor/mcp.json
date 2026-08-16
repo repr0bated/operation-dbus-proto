@@ -1,8 +1,12 @@
 {
   "mcpServers": {
+    "cognitive-mcp": {
+      "url": "http://127.0.0.1:8080/mcp/agents/message",
+      "type": "http"
+    },
     "op-dbus": {
       "command": "/usr/local/bin/op-mcp-server",
-      "args": ["--stdio", "-m", "cognitive"],
+      "args": ["--stdio", "-m", "compact"],
       "type": "stdio"
     }
   }
