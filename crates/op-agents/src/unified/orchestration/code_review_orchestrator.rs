@@ -17,7 +17,13 @@ impl CodeReviewOrchestrator {
             "code-review-orchestrator",
             "Code Review Orchestrator",
             "Coordinates comprehensive code review with multiple expert agents",
-            vec!["python-executor", "rust-executor", "security-auditor", "code-reviewer", "backend-architect"],
+            vec![
+                "python-executor",
+                "rust-executor",
+                "security-auditor",
+                "code-reviewer",
+                "backend-architect",
+            ],
         )
         .with_step(WorkflowStep {
             name: "lint".to_string(),

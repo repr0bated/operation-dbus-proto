@@ -99,6 +99,35 @@ pub struct SessionEventRecord {
     pub created_at: i64,
 }
 
+/// One registered human principal row (mirrors op-plugins' `HumanPrincipal`).
+///
+/// Humans are not containers: `principal_id` is derived from the WireGuard
+/// pubkey via `op_identity::session::derive_principal_id` (never
+/// caller-supplied), so it can never collide with a container session id.
+/// `display_alias` is display-only ("" = none) and never authoritative.
+/// `revoked_at` = 0 means active; revocation is a permanent tombstone — the
+/// row (and its pubkey mapping) is never deleted, so a revoked key can never
+/// be re-registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanPrincipalRecord {
+    pub principal_id: String,
+    pub human_pubkey: String,
+    pub display_alias: String,
+    pub registered_at: i64,
+    pub revoked_at: i64,
+}
+
+/// Default on-disk location of the human_principal plugin's Cozo database.
+pub const DEFAULT_HUMAN_PRINCIPAL_COZO_DB_PATH: &str = "/var/lib/op-dbus/human-principal-cozo";
+
+/// Resolve the human_principal Cozo DB path: the
+/// `OP_HUMAN_PRINCIPAL_COZO_DB_PATH` override when set, else the default.
+pub fn human_principal_cozo_db_path() -> PathBuf {
+    std::env::var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_HUMAN_PRINCIPAL_COZO_DB_PATH))
+}
+
 /// CozoDB graph database shuttle.
 ///
 /// Manages the unified Datalog relations:
@@ -355,6 +384,25 @@ impl CozoGraphShuttle {
                 subid: String default "",
                 content: String default "",
                 created_at: Int default 0
+            }"#,
+            // one row per registered human principal (humans ≠ containers;
+            // principal_id is derived, never caller-supplied). revoked_at = 0
+            // means active; revocation is a permanent tombstone — the row is
+            // never deleted, so a revoked key can never be re-registered.
+            r#":create human_principals {
+                principal_id: String
+                =>
+                human_pubkey: String,
+                display_alias: String default "",
+                registered_at: Int default 0,
+                revoked_at: Int default 0
+            }"#,
+            // human_pubkey → principal_id lookup; the pubkey is unique across
+            // ALL principals, active or revoked (tombstones keep their mapping)
+            r#":create human_principal_pubkeys {
+                human_pubkey: String
+                =>
+                principal_id: String default ""
             }"#,
         ];
 
@@ -1419,6 +1467,169 @@ impl CozoGraphShuttle {
         Ok(())
     }
 
+    // ── Human principals ───────────────────────────────────────────────────────
+
+    /// Upsert a full human principal row and its human_pubkey → principal_id
+    /// mapping, atomically (both rows or neither, mirroring `put_wg_session`).
+    /// Policy (pubkey shape, duplicate/alias rules, tombstone enforcement)
+    /// lives with the caller; this layer persists the record verbatim.
+    pub fn put_human_principal(
+        &self,
+        rec: &HumanPrincipalRecord,
+    ) -> std::result::Result<(), CozoError> {
+        let txn = self.db.multi_transaction(true);
+
+        let mut p: Params = BTreeMap::new();
+        p.insert(
+            "pid".into(),
+            DataValue::Str(rec.principal_id.as_str().into()),
+        );
+        p.insert(
+            "pk".into(),
+            DataValue::Str(rec.human_pubkey.as_str().into()),
+        );
+        p.insert(
+            "alias".into(),
+            DataValue::Str(rec.display_alias.as_str().into()),
+        );
+        p.insert("registered".into(), dv_int(rec.registered_at));
+        p.insert("revoked".into(), dv_int(rec.revoked_at));
+        if let Err(e) = txn.run_script(
+            r#"
+                ?[principal_id, human_pubkey, display_alias, registered_at, revoked_at]
+                    <- [[$pid, $pk, $alias, $registered, $revoked]]
+                :put human_principals {
+                    principal_id => human_pubkey, display_alias, registered_at, revoked_at
+                }
+            "#,
+            p,
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("put human principal: {e}")));
+        }
+
+        let mut pp: Params = BTreeMap::new();
+        pp.insert(
+            "pk".into(),
+            DataValue::Str(rec.human_pubkey.as_str().into()),
+        );
+        pp.insert(
+            "pid".into(),
+            DataValue::Str(rec.principal_id.as_str().into()),
+        );
+        if let Err(e) = txn.run_script(
+            "?[human_pubkey, principal_id] <- [[$pk, $pid]] \
+             :put human_principal_pubkeys { human_pubkey => principal_id }",
+            pp,
+        ) {
+            let _ = txn.abort();
+            return Err(CozoError::Other(format!("put human principal pubkey: {e}")));
+        }
+
+        txn.commit()
+            .map_err(|e| CozoError::Other(format!("commit human principal write: {e}")))?;
+        Ok(())
+    }
+
+    /// Fetch a single human principal row by its derived principal_id.
+    pub fn get_human_principal(
+        &self,
+        principal_id: &str,
+    ) -> std::result::Result<Option<HumanPrincipalRecord>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("pid".into(), DataValue::Str(principal_id.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[principal_id, human_pubkey, display_alias, registered_at, revoked_at] := \
+             *human_principals[principal_id, human_pubkey, display_alias, registered_at, revoked_at], \
+             principal_id = $pid",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("get human principal: {e}")))?;
+        Ok(r.rows.first().map(|r| row_to_human_principal(r)))
+    }
+
+    /// Resolve a human principal by its unique WireGuard pubkey. Revoked
+    /// principals keep their mapping, so they resolve here with `revoked_at`
+    /// set (visibility — never as active, never not-found).
+    pub fn get_human_principal_by_pubkey(
+        &self,
+        human_pubkey: &str,
+    ) -> std::result::Result<Option<HumanPrincipalRecord>, CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("pk".into(), DataValue::Str(human_pubkey.into()));
+        let r = cozo_run(
+            &self.db,
+            "?[principal_id] := \
+             *human_principal_pubkeys[human_pubkey, principal_id], human_pubkey = $pk",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("lookup human principal pubkey: {e}")))?;
+        let Some(row) = r.rows.first() else {
+            return Ok(None);
+        };
+        let Some(principal_id) = dv_as_str(&row[0]) else {
+            return Ok(None);
+        };
+        self.get_human_principal(principal_id)
+    }
+
+    /// List every registered human principal, revoked tombstones included.
+    pub fn list_human_principals(
+        &self,
+    ) -> std::result::Result<Vec<HumanPrincipalRecord>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[principal_id, human_pubkey, display_alias, registered_at, revoked_at] := \
+             *human_principals[principal_id, human_pubkey, display_alias, registered_at, revoked_at]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list human principals: {e}")))?;
+        Ok(r.rows.iter().map(|r| row_to_human_principal(r)).collect())
+    }
+
+    /// Stamp `revoked_at` on a human principal — a partial-column `:update`,
+    /// so the rest of the row cannot be clobbered by a stale full-record
+    /// write-back. Idempotency (never re-stamping an existing `revoked_at`)
+    /// is the caller's policy.
+    pub fn revoke_human_principal(
+        &self,
+        principal_id: &str,
+        revoked_at: i64,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("pid".into(), DataValue::Str(principal_id.into()));
+        p.insert("revoked".into(), dv_int(revoked_at));
+        cozo_run(
+            &self.db,
+            "?[principal_id, revoked_at] <- [[$pid, $revoked]] \
+             :update human_principals { principal_id => revoked_at }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("revoke human principal: {e}")))?;
+        Ok(())
+    }
+
+    /// Update only the display-only alias of a human principal — a
+    /// partial-column `:update`, so no other field can be clobbered.
+    pub fn update_human_principal_alias(
+        &self,
+        principal_id: &str,
+        display_alias: &str,
+    ) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("pid".into(), DataValue::Str(principal_id.into()));
+        p.insert("alias".into(), DataValue::Str(display_alias.into()));
+        cozo_run(
+            &self.db,
+            "?[principal_id, display_alias] <- [[$pid, $alias]] \
+             :update human_principals { principal_id => display_alias }",
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("update human principal alias: {e}")))?;
+        Ok(())
+    }
+
     /// Append one event to a session's snowball ledger, allocating the next
     /// `seq` inside a single write transaction (max+1 and the `:put` commit
     /// together, so two concurrent appends can't mint the same seq and
@@ -1605,6 +1816,17 @@ fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
     }
 }
 
+fn row_to_human_principal(row: &[DataValue]) -> HumanPrincipalRecord {
+    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
+    HumanPrincipalRecord {
+        principal_id: s(0),
+        human_pubkey: s(1),
+        display_alias: s(2),
+        registered_at: dv_as_int(&row[3]),
+        revoked_at: dv_as_int(&row[4]),
+    }
+}
+
 fn json_obj_to_params(v: Value) -> Params {
     let mut map: Params = BTreeMap::new();
     if let Value::Object(obj) = v {
@@ -1786,5 +2008,146 @@ mod identity_sled_tests {
         let limited = store.list_session_events("s", 1).unwrap();
         assert_eq!(limited.len(), 1);
         assert_eq!(limited[0].seq, 1);
+    }
+}
+
+#[cfg(test)]
+mod human_principal_tests {
+    use super::*;
+
+    fn sample(principal_id: &str, pubkey: &str) -> HumanPrincipalRecord {
+        HumanPrincipalRecord {
+            principal_id: principal_id.to_string(),
+            human_pubkey: pubkey.to_string(),
+            display_alias: String::new(),
+            registered_at: 1_700_000_000,
+            revoked_at: 0,
+        }
+    }
+
+    #[test]
+    fn human_principal_round_trip() {
+        let store = CozoGraphShuttle::new_in_memory().unwrap();
+        let mut rec = sample("pid-1", "pubkey-A");
+        rec.display_alias = "alice".to_string();
+        store.put_human_principal(&rec).unwrap();
+
+        // Fetch by derived principal id and by unique pubkey: full equality.
+        let got = store.get_human_principal("pid-1").unwrap().unwrap();
+        assert_eq!(got, rec);
+        let by_key = store
+            .get_human_principal_by_pubkey("pubkey-A")
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_key, rec);
+
+        // Unknown lookups are absent, never fabricated.
+        assert!(store.get_human_principal("nope").unwrap().is_none());
+        assert!(store
+            .get_human_principal_by_pubkey("nope")
+            .unwrap()
+            .is_none());
+
+        // Alias update is a partial-column update: nothing else is clobbered.
+        store
+            .update_human_principal_alias("pid-1", "alice2")
+            .unwrap();
+        let aliased = store.get_human_principal("pid-1").unwrap().unwrap();
+        assert_eq!(aliased.display_alias, "alice2");
+        assert_eq!(aliased.human_pubkey, rec.human_pubkey);
+        assert_eq!(aliased.registered_at, rec.registered_at);
+        assert_eq!(aliased.revoked_at, 0);
+
+        // Revocation is a tombstone: the row stays resolvable by id AND key.
+        store
+            .revoke_human_principal("pid-1", 1_700_000_999)
+            .unwrap();
+        let revoked = store.get_human_principal("pid-1").unwrap().unwrap();
+        assert_eq!(revoked.revoked_at, 1_700_000_999);
+        assert_eq!(revoked.display_alias, "alice2");
+        let revoked_by_key = store
+            .get_human_principal_by_pubkey("pubkey-A")
+            .unwrap()
+            .unwrap();
+        assert_eq!(revoked_by_key.revoked_at, 1_700_000_999);
+
+        assert_eq!(store.list_human_principals().unwrap().len(), 1);
+    }
+
+    /// Reopen a persistent shuttle, tolerating cozo 0.7.6's deferred close:
+    /// `multi_transaction` clones the DbInstance into a rayon worker that can
+    /// outlive the shuttle drop by a few ms, so the RocksDB LOCK release lags.
+    /// The durability contract being tested is unaffected — this only waits
+    /// for the engine to finish closing.
+    fn reopen_persistent(path: &std::path::Path) -> CozoGraphShuttle {
+        let mut last_err = None;
+        for _ in 0..100 {
+            match CozoGraphShuttle::new_persistent(path.to_path_buf()) {
+                Ok(store) => return store,
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        }
+        panic!("reopen never acquired the RocksDB lock: {last_err:?}");
+    }
+
+    #[test]
+    fn human_principal_persists_through_rocksdb_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("human-principal-rocksdb");
+        let mut active = sample("pid-active", "pubkey-active");
+        active.display_alias = "alice".to_string();
+        let mut revoked = sample("pid-revoked", "pubkey-revoked");
+        revoked.display_alias = "bob".to_string();
+        revoked.revoked_at = 1_700_000_111;
+        {
+            let store = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
+            store.put_human_principal(&active).unwrap();
+            store.put_human_principal(&revoked).unwrap();
+        }
+        // Records, aliases, and revoked_at markers all survive the reopen.
+        let reopened = reopen_persistent(&db_path);
+        assert_eq!(
+            reopened.get_human_principal("pid-active").unwrap().unwrap(),
+            active
+        );
+        assert_eq!(
+            reopened
+                .get_human_principal("pid-revoked")
+                .unwrap()
+                .unwrap(),
+            revoked
+        );
+        assert_eq!(
+            reopened
+                .get_human_principal_by_pubkey("pubkey-revoked")
+                .unwrap()
+                .unwrap(),
+            revoked
+        );
+        let mut listed = reopened.list_human_principals().unwrap();
+        listed.sort_by(|a, b| a.principal_id.cmp(&b.principal_id));
+        assert_eq!(listed, vec![active, revoked]);
+    }
+
+    #[test]
+    fn human_principal_db_path_env_override() {
+        // Unset (no other test in this binary touches the var) → default.
+        assert_eq!(
+            human_principal_cozo_db_path(),
+            PathBuf::from(DEFAULT_HUMAN_PRINCIPAL_COZO_DB_PATH)
+        );
+        std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", "/tmp/hp-override");
+        assert_eq!(
+            human_principal_cozo_db_path(),
+            PathBuf::from("/tmp/hp-override")
+        );
+        std::env::remove_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH");
+        assert_eq!(
+            human_principal_cozo_db_path(),
+            PathBuf::from(DEFAULT_HUMAN_PRINCIPAL_COZO_DB_PATH)
+        );
     }
 }

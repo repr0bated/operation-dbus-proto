@@ -695,6 +695,21 @@ impl SchemaBackedInterface {
     }
 }
 
+/// Test-only access to the zbus `call` dispatcher: the interface method is
+/// private to the macro-generated impl, and bridge-internal tests outside
+/// this module drive the real D-Bus-surface validation pipeline (method
+/// lookup → arg validation → capability gate → dispatch) through this door.
+#[cfg(test)]
+impl SchemaBackedInterface {
+    pub(crate) async fn call_in_test(
+        &self,
+        method: String,
+        json_args: String,
+    ) -> zbus::fdo::Result<String> {
+        self.call(method, json_args).await
+    }
+}
+
 #[zbus::interface(name = "org.opdbus.v1.PluginV1")]
 impl SchemaBackedInterface {
     /// Generic method call dispatcher.
@@ -832,7 +847,10 @@ impl SchemaBackedInterface {
     /// Subscribers can act on the signal payload alone without an additional
     /// query — this is the no-polling guarantee (REQ-1.5, REQ-7).
     #[zbus(signal)]
-    pub async fn updated(signal_emitter: &zbus::object_server::SignalEmitter<'_>, data_json: &str) -> zbus::Result<()>;
+    pub async fn updated(
+        signal_emitter: &zbus::object_server::SignalEmitter<'_>,
+        data_json: &str,
+    ) -> zbus::Result<()>;
 }
 
 #[derive(Debug, thiserror::Error)]

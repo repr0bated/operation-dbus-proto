@@ -229,7 +229,9 @@ pub async fn ui_model_catalog_delete_handler(
 /// "plugins with generated RPC methods" (some plugins, e.g. antigravity/
 /// antigravity_chat, are state-only with zero methods, so they're absent
 /// from the frontend's method-index but very much present as real blobs).
-pub async fn ui_model_list_plugins_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+pub async fn ui_model_list_plugins_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Response {
     match op_blob::catalog::read_manifest_plugin_ids_shm() {
         Some(ids) => ok(json!({ "plugins": ids })),
         None => err(

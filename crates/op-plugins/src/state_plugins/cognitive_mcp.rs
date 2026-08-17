@@ -199,12 +199,9 @@ impl StatePlugin for CognitiveMcpPlugin {
     /// (`/etc/runit/sv/op-cognitive-mcp`); checking only the s6 path reported the
     /// plugin unavailable and silently suppressed its gRPC surface.
     fn is_available(&self) -> bool {
-        [
-            "/etc/runit/sv/op-cognitive-mcp",
-            SUPERVISED_PATH,
-        ]
-        .iter()
-        .any(|p| std::path::Path::new(p).exists())
+        ["/etc/runit/sv/op-cognitive-mcp", SUPERVISED_PATH]
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
     }
 
     fn unavailable_reason(&self) -> String {

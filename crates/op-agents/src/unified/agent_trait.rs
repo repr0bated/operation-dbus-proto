@@ -30,7 +30,7 @@ pub enum AgentCapability {
     ReadFiles,
     WriteFiles,
     NetworkAccess,
-    
+
     // Persona capabilities (LLM augmentation)
     CodeReview,
     ArchitectureDesign,
@@ -38,7 +38,7 @@ pub enum AgentCapability {
     Documentation,
     Debugging,
     Optimization,
-    
+
     // Orchestration capabilities
     DelegateToAgents { agents: Vec<String> },
     ParallelExecution,
@@ -120,83 +120,83 @@ pub trait UnifiedAgent: Send + Sync {
     // =========================================================================
     // IDENTITY
     // =========================================================================
-    
+
     /// Unique agent identifier (e.g., "python-executor", "django-expert")
     fn id(&self) -> &str;
-    
+
     /// Human-readable name
     fn name(&self) -> &str;
-    
+
     /// Description of what this agent does
     fn description(&self) -> &str;
-    
+
     /// Agent category
     fn category(&self) -> AgentCategory;
-    
+
     /// Agent capabilities
     fn capabilities(&self) -> Vec<AgentCapability>;
-    
+
     // =========================================================================
     // PROMPTS (embedded, not separate markdown files)
     // =========================================================================
-    
+
     /// System prompt for LLM interactions
     /// This is the "persona" that was previously in markdown files
     fn system_prompt(&self) -> &str;
-    
+
     /// Additional context/knowledge to inject
     fn knowledge_base(&self) -> Option<&str> {
         None
     }
-    
+
     /// Example interactions for few-shot learning
     fn examples(&self) -> Vec<(&str, &str)> {
         vec![]
     }
-    
+
     // =========================================================================
     // SECURITY (for execution agents)
     // =========================================================================
-    
+
     /// Security profile (only meaningful for execution agents)
     fn security_profile(&self) -> Option<&SecurityProfile> {
         None
     }
-    
+
     /// Whether this agent requires root/elevated privileges
     fn requires_root(&self) -> bool {
         false
     }
-    
+
     // =========================================================================
     // OPERATIONS
     // =========================================================================
-    
+
     /// List of operations this agent can perform
     fn operations(&self) -> Vec<&str>;
-    
+
     /// Execute an operation
     async fn execute(&self, request: AgentRequest) -> AgentResponse;
-    
+
     /// Check if agent can handle a specific operation
     fn can_handle(&self, operation: &str) -> bool {
         self.operations().contains(&operation)
     }
-    
+
     // =========================================================================
     // LIFECYCLE
     // =========================================================================
-    
+
     /// Initialize the agent (called once on startup)
     async fn initialize(&self) -> Result<(), String> {
         Ok(())
     }
-    
+
     /// Shutdown the agent (called on cleanup)
     async fn shutdown(&self) -> Result<(), String> {
         Ok(())
     }
-    
+
     /// Health check
     fn is_healthy(&self) -> bool {
         true

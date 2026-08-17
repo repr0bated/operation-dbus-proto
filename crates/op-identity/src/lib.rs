@@ -6,6 +6,7 @@
 pub mod anna_scribe;
 pub mod gcloud_auth;
 pub mod identity_vault;
+pub mod oracle_assertion;
 pub mod recovery;
 pub mod registration;
 pub mod schema_bridge;

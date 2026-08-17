@@ -1,8 +1,8 @@
 //! Operations Expert Agents
 
-use super::base::PersonaAgent;
 use super::super::agent_trait::AgentCapability;
-use super::super::prompts::operations::{KUBERNETES_EXPERT, SYSTEMD_EXPERT, DBUS_EXPERT};
+use super::super::prompts::operations::{DBUS_EXPERT, KUBERNETES_EXPERT, SYSTEMD_EXPERT};
+use super::base::PersonaAgent;
 
 pub struct KubernetesExpert(PersonaAgent);
 

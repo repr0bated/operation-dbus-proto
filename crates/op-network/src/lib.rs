@@ -12,6 +12,7 @@
 
 pub mod btrfs;
 pub mod controller;
+pub mod datapath_safe;
 pub mod openflow;
 pub mod openflow_translate;
 pub mod ovs_capabilities;
@@ -24,6 +25,7 @@ pub mod rovs_proxy;
 pub mod rtnetlink;
 
 pub use controller::{OpenFlowController, OpenFlowControllerHandle};
+pub use datapath_safe::{FALLBACK_COOKIE, MANAGED_COOKIE, attach_controller_safe, del_controller, ensure_fallback_normal, get_datapath_health, set_controller, set_fail_mode, DatapathHealth};
 pub use openflow::{FlowAction, FlowEntry, FlowMatch, OpenFlowClient, OpenFlowVersion};
 pub use ovs_capabilities::{counter_excuses, excuses_to_llm_context, OvsCapabilities};
 pub use ovs_error::OvsError;

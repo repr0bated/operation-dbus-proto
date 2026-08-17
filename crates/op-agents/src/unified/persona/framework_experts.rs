@@ -1,8 +1,8 @@
 //! Framework Expert Agents
 
-use super::base::PersonaAgent;
 use super::super::agent_trait::AgentCapability;
 use super::super::prompts::frameworks::{DJANGO, FASTAPI, REACT};
+use super::base::PersonaAgent;
 
 pub struct DjangoExpert(PersonaAgent);
 

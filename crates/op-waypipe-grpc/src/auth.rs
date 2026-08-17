@@ -64,10 +64,9 @@ pub fn read_sled_identity() -> Result<SledIdentity, Status> {
 fn optional_header<'a>(metadata: &'a MetadataMap, key: &str) -> Result<Option<&'a str>, Status> {
     match metadata.get(key) {
         None => Ok(None),
-        Some(raw) => Ok(Some(
-            raw.to_str()
-                .map_err(|_| Status::invalid_argument(format!("invalid {key} encoding")))?,
-        )),
+        Some(raw) => Ok(Some(raw.to_str().map_err(|_| {
+            Status::invalid_argument(format!("invalid {key} encoding"))
+        })?)),
     }
 }
 

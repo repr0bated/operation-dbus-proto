@@ -112,12 +112,16 @@ fn resolve_declared_route(
     requested_provider: &str,
     requested_model: &str,
 ) -> anyhow::Result<ResolvedExecutionRoute> {
-    let provider_request = (!requested_provider.trim().is_empty())
-        .then_some(requested_provider.trim())
-        .unwrap_or_else(|| state.selected_provider.as_str());
-    let model_request = (!requested_model.trim().is_empty())
-        .then_some(requested_model.trim())
-        .unwrap_or_else(|| state.selected_model.as_str());
+    let provider_request = if !requested_provider.trim().is_empty() {
+        requested_provider.trim()
+    } else {
+        state.selected_provider.as_str()
+    };
+    let model_request = if !requested_model.trim().is_empty() {
+        requested_model.trim()
+    } else {
+        state.selected_model.as_str()
+    };
 
     let provider_aliases = provider_names(state, provider_request)
         .ok_or_else(|| anyhow!("provider '{provider_request}' is not declared by ZeroClaw"))?;

@@ -17,7 +17,11 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use op_network::{OpenFlowController, OpenFlowControllerHandle};
+use op_network::{
+    attach_controller_safe, del_controller, ensure_fallback_normal,
+    get_datapath_health, set_controller, set_fail_mode, OpenFlowController,
+    OpenFlowControllerHandle,
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zbus::interface;
@@ -48,6 +52,58 @@ impl OpenFlowDbusService {
     /// re-query of the switch's flow table).
     async fn dump_flows(&self) -> Vec<String> {
         self.handle.dump_flows()
+    }
+
+    /// Ensure priority=0 actions=NORMAL is present on `bridge`.
+    async fn ensure_fallback_normal(&self, bridge: String) -> zbus::fdo::Result<String> {
+        ensure_fallback_normal(&bridge)
+            .await
+            .map(|_| format!("ok: fallback NORMAL on {bridge}"))
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// Set Bridge fail_mode (`standalone` or `secure`).
+    async fn set_fail_mode(&self, bridge: String, mode: String) -> zbus::fdo::Result<String> {
+        set_fail_mode(&bridge, &mode)
+            .await
+            .map(|_| format!("ok: {bridge} fail_mode={mode}"))
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// Remove controllers from `bridge`.
+    async fn del_controller(&self, bridge: String) -> zbus::fdo::Result<String> {
+        del_controller(&bridge)
+            .await
+            .map(|_| format!("ok: del-controller {bridge}"))
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// Set controller after ensuring NORMAL fallback. Endpoint e.g. tcp:10.200.0.1:6653.
+    async fn set_controller(&self, bridge: String, endpoint: String) -> zbus::fdo::Result<String> {
+        set_controller(&bridge, &endpoint)
+            .await
+            .map(|_| format!("ok: set-controller {bridge} -> {endpoint}"))
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// JSON datapath health (fail_mode, controllers, fallback_normal).
+    async fn get_datapath_health(&self, bridge: String) -> zbus::fdo::Result<String> {
+        let h = get_datapath_health(&bridge)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))?;
+        serde_json::to_string(&h).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Safe attach: standalone + NORMAL + set-controller + verify; rollback on failure.
+    async fn attach_controller_safe(
+        &self,
+        bridge: String,
+        endpoint: String,
+    ) -> zbus::fdo::Result<String> {
+        let h = attach_controller_safe(&bridge, &endpoint)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))?;
+        serde_json::to_string(&h).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 }
 
@@ -83,6 +139,23 @@ async fn main() -> Result<()> {
             parts[0], parts[1], priority
         );
         controller = controller.add_port_pair(parts[0], parts[1], priority);
+    }
+
+    // Durable static flows: rich FlowEntry JSON reinstalled on every OVS
+    // reconnect (survives controller restarts). File is a JSON array.
+    let static_flows_path = std::env::var("OF_STATIC_FLOWS_FILE")
+        .unwrap_or_else(|_| "/etc/op-dbus/openflow-static-flows.json".to_string());
+    match std::fs::read_to_string(&static_flows_path) {
+        Ok(contents) => match serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+            Ok(entries) => {
+                for e in &entries {
+                    controller = controller.add_static_flow(&e.to_string());
+                }
+                info!("Loaded {} static flow(s) from {}", entries.len(), static_flows_path);
+            }
+            Err(e) => tracing::warn!("Failed to parse static flows {}: {:#}", static_flows_path, e),
+        },
+        Err(_) => info!("No static flows file at {} (skipping)", static_flows_path),
     }
 
     let dbus_handle = controller.handle();

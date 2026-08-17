@@ -68,6 +68,26 @@ pub fn derive_session_id(pubkey: &str) -> String {
     Uuid::from_bytes(bytes).to_string()
 }
 
+/// Domain-separation context for deriving a deterministic human principal id
+/// from a WireGuard pubkey. DISTINCT from `SESSION_ID_KDF_CONTEXT`, so a
+/// human principal id can never collide with a container session id.
+const PRINCIPAL_ID_KDF_CONTEXT: &str = "op-identity human-principal v1";
+
+/// Derive a stable human principal id from a WireGuard pubkey using Blake3
+/// KDF.
+///
+/// Same recipe as [`derive_session_id`] (first 16 bytes of the KDF output as
+/// a raw UUID, no version/variant munging) but under the distinct
+/// `PRINCIPAL_ID_KDF_CONTEXT`, separating the two namespaces by construction.
+/// Deterministic and local-only: no network, no DB, no randomness.
+pub fn derive_principal_id(pubkey: &str) -> String {
+    let key_material = blake3::derive_key(PRINCIPAL_ID_KDF_CONTEXT, pubkey.as_bytes());
+    let bytes: [u8; 16] = key_material[..16]
+        .try_into()
+        .expect("16 bytes from 32-byte KDF output");
+    Uuid::from_bytes(bytes).to_string()
+}
+
 /// Represents an active session
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -342,6 +362,52 @@ mod tests {
         assert_ne!(id1, id3);
         // Uuid::parse_str accepts both hyphenated and raw hex forms; our output is hyphenated.
         assert!(uuid::Uuid::parse_str(&id1).is_ok());
+    }
+
+    /// VAL-ASSERT-017: derive_principal_id is deterministic and UUID-shaped.
+    #[test]
+    fn derive_principal_id_is_deterministic_and_uuid_like() {
+        let id1 = derive_principal_id("test-pubkey");
+        let id2 = derive_principal_id("test-pubkey");
+        let id3 = derive_principal_id("different-pubkey");
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+        assert!(uuid::Uuid::parse_str(&id1).is_ok());
+        // Hyphenated UUID shape: 36 chars, 4 hyphens.
+        assert_eq!(id1.len(), 36);
+        assert_eq!(id1.chars().filter(|c| *c == '-').count(), 4);
+    }
+
+    /// VAL-ASSERT-018: derive_principal_id is context-separated from
+    /// derive_session_id and matches an independent recomputation of the
+    /// exact recipe.
+    #[test]
+    fn derive_principal_id_context_separated_from_session_id() {
+        let pubkey = "dGVzdC1wdWJrZXk=";
+        // A principal id can never collide with a container session id.
+        assert_ne!(derive_principal_id(pubkey), derive_session_id(pubkey));
+
+        // Independent recomputation: blake3 derive_key under the
+        // human-principal context -> first 16 bytes -> raw Uuid::from_bytes
+        // (no version/variant munging).
+        let kdf = blake3::derive_key("op-identity human-principal v1", pubkey.as_bytes());
+        let bytes: [u8; 16] = kdf[..16]
+            .try_into()
+            .expect("16 bytes from 32-byte KDF output");
+        assert_eq!(
+            derive_principal_id(pubkey),
+            Uuid::from_bytes(bytes).to_string()
+        );
+
+        // The session id recipe uses the distinct context.
+        let session_kdf = blake3::derive_key("op-identity session-id v1", pubkey.as_bytes());
+        let session_bytes: [u8; 16] = session_kdf[..16]
+            .try_into()
+            .expect("16 bytes from 32-byte KDF output");
+        assert_eq!(
+            derive_session_id(pubkey),
+            Uuid::from_bytes(session_bytes).to_string()
+        );
     }
 
     #[test]

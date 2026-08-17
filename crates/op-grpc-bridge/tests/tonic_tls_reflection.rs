@@ -14,9 +14,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::time::timeout;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity, ServerTlsConfig};
 use tonic::Request;
-use tokio::time::timeout;
 
 /// Install the rustls CryptoProvider exactly once for the entire test binary.
 fn install_crypto_provider() {
@@ -33,11 +33,9 @@ fn install_crypto_provider() {
 
 /// Generate a self-signed TLS identity via rcgen, returning (Identity, CA cert PEM).
 fn generate_tls_identity() -> (Identity, String) {
-    let ck = rcgen::generate_simple_self_signed(vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ])
-    .expect("failed to generate self-signed TLS cert");
+    let ck =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+            .expect("failed to generate self-signed TLS cert");
     let cert_pem = ck.cert.pem();
     let key_pem = ck.key_pair.serialize_pem();
     let identity = Identity::from_pem(cert_pem.clone(), key_pem);
@@ -142,8 +140,7 @@ async fn tls_handshake_rejects_unknown_ca() {
     match result {
         Err(_) => { /* expected */ }
         Ok(channel) => {
-            let mut health =
-                tonic_health::pb::health_client::HealthClient::new(channel);
+            let mut health = tonic_health::pb::health_client::HealthClient::new(channel);
             let res = health
                 .check(tonic_health::pb::HealthCheckRequest {
                     service: String::new(),
@@ -222,21 +219,20 @@ async fn reflection_list_services_over_tls() {
 
     // The reflection service itself is always listed.
     assert!(
-        services.iter().any(|s| s == "grpc.reflection.v1.ServerReflection"),
+        services
+            .iter()
+            .any(|s| s == "grpc.reflection.v1.ServerReflection"),
         "grpc.reflection.v1.ServerReflection should always be listed. Got: {services:?}"
     );
 
     // Build-time plugin method services should be listed (they come from the
     // static FILE_DESCRIPTOR_SET, not from SHM blobs).
-    let has_plugin_method_services = services
-        .iter()
-        .any(|s| s.starts_with("operation.method."));
+    let has_plugin_method_services = services.iter().any(|s| s.starts_with("operation.method."));
     assert!(
         has_plugin_method_services,
         "expected at least one operation.method.* service from build-time plugin schemas. Got: {services:?}"
     );
 }
-
 
 /// gRPC reflection can retrieve a file descriptor for a known service over TLS.
 #[tokio::test]
@@ -348,8 +344,7 @@ async fn domain_rpc_get_state_over_tls() {
     let (addr, ca_pem) = start_tls_server().await;
     let channel = tls_channel(addr, &ca_pem).await;
 
-    let mut client =
-        op_grpc_bridge::proto::state_sync_client::StateSyncClient::new(channel);
+    let mut client = op_grpc_bridge::proto::state_sync_client::StateSyncClient::new(channel);
 
     let response = timeout(
         Duration::from_secs(5),
@@ -379,7 +374,6 @@ async fn domain_rpc_get_state_over_tls() {
             );
         }
     }
-
 }
 
 /// ListPlugins returns a valid response over TLS (validates the interceptor

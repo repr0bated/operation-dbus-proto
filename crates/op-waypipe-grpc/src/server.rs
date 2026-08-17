@@ -28,7 +28,9 @@ pub struct ServeOpts {
 /// Build the WaypipeTunnel service for mounting on an existing tonic server
 /// (cognitive-mcp on :50052). Identity is read from the SHM sled inside each
 /// `Tunnel` RPC (see [`authorize_on_connection`]).
-pub fn build_tunnel_service(config: TunnelConfig) -> Result<WaypipeTunnelServer<WaypipeTunnelService>> {
+pub fn build_tunnel_service(
+    config: TunnelConfig,
+) -> Result<WaypipeTunnelServer<WaypipeTunnelService>> {
     std::fs::create_dir_all(&config.socket_dir)
         .with_context(|| format!("create socket_dir {}", config.socket_dir.display()))?;
     Ok(WaypipeTunnelServer::new(WaypipeTunnelService {
@@ -73,8 +75,7 @@ pub struct WaypipeTunnelService {
 
 #[tonic::async_trait]
 impl WaypipeTunnel for WaypipeTunnelService {
-    type TunnelStream =
-        Pin<Box<dyn Stream<Item = Result<ServerMsg, Status>> + Send + 'static>>;
+    type TunnelStream = Pin<Box<dyn Stream<Item = Result<ServerMsg, Status>> + Send + 'static>>;
 
     async fn tunnel(
         &self,
@@ -137,23 +138,15 @@ impl WaypipeTunnel for WaypipeTunnelService {
         let sock_path = self.cfg.socket_dir.join(format!("srv-{session}.sock"));
         let _ = std::fs::remove_file(&sock_path);
 
-        let listener = UnixListener::bind(&sock_path).map_err(|e| {
-            Status::internal(format!("bind {}: {e}", sock_path.display()))
-        })?;
+        let listener = UnixListener::bind(&sock_path)
+            .map_err(|e| Status::internal(format!("bind {}: {e}", sock_path.display())))?;
 
-        let mut child = spawn_waypipe_server(
-            &self.cfg.waypipe_bin,
-            &compress,
-            &sock_path,
-            &open.command,
-        )
-        .map_err(|e| Status::internal(e.to_string()))?;
+        let mut child =
+            spawn_waypipe_server(&self.cfg.waypipe_bin, &compress, &sock_path, &open.command)
+                .map_err(|e| Status::internal(e.to_string()))?;
 
-        let unix = match tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            listener.accept(),
-        )
-        .await
+        let unix = match tokio::time::timeout(std::time::Duration::from_secs(15), listener.accept())
+            .await
         {
             Ok(Ok((stream, _))) => stream,
             Ok(Err(e)) => {

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::ValueAsScalar;
 use std::sync::Arc;
 
-use crate::state_tree;
 use crate::state::AppState;
+use crate::state_tree;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DashboardMetrics {

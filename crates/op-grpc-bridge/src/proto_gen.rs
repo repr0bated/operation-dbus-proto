@@ -296,7 +296,9 @@ pub fn to_pascal_case(s: &str) -> String {
 }
 
 /// Convert string to snake_case
+// Test-only helper retained for future proto_gen tests; currently unreferenced.
 #[cfg(test)]
+#[allow(dead_code)]
 fn to_snake_case(s: &str) -> String {
     let mut result = String::new();
     for (i, c) in s.chars().enumerate() {

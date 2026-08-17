@@ -5,11 +5,11 @@ use simd_json::json;
 use simd_json::prelude::*;
 use std::collections::HashSet;
 
-use super::base::ExecutionAgent;
 use super::super::agent_trait::{
-    UnifiedAgent, AgentCategory, AgentCapability, AgentRequest, AgentResponse
+    AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,
 };
 use super::super::prompts::languages::GO;
+use super::base::ExecutionAgent;
 use crate::security::SecurityProfile;
 
 pub struct GoExecutor {
@@ -45,18 +45,38 @@ impl Default for GoExecutor {
 
 #[async_trait]
 impl UnifiedAgent for GoExecutor {
-    fn id(&self) -> &str { self.base.id() }
-    fn name(&self) -> &str { self.base.name() }
-    fn description(&self) -> &str { self.base.description() }
-    fn category(&self) -> AgentCategory { AgentCategory::Execution }
-    fn capabilities(&self) -> Vec<AgentCapability> { self.base.capabilities() }
-    fn system_prompt(&self) -> &str { self.base.system_prompt() }
-    fn knowledge_base(&self) -> Option<&str> { self.base.knowledge_base() }
-    fn security_profile(&self) -> Option<&SecurityProfile> { self.base.security_profile() }
-    fn operations(&self) -> Vec<&str> { self.base.operations() }
+    fn id(&self) -> &str {
+        self.base.id()
+    }
+    fn name(&self) -> &str {
+        self.base.name()
+    }
+    fn description(&self) -> &str {
+        self.base.description()
+    }
+    fn category(&self) -> AgentCategory {
+        AgentCategory::Execution
+    }
+    fn capabilities(&self) -> Vec<AgentCapability> {
+        self.base.capabilities()
+    }
+    fn system_prompt(&self) -> &str {
+        self.base.system_prompt()
+    }
+    fn knowledge_base(&self) -> Option<&str> {
+        self.base.knowledge_base()
+    }
+    fn security_profile(&self) -> Option<&SecurityProfile> {
+        self.base.security_profile()
+    }
+    fn operations(&self) -> Vec<&str> {
+        self.base.operations()
+    }
 
     async fn execute(&self, request: AgentRequest) -> AgentResponse {
-        let path = request.args.get("path")
+        let path = request
+            .args
+            .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(".");
 
@@ -64,32 +84,38 @@ impl UnifiedAgent for GoExecutor {
             "build" => (vec!["build", "./..."], 300),
             "test" => (vec!["test", "-v", "./..."], 300),
             "run" => {
-                let file = request.args.get("file")
+                let file = request
+                    .args
+                    .get("file")
                     .and_then(|v| v.as_str())
                     .unwrap_or("main.go");
                 (vec!["run", file], 120)
             }
             "fmt" => (vec!["fmt", "./..."], 60),
             "vet" => (vec!["vet", "./..."], 120),
-            _ => return AgentResponse::failure(format!("Unknown operation: {}", request.operation)),
+            _ => {
+                return AgentResponse::failure(format!("Unknown operation: {}", request.operation))
+            }
         };
 
-        match self.base.execute_command("go", &args, Some(path), timeout).await {
-            Ok((stdout, stderr, code)) => {
-                AgentResponse::success(
-                    json!({
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exit_code": code,
-                        "success": code == 0
-                    }),
-                    if code == 0 {
-                        format!("{} completed successfully", request.operation)
-                    } else {
-                        format!("{} failed", request.operation)
-                    }
-                )
-            }
+        match self
+            .base
+            .execute_command("go", &args, Some(path), timeout)
+            .await
+        {
+            Ok((stdout, stderr, code)) => AgentResponse::success(
+                json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": code,
+                    "success": code == 0
+                }),
+                if code == 0 {
+                    format!("{} completed successfully", request.operation)
+                } else {
+                    format!("{} failed", request.operation)
+                },
+            ),
             Err(e) => AgentResponse::failure(e),
         }
     }

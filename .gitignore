@@ -75,3 +75,13 @@ security-policy-templates/
 techops/
 **/node_modules/
 **/target/
+.aider*
+
+# secrets (session credential dumps - never commit)
+/mashterid.txt
+/nmenv.txt
+/sso.txt
+/tenantid.txt
+/token.txt
+# agent/editor scratch backups
+*.bak-*
