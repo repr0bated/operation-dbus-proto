@@ -154,6 +154,78 @@ pub struct SignalDecl {
     pub subid: String,
 }
 
+/// A capability declared by a plugin.
+///
+/// The plugin schema is the single declaration point for capabilities:
+/// every `MethodDecl::required_capability` must resolve to an entry in
+/// `PluginSchema::capabilities` (see `validate_capability_closure`). The
+/// gRPC interceptor and generated client indexes are *readers* of this
+/// declaration, never independent sources.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityDecl {
+    /// Capability id, canonical OSCAL form
+    /// (e.g. `cap.software.zeroclaw.gateway-config.read@v1`).
+    pub id: String,
+    /// What this capability authorizes.
+    pub description: String,
+}
+
+/// True when `id` follows the canonical OSCAL capability form
+/// (`cap.<domain>.<subject>.<op>@vN`). Anything else is a legacy
+/// short-form id (`agent.read`, `factory.invoke`, …) tolerated until the
+/// capability refactor completes — see `validate_capability_closure`.
+pub fn is_canonical_capability_id(id: &str) -> bool {
+    id.starts_with("cap.")
+        && id.rsplit('@').next().is_some_and(|v| {
+            v.len() > 1 && v.starts_with('v') && v[1..].chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Where a method's effective capability was found — the three migration
+/// lookup places, in resolution order. See
+/// `PluginSchema::resolve_method_capability`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CapabilityResolution {
+    /// Declared on the plugin and referenced by the method (end state).
+    Declared(String),
+    /// On the method only, canonical form but undeclared — must be fixed.
+    Undeclared(String),
+    /// On the method only, legacy short form — tolerated until refactor.
+    Legacy(String),
+    /// Nowhere on the method — legacy derived default `{plugin}.{read|invoke}`.
+    Derived(String),
+}
+
+impl CapabilityResolution {
+    /// The resolved capability id, wherever it was found.
+    pub fn capability(&self) -> &str {
+        match self {
+            Self::Declared(c) | Self::Undeclared(c) | Self::Legacy(c) | Self::Derived(c) => c,
+        }
+    }
+}
+
+/// Result of `PluginSchema::validate_capability_closure`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityClosure {
+    /// Capability ids used by methods and declared on the plugin.
+    pub declared: Vec<String>,
+    /// Canonical-form ids used by methods but NOT declared — must be fixed.
+    pub missing: Vec<String>,
+    /// Legacy short-form ids on methods — tolerated until the refactor.
+    pub legacy: Vec<String>,
+    /// Methods with no capability at all, resolved to the legacy derived
+    /// default `{plugin}.{read|invoke}` — tolerated until the refactor.
+    pub derived: Vec<String>,
+}
+
+impl CapabilityClosure {
+    /// True when there is nothing to fix (legacy/derived are tolerated).
+    pub fn ok(&self) -> bool {
+        self.missing.is_empty()
+    }
+}
+
 /// Canonical plugin capability guarantees.
 ///
 /// This is the **single** definition of `PluginCapabilities` in the workspace.
@@ -237,6 +309,13 @@ pub struct PluginSchema {
     /// Declared methods on the plugin's capability surface.
     #[serde(default)]
     pub methods: HashMap<String, MethodDecl>,
+    /// Capabilities declared by this plugin, keyed by capability id.
+    ///
+    /// Single declaration point: every `MethodDecl::required_capability`
+    /// must resolve to a key here. Empty map = no gated methods (or a
+    /// legacy schema that predates the declaration point).
+    #[serde(default)]
+    pub capabilities: HashMap<String, CapabilityDecl>,
     /// Declared signals emitted by the plugin.
     #[serde(default)]
     pub signals: Vec<SignalDecl>,
@@ -265,6 +344,60 @@ impl PluginSchema {
     /// Create a new plugin schema builder
     pub fn builder(name: &str) -> PluginSchemaBuilder {
         PluginSchemaBuilder::new(name)
+    }
+
+    /// Resolve the effective capability for one method.
+    ///
+    /// Migration rule — capabilities are found by looking in THREE places,
+    /// in order, until the refactor completes:
+    ///
+    /// 1. `PluginSchema::capabilities` — the plugin's own declaration
+    ///    (canonical home; a hit here is the end state).
+    /// 2. `MethodDecl::required_capability` — the method's raw string,
+    ///    which may be canonical-but-undeclared (must fix) or a legacy
+    ///    short-form id like `agent.read` (tolerated for now).
+    /// 3. Legacy derived default `{plugin}.{read|invoke}` — when the method
+    ///    declares nothing, the vocabulary the generated clients stamp
+    ///    today, derived from the plugin name and the method's side effect.
+    pub fn resolve_method_capability(&self, method: &MethodDecl) -> CapabilityResolution {
+        if let Some(cap) = method.required_capability.as_deref() {
+            if !cap.is_empty() {
+                if self.capabilities.contains_key(cap) {
+                    return CapabilityResolution::Declared(cap.to_string());
+                }
+                if is_canonical_capability_id(cap) {
+                    return CapabilityResolution::Undeclared(cap.to_string());
+                }
+                return CapabilityResolution::Legacy(cap.to_string());
+            }
+        }
+        let op = match method.side_effect {
+            SideEffect::Read => "read",
+            SideEffect::Mutation => "invoke",
+        };
+        CapabilityResolution::Derived(format!("{}.{op}", self.name))
+    }
+
+    /// Check capability closure across all methods: every method must
+    /// resolve, canonical ids must be declared, legacy/derived are reported
+    /// for migration but tolerated.
+    pub fn validate_capability_closure(&self) -> CapabilityClosure {
+        let mut closure = CapabilityClosure::default();
+        // Dedup per bucket: the same id may legitimately appear as both a
+        // legacy method string and a derived default.
+        let mut seen = std::collections::BTreeSet::new();
+        for method in self.methods.values() {
+            let (tag, bucket, cap) = match self.resolve_method_capability(method) {
+                CapabilityResolution::Declared(c) => (0u8, &mut closure.declared, c),
+                CapabilityResolution::Undeclared(c) => (1u8, &mut closure.missing, c),
+                CapabilityResolution::Legacy(c) => (2u8, &mut closure.legacy, c),
+                CapabilityResolution::Derived(c) => (3u8, &mut closure.derived, c),
+            };
+            if seen.insert((tag, cap.clone())) {
+                bucket.push(cap);
+            }
+        }
+        closure
     }
 
     /// Validate a state value against this schema
@@ -743,6 +876,7 @@ pub struct PluginSchemaBuilder {
     subids: HashMap<String, String>,
     org: Option<String>,
     methods: HashMap<String, MethodDecl>,
+    capabilities: HashMap<String, CapabilityDecl>,
     signals: Vec<SignalDecl>,
     guarantees: PluginCapabilities,
 }
@@ -764,6 +898,7 @@ impl PluginSchemaBuilder {
             subids: HashMap::new(),
             org: None,
             methods: HashMap::new(),
+            capabilities: HashMap::new(),
             signals: Vec::new(),
             guarantees: PluginCapabilities::default(),
         }
@@ -962,6 +1097,18 @@ impl PluginSchemaBuilder {
         self
     }
 
+    /// Set the declared capabilities map for the schema being built.
+    pub fn capabilities(mut self, capabilities: HashMap<String, CapabilityDecl>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Add a single capability declaration to the schema being built.
+    pub fn capability(mut self, capability: CapabilityDecl) -> Self {
+        self.capabilities.insert(capability.id.clone(), capability);
+        self
+    }
+
     /// Add a single signal declaration to the schema being built.
     pub fn signal(mut self, signal: SignalDecl) -> Self {
         self.signals.push(signal);
@@ -991,6 +1138,7 @@ impl PluginSchemaBuilder {
             subids: self.subids,
             org: self.org,
             methods: self.methods,
+            capabilities: self.capabilities,
             signals: self.signals,
             guarantees: self.guarantees,
         }
@@ -4610,6 +4758,91 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ====================================================================
+    // Capability declaration closure (migration: 3-place lookup)
+    // ====================================================================
+
+    fn cap_method(name: &str, cap: Option<&str>, side: SideEffect) -> MethodDecl {
+        let idempotent = matches!(side, SideEffect::Read);
+        MethodDecl {
+            name: name.to_string(),
+            args: json!({"type": "object"}),
+            returns: None,
+            side_effect: side,
+            idempotent,
+            required_capability: cap.map(str::to_string),
+            subid: format!("obs.service.demo.{}@v1", name.to_lowercase()),
+        }
+    }
+
+    #[test]
+    fn canonical_capability_ids_are_recognized() {
+        assert!(is_canonical_capability_id(
+            "cap.software.zeroclaw.gateway-config.read@v1"
+        ));
+        assert!(!is_canonical_capability_id("agent.read"));
+        assert!(!is_canonical_capability_id("cap.software.zeroclaw.read"));
+        assert!(!is_canonical_capability_id(""));
+    }
+
+    #[test]
+    fn capability_resolution_looks_in_three_places() {
+        let schema = PluginSchema::builder("demo")
+            .capability(CapabilityDecl {
+                id: "cap.software.demo.state.read@v1".to_string(),
+                description: "read demo state".to_string(),
+            })
+            .method(cap_method(
+                "GetState",
+                Some("cap.software.demo.state.read@v1"),
+                SideEffect::Read,
+            ))
+            .method(cap_method(
+                "SetThing",
+                Some("cap.software.demo.thing.write@v1"), // canonical, undeclared
+                SideEffect::Mutation,
+            ))
+            .method(cap_method("ListTools", Some("demo.read"), SideEffect::Read)) // legacy
+            .method(cap_method("Ping", None, SideEffect::Read)) // derived
+            .build();
+
+        let closure = schema.validate_capability_closure();
+        assert_eq!(closure.declared, ["cap.software.demo.state.read@v1"]);
+        assert_eq!(closure.missing, ["cap.software.demo.thing.write@v1"]);
+        assert_eq!(closure.legacy, ["demo.read"]);
+        assert_eq!(closure.derived, ["demo.read"]);
+        assert!(!closure.ok(), "canonical-but-undeclared must fail");
+    }
+
+    #[test]
+    fn fully_declared_schema_passes_closure() {
+        let schema = PluginSchema::builder("demo")
+            .capability(CapabilityDecl {
+                id: "cap.software.demo.state.read@v1".to_string(),
+                description: "read demo state".to_string(),
+            })
+            .method(cap_method(
+                "GetState",
+                Some("cap.software.demo.state.read@v1"),
+                SideEffect::Read,
+            ))
+            .build();
+        let closure = schema.validate_capability_closure();
+        assert!(closure.ok());
+        assert!(closure.legacy.is_empty() && closure.derived.is_empty());
+    }
+
+    #[test]
+    fn derived_default_matches_side_effect() {
+        let schema = PluginSchema::builder("demo")
+            .method(cap_method("DoThing", None, SideEffect::Mutation))
+            .build();
+        let m = schema.methods.get("DoThing").unwrap();
+        let r = schema.resolve_method_capability(m);
+        assert_eq!(r.capability(), "demo.invoke");
+        assert!(matches!(r, CapabilityResolution::Derived(_)));
+    }
 
     // ====================================================================
     // WS1 — Capability Model tests (R1.1–R1.5, R2.1, R2.4, R11.1–R11.4)

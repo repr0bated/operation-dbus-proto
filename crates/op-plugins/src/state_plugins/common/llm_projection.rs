@@ -203,6 +203,47 @@ pub struct ConfigSchema {
     pub env_vars: JsonValue,
 }
 
+/// Weights and defaults for the pure model selector.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.llm-selector-policy.schema@v1"))]
+pub struct SelectorPolicy {
+    /// Default effort class when the caller does not request one.
+    #[serde(default = "default_effort")]
+    pub default_effort: String,
+    /// Weight applied to effort-quality scoring.
+    #[serde(default = "default_weight")]
+    pub effort_weight: f64,
+    /// Weight applied to cost-class scoring.
+    #[serde(default = "default_weight")]
+    pub cost_weight: f64,
+    /// Weight applied to latency-class scoring.
+    #[serde(default = "default_weight")]
+    pub latency_weight: f64,
+    /// Weight applied to declared route health.
+    #[serde(default = "default_weight")]
+    pub health_weight: f64,
+}
+
+fn default_effort() -> String {
+    "medium".to_string()
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+impl Default for SelectorPolicy {
+    fn default() -> Self {
+        Self {
+            default_effort: default_effort(),
+            effort_weight: default_weight(),
+            cost_weight: default_weight(),
+            latency_weight: default_weight(),
+            health_weight: default_weight(),
+        }
+    }
+}
+
 /// A UI surface rendered from the schema.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.llm-ui-surface.schema@v1"))]

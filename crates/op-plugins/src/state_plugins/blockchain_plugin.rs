@@ -521,6 +521,21 @@ pub(crate) fn blockchain_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "blockchain.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "blockchain.read".to_string(),
+            description: "Grants: list_snapshots, get_snapshot, get_current_state, get_stats, query_events, verify_chain.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "blockchain.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "blockchain.invoke".to_string(),
+            description: "Grants: create_snapshot, rollback, set_retention.".to_string(),
+        },
+    );
+
     schema
 }
 

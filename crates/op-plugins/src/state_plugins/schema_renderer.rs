@@ -260,6 +260,15 @@ pub(crate) fn schema_renderer_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "schema_renderer.read".to_string(),
+        CapabilityDecl {
+            id: "schema_renderer.read".to_string(),
+            description: "Grants: render_schema, list_galleries, get_rendering, validate_schema."
+                .to_string(),
+        },
+    );
+
     schema
 }
 

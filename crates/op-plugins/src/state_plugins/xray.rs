@@ -392,6 +392,21 @@ pub(crate) fn xray_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "xray.read".to_string(),
+        CapabilityDecl {
+            id: "xray.read".to_string(),
+            description: "Grants: get_stats.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "xray.write".to_string(),
+        CapabilityDecl {
+            id: "xray.write".to_string(),
+            description: "Grants: restart, add_user, remove_user, add_inbound, start_trace, end_trace, record_span.".to_string(),
+        },
+    );
+
     schema
 }
 

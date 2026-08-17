@@ -348,4 +348,11 @@ fn add_pcidecl_methods(schema: &mut PluginSchema) {
             "obs.hardware.pci.device.info@v1",
         ),
     );
+    schema.capabilities.insert(
+        "pcidecl.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "pcidecl.read".to_string(),
+            description: "Grants: enumerate_devices, get_device_info.".to_string(),
+        },
+    );
 }

@@ -1234,20 +1234,20 @@ impl MutationEngine {
                 )
                 .await?
             }
-            "zeroclaw" => {
+            "tched_router" => {
                 let state = self
-                    .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>(
-                        "zeroclaw",
+                    .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>(
+                        "tched_router",
                     )
                     .await
                     .unwrap_or_else(
-                        op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state,
+                        op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state,
                     );
                 if method == "Chat" {
                     let args = serde_json::from_value::<
-                        op_plugins::state_plugins::zeroclaw::ChatInput,
+                        op_plugins::state_plugins::tched_router::ChatInput,
                     >(serde_json::to_value(&parsed_value)?)
-                    .context("invalid zeroclaw.Chat arguments")?;
+                    .context("invalid tched_router.Chat arguments")?;
                     serde_json::to_value(
                         crate::chat_service::dispatch_schema_chat(
                             self.chat_manager.as_ref(),
@@ -1257,7 +1257,7 @@ impl MutationEngine {
                         .await?,
                     )?
                 } else {
-                    match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                    match op_plugins::state_plugins::tched_router::dispatch_tched_router_method(
                         method, json_args, &state,
                     ) {
                         Ok(outcome) => {
@@ -1272,7 +1272,7 @@ impl MutationEngine {
                         }
                         Err(e) => {
                             return Err(anyhow::anyhow!(
-                                "zeroclaw dispatch error for '{}': {}",
+                                "tched_router dispatch error for '{}': {}",
                                 method,
                                 e
                             ))
@@ -1379,20 +1379,20 @@ impl MutationEngine {
     ) -> anyhow::Result<()> {
         match method {
             "SetProvider" | "SetModel" => {
-                self.merge_into_state_cache("zeroclaw", result).await;
+                self.merge_into_state_cache("tched_router", result).await;
             }
             "SetOvsRoutingModel"
             | "SetObfuscationModel"
             | "SetVectorizationModel"
             | "SetQdrantRetrievalModel"
             | "SetCozoRetrievalModel" => {
-                self.merge_nested_into_state_cache("zeroclaw", "model_assignments", result)
+                self.merge_nested_into_state_cache("tched_router", "model_assignments", result)
                     .await;
             }
             _ => {}
         }
 
-        self.publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+        self.publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
             .await
     }
 

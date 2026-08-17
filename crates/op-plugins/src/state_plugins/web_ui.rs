@@ -610,6 +610,21 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "ui.read".to_string(),
+        CapabilityDecl {
+            id: "ui.read".to_string(),
+            description: "Grants: render_page.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "ui.write".to_string(),
+        CapabilityDecl {
+            id: "ui.write".to_string(),
+            description: "Grants: handle_event, update_component.".to_string(),
+        },
+    );
+
     schema
 }
 

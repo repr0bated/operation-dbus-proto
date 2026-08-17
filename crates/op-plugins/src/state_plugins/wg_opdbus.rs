@@ -230,6 +230,21 @@ pub(crate) fn wg_opdbus_schema() -> PluginSchema {
     );
 
     schema.example = Some(default_state_value());
+    schema.capabilities.insert(
+        "wg_opdbus.invoke".to_string(),
+        CapabilityDecl {
+            id: "wg_opdbus.invoke".to_string(),
+            description: "Grants: create_interface.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "wg_opdbus.read".to_string(),
+        CapabilityDecl {
+            id: "wg_opdbus.read".to_string(),
+            description: "Grants: get_status.".to_string(),
+        },
+    );
+
     schema
 }
 

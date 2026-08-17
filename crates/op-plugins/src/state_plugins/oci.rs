@@ -305,6 +305,34 @@ pub(crate) fn oci_schema() -> PluginSchema {
             "cap.container.oci.state.get@v1",
             "obs.container.oci.state.get@v1",
         ))
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.image.pull@v1".to_string(),
+            description: "Grants: pull_image.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.run@v1".to_string(),
+            description: "Grants: run_container.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.create@v1".to_string(),
+            description: "Grants: create.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.start@v1".to_string(),
+            description: "Grants: start.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.kill@v1".to_string(),
+            description: "Grants: kill.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.delete@v1".to_string(),
+            description: "Grants: delete.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.container.oci.state.get@v1".to_string(),
+            description: "Grants: state.".to_string(),
+        })
         .build()
 }
 

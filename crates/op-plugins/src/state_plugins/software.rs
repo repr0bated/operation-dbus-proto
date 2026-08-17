@@ -246,6 +246,21 @@ pub(crate) fn software_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "software.write".to_string(),
+        CapabilityDecl {
+            id: "software.write".to_string(),
+            description: "Grants: install, uninstall, update.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "software.read".to_string(),
+        CapabilityDecl {
+            id: "software.read".to_string(),
+            description: "Grants: get_info.".to_string(),
+        },
+    );
+
     schema
 }
 

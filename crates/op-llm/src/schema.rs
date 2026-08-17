@@ -9,22 +9,22 @@
 //! Anything in op-llm that needs the provider/model/tool/route contract should
 //! import it from this module, never re-define it.
 
-pub use op_plugins::state_plugins::common::errors::ZeroclawError;
+pub use op_plugins::state_plugins::common::errors::TchedRouterError;
 pub use op_plugins::state_plugins::common::llm_projection::{
     ConfigSchema, LlmProjection, LlmTool, ModelRoute, Provider, Router, StructuredOutput, UiSurface,
 };
-pub use op_plugins::state_plugins::zeroclaw::{
-    zeroclaw_plugin_schema, LlmTransport, ZeroclawPlugin, ZeroclawState,
+pub use op_plugins::state_plugins::tched_router::{
+    tched_router_plugin_schema, LlmTransport, TchedRouterPlugin, TchedRouterState,
 };
 
-/// The single Zeroclaw `PluginSchema`, included from the plugin. op-llm reads
-/// the provider/model/tool contract from here — never a separate copy.
+/// The single 3tched Router `PluginSchema`, included from the plugin. op-llm
+/// reads the provider/model/tool contract from here — never a separate copy.
 pub fn embedded_plugin_schema() -> op_state_store::PluginSchema {
-    zeroclaw_plugin_schema()
+    tched_router_plugin_schema()
 }
 
-/// The in-memory typed projection state (declared providers, model routes,
+/// The in-memory typed catalog state (declared providers, model routes,
 /// tools, selector policy) from the plugin — the schema-backed authority.
 pub fn embedded_projection() -> LlmProjection {
-    ZeroclawPlugin::current_state().projection
+    TchedRouterPlugin::current_state().catalog
 }

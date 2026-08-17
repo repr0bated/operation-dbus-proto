@@ -1,0 +1,11 @@
+[package]
+name = "zeroclawlabs"
+version = "0.0.0"
+edition = "2021"
+description = "Compile stand-in for the live-host ZeroClaw crate at /srv/git/zeroclaw. Replace with the real checkout when building on the host."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+schemars = "1"
+serde = { version = "1", features = ["derive"] }

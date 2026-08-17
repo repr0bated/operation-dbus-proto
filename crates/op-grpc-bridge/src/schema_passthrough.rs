@@ -141,14 +141,14 @@ impl SchemaPassthroughService {
     }
 
     /// Build the read-only `ZeroclawProjection` proto for the `"zeroclaw"`
-    /// plugin from the in-memory `ZeroclawState` (never a `/dev/shm` re-read).
+    /// plugin from the in-memory `TchedRouterState` (never a `/dev/shm` re-read).
     /// Returns `None` for any other plugin name.
     /// subid: `exp.service.zeroclaw-bridge.grpc-stream@v1`.
     pub fn zeroclaw_projection(plugin_name: &str) -> Option<crate::proto::ZeroclawProjection> {
-        if plugin_name != "zeroclaw" {
+        if plugin_name != "tched_router" {
             return None;
         }
-        let state = op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state();
+        let state = op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state();
         let schema_json = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_string());
         let model_routes = state
             .projection

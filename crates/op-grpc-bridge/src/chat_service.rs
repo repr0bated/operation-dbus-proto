@@ -19,8 +19,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use op_llm::chat::ChatManager;
 use op_llm::ProviderType;
-use op_plugins::state_plugins::zeroclaw::{
-    ChatInput, ChatOutput, ZeroclawChatMessage, ZeroclawState,
+use op_plugins::state_plugins::tched_router::{
+    ChatInput, ChatOutput, TchedChatMessage, TchedRouterState,
 };
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
@@ -66,7 +66,7 @@ impl ChatServiceImpl {
 
 type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 'static>>;
 
-fn provider_names(state: &ZeroclawState, requested: &str) -> Option<Vec<String>> {
+fn provider_names(state: &TchedRouterState, requested: &str) -> Option<Vec<String>> {
     let requested = requested.trim();
     state
         .projection
@@ -93,7 +93,7 @@ fn names_contain(names: &[String], candidate: &str) -> bool {
         .any(|name| name.eq_ignore_ascii_case(candidate))
 }
 
-fn provider_type_for(state: &ZeroclawState, provider_id: &str) -> anyhow::Result<ProviderType> {
+fn provider_type_for(state: &TchedRouterState, provider_id: &str) -> anyhow::Result<ProviderType> {
     let names = provider_names(state, provider_id)
         .ok_or_else(|| anyhow!("provider '{provider_id}' is not declared by ZeroClaw"))?;
     names
@@ -108,7 +108,7 @@ fn provider_type_for(state: &ZeroclawState, provider_id: &str) -> anyhow::Result
 }
 
 fn resolve_declared_route(
-    state: &ZeroclawState,
+    state: &TchedRouterState,
     requested_provider: &str,
     requested_model: &str,
 ) -> anyhow::Result<ResolvedExecutionRoute> {
@@ -179,7 +179,7 @@ fn resolve_declared_route(
 
 async fn execute_chat(
     chat_manager: &ChatManager,
-    state: &ZeroclawState,
+    state: &TchedRouterState,
     requested_provider: &str,
     requested_model: &str,
     messages: Vec<op_llm::ChatMessage>,
@@ -229,7 +229,7 @@ async fn execute_chat(
 /// upstream call.
 pub(crate) async fn dispatch_schema_chat(
     chat_manager: &ChatManager,
-    state: &ZeroclawState,
+    state: &TchedRouterState,
     input: ChatInput,
 ) -> anyhow::Result<ChatOutput> {
     let messages = if input.messages.is_empty() {
@@ -305,7 +305,7 @@ impl ChatService for ChatServiceImpl {
             message: String::new(),
             messages: ui_messages
                 .iter()
-                .map(|message| ZeroclawChatMessage {
+                .map(|message| TchedChatMessage {
                     role: message
                         .get("role")
                         .and_then(serde_json::Value::as_str)
@@ -513,11 +513,11 @@ impl ChatService for ChatServiceImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_plugins::state_plugins::zeroclaw::ZeroclawPlugin;
+    use op_plugins::state_plugins::tched_router::TchedRouterPlugin;
 
     #[test]
     fn explicit_provider_and_model_resolve_through_schema_catalog() {
-        let mut state = ZeroclawPlugin::current_state();
+        let mut state = TchedRouterPlugin::current_state();
         let route = state
             .projection
             .model_routes
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn provider_alias_and_route_hint_resolve() {
-        let state = ZeroclawPlugin::current_state();
+        let state = TchedRouterPlugin::current_state();
         let resolved =
             resolve_declared_route(&state, "salad-ai", "fast").expect("alias and hint resolve");
         assert_eq!(resolved.provider, ProviderType::Salad);
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn selected_provider_and_model_are_the_default_route() {
-        let mut state = ZeroclawPlugin::current_state();
+        let mut state = TchedRouterPlugin::current_state();
         state.selected_provider = "salad".to_string();
         state.selected_model = "qwen3.6-35b-a3b".to_string();
 
@@ -556,14 +556,14 @@ mod tests {
 
     #[test]
     fn undeclared_model_fails_closed() {
-        let state = ZeroclawPlugin::current_state();
+        let state = TchedRouterPlugin::current_state();
         let error = resolve_declared_route(&state, "salad", "not-a-model").unwrap_err();
         assert!(error.to_string().contains("not declared"));
     }
 
     #[test]
     fn non_chat_routes_fail_closed() {
-        let state = ZeroclawPlugin::current_state();
+        let state = TchedRouterPlugin::current_state();
         let error = resolve_declared_route(&state, "oscal", "compliance").unwrap_err();
         assert!(error.to_string().contains("cannot serve chat"));
     }

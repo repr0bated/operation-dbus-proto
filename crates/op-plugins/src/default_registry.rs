@@ -340,7 +340,7 @@ mod tests {
         let plugins = registry.load_default_plugins().await.unwrap();
         assert!(!plugins.is_empty());
         assert!(plugins.iter().any(|plugin| plugin.name() == "mail_server"));
-        assert!(plugins.iter().any(|plugin| plugin.name() == "zeroclaw"));
+        assert!(plugins.iter().any(|plugin| plugin.name() == "tched_router"));
     }
 
     #[tokio::test]
@@ -364,6 +364,46 @@ mod tests {
             missing.is_empty(),
             "discovered plugins missing plugin-owned schema: {:?}",
             missing
+        );
+    }
+
+    /// Every plugin with canonical-form capability ids on its methods MUST
+    /// declare them in `schema.capabilities` (the plugin is the single
+    /// declaration point). Legacy short-form and derived ids are tolerated
+    /// until the capability refactor completes — only `missing` fails.
+    #[tokio::test]
+    async fn test_plugins_have_capability_closure() {
+        let store = Arc::new(MemoryStore::new());
+        let registry = DefaultPluginRegistry::new(store);
+
+        let plugins = registry.load_all_plugins().await.unwrap();
+        let mut failures: Vec<String> = Vec::new();
+        let mut legacy_total = 0usize;
+        let mut derived_total = 0usize;
+        for plugin in &plugins {
+            let Some(schema) = plugin.schema() else {
+                continue;
+            };
+            let closure = schema.validate_capability_closure();
+            legacy_total += closure.legacy.len();
+            derived_total += closure.derived.len();
+            if !closure.missing.is_empty() {
+                failures.push(format!(
+                    "{}: undeclared canonical capabilities {:?}",
+                    schema.name, closure.missing
+                ));
+            }
+        }
+        eprintln!(
+            "capability closure: {} plugins, legacy tolerated: {}, derived tolerated: {}",
+            plugins.len(),
+            legacy_total,
+            derived_total
+        );
+        assert!(
+            failures.is_empty(),
+            "plugins with undeclared canonical capabilities:\n{}",
+            failures.join("\n")
         );
     }
 

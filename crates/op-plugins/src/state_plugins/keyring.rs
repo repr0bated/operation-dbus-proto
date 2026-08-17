@@ -243,6 +243,14 @@ pub(crate) fn keyring_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "keyring.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "keyring.read".to_string(),
+            description: "Grants: list_collections, get_default_collection.".to_string(),
+        },
+    );
+
     schema
 }
 

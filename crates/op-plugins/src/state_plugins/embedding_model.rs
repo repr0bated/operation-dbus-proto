@@ -499,6 +499,21 @@ pub(crate) fn embedding_model_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "embedding.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "embedding.invoke".to_string(),
+            description: "Grants: embed, set_model, update_config.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "embedding.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "embedding.read".to_string(),
+            description: "Grants: list_models, get_config.".to_string(),
+        },
+    );
+
     schema
 }
 

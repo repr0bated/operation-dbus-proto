@@ -360,6 +360,35 @@ pub(crate) fn ghostbridge_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cap.service.ghostbridge.state.read@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.ghostbridge.state.read@v1".to_string(),
+            description: "Grants: GetState.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.ghostbridge.identity.read@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.ghostbridge.identity.read@v1".to_string(),
+            description: "Grants: GetIdentity.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.ghostbridge.endpoints.read@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.ghostbridge.endpoints.read@v1".to_string(),
+            description: "Grants: ListEndpoints.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.ghostbridge.ghostrunner.read@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.ghostbridge.ghostrunner.read@v1".to_string(),
+            description: "Grants: GetGhostrunner.".to_string(),
+        },
+    );
+
     schema
 }
 

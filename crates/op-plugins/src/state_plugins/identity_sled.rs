@@ -403,6 +403,21 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "identity_sled.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "identity_sled.read".to_string(),
+            description: "Grants: get_identity, get_session_history.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "identity_sled.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "identity_sled.write".to_string(),
+            description: "Grants: write_identity, provision_container, attach_btrfs_device, touch_session, record_session_event.".to_string(),
+        },
+    );
+
     schema
 }
 

@@ -724,6 +724,21 @@ pub(crate) fn dnsresolver_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "dnsresolver.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "dnsresolver.read".to_string(),
+            description: "Grants: resolve_hostname, resolve_address, resolve_record, resolve_service, get_link.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "dnsresolver.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "dnsresolver.write".to_string(),
+            description: "Grants: set_link_dns, set_link_dns_ex, set_link_domains, set_link_default_route, set_link_llmnr, set_link_multicast_dns, set_link_dns_over_tls, set_link_dnssec, set_link_dnssec_nta, revert_link, register_service, unregister_service, reset_statistics, flush_caches, reset_server_features.".to_string(),
+        },
+    );
+
     schema
 }
 

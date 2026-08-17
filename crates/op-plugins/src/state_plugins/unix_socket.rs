@@ -222,6 +222,21 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "network.write".to_string(),
+        CapabilityDecl {
+            id: "network.write".to_string(),
+            description: "Grants: bind, listen, close.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "network.read".to_string(),
+        CapabilityDecl {
+            id: "network.read".to_string(),
+            description: "Grants: accept.".to_string(),
+        },
+    );
+
     schema
 }
 

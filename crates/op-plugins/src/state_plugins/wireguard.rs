@@ -361,6 +361,21 @@ pub fn wireguard_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "wireguard.write".to_string(),
+        CapabilityDecl {
+            id: "wireguard.write".to_string(),
+            description: "Grants: set_device, add_peer, remove_peer, set_config.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "wireguard.read".to_string(),
+        CapabilityDecl {
+            id: "wireguard.read".to_string(),
+            description: "Grants: get_device, list_peers.".to_string(),
+        },
+    );
+
     schema
 }
 

@@ -199,12 +199,9 @@ impl StatePlugin for CognitiveMcpPlugin {
     /// (`/etc/runit/sv/op-cognitive-mcp`); checking only the s6 path reported the
     /// plugin unavailable and silently suppressed its gRPC surface.
     fn is_available(&self) -> bool {
-        [
-            "/etc/runit/sv/op-cognitive-mcp",
-            SUPERVISED_PATH,
-        ]
-        .iter()
-        .any(|p| std::path::Path::new(p).exists())
+        ["/etc/runit/sv/op-cognitive-mcp", SUPERVISED_PATH]
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
     }
 
     fn unavailable_reason(&self) -> String {
@@ -1158,6 +1155,21 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             "cognitive_mcp.invoke",
             "mut.service.cognitive-mcp.tool.invoke@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "cognitive_mcp.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cognitive_mcp.read".to_string(),
+            description: "Grants: get_config, get_health, list_tools, memory_retrieve, memory_query, memory_list_namespaces, code_search, code_context.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cognitive_mcp.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cognitive_mcp.invoke".to_string(),
+            description: "Grants: set_config, register_tool, memory_store, memory_delete, code_index, gemini_query, restart_service, invoke_tool.".to_string(),
+        },
     );
 
     schema

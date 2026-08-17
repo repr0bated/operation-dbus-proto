@@ -42,6 +42,7 @@ pub(crate) use super::schema_renderer::schema_renderer_schema as schema_renderer
 pub(crate) use super::service::service_schema as service_plugin_schema;
 pub(crate) use super::sessdecl::sess_decl_schema as sess_decl_plugin_schema;
 pub(crate) use super::software::software_schema as software_plugin_schema;
+pub(crate) use super::tched_router::tched_router_plugin_schema;
 pub(crate) use super::unix_socket::unix_socket_schema_derived as unix_socket_plugin_schema;
 pub(crate) use super::users::users_schema as users_plugin_schema;
 pub(crate) use super::web_ui::web_ui_schema as web_ui_plugin_schema;
@@ -50,7 +51,6 @@ pub(crate) use super::wgcf::wgcf_schema as wgcf_plugin_schema;
 pub(crate) use super::wireguard::wireguard_schema as wireguard_plugin_schema;
 pub(crate) use super::workflows_plugin::workflows_schema as workflows_plugin_schema;
 pub(crate) use super::xray::xray_schema as xray_plugin_schema;
-pub(crate) use super::zeroclaw::zeroclaw_schema as zeroclaw_plugin_schema;
 
 // Added missing schema re-exports
 pub(crate) use super::blockchain_plugin::blockchain_schema as blockchain_plugin_schema;

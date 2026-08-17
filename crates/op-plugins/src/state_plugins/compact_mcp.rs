@@ -468,6 +468,21 @@ pub(crate) fn compact_mcp_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "compact_mcp.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "compact_mcp.read".to_string(),
+            description: "Grants: get_current_config.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "compact_mcp.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "compact_mcp.write".to_string(),
+            description: "Grants: restart.".to_string(),
+        },
+    );
+
     schema
 }
 

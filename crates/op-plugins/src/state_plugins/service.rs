@@ -268,6 +268,28 @@ pub(crate) fn service_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cap.service.lifecycle.init@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.service.lifecycle.init@v1".to_string(),
+            description: "Grants: init.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.lifecycle.run@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.service.lifecycle.run@v1".to_string(),
+            description: "Grants: run.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.lifecycle.shutdown@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.service.lifecycle.shutdown@v1".to_string(),
+            description: "Grants: shutdown.".to_string(),
+        },
+    );
+
     schema
 }
 

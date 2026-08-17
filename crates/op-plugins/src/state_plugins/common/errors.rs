@@ -45,3 +45,41 @@ pub enum ZeroclawError {
     #[error("no candidate route after filtering")]
     NoCandidateAfterFiltering,
 }
+
+/// Failure modes for 3tched Router route resolution, model selection, and
+/// execution authorization. Mirrors [`ZeroclawError`] during the de-claw
+/// fork-lift; new code uses this type. subid:
+/// `sch.software.3tched-router-error.schema@v1`.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TchedRouterError {
+    #[error("route not declared: {hint}")]
+    RouteNotDeclared { hint: String },
+
+    #[error("provider not declared: {provider}")]
+    ProviderNotDeclared { provider: String },
+
+    #[error("model not declared: {model}")]
+    ModelNotDeclared { model: String },
+
+    #[error("tool not declared: {tool}")]
+    ToolNotDeclared { tool: String },
+
+    #[error("route unavailable: {hint} ({reason})")]
+    RouteUnavailable { hint: String, reason: String },
+
+    #[error("privacy tier violation: required {required}, provided {provided}")]
+    PrivacyTierViolation { required: String, provided: String },
+
+    #[error("cost policy violation: {policy} ({reason})")]
+    CostPolicyViolation { policy: String, reason: String },
+
+    #[error("context window exceeded: limit {limit}, requested {requested}")]
+    ContextWindowExceeded { limit: u32, requested: u32 },
+
+    #[error("execution denied: {reason}")]
+    ExecutionDenied { reason: String },
+
+    #[error("no candidate route after filtering")]
+    NoCandidateAfterFiltering,
+}

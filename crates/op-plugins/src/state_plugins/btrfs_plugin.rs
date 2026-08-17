@@ -365,6 +365,91 @@ pub(crate) fn btrfs_schema() -> PluginSchema {
             "mut.storage.btrfs.device.remove@v1",
         ),
     );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.subvolume.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.subvolume.create@v1".to_string(),
+            description: "Grants: create_subvolume.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.subvolume.delete@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.subvolume.delete@v1".to_string(),
+            description: "Grants: delete_subvolume.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.snapshot.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.snapshot.create@v1".to_string(),
+            description: "Grants: snapshot.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.subvolume.list@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.subvolume.list@v1".to_string(),
+            description: "Grants: list_subvolumes.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.scrub.start@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.scrub.start@v1".to_string(),
+            description: "Grants: scrub_start.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.scrub.status@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.scrub.status@v1".to_string(),
+            description: "Grants: scrub_status.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.balance.start@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.balance.start@v1".to_string(),
+            description: "Grants: balance_start.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.balance.status@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.balance.status@v1".to_string(),
+            description: "Grants: balance_status.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.filesystem.df@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.filesystem.df@v1".to_string(),
+            description: "Grants: filesystem_df.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.filesystem.usage@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.filesystem.usage@v1".to_string(),
+            description: "Grants: filesystem_usage.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.device.add@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.device.add@v1".to_string(),
+            description: "Grants: device_add.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.storage.btrfs.device.remove@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.storage.btrfs.device.remove@v1".to_string(),
+            description: "Grants: device_remove.".to_string(),
+        },
+    );
+
     schema
 }
 

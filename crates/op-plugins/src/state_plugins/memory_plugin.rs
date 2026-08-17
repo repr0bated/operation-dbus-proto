@@ -378,6 +378,77 @@ pub(crate) fn memory_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "memory.namespace.create".to_string(),
+        CapabilityDecl {
+            id: "memory.namespace.create".to_string(),
+            description: "Grants: create_namespace.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.namespace.delete".to_string(),
+        CapabilityDecl {
+            id: "memory.namespace.delete".to_string(),
+            description: "Grants: delete_namespace.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.namespace.read".to_string(),
+        CapabilityDecl {
+            id: "memory.namespace.read".to_string(),
+            description: "Grants: query_namespace.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.entry.create".to_string(),
+        CapabilityDecl {
+            id: "memory.entry.create".to_string(),
+            description: "Grants: insert_entry.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.entry.write".to_string(),
+        CapabilityDecl {
+            id: "memory.entry.write".to_string(),
+            description: "Grants: update_entry.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.entry.read".to_string(),
+        CapabilityDecl {
+            id: "memory.entry.read".to_string(),
+            description: "Grants: get_entry.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.entry.delete".to_string(),
+        CapabilityDecl {
+            id: "memory.entry.delete".to_string(),
+            description: "Grants: delete_entry.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.namespace.clear".to_string(),
+        CapabilityDecl {
+            id: "memory.namespace.clear".to_string(),
+            description: "Grants: clear_namespace.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.stats.read".to_string(),
+        CapabilityDecl {
+            id: "memory.stats.read".to_string(),
+            description: "Grants: get_stats.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "memory.memory.compact".to_string(),
+        CapabilityDecl {
+            id: "memory.memory.compact".to_string(),
+            description: "Grants: compact.".to_string(),
+        },
+    );
+
     schema
 }
 

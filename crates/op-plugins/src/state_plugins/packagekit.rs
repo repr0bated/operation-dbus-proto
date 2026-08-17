@@ -525,5 +525,20 @@ pub(crate) fn packagekit_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "packagekit.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "packagekit.read".to_string(),
+            description: "Grants: resolve, get_updates, search_names.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "packagekit.admin".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "packagekit.admin".to_string(),
+            description: "Grants: install_packages, remove_packages, update_packages.".to_string(),
+        },
+    );
+
     schema
 }

@@ -311,6 +311,16 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "procfs.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "procfs.read".to_string(),
+            description:
+                "Grants: list_processes, get_process_info, get_meminfo, get_cpuinfo, get_loadavg, get_uptime, get_net_dev."
+                    .to_string(),
+        },
+    );
+
     schema
 }
 

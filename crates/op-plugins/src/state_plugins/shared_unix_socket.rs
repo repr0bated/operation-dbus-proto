@@ -334,6 +334,21 @@ pub(crate) fn shared_unix_socket_schema() -> op_state_store::PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "shared_unix_socket.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "shared_unix_socket.invoke".to_string(),
+            description: "Grants: create_unix_socket.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "shared_unix_socket.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "shared_unix_socket.read".to_string(),
+            description: "Grants: list_registrations, get_config.".to_string(),
+        },
+    );
+
     schema
 }
 

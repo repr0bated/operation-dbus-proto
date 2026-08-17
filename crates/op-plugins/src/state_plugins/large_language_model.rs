@@ -384,6 +384,23 @@ pub(crate) fn large_language_model_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "llm.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "llm.read".to_string(),
+            description: "Grants: list_providers, get_provider, list_models, get_config."
+                .to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "llm.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "llm.invoke".to_string(),
+            description: "Grants: set_provider, generate, stream_generate, update_config."
+                .to_string(),
+        },
+    );
+
     schema
 }
 

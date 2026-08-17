@@ -482,6 +482,28 @@ pub fn persona_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "persona.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "persona.read".to_string(),
+            description: "Grants: get_identity.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "persona.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "persona.write".to_string(),
+            description: "Grants: set_identity, authenticate.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "persona.execute".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "persona.execute".to_string(),
+            description: "Grants: execute.".to_string(),
+        },
+    );
+
     schema
 }
 

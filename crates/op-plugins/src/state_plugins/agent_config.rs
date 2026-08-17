@@ -208,6 +208,21 @@ pub fn agent_config_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "agent.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "agent.read".to_string(),
+            description: "Grants: get_config, list_tools.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "agent.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "agent.invoke".to_string(),
+            description: "Grants: update_config, register_tool, reset_config.".to_string(),
+        },
+    );
+
     schema
 }
 

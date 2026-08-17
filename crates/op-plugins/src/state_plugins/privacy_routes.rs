@@ -476,6 +476,14 @@ pub(crate) fn privacy_routes_schema() -> PluginSchema {
                 }
             ]
         }))
+        .capability(op_state_store::CapabilityDecl {
+            id: "privacy_routes.read".to_string(),
+            description: "Grants: list_routes.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "privacy_routes.write".to_string(),
+            description: "Grants: delete_route.".to_string(),
+        })
         .build()
 }
 

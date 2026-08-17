@@ -345,6 +345,23 @@ pub(crate) fn cron_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cron.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cron.read".to_string(),
+            description: "Grants: list_jobs, get_job, get_history.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cron.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cron.invoke".to_string(),
+            description:
+                "Grants: create_job, update_job, delete_job, enable_job, disable_job, run_job."
+                    .to_string(),
+        },
+    );
+
     schema
 }
 

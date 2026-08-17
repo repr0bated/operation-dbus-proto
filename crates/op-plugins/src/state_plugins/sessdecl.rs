@@ -153,6 +153,21 @@ pub(crate) fn sess_decl_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "sess_decl.read".to_string(),
+        CapabilityDecl {
+            id: "sess_decl.read".to_string(),
+            description: "Grants: list_sessions.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "sess_decl.write".to_string(),
+        CapabilityDecl {
+            id: "sess_decl.write".to_string(),
+            description: "Grants: declare_session.".to_string(),
+        },
+    );
+
     schema
 }
 

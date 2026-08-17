@@ -457,7 +457,7 @@ mod tests {
             .any(|service| service == "grpc.reflection.v1.ServerReflection"));
         assert!(!before
             .iter()
-            .any(|service| service == "operation.plugin.v1.ZeroclawPluginMethods"));
+            .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
 
         catalog
             .upsert_blob(crate::zeroclaw_object_blob::from_plugin_schema())
@@ -466,13 +466,13 @@ mod tests {
         // Legacy service (mounted via build.rs) is advertised.
         assert!(after
             .iter()
-            .any(|service| service == "operation.plugin.v1.ZeroclawPluginMethods"));
+            .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
 
-        catalog.remove_blob("zeroclaw").await;
+        catalog.remove_blob("tched_router").await;
         let removed = catalog.list_services().await;
         assert!(!removed
             .iter()
-            .any(|service| service == "operation.plugin.v1.ZeroclawPluginMethods"));
+            .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
     }
 
     #[tokio::test]
@@ -509,7 +509,7 @@ mod tests {
         // Removal by the external sealer propagates on the next arrival too.
         {
             let mut store = op_blob::BlobStore::open(&dir).unwrap();
-            store.remove_blob("zeroclaw").unwrap();
+            store.remove_blob("tched_router").unwrap();
         }
         catalog.sync_from_shm().await;
         let removed = catalog.list_services().await;

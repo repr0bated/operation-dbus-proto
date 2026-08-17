@@ -1288,7 +1288,10 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     // llm_plugin (default large_language_model) via provider_route.
     schema.methods.insert(
         "get_auth_status".to_string(),
-        method_decl_from_schemars_with_output::<super::plugin_scaffold_helpers::EmptyInput, GetAuthStatusOutput>(
+        method_decl_from_schemars_with_output::<
+            super::plugin_scaffold_helpers::EmptyInput,
+            GetAuthStatusOutput,
+        >(
             "get_auth_status",
             SideEffect::Read,
             true,
@@ -1315,6 +1318,21 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
             "antigravity.write",
             "mut.software.antigravity.safety.configure@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "antigravity.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "antigravity.read".to_string(),
+            description: "Grants: get_auth_status, get_usage_report, list_extensions.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "antigravity.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "antigravity.write".to_string(),
+            description: "Grants: configure_safety, install_extension, show_versions, sync, telemetry, uninstall_extension, update_extensions.".to_string(),
+        },
     );
 
     schema

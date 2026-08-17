@@ -421,6 +421,56 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cap.data.cozo.query.run@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.query.run@v1".to_string(),
+            description: "Grants: run_query.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.cozo.relations.import@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.relations.import@v1".to_string(),
+            description: "Grants: import_relations.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.cozo.relations.export@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.relations.export@v1".to_string(),
+            description: "Grants: export_relations.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.cozo.backup.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.backup.create@v1".to_string(),
+            description: "Grants: backup.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.cozo.backup.restore@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.backup.restore@v1".to_string(),
+            description: "Grants: restore.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.cozo.relations.list@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.relations.list@v1".to_string(),
+            description: "Grants: list_relations.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.cozo.relation.describe@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.cozo.relation.describe@v1".to_string(),
+            description: "Grants: describe_relation.".to_string(),
+        },
+    );
+
     schema
 }
 

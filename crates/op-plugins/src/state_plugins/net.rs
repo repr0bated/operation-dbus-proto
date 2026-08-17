@@ -1008,6 +1008,21 @@ pub(crate) fn net_schema() -> PluginSchema {
             "mut.network.ovs-bridge.delete@v1",
         ),
     );
+    schema.capabilities.insert(
+        "cap.network.interface.apply@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.interface.apply@v1".to_string(),
+            description: "Grants: apply_interface.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.ovs-bridge.delete@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.ovs-bridge.delete@v1".to_string(),
+            description: "Grants: delete_ovs_bridge.".to_string(),
+        },
+    );
+
     schema
 }
 

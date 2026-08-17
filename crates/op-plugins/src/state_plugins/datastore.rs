@@ -346,6 +346,14 @@ pub(crate) fn datastore_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "datastore.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "datastore.read".to_string(),
+            description: "Grants: list_objects, get_object, query, get_stats, export.".to_string(),
+        },
+    );
+
     schema
 }
 

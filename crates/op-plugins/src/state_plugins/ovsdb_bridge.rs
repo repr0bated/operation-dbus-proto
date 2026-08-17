@@ -561,6 +561,22 @@ pub(crate) fn ovsdb_bridge_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "ovsdb.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "ovsdb.read".to_string(),
+            description: "Grants: list_dbs, get_schema.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "ovsdb.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "ovsdb.write".to_string(),
+            description: "Grants: transact, create_bridge, delete_bridge, add_port, remove_port."
+                .to_string(),
+        },
+    );
+
     schema
 }
 

@@ -658,6 +658,20 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             "mut.service.mail.queue.flush@v1",
         ),
     );
+    schema.capabilities.insert(
+        "mail.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "mail.write".to_string(),
+            description: "Grants: add_domain, remove_domain, add_mailbox, remove_mailbox, add_alias, remove_alias, set_quota, flush_queue.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "mail.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "mail.read".to_string(),
+            description: "Grants: get_queue, connect.".to_string(),
+        },
+    );
 
     schema
 }

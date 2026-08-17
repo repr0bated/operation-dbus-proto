@@ -775,6 +775,20 @@ impl StatePlugin for FullSystemPlugin {
                 "mut.system.plugin.full-system.hostname.set@v1",
             ),
         );
+        schema.capabilities.insert(
+            "full_system.read".to_string(),
+            op_state_store::CapabilityDecl {
+                id: "full_system.read".to_string(),
+                description: "Grants: capture_state.".to_string(),
+            },
+        );
+        schema.capabilities.insert(
+            "full_system.write".to_string(),
+            op_state_store::CapabilityDecl {
+                id: "full_system.write".to_string(),
+                description: "Grants: set_hostname.".to_string(),
+            },
+        );
 
         Some(schema)
     }

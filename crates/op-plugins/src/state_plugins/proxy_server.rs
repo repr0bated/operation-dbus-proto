@@ -184,6 +184,28 @@ pub(crate) fn proxy_server_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cap.network.proxy.start@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.network.proxy.start@v1".to_string(),
+            description: "Grants: start_proxy.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.proxy.stop@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.network.proxy.stop@v1".to_string(),
+            description: "Grants: stop_proxy.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.proxy.configure@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.network.proxy.configure@v1".to_string(),
+            description: "Grants: configure.".to_string(),
+        },
+    );
+
     schema
 }
 

@@ -5958,9 +5958,11 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
  "zbus 5.18.0",
+ "zeroclawlabs",
 ]
 
 [[package]]
@@ -11078,6 +11080,14 @@ dependencies = [
  "tonic-web",
  "tower 0.5.3",
  "uuid",
+]
+
+[[package]]
+name = "zeroclawlabs"
+version = "0.0.0"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
 ]
 
 [[package]]

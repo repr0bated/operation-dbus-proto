@@ -214,6 +214,21 @@ pub(crate) fn users_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "users.write".to_string(),
+        CapabilityDecl {
+            id: "users.write".to_string(),
+            description: "Grants: create_user, delete_user, modify_user.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "users.read".to_string(),
+        CapabilityDecl {
+            id: "users.read".to_string(),
+            description: "Grants: list_users.".to_string(),
+        },
+    );
+
     schema
 }
 

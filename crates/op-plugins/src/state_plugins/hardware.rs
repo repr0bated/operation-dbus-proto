@@ -369,6 +369,21 @@ pub fn hardware_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "hardware.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "hardware.read".to_string(),
+            description: "Grants: list_devices, get_device, get_stats.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "hardware.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "hardware.invoke".to_string(),
+            description: "Grants: scan_hardware, refresh_inventory.".to_string(),
+        },
+    );
+
     schema
 }
 
