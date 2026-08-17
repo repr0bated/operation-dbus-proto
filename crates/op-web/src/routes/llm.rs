@@ -123,7 +123,7 @@ pub async fn get_models(
         // The zeroclaw plugin projection is the default source of truth for the combined model list.
         if let Some(models) = models_from_zeroclaw(&state).await {
             return Json(ModelsResponse {
-                provider: "zeroclaw".to_string(),
+                provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),
                 models,
             })
             .into_response();
@@ -132,18 +132,20 @@ pub async fn get_models(
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(simd_json::json!({
-                "error": "Zeroclaw model route projection is unavailable",
-                "provider": "zeroclaw",
+                "error": "tched_router model route catalog is unavailable",
+                "provider": crate::zeroclaw_routes::ROUTER_PLUGIN_ID,
                 "models": []
             })),
         )
             .into_response();
     };
 
-    if provider_str == "zeroclaw" {
+    if provider_str == crate::zeroclaw_routes::ROUTER_PLUGIN_ID
+        || provider_str == crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID
+    {
         if let Some(models) = models_from_zeroclaw(&state).await {
             return Json(ModelsResponse {
-                provider: "zeroclaw".to_string(),
+                provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),
                 models,
             })
             .into_response();

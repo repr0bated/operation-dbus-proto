@@ -64,7 +64,11 @@ async fn call_zeroclaw_method(
     let arguments = simd_json::to_owned_value(&mut bytes)
         .map_err(|error| json_error_response(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let envelope = crate::state_manager_client::call_plugin_method(
-        "zeroclaw", method, arguments, capability, &identity,
+        crate::zeroclaw_routes::ROUTER_PLUGIN_ID,
+        method,
+        arguments,
+        capability,
+        &identity,
     )
     .await
     .map_err(|error| {
@@ -145,7 +149,7 @@ pub async fn zeroclaw_chat_handler(
     let result = match call_zeroclaw_method(
         &headers,
         "Chat",
-        "cap.software.zeroclaw.chat@v1",
+        "cap.software.3tched-router.chat@v1",
         serde_json::json!({
             "messages": messages,
             "provider": req.provider.unwrap_or_default(),
@@ -239,7 +243,7 @@ pub async fn openai_models_handler(
     let result = match call_zeroclaw_method(
         &headers,
         "ListModels",
-        "cap.software.zeroclaw.models.read@v1",
+        "cap.software.3tched-router.models.read@v1",
         serde_json::json!({}),
     )
     .await
@@ -313,7 +317,10 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 /// `/dev/shm/live-schema.json` is gone. Live projection values take precedence,
 /// while schema field defaults provide the boot-safe provider/model catalog.
 fn read_zeroclaw_schema_shm() -> Option<Value> {
-    let schema = op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
+    let schema = op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::ROUTER_PLUGIN_ID)
+        .or_else(|| {
+            op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID)
+        })?;
     // `PluginSchema` serializes to { name, version, fields, methods, … }.
     let mut v: Value = simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?;
     // Stamp the catalog_hash so consumers can verify lineage.
@@ -420,9 +427,9 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     // sealed PluginSchema blob so the schema surface still renders when no
     // mutation has populated SHM yet.
     let (zeroclaw, zeroclaw_schema) =
-        match crate::state_tree::read_plugin("zeroclaw") {
+        match crate::zeroclaw_routes::read_router_plugin() {
             Some(v) => {
-                info!("Using zeroclaw from SHM state tree (live provider/model catalog)");
+                info!("Using tched_router from SHM state tree (live provider/model catalog)");
                 (v, read_zeroclaw_schema_shm())
             }
             None => match read_zeroclaw_schema_shm() {

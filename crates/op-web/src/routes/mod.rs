@@ -42,6 +42,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/status", get(handlers::status::status_handler))
         // Schema — single source of truth from shared memory
         .route("/schema", get(handlers::schema::schema_handler))
+        // Compatibility paths used by dashboard builds predating `/api/schema`.
+        .route("/schema/catalog", get(handlers::schema::schema_handler))
+        .route(
+            "/schema/catalog/detail",
+            get(handlers::schema::schema_catalog_handler),
+        )
         // Identity sled — live WireGuard identity from shared memory
         .route(
             "/identity/sled",
@@ -86,6 +92,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/zeroclaw/schema",
+            get(handlers::zeroclaw::zeroclaw_schema_handler),
+        )
+        .route(
+            "/tched_router/schema",
             get(handlers::zeroclaw::zeroclaw_schema_handler),
         )
         // Plugin identity endpoints — model-agnostic, sealed SHM blob catalog
@@ -192,6 +202,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
         )
+        .route("/llm/model", post(handlers::llm::switch_model_handler))
         .route("/llm/chat", post(handlers::zeroclaw::zeroclaw_chat_handler))
         // OpenClaw endpoints (internal/base layer)
         .route(
