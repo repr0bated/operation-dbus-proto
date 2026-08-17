@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::StatePlugin;
 use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

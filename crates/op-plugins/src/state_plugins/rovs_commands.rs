@@ -327,6 +327,10 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
             id: "cap.network.ovsdb.port.list@v1".to_string(),
             description: "Grants: list_ports.".to_string(),
         })
+        .capability(op_state_store::CapabilityDecl {
+            id: "cap.network.ovsdb.db.list@v1".to_string(),
+            description: "Grants: list_dbs.".to_string(),
+        })
         .build()
 }
 

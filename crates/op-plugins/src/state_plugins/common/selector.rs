@@ -84,7 +84,7 @@ pub fn select_model(
     // REQ-02: a requested tool that is not declared in the global tool catalog
     // is rejected before any route scoring or network I/O.
     let declared_tools: Vec<&str> = state
-        .projection
+        .catalog
         .tools
         .iter()
         .map(|t| t.name.as_str())

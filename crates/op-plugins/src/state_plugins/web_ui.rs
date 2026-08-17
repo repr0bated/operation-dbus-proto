@@ -11,7 +11,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_blockchain::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 #[cfg(test)]
 use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};

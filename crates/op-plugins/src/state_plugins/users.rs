@@ -8,7 +8,7 @@ use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
 use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-category" = "service"))]

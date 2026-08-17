@@ -69,7 +69,7 @@ type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 
 fn provider_names(state: &TchedRouterState, requested: &str) -> Option<Vec<String>> {
     let requested = requested.trim();
     state
-        .projection
+        .catalog
         .providers
         .iter()
         .find(|provider| {
@@ -135,14 +135,14 @@ fn resolve_declared_route(
     };
 
     let route = state
-        .projection
+        .catalog
         .model_routes
         .iter()
         .filter(provider_matches)
         .find(exact_model)
         .or_else(|| {
             state
-                .projection
+                .catalog
                 .model_routes
                 .iter()
                 .filter(provider_matches)
@@ -519,7 +519,7 @@ mod tests {
     fn explicit_provider_and_model_resolve_through_schema_catalog() {
         let mut state = TchedRouterPlugin::current_state();
         let route = state
-            .projection
+            .catalog
             .model_routes
             .iter_mut()
             .find(|route| route.provider == "salad" && route.hint == "balanced")
