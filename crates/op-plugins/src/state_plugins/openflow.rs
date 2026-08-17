@@ -1616,6 +1616,23 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "openflow.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "openflow.read".to_string(),
+            description: "Grants: get_datapath_health.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "openflow.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "openflow.write".to_string(),
+            description:
+                "Grants: ensure_fallback_normal, set_fail_mode, del_controller, set_controller, attach_controller_safe."
+                    .to_string(),
+        },
+    );
+
     schema
 }
 

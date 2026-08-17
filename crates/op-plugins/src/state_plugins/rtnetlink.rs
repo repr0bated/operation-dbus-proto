@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state_store::{CapabilityDecl, FieldSchema, FieldType, PluginSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -625,6 +625,71 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
             "mut.network.rtnetlink.rule.add@v1",
         ),
     );
+
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.link-state.set@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.link-state.set@v1".to_string(),
+            description: "Grants: set_link_state.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.ipv4-address.add@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.ipv4-address.add@v1".to_string(),
+            description: "Grants: add_ipv4_address.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.mac-address.set@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.mac-address.set@v1".to_string(),
+            description: "Grants: set_mac_address.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.default-route.set@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.default-route.set@v1".to_string(),
+            description: "Grants: set_default_route.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.link.add@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.link.add@v1".to_string(),
+            description: "Grants: add_link.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.link.del@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.link.del@v1".to_string(),
+            description: "Grants: del_link.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.route.add@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.route.add@v1".to_string(),
+            description: "Grants: add_route.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.route.del@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.route.del@v1".to_string(),
+            description: "Grants: del_route.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.rtnetlink.rule.add@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.rtnetlink.rule.add@v1".to_string(),
+            description: "Grants: add_rule.".to_string(),
+        },
+    );
+
     schema
 }
 

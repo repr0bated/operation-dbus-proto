@@ -171,6 +171,21 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "config.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "config.read".to_string(),
+            description: "Grants: list_keys, get_value, export_config.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "config.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "config.invoke".to_string(),
+            description: "Grants: set_value, delete_key.".to_string(),
+        },
+    );
+
     schema
 }
 

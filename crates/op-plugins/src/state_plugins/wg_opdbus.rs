@@ -6,7 +6,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{PluginSchema, SideEffect};
+use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
@@ -227,6 +227,21 @@ pub(crate) fn wg_opdbus_schema() -> PluginSchema {
             "wg_opdbus.read",
             "obs.network.wg-opdbus.status.get@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "wg_opdbus.invoke".to_string(),
+        CapabilityDecl {
+            id: "wg_opdbus.invoke".to_string(),
+            description: "Grants: create_interface.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "wg_opdbus.read".to_string(),
+        CapabilityDecl {
+            id: "wg_opdbus.read".to_string(),
+            description: "Grants: get_status.".to_string(),
+        },
     );
 
     schema.example = Some(default_state_value());

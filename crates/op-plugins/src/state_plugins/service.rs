@@ -7,7 +7,7 @@ use crate::service_def::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{FieldSchema, FieldType, PluginSchema, SideEffect};
+use op_state_store::{CapabilityDecl, FieldSchema, FieldType, PluginSchema, SideEffect};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
@@ -266,6 +266,28 @@ pub(crate) fn service_schema() -> PluginSchema {
             "cap.service.lifecycle.shutdown@v1",
             "mut.service.lifecycle.shutdown@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "cap.service.lifecycle.init@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.service.lifecycle.init@v1".to_string(),
+            description: "Grants: init.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.lifecycle.run@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.service.lifecycle.run@v1".to_string(),
+            description: "Grants: run.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.lifecycle.shutdown@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.service.lifecycle.shutdown@v1".to_string(),
+            description: "Grants: shutdown.".to_string(),
+        },
     );
 
     schema

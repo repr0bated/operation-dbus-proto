@@ -65,6 +65,7 @@ done
 
 # PHP-FPM (SnappyMail backend) stays mesh-only — never published on pub0.
 set -- "$@" --tcp-to-unix "100.69.0.1:9000=$GB/php.sock"
+set -- "$@" --unix-to-tcp "$GB/outbound-smtp.sock=100.69.0.2:25"
 
 /usr/local/libexec/3tched/runit-ready-signal mail-port-fabric 2>/dev/null || true
 exec "$RELAY" "$@"

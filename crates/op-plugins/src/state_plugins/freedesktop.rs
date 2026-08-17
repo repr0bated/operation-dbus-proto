@@ -223,10 +223,18 @@ impl FreeDesktopPlugin {
                     op_state_store::SideEffect::Read,
                     true,
                     "freedesktop.read",
-                    "obs.software.freedesktop.machine_id.get@v1",
-                ),
-            )
-            .build();
+                "obs.software.freedesktop.machine_id.get@v1",
+            ),
+        )
+        .capability(op_state_store::CapabilityDecl {
+            id: "freedesktop.read".to_string(),
+            description: "Grants: GetManagedObjects, Get, GetAll, Introspect, Ping, GetMachineId.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
+            id: "freedesktop.write".to_string(),
+            description: "Grants: Set.".to_string(),
+        })
+        .build();
 
         #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
         struct FreeDesktopInspectorSchema {

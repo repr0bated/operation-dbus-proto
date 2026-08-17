@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateAction, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -1008,6 +1008,21 @@ pub(crate) fn net_schema() -> PluginSchema {
             "mut.network.ovs-bridge.delete@v1",
         ),
     );
+    schema.capabilities.insert(
+        "cap.network.interface.apply@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.interface.apply@v1".to_string(),
+            description: "Grants: apply_interface.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.ovs-bridge.delete@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.ovs-bridge.delete@v1".to_string(),
+            description: "Grants: delete_ovs_bridge.".to_string(),
+        },
+    );
+
     schema
 }
 

@@ -5,7 +5,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{PluginSchema, SideEffect};
+use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
@@ -428,6 +428,21 @@ pub fn wireguard_schema() -> PluginSchema {
             "wireguard.write",
             "mut.network.wireguard.config.set@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "wireguard.write".to_string(),
+        CapabilityDecl {
+            id: "wireguard.write".to_string(),
+            description: "Grants: set_device, add_peer, remove_peer, set_config.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "wireguard.read".to_string(),
+        CapabilityDecl {
+            id: "wireguard.read".to_string(),
+            description: "Grants: get_device, list_peers.".to_string(),
+        },
     );
 
     schema

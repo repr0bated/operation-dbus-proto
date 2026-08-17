@@ -53,6 +53,11 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal Crates
+# ZeroClaw base runtime — imported for its REAL types (config, tools, providers).
+# The sealed zeroclaw blob is projected from these, not from hand-written structs.
+# default-features = false: skip nostr/prometheus/skill-creation extras.
+# TODO: pin to git rev once the upstream pin policy is decided.
+zeroclaw = { package = "zeroclawlabs", path = "/srv/git/zeroclaw", default-features = false }
 op-core = { path = "crates/op-core" }
 op-tools = { path = "crates/op-tools" }
 op-chat = { path = "crates/op-chat" }

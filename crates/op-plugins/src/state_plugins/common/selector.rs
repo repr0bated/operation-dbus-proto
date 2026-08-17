@@ -1,6 +1,6 @@
 //! Dynamic model selection (spec §4) — the Orchestration Layer's pure selector.
 //!
-//! `select_model` reads **only** from the in-memory `ZeroclawState`
+//! `select_model` reads **only** from the in-memory `TchedRouterState`
 //! (`model_routes`, `tools`, `selector_policy`) handed to it. It performs no
 //! I/O, no env reads, no D-Bus calls, and contains **no `match` arm on provider
 //! or model name** — selection is entirely data-driven from schema state
@@ -12,11 +12,11 @@
 //! (`trace_id`, `timestamp`) are left empty here and populated by the D-Bus
 //! method handler (T-21), so the selector itself stays pure.
 
-use crate::state_plugins::common::errors::ZeroclawError;
+use crate::state_plugins::common::errors::TchedRouterError;
 use crate::state_plugins::common::llm_projection::{
     ModelRoute, SelectionEvent, SelectionInput, SelectionOutput, SelectorPolicy,
 };
-use crate::state_plugins::zeroclaw::ZeroclawState;
+use crate::state_plugins::tched_router::TchedRouterState;
 
 const SELECTOR_VERSION: &str = "1.0.0";
 
@@ -76,22 +76,22 @@ struct Scored<'a> {
 /// Select a provider/model from live schema state.
 pub fn select_model(
     input: &SelectionInput,
-    state: &ZeroclawState,
-) -> Result<SelectionOutput, ZeroclawError> {
-    let routes = &state.projection.model_routes;
+    state: &TchedRouterState,
+) -> Result<SelectionOutput, TchedRouterError> {
+    let routes = &state.catalog.model_routes;
     let policy = &state.selector_policy;
 
     // REQ-02: a requested tool that is not declared in the global tool catalog
     // is rejected before any route scoring or network I/O.
     let declared_tools: Vec<&str> = state
-        .projection
+        .catalog
         .tools
         .iter()
         .map(|t| t.name.as_str())
         .collect();
     for need in &input.tool_needs {
         if !declared_tools.iter().any(|t| t == need) {
-            return Err(ZeroclawError::ToolNotDeclared { tool: need.clone() });
+            return Err(TchedRouterError::ToolNotDeclared { tool: need.clone() });
         }
     }
 
@@ -111,7 +111,7 @@ pub fn select_model(
     }
 
     if scored.is_empty() {
-        return Err(ZeroclawError::NoCandidateAfterFiltering);
+        return Err(TchedRouterError::NoCandidateAfterFiltering);
     }
 
     order_candidates(&mut scored);
@@ -126,7 +126,7 @@ fn select_explicit(
     input: &SelectionInput,
     routes: &[ModelRoute],
     policy: &SelectorPolicy,
-) -> Result<SelectionOutput, ZeroclawError> {
+) -> Result<SelectionOutput, TchedRouterError> {
     let matches: Vec<&ModelRoute> = routes
         .iter()
         .filter(|r| {
@@ -146,23 +146,23 @@ fn select_explicit(
     if matches.is_empty() {
         if let Some(provider) = &input.explicit_provider {
             if !routes.iter().any(|r| &r.provider == provider) {
-                return Err(ZeroclawError::ProviderNotDeclared {
+                return Err(TchedRouterError::ProviderNotDeclared {
                     provider: provider.clone(),
                 });
             }
         }
         if let Some(model) = &input.explicit_model {
-            return Err(ZeroclawError::ModelNotDeclared {
+            return Err(TchedRouterError::ModelNotDeclared {
                 model: model.clone(),
             });
         }
-        return Err(ZeroclawError::NoCandidateAfterFiltering);
+        return Err(TchedRouterError::NoCandidateAfterFiltering);
     }
 
     // The explicit candidate(s) must still satisfy the hard filters; surface the
     // first specific failure so the caller knows why the override was rejected.
     let mut scored: Vec<Scored> = Vec::new();
-    let mut last_err: Option<ZeroclawError> = None;
+    let mut last_err: Option<TchedRouterError> = None;
     for route in matches {
         match hard_filter(route, input) {
             Ok(()) => scored.push(Scored {
@@ -174,7 +174,7 @@ fn select_explicit(
     }
 
     if scored.is_empty() {
-        return Err(last_err.unwrap_or(ZeroclawError::NoCandidateAfterFiltering));
+        return Err(last_err.unwrap_or(TchedRouterError::NoCandidateAfterFiltering));
     }
 
     order_candidates(&mut scored);
@@ -187,9 +187,9 @@ fn select_explicit(
 /// Phase 1 hard filters (design §4). Each returns a specific error so explicit
 /// requests can report why they were rejected; aggregate selection treats any
 /// `Err` as "exclude this route".
-fn hard_filter(route: &ModelRoute, input: &SelectionInput) -> Result<(), ZeroclawError> {
+fn hard_filter(route: &ModelRoute, input: &SelectionInput) -> Result<(), TchedRouterError> {
     if !route.available {
-        return Err(ZeroclawError::RouteUnavailable {
+        return Err(TchedRouterError::RouteUnavailable {
             hint: route.hint.clone(),
             reason: if route.status_reason.is_empty() {
                 "route marked unavailable".to_string()
@@ -200,7 +200,7 @@ fn hard_filter(route: &ModelRoute, input: &SelectionInput) -> Result<(), Zerocla
     }
 
     if privacy_ord(&route.privacy_tier) > privacy_ord(&input.privacy_tier) {
-        return Err(ZeroclawError::PrivacyTierViolation {
+        return Err(TchedRouterError::PrivacyTierViolation {
             required: input.privacy_tier.clone(),
             provided: route.privacy_tier.clone(),
         });
@@ -208,12 +208,12 @@ fn hard_filter(route: &ModelRoute, input: &SelectionInput) -> Result<(), Zerocla
 
     for need in &input.tool_needs {
         if !route.tool_support.iter().any(|t| t == need) {
-            return Err(ZeroclawError::ToolNotDeclared { tool: need.clone() });
+            return Err(TchedRouterError::ToolNotDeclared { tool: need.clone() });
         }
     }
 
     if route.context_window > 0 && route.context_window < input.context_tokens {
-        return Err(ZeroclawError::ContextWindowExceeded {
+        return Err(TchedRouterError::ContextWindowExceeded {
             limit: route.context_window,
             requested: input.context_tokens,
         });
@@ -221,7 +221,7 @@ fn hard_filter(route: &ModelRoute, input: &SelectionInput) -> Result<(), Zerocla
 
     if let Some(policy) = &input.cost_policy {
         if cost_ord(&route.cost_profile) > cost_ord(policy) {
-            return Err(ZeroclawError::CostPolicyViolation {
+            return Err(TchedRouterError::CostPolicyViolation {
                 policy: policy.clone(),
                 reason: format!(
                     "route cost_profile `{}` exceeds ceiling",
@@ -334,7 +334,7 @@ fn build_output(scored: &[Scored], reason: &str) -> SelectionOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state_plugins::zeroclaw::ZeroclawPlugin;
+    use crate::state_plugins::tched_router::TchedRouterPlugin;
 
     #[allow(clippy::too_many_arguments)]
     fn route(
@@ -371,9 +371,9 @@ mod tests {
         }
     }
 
-    fn state_with(routes: Vec<ModelRoute>) -> ZeroclawState {
-        let mut s = ZeroclawPlugin::current_state();
-        s.projection.model_routes = routes;
+    fn state_with(routes: Vec<ModelRoute>) -> TchedRouterState {
+        let mut s = TchedRouterPlugin::current_state();
+        s.catalog.model_routes = routes;
         s
     }
 
@@ -443,7 +443,7 @@ mod tests {
             0.9,
         )];
         let err = select_model(&inp, &state_with(routes)).unwrap_err();
-        assert!(matches!(err, ZeroclawError::NoCandidateAfterFiltering));
+        assert!(matches!(err, TchedRouterError::NoCandidateAfterFiltering));
     }
 
     #[test]
@@ -454,7 +454,7 @@ mod tests {
             "a", "p1", "m1", true, "low", "high", "public", 8000, 0.9,
         )];
         let err = select_model(&inp, &state_with(routes)).unwrap_err();
-        assert!(matches!(err, ZeroclawError::ProviderNotDeclared { .. }));
+        assert!(matches!(err, TchedRouterError::ProviderNotDeclared { .. }));
     }
 
     #[test]
@@ -499,6 +499,6 @@ mod tests {
             "a", "p1", "m1", true, "low", "high", "public", 8000, 0.9,
         )];
         let err = select_model(&inp, &state_with(routes)).unwrap_err();
-        assert!(matches!(err, ZeroclawError::ToolNotDeclared { .. }));
+        assert!(matches!(err, TchedRouterError::ToolNotDeclared { .. }));
     }
 }

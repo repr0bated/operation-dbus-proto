@@ -183,6 +183,21 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "fail2ban.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "fail2ban.read".to_string(),
+            description: "Grants: get_jail_status.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "fail2ban.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "fail2ban.write".to_string(),
+            description: "Grants: ban_ip, unban_ip, reload.".to_string(),
+        },
+    );
+
     schema
 }
 

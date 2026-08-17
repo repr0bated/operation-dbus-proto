@@ -12,7 +12,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use op_state_store::SideEffect;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -813,6 +813,21 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
             "notebooklm.admin",
             "mut.service.plugin.notebooklm.auth.reauth@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "notebooklm.read".to_string(),
+        CapabilityDecl {
+            id: "notebooklm.read".to_string(),
+            description: "Grants: list_notebooks, get_notebook, search_notebooks, query_notebook, get_library_stats, cross_notebook_query, list_sources, get_source_content.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "notebooklm.invoke".to_string(),
+        CapabilityDecl {
+            id: "notebooklm.invoke".to_string(),
+            description: "Grants: select_notebook, add_source_url, add_source_text, add_source_drive, add_source_file, delete_source, sync_drive_sources, auto_label_sources, create_label, rename_label, set_label_emoji, move_source_label, delete_label, create_audio, create_video, create_report, create_quiz, create_flashcards, create_infographic, create_slides, revise_slides, describe_studio, get_audio_status, list_artifacts, download_artifact, start_research, import_research, share_public, share_invite, get_share_settings, disable_share, batch_operation, list_sessions, close_session, reset_session, get_health, setup_auth, refresh_auth, reauth.".to_string(),
+        },
     );
 
     schema

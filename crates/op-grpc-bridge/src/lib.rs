@@ -65,7 +65,7 @@ pub use server::{run_zeroclaw_server, ServerConfig};
 // Object blob artifacts (schema-coupled D-Bus + gRPC reflection units),
 // backed by the op-blob crate.
 pub use plugin_object_blob::{BlobMethod, DbusObjectIdentity, PluginObjectBlob};
-pub use zeroclaw_object_blob::ZeroclawObjectBlob;
+pub use zeroclaw_object_blob::TchedRouterObjectBlob;
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.

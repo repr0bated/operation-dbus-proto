@@ -197,6 +197,14 @@ pub fn gcloud_adc_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "gcloud_adc.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "gcloud_adc.read".to_string(),
+            description: "Grants: check_auth_status.".to_string(),
+        },
+    );
+
     schema
 }
 

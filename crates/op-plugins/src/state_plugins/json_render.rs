@@ -797,6 +797,21 @@ pub(crate) fn json_render_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "json_render.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "json_render.read".to_string(),
+            description: "Grants: get_config, get_health, list_tools, list_packages, get_package, list_components, get_component_schema, list_actions, list_core_exports, list_renderers, get_spec_schema, validate_spec, export_json_schema, build_prompt_surface.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "json_render.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "json_render.invoke".to_string(),
+            description: "Grants: set_config.".to_string(),
+        },
+    );
+
     schema
 }
 

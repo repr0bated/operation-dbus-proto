@@ -237,6 +237,13 @@ pub fn keypair_schema() -> PluginSchema {
             "obs.service.keypair.list@v1",
         ),
     );
+    schema.capabilities.insert(
+        "cap.service.keypair.list@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.keypair.list@v1".to_string(),
+            description: "Grants: list_keypairs.".to_string(),
+        },
+    );
     schema
 }
 

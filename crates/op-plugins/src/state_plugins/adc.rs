@@ -126,6 +126,14 @@ pub fn adc_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "adc.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "adc.read".to_string(),
+            description: "Grants: get_status.".to_string(),
+        },
+    );
+
     schema
 }
 

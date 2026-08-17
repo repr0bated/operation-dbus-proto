@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use op_plugins::state_plugins::common::llm_projection::{ModelRoute, Provider};
-use op_plugins::state_plugins::zeroclaw::{ChatInput, ChatOutput, ZeroclawState};
+use op_plugins::state_plugins::tched_router::{ChatInput, ChatOutput, TchedRouterState};
 use reqwest::{RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -222,8 +222,8 @@ impl ZeroclawRuntimeClient {
 
     pub(crate) async fn project_state(
         &self,
-        mut state: ZeroclawState,
-    ) -> anyhow::Result<ZeroclawState> {
+        mut state: TchedRouterState,
+    ) -> anyhow::Result<TchedRouterState> {
         self.health().await?;
         let configured = self.configured_providers().await?;
         let selected_ref = self
@@ -279,12 +279,12 @@ impl ZeroclawRuntimeClient {
         state.selected_provider = selected.family.clone();
         state.selected_model = selected.selected_model.clone();
         state.transport.grpc_target = self.endpoint.clone();
-        state.projection.providers = providers;
-        state.projection.model_routes = routes;
-        state.projection.router.provider = selected.family.clone();
-        state.projection.router.model = selected.selected_model.clone();
-        state.projection.router.endpoint = self.endpoint.clone();
-        state.projection.router.role = "zeroclaw-runtime-authority".to_string();
+        state.catalog.providers = providers;
+        state.catalog.model_routes = routes;
+        state.catalog.router.provider = selected.family.clone();
+        state.catalog.router.model = selected.selected_model.clone();
+        state.catalog.router.endpoint = self.endpoint.clone();
+        state.catalog.router.role = "zeroclaw-runtime-authority".to_string();
         Ok(state)
     }
 
@@ -332,7 +332,7 @@ impl ZeroclawRuntimeClient {
 
     pub(crate) async fn chat(
         &self,
-        state: &ZeroclawState,
+        state: &TchedRouterState,
         input: ChatInput,
     ) -> anyhow::Result<ChatOutput> {
         self.health().await?;
@@ -478,7 +478,7 @@ fn truncate_error(detail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_plugins::state_plugins::zeroclaw::ZeroclawChatMessage;
+    use op_plugins::state_plugins::tched_router::TchedChatMessage;
 
     #[test]
     fn configured_provider_catalog_is_derived_from_runtime_paths() {
@@ -506,11 +506,11 @@ mod tests {
     fn conversation_history_is_forwarded_in_order() {
         let input = ChatInput {
             messages: vec![
-                ZeroclawChatMessage {
+                TchedChatMessage {
                     role: "user".to_string(),
                     content: "first".to_string(),
                 },
-                ZeroclawChatMessage {
+                TchedChatMessage {
                     role: "assistant".to_string(),
                     content: "second".to_string(),
                 },

@@ -492,6 +492,21 @@ pub(crate) fn oscal_subid_registry_schema() -> PluginSchema {
         schema.fields.insert("inspector_fields".to_string(), field);
     }
 
+    schema.capabilities.insert(
+        "oscal.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "oscal.invoke".to_string(),
+            description: "Grants: register.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "oscal.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "oscal.read".to_string(),
+            description: "Grants: lookup, list_by_category, resolve, export.".to_string(),
+        },
+    );
+
     schema
 }
 

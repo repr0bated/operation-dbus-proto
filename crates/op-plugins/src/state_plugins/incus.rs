@@ -1644,6 +1644,99 @@ pub(crate) fn incus_schema() -> PluginSchema {
         ),
     );
     schema = schema.with_methods(methods);
+
+    schema.capabilities.insert(
+        "cap.service.incus.instance.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.create@v1".to_string(),
+            description: "Grants: create_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.modify@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.modify@v1".to_string(),
+            description: "Grants: modify_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.delete@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.delete@v1".to_string(),
+            description: "Grants: delete_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.start@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.start@v1".to_string(),
+            description: "Grants: start_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.stop@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.stop@v1".to_string(),
+            description: "Grants: stop_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.restart@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.restart@v1".to_string(),
+            description: "Grants: restart_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.freeze@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.freeze@v1".to_string(),
+            description: "Grants: freeze_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.unfreeze@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.unfreeze@v1".to_string(),
+            description: "Grants: unfreeze_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.snapshot@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.snapshot@v1".to_string(),
+            description: "Grants: snapshot_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.instance.exec@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.instance.exec@v1".to_string(),
+            description: "Grants: exec_instance.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.device.add@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.device.add@v1".to_string(),
+            description: "Grants: add_device.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.device.remove@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.device.remove@v1".to_string(),
+            description: "Grants: remove_device.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.service.incus.device.update@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.service.incus.device.update@v1".to_string(),
+            description: "Grants: update_device.".to_string(),
+        },
+    );
+
     schema
 }
 

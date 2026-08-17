@@ -424,6 +424,21 @@ pub(crate) fn mcp_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "mcp.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "mcp.read".to_string(),
+            description: "Grants: get_config.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "mcp.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "mcp.write".to_string(),
+            description: "Grants: configure_server, configure_tool_groups.".to_string(),
+        },
+    );
+
     schema
 }
 

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
@@ -399,6 +399,21 @@ pub(crate) fn xray_schema() -> PluginSchema {
             "xray.write",
             "mut.software.plugin.xray.span.record@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "xray.read".to_string(),
+        CapabilityDecl {
+            id: "xray.read".to_string(),
+            description: "Grants: get_stats.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "xray.write".to_string(),
+        CapabilityDecl {
+            id: "xray.write".to_string(),
+            description: "Grants: restart, add_user, remove_user, add_inbound, start_trace, end_trace, record_span.".to_string(),
+        },
     );
 
     schema

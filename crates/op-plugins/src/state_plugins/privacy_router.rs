@@ -1514,6 +1514,21 @@ pub(crate) fn privacy_router_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "privacy_router.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "privacy_router.read".to_string(),
+            description: "Grants: audit_request.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "privacy_router.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "privacy_router.write".to_string(),
+            description: "Grants: enforce_policy, log_decision.".to_string(),
+        },
+    );
+
     schema
 }
 

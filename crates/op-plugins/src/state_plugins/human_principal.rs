@@ -308,6 +308,21 @@ pub(crate) fn human_principal_schema() -> PluginSchema {
     // declaring the subids is enough — the fields cannot be forgotten.
     super::common::oscal::ensure_category_metadata_fields(&mut schema);
 
+    schema.capabilities.insert(
+        "human_principal.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "human_principal.write".to_string(),
+            description: "Grants: register_key, revoke_key, set_alias.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "human_principal.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "human_principal.read".to_string(),
+            description: "Grants: resolve_key, get_principal, list_principals.".to_string(),
+        },
+    );
+
     schema
 }
 

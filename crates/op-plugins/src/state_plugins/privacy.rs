@@ -234,5 +234,20 @@ pub(crate) fn privacy_schema() -> PluginSchema {
         ),
     );
     
+    schema.capabilities.insert(
+        "privacy.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "privacy.read".to_string(),
+            description: "Grants: get_policy.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "privacy.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "privacy.write".to_string(),
+            description: "Grants: mask_data, unmask_data.".to_string(),
+        },
+    );
+    
     schema
 }

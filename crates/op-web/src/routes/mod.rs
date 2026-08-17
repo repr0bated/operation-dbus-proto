@@ -2,9 +2,10 @@
 
 use axum::{
     extract::Extension,
+    http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Router,
+    Json, Router,
 };
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
@@ -44,6 +45,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/status", get(handlers::status::status_handler))
         // Schema — single source of truth from shared memory
         .route("/schema", get(handlers::schema::schema_handler))
+        // Compatibility paths used by dashboard builds predating `/api/schema`.
+        // Keep these on the live router; `router.rs` is not mounted by main.
+        .route("/schema/catalog", get(handlers::schema::schema_handler))
+        .route(
+            "/schema/catalog/detail",
+            get(handlers::schema::schema_catalog_handler),
+        )
         // Identity sled — live WireGuard identity from shared memory
         .route(
             "/identity/sled",
@@ -65,7 +73,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // Users
         .route("/users", get(handlers::users::list_users_handler))
-        .route("/users/:id", get(handlers::users::get_user_handler))
+        .route("/users/{id}", get(handlers::users::get_user_handler))
         // VPN
         .route("/vpn/status", get(handlers::vpn::vpn_status_handler))
         .route(
@@ -102,7 +110,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(handlers::plugin_schema::plugin_list_handler),
         )
         .route(
-            "/plugin-schema/:plugin_id",
+            "/plugin-schema/{plugin_id}",
             get(handlers::plugin_schema::plugin_schema_handler),
         )
         // UI-model spec gallery + catalog (render slices of the sealed blob
@@ -113,7 +121,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(handlers::ui_model::ui_model_gallery_handler),
         )
         .route(
-            "/ui-model/gallery/:id",
+            "/ui-model/gallery/{id}",
             delete(handlers::ui_model::ui_model_gallery_delete_handler),
         )
         .route(
@@ -121,15 +129,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(handlers::ui_model::ui_model_catalog_handler),
         )
         .route(
-            "/ui-model/catalog/promote/:id",
+            "/ui-model/catalog/promote/{id}",
             post(handlers::ui_model::ui_model_catalog_promote_handler),
         )
         .route(
-            "/ui-model/catalog/:id",
+            "/ui-model/catalog/{id}",
             delete(handlers::ui_model::ui_model_catalog_delete_handler),
         )
         .route(
-            "/ui-model/plugin-schema/:plugin",
+            "/ui-model/plugin-schema/{plugin}",
             get(handlers::ui_model::ui_model_plugin_schema_handler),
         )
         .route(
@@ -159,12 +167,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             post(handlers::chat::create_session_handler),
         )
         .route(
-            "/chat/sessions/:id",
+            "/chat/sessions/{id}",
             delete(handlers::chat::delete_session_handler),
         )
         .route("/chat/message", post(handlers::chat::send_message_handler))
         .route(
-            "/chat/history/:session_id",
+            "/chat/history/{session_id}",
             get(handlers::chat::get_history_handler),
         )
         .route(
@@ -186,10 +194,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // Tool endpoints
         .route("/tools", get(handlers::tools::list_tools_handler))
-        .route("/tools/:name", get(handlers::tools::get_tool_handler))
+        .route("/tools/{name}", get(handlers::tools::get_tool_handler))
         .route("/tool", post(handlers::tools::execute_tool_handler))
         .route(
-            "/tools/:name/execute",
+            "/tools/{name}/execute",
             post(handlers::tools::execute_named_tool_handler),
         )
         // Agent endpoints
@@ -199,13 +207,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/agents/types",
             get(handlers::agents::list_agent_types_handler),
         )
-        .route("/agents/:id", get(handlers::agents::get_agent_handler))
+        .route("/agents/{id}", get(handlers::agents::get_agent_handler))
         .route(
-            "/agents/:id/task",
+            "/agents/{id}/task",
             post(handlers::agents::agent_task_handler),
         )
         .route(
-            "/agents/:id",
+            "/agents/{id}",
             axum::routing::delete(handlers::agents::kill_agent_handler),
         )
         // LLM endpoints
@@ -213,7 +221,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/llm/providers", get(handlers::llm::list_providers_handler))
         .route("/llm/models", get(llm::get_models))
         .route(
-            "/llm/models/:provider",
+            "/llm/models/{provider}",
             get(handlers::llm::list_models_for_provider_handler),
         )
         .route("/llm/chat", post(handlers::zeroclaw::zeroclaw_chat_handler))
@@ -253,7 +261,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // MCP server management endpoints
         .route("/mcp/servers", get(handlers::mcp::list_servers_handler))
-        .route("/mcp/servers/:id", get(handlers::mcp::get_server_handler))
+        .route("/mcp/servers/{id}", get(handlers::mcp::get_server_handler))
         .route(
             "/mcp/cognitive/agents",
             get(handlers::mcp::list_agents_handler),
@@ -267,7 +275,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             post(handlers::mcp::query_memory_handler),
         )
         .route(
-            "/mcp/cognitive/memory/:key",
+            "/mcp/cognitive/memory/{key}",
             delete(handlers::mcp::delete_memory_handler),
         )
         .route(
@@ -282,7 +290,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/privacy/signup", post(handlers::privacy::signup))
         .route("/privacy/verify", get(handlers::privacy::verify))
         .route(
-            "/privacy/config/:user_id",
+            "/privacy/config/{user_id}",
             get(handlers::privacy::get_config),
         )
         .route("/privacy/status", get(handlers::privacy::status))
@@ -295,7 +303,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/privacy/google/callback",
             get(handlers::privacy::google_callback),
-        );
+        )
+        // API misses must never fall through to the SPA and masquerade as a
+        // successful HTML response.
+        .fallback(api_not_found);
 
     // MCP JSON-RPC endpoints (profile-based and legacy)
     let mcp_route = mcp::create_mcp_router();
@@ -426,4 +437,50 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
+}
+
+async fn api_not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": "API route not found",
+        })),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api_not_found;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{header::CONTENT_TYPE, Request, StatusCode},
+        response::Html,
+        Router,
+    };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn missing_api_route_does_not_fall_through_to_spa() {
+        let app = Router::new()
+            .nest("/api", Router::new().fallback(api_not_found))
+            .fallback(|| async { Html("spa index") });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/definitely-missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body, r#"{"error":"API route not found"}"#);
+    }
 }

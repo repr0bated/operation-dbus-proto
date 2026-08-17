@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use op_plugins::state_plugins::zeroclaw::{ChatInput, ChatOutput, ZeroclawChatMessage};
+use op_plugins::state_plugins::tched_router::{ChatInput, ChatOutput, TchedChatMessage};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
@@ -90,7 +90,7 @@ impl ChatService for ChatServiceImpl {
             message: String::new(),
             messages: ui_messages
                 .iter()
-                .map(|message| ZeroclawChatMessage {
+                .map(|message| TchedChatMessage {
                     role: message
                         .get("role")
                         .and_then(serde_json::Value::as_str)

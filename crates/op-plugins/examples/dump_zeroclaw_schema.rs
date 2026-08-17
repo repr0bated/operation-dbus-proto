@@ -15,7 +15,7 @@ fn main() -> ExitCode {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp/zeroclaw.full.schema.json"));
 
-    let schema = op_plugins::state_plugins::zeroclaw::zeroclaw_plugin_schema();
+    let schema = op_plugins::state_plugins::tched_router::tched_router_plugin_schema();
     let json = match serde_json::to_string_pretty(&schema) {
         Ok(j) => j,
         Err(e) => {

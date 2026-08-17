@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -220,6 +220,21 @@ pub fn unix_socket_schema_derived() -> PluginSchema {
             "network.write",
             "mut.service.unix-socket.close@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "network.write".to_string(),
+        CapabilityDecl {
+            id: "network.write".to_string(),
+            description: "Grants: bind, listen, close.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "network.read".to_string(),
+        CapabilityDecl {
+            id: "network.read".to_string(),
+            description: "Grants: accept.".to_string(),
+        },
     );
 
     schema

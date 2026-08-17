@@ -11,7 +11,7 @@
 //! source of truth for both JSON Schema (exposed in `PluginSchema.methods.args`)
 //! and gRPC proto generation.
 
-use op_state_store::{FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
+use op_state_store::{CapabilityDecl, FieldSchema, FieldType, MethodDecl, PluginSchema, SideEffect};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::json;
@@ -323,6 +323,34 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
             },
         )
         .methods(methods)
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.bridge.create@v1".to_string(),
+            description: "Grants: create_bridge.".to_string(),
+        })
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.bridge.delete@v1".to_string(),
+            description: "Grants: delete_bridge.".to_string(),
+        })
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.port.add@v1".to_string(),
+            description: "Grants: add_port.".to_string(),
+        })
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.port.delete@v1".to_string(),
+            description: "Grants: remove_port.".to_string(),
+        })
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.bridge.list@v1".to_string(),
+            description: "Grants: list_bridges.".to_string(),
+        })
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.port.list@v1".to_string(),
+            description: "Grants: list_ports.".to_string(),
+        })
+        .capability(CapabilityDecl {
+            id: "cap.network.ovsdb.db.list@v1".to_string(),
+            description: "Grants: list_dbs.".to_string(),
+        })
         .build()
 }
 

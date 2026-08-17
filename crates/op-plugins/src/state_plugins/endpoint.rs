@@ -166,6 +166,21 @@ pub fn endpoint_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "endpoint.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "endpoint.read".to_string(),
+            description: "Grants: list_endpoints, get_endpoint.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "endpoint.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "endpoint.invoke".to_string(),
+            description: "Grants: add_endpoint, remove_endpoint.".to_string(),
+        },
+    );
+
     schema
 }
 

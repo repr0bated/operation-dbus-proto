@@ -15,7 +15,7 @@ use op_cognitive_mcp::proto::cognitive_tool_service_server::CognitiveToolService
 use op_cognitive_mcp::{CognitiveGrpcService, CognitiveMcpServer, QdrantSemanticShuttle};
 use op_mcp::tool_registry::ToolRegistry;
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage};
+use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use serde::de::DeserializeSeed;
 use serde_json::Value as JsonValue;
@@ -676,7 +676,7 @@ impl OperationGrpcServer {
                     "failed to decode typed request for {plugin_id}.{method_name}: {error}"
                 ))
             })?;
-        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
+        let json_args = dynamic_message_to_plugin_json(&request_dynamic).map_err(|error| {
             Status::internal(format!(
                 "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
             ))
@@ -754,6 +754,18 @@ fn plugin_message_descriptor(name: &str) -> Option<prost_reflect::MessageDescrip
         // descriptors are keyed by their package-qualified names.
         pool.get_message_by_name(&format!("operation.plugin.v1.{name}"))
     })
+}
+
+/// Serialize a generated protobuf request back into the field names declared
+/// by the plugin schema. The generic dispatcher consumes schema-native JSON
+/// (`session_id`, `wireguard_pubkey`, ...), while protobuf's canonical JSON
+/// mapping defaults to lowerCamelCase (`sessionId`, `wireguardPubkey`).
+fn dynamic_message_to_plugin_json(message: &DynamicMessage) -> Result<String, serde_json::Error> {
+    let value = message.serialize_with_options(
+        serde_json::value::Serializer,
+        &SerializeOptions::new().use_proto_field_name(true),
+    )?;
+    serde_json::to_string(&value)
 }
 
 fn plugin_method_domain_result(envelope: &serde_json::Value) -> &serde_json::Value {
@@ -2029,8 +2041,25 @@ mod state_sync_frame_tests {
 
     #[test]
     fn generated_plugin_descriptors_resolve_short_names() {
-        assert!(plugin_message_descriptor("ZeroclawListProvidersRequest").is_some());
+        assert!(plugin_message_descriptor("TchedRouterListProvidersRequest").is_some());
         assert!(plugin_message_descriptor("GemmaBrainGetUiSpecResponse").is_some());
+    }
+
+    #[test]
+    fn generated_plugin_request_preserves_schema_field_names() {
+        let request = crate::proto::plugin_methods::IdentitySledGetIdentityRequest {
+            session_id: "chatbot-session".to_string(),
+        };
+        let descriptor = plugin_message_descriptor("IdentitySledGetIdentityRequest")
+            .expect("identity request descriptor");
+        let dynamic = DynamicMessage::decode(descriptor, request.encode_to_vec().as_slice())
+            .expect("decode typed request");
+
+        let json = dynamic_message_to_plugin_json(&dynamic).expect("serialize plugin request");
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&json).expect("valid JSON"),
+            serde_json::json!({"session_id": "chatbot-session"})
+        );
     }
 
     #[test]

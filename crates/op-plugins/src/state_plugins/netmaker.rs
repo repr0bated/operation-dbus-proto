@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::StatePlugin;
 use op_state::{ApplyResult, PluginCapabilities, StateAction, StateDiff};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1208,6 +1208,63 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
             "mut.network.netmaker.egress.delete@v1",
         ),
     );
+    schema.capabilities.insert(
+        "cap.network.netmaker.network.join@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.network.join@v1".to_string(),
+            description: "Grants: join_network.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.network.leave@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.network.leave@v1".to_string(),
+            description: "Grants: leave_network.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.nodes.list@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.nodes.list@v1".to_string(),
+            description: "Grants: list_nodes.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.node.get@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.node.get@v1".to_string(),
+            description: "Grants: get_node.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.node.update@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.node.update@v1".to_string(),
+            description: "Grants: update_node.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.networks.list@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.networks.list@v1".to_string(),
+            description: "Grants: list_networks.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.egress.create@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.egress.create@v1".to_string(),
+            description: "Grants: create_egress.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.netmaker.egress.delete@v1".to_string(),
+        CapabilityDecl {
+            id: "cap.network.netmaker.egress.delete@v1".to_string(),
+            description: "Grants: delete_egress.".to_string(),
+        },
+    );
+
     schema
 }
 

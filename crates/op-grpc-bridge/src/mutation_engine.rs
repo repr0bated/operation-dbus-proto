@@ -1911,14 +1911,14 @@ impl MutationEngine {
                     method, json_args, &state,
                 )?
             }
-            "zeroclaw" => {
+            "tched_router" => {
                 let declared_state = self
-                    .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>(
-                        "zeroclaw",
+                    .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>(
+                        "tched_router",
                     )
                     .await
                     .unwrap_or_else(
-                        op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state,
+                        op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state,
                     );
                 let mut state = self
                     .zeroclaw_runtime
@@ -1927,7 +1927,7 @@ impl MutationEngine {
                     .context("ZeroClaw runtime state projection failed")?;
                 self.cache_zeroclaw_state(&state).await?;
                 if let Err(error) = self
-                    .publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+                    .publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
                     .await
                 {
                     tracing::warn!(
@@ -1937,12 +1937,12 @@ impl MutationEngine {
                 }
                 if method == "Chat" {
                     let args = serde_json::from_value::<
-                        op_plugins::state_plugins::zeroclaw::ChatInput,
+                        op_plugins::state_plugins::tched_router::ChatInput,
                     >(serde_json::to_value(&parsed_value)?)
                     .context("invalid zeroclaw.Chat arguments")?;
                     serde_json::to_value(self.zeroclaw_runtime.chat(&state, args).await?)?
                 } else {
-                    match op_plugins::state_plugins::zeroclaw::dispatch_zeroclaw_method(
+                    match op_plugins::state_plugins::tched_router::dispatch_tched_router_method(
                         method, json_args, &state,
                     ) {
                         Ok(outcome) => {
@@ -2190,40 +2190,40 @@ impl MutationEngine {
     ) -> anyhow::Result<()> {
         match method {
             "SetProvider" | "SetModel" => {
-                self.merge_into_state_cache("zeroclaw", result).await;
+                self.merge_into_state_cache("tched_router", result).await;
             }
             "SetOvsRoutingModel"
             | "SetObfuscationModel"
             | "SetVectorizationModel"
             | "SetQdrantRetrievalModel"
             | "SetCozoRetrievalModel" => {
-                self.merge_nested_into_state_cache("zeroclaw", "model_assignments", result)
+                self.merge_nested_into_state_cache("tched_router", "model_assignments", result)
                     .await;
             }
             _ => {}
         }
 
-        self.publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+        self.publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
             .await
     }
 
     async fn cache_zeroclaw_state(
         &self,
-        state: &op_plugins::state_plugins::zeroclaw::ZeroclawState,
+        state: &op_plugins::state_plugins::tched_router::TchedRouterState,
     ) -> anyhow::Result<()> {
         let owned = simd_json::serde::to_owned_value(state)?;
-        self.update_state_cache("zeroclaw".to_string(), owned).await;
+        self.update_state_cache("tched_router".to_string(), owned).await;
         Ok(())
     }
 
     async fn refresh_zeroclaw_projection(&self) -> anyhow::Result<()> {
         let declared_state = self
-            .projected_state::<op_plugins::state_plugins::zeroclaw::ZeroclawState>("zeroclaw")
+            .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>("tched_router")
             .await
-            .unwrap_or_else(op_plugins::state_plugins::zeroclaw::ZeroclawPlugin::current_state);
+            .unwrap_or_else(op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state);
         let state = self.zeroclaw_runtime.project_state(declared_state).await?;
         self.cache_zeroclaw_state(&state).await?;
-        self.publish_plugin_projection_from_cache("zeroclaw", ChangeType::PropertySet)
+        self.publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
             .await
     }
 

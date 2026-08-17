@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::prelude::*;
@@ -151,6 +151,21 @@ pub(crate) fn sess_decl_schema() -> PluginSchema {
             "sess_decl.write",
             "mut.software.plugin.sessdecl.session.declare@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "sess_decl.read".to_string(),
+        CapabilityDecl {
+            id: "sess_decl.read".to_string(),
+            description: "Grants: list_sessions.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "sess_decl.write".to_string(),
+        CapabilityDecl {
+            id: "sess_decl.write".to_string(),
+            description: "Grants: declare_session.".to_string(),
+        },
     );
 
     schema

@@ -11,7 +11,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_blockchain::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 #[cfg(test)]
 use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
@@ -608,6 +608,21 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
             "ui.write",
             "mut.software.plugin.web-ui.update-component@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "ui.read".to_string(),
+        CapabilityDecl {
+            id: "ui.read".to_string(),
+            description: "Grants: render_page.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "ui.write".to_string(),
+        CapabilityDecl {
+            id: "ui.write".to_string(),
+            description: "Grants: handle_event, update_component.".to_string(),
+        },
     );
 
     schema

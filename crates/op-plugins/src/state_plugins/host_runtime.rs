@@ -319,6 +319,14 @@ pub(crate) fn host_runtime_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "host_runtime.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "host_runtime.read".to_string(),
+            description: "Grants: get_system_info, list_services, get_service, list_interfaces, get_numa_topology, check_unix_sockets, sample_metrics.".to_string(),
+        },
+    );
+
     schema
 }
 

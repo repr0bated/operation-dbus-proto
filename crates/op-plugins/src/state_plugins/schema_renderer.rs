@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
@@ -263,6 +263,14 @@ pub(crate) fn schema_renderer_schema() -> PluginSchema {
             "schema_renderer.read",
             "obs.service.schema.validate@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "schema_renderer.read".to_string(),
+        CapabilityDecl {
+            id: "schema_renderer.read".to_string(),
+            description: "Grants: render_schema, list_galleries, get_rendering, validate_schema.".to_string(),
+        },
     );
 
     schema

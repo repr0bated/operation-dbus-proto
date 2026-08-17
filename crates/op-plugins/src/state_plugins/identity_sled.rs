@@ -453,6 +453,21 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "identity_sled.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "identity_sled.read".to_string(),
+            description: "Grants: get_identity, get_session_history.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "identity_sled.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "identity_sled.write".to_string(),
+            description: "Grants: write_identity, provision_container, attach_btrfs_device, touch_session, record_session_event.".to_string(),
+        },
+    );
+
     schema
 }
 
@@ -510,9 +525,7 @@ mod tests {
     #[test]
     fn v3_fields_present() {
         let raw = serde_json::to_value(schemars::schema_for!(ContainerIdentitySled)).unwrap();
-        let props = raw
-            .get("properties")
-            .expect("schema has properties");
+        let props = raw.get("properties").expect("schema has properties");
         for field in [
             "genesis",
             "arrival_timestamp",
@@ -558,7 +571,10 @@ mod tests {
     #[test]
     fn hashed_footprint_only_in_alias() {
         let src = include_str!("identity_sled.rs");
-        for (lineno, line) in src.lines().enumerate() {
+        // Only audit the record-definition region; the tests module itself
+        // legitimately names the string in backward-compat assertions.
+        let test_start = src.find("#[cfg(test)]").unwrap_or(src.len());
+        for (lineno, line) in src[..test_start].lines().enumerate() {
             if line.contains("hashed_footprint") {
                 let trimmed = line.trim();
                 assert!(

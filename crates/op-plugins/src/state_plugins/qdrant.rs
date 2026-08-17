@@ -783,6 +783,77 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cap.data.qdrant.collection.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.collection.create@v1".to_string(),
+            description: "Grants: create_collection.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.collection.delete@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.collection.delete@v1".to_string(),
+            description: "Grants: delete_collection.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.collection.list@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.collection.list@v1".to_string(),
+            description: "Grants: list_collections.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.point.upsert@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.point.upsert@v1".to_string(),
+            description: "Grants: upsert_points.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.point.search@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.point.search@v1".to_string(),
+            description: "Grants: search_points.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.point.delete@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.point.delete@v1".to_string(),
+            description: "Grants: delete_points.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.point.scroll@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.point.scroll@v1".to_string(),
+            description: "Grants: scroll_points.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.snapshot.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.snapshot.create@v1".to_string(),
+            description: "Grants: create_snapshot.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.snapshot.list@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.snapshot.list@v1".to_string(),
+            description: "Grants: list_snapshots.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.data.qdrant.payload-index.create@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.data.qdrant.payload-index.create@v1".to_string(),
+            description: "Grants: create_payload_index.".to_string(),
+        },
+    );
+
     schema
 }
 

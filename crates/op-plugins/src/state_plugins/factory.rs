@@ -476,6 +476,21 @@ pub(crate) fn factory_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "factory.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "factory.read".to_string(),
+            description: "Grants: list_computers, get_session, list_sessions, list_models.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "factory.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "factory.invoke".to_string(),
+            description: "Grants: discover_byom, set_autonomy.".to_string(),
+        },
+    );
+
     schema
 }
 

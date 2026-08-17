@@ -1331,6 +1331,22 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     );
 
     inspector_gadget_generated::register_methods(&mut schema);
+
+    schema.capabilities.insert(
+        "antigravity.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "antigravity.read".to_string(),
+            description: "Grants: get_auth_status, get_usage_report, list_extensions.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "antigravity.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "antigravity.write".to_string(),
+            description: "Grants: configure_safety, install_extension, show_versions, sync, telemetry, uninstall_extension, update_extensions.".to_string(),
+        },
+    );
+
     schema
 }
 

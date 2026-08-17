@@ -375,6 +375,21 @@ pub(crate) fn gemma_brain_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "gemma.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "gemma.invoke".to_string(),
+            description: "Grants: classify, route, register_tag, analyze_intent.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "gemma.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "gemma.read".to_string(),
+            description: "Grants: list_perspectives, get_ui_spec, list_tags.".to_string(),
+        },
+    );
+
     schema
 }
 

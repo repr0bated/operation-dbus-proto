@@ -370,7 +370,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     // Refresh method
     schema.methods.insert(
         "refresh".to_string(),
-        method_decl_from_schemars_with_output::<
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             RefreshInput,
             super::plugin_scaffold_helpers::AckOutput,
         >(
@@ -380,6 +380,49 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
             "wgcf.write",
             "mut.software.wgcf.refresh@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "cap.software.wgcf.register@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.software.wgcf.register@v1".to_string(),
+            description: "Grants: register.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.software.wgcf.update@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.software.wgcf.update@v1".to_string(),
+            description: "Grants: update.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.software.wgcf.status@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.software.wgcf.status@v1".to_string(),
+            description: "Grants: status.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.software.wgcf.keys.rotate@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.software.wgcf.keys.rotate@v1".to_string(),
+            description: "Grants: rotate_keys.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.software.wgcf.endpoint.set@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.software.wgcf.endpoint.set@v1".to_string(),
+            description: "Grants: set_endpoint.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "wgcf.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "wgcf.write".to_string(),
+            description: "Grants: generate_config, apply_config, refresh.".to_string(),
+        },
     );
 
     schema

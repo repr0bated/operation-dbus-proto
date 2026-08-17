@@ -24,6 +24,8 @@ op-network = { path = "../op-network" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
 op-agents = { path = "../op-agents" }
+# ZeroClaw base runtime types (schemars 1.x — matches this crate's schemars).
+zeroclaw = { workspace = true }
 
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -43,6 +45,7 @@ md5 = { workspace = true }
 uuid = { workspace = true }
 libc = { workspace = true }
 dirs = "5.0"
+toml = { workspace = true }
 parking_lot = { workspace = true }
 
 [dev-dependencies]

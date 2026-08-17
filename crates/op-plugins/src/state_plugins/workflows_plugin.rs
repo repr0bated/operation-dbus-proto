@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state_store::{CapabilityDecl, PluginSchema};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
@@ -216,6 +216,14 @@ pub(crate) fn workflows_schema() -> PluginSchema {
             "workflows.write",
             "mut.software.plugin.workflows.cancel@v1",
         ),
+    );
+
+    schema.capabilities.insert(
+        "workflows.write".to_string(),
+        CapabilityDecl {
+            id: "workflows.write".to_string(),
+            description: "Grants: start_workflow, pause_workflow, resume_workflow, cancel_workflow.".to_string(),
+        },
     );
 
     schema

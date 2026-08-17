@@ -359,6 +359,7 @@ pub(crate) fn emqx_schema() -> PluginSchema {
     schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
     if let Ok(defaults) = simd_json::serde::to_owned_value(EmqxPlugin::current_state()) {
         super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
+        schema.example = Some(defaults);
     }
     schema.methods.insert(
         "get_status".to_string(),
@@ -380,6 +381,21 @@ pub(crate) fn emqx_schema() -> PluginSchema {
             "obs.network.emqx.sockets.list@v1",
         ),
     );
+    schema.capabilities.insert(
+        "cap.network.emqx.status.get@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.network.emqx.status.get@v1".to_string(),
+            description: "Grants: get_status.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cap.network.emqx.sockets.list@v1".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cap.network.emqx.sockets.list@v1".to_string(),
+            description: "Grants: list_sockets.".to_string(),
+        },
+    );
+
     schema
 }
 

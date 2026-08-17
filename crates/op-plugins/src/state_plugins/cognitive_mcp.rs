@@ -1055,6 +1055,21 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         ),
     );
 
+    schema.capabilities.insert(
+        "cognitive_mcp.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cognitive_mcp.read".to_string(),
+            description: "Grants: get_config, get_health, list_tools, memory_retrieve, memory_query, memory_list_namespaces, code_search, code_context.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cognitive_mcp.invoke".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cognitive_mcp.invoke".to_string(),
+            description: "Grants: set_config, register_tool, memory_store, memory_delete, code_index, gemini_query, restart_service, invoke_tool.".to_string(),
+        },
+    );
+
     schema
 }
 
