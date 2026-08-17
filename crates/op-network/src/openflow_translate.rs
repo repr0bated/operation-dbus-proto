@@ -386,3 +386,56 @@ pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> 
     let m = parse_match(&entry.match_fields, port_map)?;
     Ok(Flow::delete().match_fields(m))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rovs_openflow::FlowCommand;
+
+    fn flow_json(cookie: serde_json::Value) -> String {
+        serde_json::json!({
+            "table": 7,
+            "priority": 321,
+            "match_fields": {
+                "in_port": "uplink",
+                "ip": "",
+                "nw_dst": "10.20.0.0/16"
+            },
+            "actions": [{"type": "normal"}],
+            "cookie": cookie,
+            "idle_timeout": 0,
+            "hard_timeout": 0
+        })
+        .to_string()
+    }
+
+    fn ports() -> HashMap<String, u32> {
+        HashMap::from([("uplink".to_string(), 9)])
+    }
+
+    #[test]
+    fn add_uses_the_declared_table() {
+        let flow = json_flow_to_add(&flow_json(serde_json::json!(42)), &ports()).unwrap();
+
+        assert_eq!(flow.table_id, 7);
+    }
+
+    #[test]
+    fn delete_is_strict_and_scoped_to_the_exact_flow() {
+        let flow = json_flow_to_delete(&flow_json(serde_json::json!(42)), &ports()).unwrap();
+
+        assert_eq!(flow.command, FlowCommand::DeleteStrict);
+        assert_eq!(flow.table_id, 7);
+        assert_eq!(flow.priority, 321);
+        assert_eq!(flow.cookie, 42);
+        assert_eq!(flow.cookie_mask, u64::MAX);
+    }
+
+    #[test]
+    fn delete_scopes_an_unspecified_cookie_to_zero() {
+        let flow = json_flow_to_delete(&flow_json(serde_json::Value::Null), &ports()).unwrap();
+
+        assert_eq!(flow.cookie, 0);
+        assert_eq!(flow.cookie_mask, u64::MAX);
+    }
+}
