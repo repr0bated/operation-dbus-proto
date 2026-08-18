@@ -84,6 +84,13 @@ fn parse_ipv4(s: &str) -> Result<Ipv4Addr> {
         .with_context(|| format!("invalid IPv4 address '{s}'"))
 }
 
+fn validate_table(table: u8) -> Result<()> {
+    if table == u8::MAX {
+        bail!("OpenFlow table 255 is reserved as the all-tables sentinel");
+    }
+    Ok(())
+}
+
 /// Parse `a.b.c.d` or `a.b.c.d/n` into (address, prefix_len). Bare addresses
 /// are treated as /32 host matches.
 fn parse_cidr(s: &str) -> Result<(Ipv4Addr, u8)> {
@@ -363,6 +370,7 @@ fn build_actions(
 /// `port_map` (as discovered from the switch's own PortDesc reply).
 pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
+    validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
     let ip_proto = m.ip_proto;
     let actions = build_actions(&entry.actions, port_map, ip_proto)?;
@@ -384,6 +392,7 @@ pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Res
 /// (matches on the same fields, no actions needed).
 pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
+    validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
     let mut flow = Flow::delete()
         .table(entry.table)
