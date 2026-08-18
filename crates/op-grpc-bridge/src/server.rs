@@ -547,3 +547,13 @@ async fn bind_unix_listener(
     }
     Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_server_loads_the_canonical_router_blob() {
+        assert_eq!(ServerConfig::default().plugin_id, "tched_router");
+    }
+}
