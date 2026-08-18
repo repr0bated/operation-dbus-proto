@@ -36,6 +36,7 @@ use crate::proto::zeroclaw::{
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
 /// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
 const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
+const DEFAULT_SCHEMA_PLUGIN_ID: &str = "tched_router";
 // NOTE: 50052 deliberately excluded — already owned by op-cognitive-mcp
 // (COGNITIVE_MCP_GRPC_BIND=10.200.0.2:50052; 0.0.0.0:50052 here would
 // collide with that, since 0.0.0.0 covers every interface including
@@ -67,7 +68,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            plugin_id: "zeroclaw".to_string(),
+            plugin_id: DEFAULT_SCHEMA_PLUGIN_ID.to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
@@ -84,7 +85,7 @@ impl ServerConfig {
         Self {
             plugin_id: std::env::var("OP_DBUS_SCHEMA_PLUGIN_ID")
                 .or_else(|_| std::env::var("ZEROCLAW_PLUGIN_ID"))
-                .unwrap_or_else(|_| "zeroclaw".to_string()),
+                .unwrap_or_else(|_| DEFAULT_SCHEMA_PLUGIN_ID.to_string()),
             schema_path: PathBuf::from(
                 std::env::var("ZEROCLAW_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
