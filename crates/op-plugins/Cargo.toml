@@ -47,8 +47,6 @@ uuid = { workspace = true }
 dirs = "5.0"
 toml = { workspace = true }
 parking_lot = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }
 
 [[bin]]

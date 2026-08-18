@@ -141,13 +141,53 @@ fn patch_config(json_args: &str) -> std::result::Result<DispatchOutcome, TchedRo
         toml::from_str(&serialized).map_err(|e| TchedRouterError::ExecutionDenied {
             reason: format!("patched config fails upstream validation: {e}"),
         })?;
-    std::fs::write(&path, serialized).map_err(|e| TchedRouterError::ExecutionDenied {
-        reason: format!("write {}: {e}", path.display()),
-    })?;
+    write_config_atomically(&path, &serialized)?;
     Ok(DispatchOutcome::plain(serde_json::json!({
         "section": args.section,
         "value": args.value,
     })))
+}
+
+/// Durably replace the live config without exposing a truncated intermediate file.
+fn write_config_atomically(
+    path: &std::path::Path,
+    serialized: &str,
+) -> std::result::Result<(), TchedRouterError> {
+    use std::io::Write;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| TchedRouterError::ExecutionDenied {
+            reason: format!("config path has no parent: {}", path.display()),
+        })?;
+    let mut staged =
+        tempfile::NamedTempFile::new_in(parent).map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("stage config beside {}: {e}", path.display()),
+        })?;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        staged
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .map_err(|e| TchedRouterError::ExecutionDenied {
+                reason: format!("set staged config permissions for {}: {e}", path.display()),
+            })?;
+    }
+    staged
+        .write_all(serialized.as_bytes())
+        .and_then(|_| staged.as_file_mut().sync_all())
+        .map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("write staged config for {}: {e}", path.display()),
+        })?;
+    staged
+        .persist(path)
+        .map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("replace {} with staged config: {}", path.display(), e.error),
+        })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("sync config directory {}: {e}", parent.display()),
+        })
 }
 
 /// Recursively mask secret-bearing keys in a config value.
