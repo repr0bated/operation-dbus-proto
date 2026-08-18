@@ -69,6 +69,27 @@ impl ChatServiceImpl {
 
 type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 'static>>;
 
+async fn dispatch_chat_method(
+    engine: &MutationEngine,
+    chat_args: &str,
+    actor_id: &str,
+) -> anyhow::Result<ChatOutput> {
+    let result = engine
+        .dispatch_method_call(
+            ROUTER_PLUGIN_ID,
+            "Chat",
+            chat_args,
+            Some(ROUTER_CHAT_CAPABILITY),
+            actor_id,
+        )
+        .await?;
+    let payload = result
+        .get("result")
+        .cloned()
+        .ok_or_else(|| anyhow!("tched_router.Chat returned no result payload"))?;
+    serde_json::from_value::<ChatOutput>(payload).context("invalid tched_router.Chat result")
+}
+
 fn provider_names(state: &TchedRouterState, requested: &str) -> Option<Vec<String>> {
     let requested = requested.trim();
     state
@@ -357,20 +378,7 @@ impl ChatService for ChatServiceImpl {
                 .await;
 
             let completion = tokio::select! {
-                result = engine.dispatch_method_call(
-                    ROUTER_PLUGIN_ID,
-                    "Chat",
-                    &chat_args,
-                    Some(ROUTER_CHAT_CAPABILITY),
-                    &actor_id,
-                ) => result.and_then(|result| {
-                    let payload = result
-                        .get("result")
-                        .cloned()
-                        .ok_or_else(|| anyhow!("tched_router.Chat returned no result payload"))?;
-                    serde_json::from_value::<ChatOutput>(payload)
-                        .context("invalid tched_router.Chat result")
-                }),
+                result = dispatch_chat_method(engine.as_ref(), &chat_args, &actor_id) => result,
                 changed = cancel_rx.changed() => {
                     match changed {
                         Ok(()) if *cancel_rx.borrow() => Err(anyhow!("chat cancelled")),
@@ -528,6 +536,28 @@ mod tests {
             chat.required_capability.as_deref(),
             Some(ROUTER_CHAT_CAPABILITY)
         );
+    }
+
+    #[tokio::test]
+    async fn chat_dispatch_reaches_the_tched_router_backend() {
+        let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+            op_state_store::ChainConfig::default(),
+        )));
+        let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+        let engine = MutationEngine::new(event_chain, ovsdb);
+        let input = ChatInput {
+            message: "hello".to_string(),
+            provider: "salad".to_string(),
+            model: "not-a-model".to_string(),
+            ..Default::default()
+        };
+        let args = serde_json::to_string(&input).expect("chat input");
+
+        let error = dispatch_chat_method(&engine, &args, "test-actor")
+            .await
+            .expect_err("undeclared model must be rejected by the router");
+
+        assert!(error.to_string().contains("not declared"), "{error}");
     }
 
     #[test]

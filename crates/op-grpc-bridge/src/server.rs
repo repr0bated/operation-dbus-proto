@@ -83,9 +83,7 @@ impl ServerConfig {
     /// Load configuration from environment variables, falling back to defaults.
     pub fn from_env() -> Self {
         Self {
-            plugin_id: std::env::var("OP_DBUS_SCHEMA_PLUGIN_ID")
-                .or_else(|_| std::env::var("ZEROCLAW_PLUGIN_ID"))
-                .unwrap_or_else(|_| DEFAULT_SCHEMA_PLUGIN_ID.to_string()),
+            plugin_id: configured_schema_plugin_id(|key| std::env::var(key).ok()),
             schema_path: PathBuf::from(
                 std::env::var("ZEROCLAW_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
@@ -134,6 +132,12 @@ impl ServerConfig {
             }
         }
     }
+}
+
+fn configured_schema_plugin_id(getenv: impl Fn(&str) -> Option<String>) -> String {
+    getenv("OP_DBUS_SCHEMA_PLUGIN_ID")
+        .or_else(|| getenv("ZEROCLAW_PLUGIN_ID"))
+        .unwrap_or_else(|| DEFAULT_SCHEMA_PLUGIN_ID.to_string())
 }
 
 /// Shared state for the gRPC service handlers.
@@ -556,5 +560,10 @@ mod tests {
     #[test]
     fn default_server_loads_the_canonical_router_blob() {
         assert_eq!(ServerConfig::default().plugin_id, "tched_router");
+    }
+
+    #[test]
+    fn env_free_server_startup_loads_the_canonical_router_blob() {
+        assert_eq!(configured_schema_plugin_id(|_| None), "tched_router");
     }
 }
