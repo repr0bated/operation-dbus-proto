@@ -28,9 +28,11 @@ OP_WEB_STATIC_DIR=/absolute/path/to/dashboard/dist \
   cargo run -p op-web --bin op-web-server
 ```
 
-The server also requires the sealed plugin catalog in
-`/dev/shm/opdbus/plugin-blobs`; startup exits before binding port 8080 when the
-catalog is absent.
+At startup, the server opens the sealed plugin catalog in
+`/dev/shm/opdbus/plugin-blobs`. It creates an absent directory and can start
+with an empty catalog. It exits before binding port 8080 only if the directory
+cannot be created or read. Plugin-backed routes still require the expected
+blobs to be populated.
 
 ## Source ownership
 

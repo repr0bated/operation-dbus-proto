@@ -5,16 +5,23 @@ filesystem-backed dashboard on port 8080 by default.
 
 ## Prerequisites
 
-The process exits during startup unless the sealed plugin catalog is available
-at `/dev/shm/opdbus/plugin-blobs`. Verify the catalog before starting:
+At startup, `op-web` opens `/dev/shm/opdbus/plugin-blobs`. It creates the
+directory when it is absent, so an absent or empty catalog does not by itself
+block startup. Startup exits only when the directory cannot be created or read,
+for example because of permissions or an I/O error.
+
+Plugin-backed features need a populated catalog. List the active plugins and
+services before testing those features:
 
 ```bash
 cargo run -p op-plugins --bin opblob -- \
   catalog /dev/shm/opdbus/plugin-blobs
 ```
 
-See [Sealed Blob Catalog](../architecture/blob-catalog.md) if it must be
-created or refreshed.
+The command can also create an absent directory; verify that its output names
+the plugins you intend to use. See
+[Sealed Blob Catalog](../architecture/blob-catalog.md) if the catalog must be
+populated or refreshed.
 
 The dashboard is optional for backend work. To serve it, obtain a prebuilt SPA
 directory containing `index.html`; its source and deployment workflow live
