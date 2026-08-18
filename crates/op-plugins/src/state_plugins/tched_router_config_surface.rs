@@ -2232,7 +2232,7 @@ mod tests {
         let target = dir.path().join("config-target.toml");
         let path = dir.path().join("config.toml");
         std::fs::write(&target, "old").expect("write original config");
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640))
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o4640))
             .expect("set original permissions");
         xattr::set(&target, "user.opdbus-test", b"preserve").expect("set original xattr");
         let original_metadata = std::fs::metadata(&target).expect("original metadata");
@@ -2254,7 +2254,7 @@ mod tests {
         let replaced_metadata = std::fs::metadata(&target).expect("replaced metadata");
         assert_eq!(replaced_metadata.uid(), original_metadata.uid());
         assert_eq!(replaced_metadata.gid(), original_metadata.gid());
-        assert_eq!(replaced_metadata.mode() & 0o7777, 0o640);
+        assert_eq!(replaced_metadata.mode() & 0o7777, 0o4640);
         assert_eq!(
             xattr::get(&target, "user.opdbus-test").expect("read replaced xattr"),
             Some(b"preserve".to_vec())
