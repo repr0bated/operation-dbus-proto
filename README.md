@@ -29,15 +29,19 @@ Native, deterministic control plane for Artix Linux infrastructure.
 ## Quick Start
 
 ```bash
-# Build everything
+# Build the control plane
 cargo build --workspace --release
 
-# Build frontend
-cd lovable && npm ci && npm run build
-
-# Run web server
-cargo run --release -p op-web
+# Run the HTTP API and serve an existing dashboard build
+OP_WEB_STATIC_DIR=/path/to/dashboard/dist \
+  cargo run --release -p op-web --bin op-web-server
 ```
+
+`op-web` reads dashboard files from `OP_WEB_STATIC_DIR` (default:
+`/usr/local/share/op-dbus/dashboard`). The removed `lovable/` checkout is not a
+build input, and `op-web` does not embed either frontend tree in this repository.
+See [`docs/operations/op-web-ui-build.md`](docs/operations/op-web-ui-build.md)
+for the UI source-of-truth and deployment contract.
 
 ## Key Principles
 

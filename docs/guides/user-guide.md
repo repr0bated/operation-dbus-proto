@@ -35,11 +35,18 @@ cargo build --workspace --release
 cargo check -p op-plugins
 ```
 
-Frontend:
+In-repository frontend prototype:
 
 ```bash
-cd crates/op-web/ui && npm ci && npm run build:prod
+cd crates
+npm ci
+npm run build
 ```
+
+This output is not embedded in `op-web`. The deployed dashboard is maintained
+outside this repository and supplied as a prebuilt directory through
+`OP_WEB_STATIC_DIR`. See
+[`docs/operations/op-web-ui-build.md`](../operations/op-web-ui-build.md).
 
 ## 4. Lint, format, and test (run before completing work)
 
@@ -58,8 +65,9 @@ cd crates && npm run typecheck
 ## 5. Run
 
 ```bash
-# Unified web server + chat UI
-cargo run --release -p op-web
+# Unified web server with a prebuilt dashboard
+OP_WEB_STATIC_DIR=/absolute/path/to/dashboard/dist \
+  cargo run --release -p op-web --bin op-web-server
 ```
 
 Service definitions live under `deploy/runit/`. The control-plane services

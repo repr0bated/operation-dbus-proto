@@ -14,24 +14,31 @@ cargo check -p <crate>
 
 ## Frontend
 
-There are two Vite apps. The primary UI dev tree lives in `crates/` and is
-built with:
+The Vite/React development prototype lives in `crates/`:
 
 ```bash
 cd crates
+npm ci
 npm run build
 ```
 
-The embedded UI that `op-web` actually serves lives in `crates/op-web/ui/`
-and is built with:
+This build is useful for frontend development, but `op-web` does not embed or
+automatically serve it. The deployed dashboard is maintained outside this
+repository and provided to `op-web` as a prebuilt static directory.
 
-```bash
-cd crates/op-web/ui
-npx vite build
-```
+`crates/op-web/ui/` is also not an embedded Vite application. It currently
+contains native Rust/egui source and stale Node metadata, with no package build
+script or Cargo target that feeds `op-web`.
 
 ## Release builds
 
-`op-web` release builds require `crates/op-web/ui/dist/index.html` to exist
-because the assets are embedded with RustEmbed. Dev builds compile with an
-empty asset set, so the requirement only applies to `--release`.
+Dashboard assets are not a prerequisite for an `op-web` release build:
+
+```bash
+cargo build -p op-web --release
+```
+
+At runtime, set `OP_WEB_STATIC_DIR` to a dashboard build containing
+`index.html`. The default is `/usr/local/share/op-dbus/dashboard`. See the
+dashboard serving runbook at `docs/operations/op-web-ui-build.md` for the full
+contract and verification steps.
