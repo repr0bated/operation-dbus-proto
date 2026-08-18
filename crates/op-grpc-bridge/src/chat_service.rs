@@ -35,6 +35,9 @@ use crate::proto::chat::{
     CancelResponse, ChatFrame, Heartbeat, SendRequest, StreamDone, StreamError, UiMessagePart,
 };
 
+const ROUTER_PLUGIN_ID: &str = "tched_router";
+const ROUTER_CHAT_CAPABILITY: &str = "cap.software.3tched-router.chat@v1";
+
 #[derive(Clone, Debug)]
 struct ResolvedExecutionRoute {
     provider: ProviderType,
@@ -281,9 +284,9 @@ impl ChatService for ChatServiceImpl {
             .cloned()
             .ok_or_else(|| Status::unauthenticated("Ghostbridge identity is required"))?;
         crate::grpc_server::authorize_schema_method(
-            "zeroclaw",
+            ROUTER_PLUGIN_ID,
             "Chat",
-            Some("cap.software.zeroclaw.chat@v1"),
+            Some(ROUTER_CHAT_CAPABILITY),
             Some(&identity),
         )?;
         let req = request.into_inner();
@@ -355,18 +358,18 @@ impl ChatService for ChatServiceImpl {
 
             let completion = tokio::select! {
                 result = engine.dispatch_method_call(
-                    "zeroclaw",
+                    ROUTER_PLUGIN_ID,
                     "Chat",
                     &chat_args,
-                    Some("cap.software.zeroclaw.chat@v1"),
+                    Some(ROUTER_CHAT_CAPABILITY),
                     &actor_id,
                 ) => result.and_then(|result| {
                     let payload = result
                         .get("result")
                         .cloned()
-                        .ok_or_else(|| anyhow!("zeroclaw.Chat returned no result payload"))?;
+                        .ok_or_else(|| anyhow!("tched_router.Chat returned no result payload"))?;
                     serde_json::from_value::<ChatOutput>(payload)
-                        .context("invalid zeroclaw.Chat result")
+                        .context("invalid tched_router.Chat result")
                 }),
                 changed = cancel_rx.changed() => {
                     match changed {
@@ -514,6 +517,18 @@ impl ChatService for ChatServiceImpl {
 mod tests {
     use super::*;
     use op_plugins::state_plugins::tched_router::TchedRouterPlugin;
+
+    #[test]
+    fn chat_service_binding_matches_router_schema() {
+        let schema = op_plugins::state_plugins::tched_router::tched_router_plugin_schema();
+        let chat = schema.methods.get("Chat").expect("Chat method");
+
+        assert_eq!(schema.name, ROUTER_PLUGIN_ID);
+        assert_eq!(
+            chat.required_capability.as_deref(),
+            Some(ROUTER_CHAT_CAPABILITY)
+        );
+    }
 
     #[test]
     fn explicit_provider_and_model_resolve_through_schema_catalog() {
