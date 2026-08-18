@@ -219,7 +219,10 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
             writeln!(
                 rust,
                 "            self.call_generated_plugin_method_typed({:?}, {:?}, {:?}, {:?}, request).await",
-                set.plugin_id, method.schema_name, method.input_name, method.output_name
+                set.plugin_id,
+                method.schema_name,
+                format!("operation.plugin.v1.{}", method.input_name),
+                format!("operation.plugin.v1.{}", method.output_name)
             )
             .unwrap();
             writeln!(rust, "        }}").unwrap();
