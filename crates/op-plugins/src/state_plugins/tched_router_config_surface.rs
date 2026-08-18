@@ -2078,14 +2078,12 @@ fn write_config_atomically(
 
     // Follow an operator-supplied symlink exactly as the previous in-place
     // write did, while still staging on the target's filesystem.
-    let resolved =
-        std::fs::canonicalize(path).map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("resolve config path {}: {e}", path.display()),
-        })?;
-    let metadata =
-        std::fs::metadata(&resolved).map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("read config metadata {}: {e}", resolved.display()),
-        })?;
+    let resolved = std::fs::canonicalize(path).map_err(|e| TchedRouterError::ExecutionDenied {
+        reason: format!("resolve config path {}: {e}", path.display()),
+    })?;
+    let metadata = std::fs::metadata(&resolved).map_err(|e| TchedRouterError::ExecutionDenied {
+        reason: format!("read config metadata {}: {e}", resolved.display()),
+    })?;
     let parent = resolved
         .parent()
         .ok_or_else(|| TchedRouterError::ExecutionDenied {
@@ -2114,7 +2112,10 @@ fn write_config_atomically(
         .as_file()
         .set_permissions(metadata.permissions())
         .map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("preserve config permissions for {}: {e}", resolved.display()),
+            reason: format!(
+                "preserve config permissions for {}: {e}",
+                resolved.display()
+            ),
         })?;
     for name in xattr::list(&resolved).map_err(|e| TchedRouterError::ExecutionDenied {
         reason: format!("list config attributes for {}: {e}", resolved.display()),
@@ -2214,9 +2215,9 @@ mod tests {
         let original = std::fs::read_to_string(&path).expect("read original target");
 
         assert!(
-            write_config_atomically(&path, "destroyed").is_err_and(
-                |error| error.to_string().contains("stage config beside /proc/version")
-            ),
+            write_config_atomically(&path, "destroyed").is_err_and(|error| error
+                .to_string()
+                .contains("stage config beside /proc/version")),
             "patch must fail specifically while staging"
         );
         assert!(
