@@ -33,12 +33,12 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("live-schema.json");
     let schema = json!({
-        "name": "zeroclaw",
+        "name": "tched_router",
         "version": "1.0.0",
         "kind": "llm",
         "description": "test schema"
     });
-    write_schema(&path, &json!({ "zeroclaw": [schema] }));
+    write_schema(&path, &json!({ "tched_router": [schema] }));
 
     let loader = Arc::new(SchemaLoader::new(&path).unwrap());
 
@@ -87,7 +87,7 @@ async fn should_serve_schema_over_grpc_web() {
     let inner = response.into_inner();
 
     let parsed: serde_json::Value = serde_json::from_str(&inner.schema_json).unwrap();
-    assert_eq!(parsed["name"], "zeroclaw");
+    assert_eq!(parsed["name"], "tched_router");
     assert_eq!(parsed["version"], "1.0.0");
     assert_eq!(inner.trace_id, "integration-test-trace");
     assert_eq!(inner.footprint, "integration-test-footprint");
@@ -117,7 +117,7 @@ async fn should_stream_reload_on_sighup() {
     // the event through the loader's channel. Tests do not send real SIGHUP to
     // the process to avoid interfering with other tests.
     let updated = json!({
-        "name": "zeroclaw",
+        "name": "tched_router",
         "version": "2.0.0",
         "kind": "llm",
         "description": "reloaded schema"
@@ -142,7 +142,7 @@ async fn should_stream_reload_on_sighup() {
 }
 
 #[tokio::test]
-async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
+async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
@@ -151,17 +151,17 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
 
     let result = engine
         .dispatch_method_call(
-            "zeroclaw",
+            "tched_router",
             "ListModels",
             r#"{"provider":"salad"}"#,
-            Some("cap.software.zeroclaw.models.read@v1"),
+            Some("cap.software.3tched-router.models.read@v1"),
             "integration-test-actor",
         )
         .await
         .unwrap();
 
     assert_eq!(result["success"], true);
-    assert_eq!(result["plugin_id"], "zeroclaw");
+    assert_eq!(result["plugin_id"], "tched_router");
     assert_eq!(result["method"], "ListModels");
     let routes = result["result"]["model_routes"].as_array().unwrap();
     assert!(!routes.is_empty());
@@ -171,11 +171,11 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();
-    assert_eq!(event.plugin_id, "zeroclaw");
+    assert_eq!(event.plugin_id, "tched_router");
     assert_eq!(event.method_name.as_deref(), Some("ListModels"));
     assert_eq!(
         event.capability_id.as_deref(),
-        Some("cap.software.zeroclaw.models.read@v1")
+        Some("cap.software.3tched-router.models.read@v1")
     );
     assert_eq!(event.actor_id, "integration-test-actor");
     assert!(event.json_args_footprint.is_some());

@@ -85,7 +85,7 @@ async fn call_zeroclaw_method(
     let payload = envelope.get("result").cloned().ok_or_else(|| {
         json_error_response(
             StatusCode::BAD_GATEWAY,
-            "ZeroClaw method response is missing its result payload",
+            "tched_router method response is missing its result payload",
         )
     })?;
     let json = simd_json::to_string(&payload)
@@ -257,7 +257,7 @@ pub async fn openai_models_handler(
     else {
         return json_error_response(
             StatusCode::BAD_GATEWAY,
-            "ZeroClaw ListModels returned no model_routes",
+            "tched_router ListModels returned no model_routes",
         );
     };
     let mut seen = std::collections::HashSet::new();
@@ -317,10 +317,7 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 /// `/dev/shm/live-schema.json` is gone. Live projection values take precedence,
 /// while schema field defaults provide the boot-safe provider/model catalog.
 fn read_zeroclaw_schema_shm() -> Option<Value> {
-    let schema = op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::ROUTER_PLUGIN_ID)
-        .or_else(|| {
-            op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID)
-        })?;
+    let schema = op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::ROUTER_PLUGIN_ID)?;
     // `PluginSchema` serializes to { name, version, fields, methods, … }.
     let mut v: Value = simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?;
     // Stamp the catalog_hash so consumers can verify lineage.
@@ -358,13 +355,13 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
     json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "ZeroClaw HTTP compatibility",
+            "title": "tched_router HTTP compatibility",
             "version": "1.0.0"
         },
         "paths": {
             "/v1/models": {
                 "get": {
-                    "operationId": "zeroclaw.ListModels",
+                    "operationId": "tched_router.ListModels",
                     "x-opdbus-method-contract": list_models,
                     "responses": {
                         "200": {
@@ -375,7 +372,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
             },
             "/v1/chat/completions": {
                 "post": {
-                    "operationId": "zeroclaw.Chat",
+                    "operationId": "tched_router.Chat",
                     "x-opdbus-method-contract": chat,
                     "requestBody": {
                         "required": true,
@@ -392,22 +389,22 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
                     }
                 }
             },
-            "/api/zeroclaw/chat": {
+            "/api/tched_router/chat": {
                 "post": {
-                    "operationId": "zeroclaw.Chat",
+                    "operationId": "tched_router.Chat",
                     "responses": {
                         "200": {
-                            "description": "ZeroClaw chat completion"
+                            "description": "tched_router chat completion"
                         }
                     }
                 }
             },
             "/api/llm/chat": {
                 "post": {
-                    "operationId": "zeroclaw.Chat",
+                    "operationId": "tched_router.Chat",
                     "responses": {
                         "200": {
-                            "description": "ZeroClaw chat completion"
+                            "description": "tched_router chat completion"
                         }
                     }
                 }
@@ -418,10 +415,10 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
 
 /// Serve the combined schema for schema-driven UI rendering.
 ///
-/// Combines the locally-derived HTTP adapter document with the ZeroClaw plugin
+/// Combines the locally-derived HTTP adapter document with the tched_router
 /// projection (providers, model_routes, tools, structured_output) so the
 /// frontend can render the entire chat interface from a single schema.
-/// GET /api/zeroclaw/schema
+/// GET /api/tched_router/schema
 pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
     // Read zeroclaw state directly from the SHM state tree. Fall back to the
     // sealed PluginSchema blob so the schema surface still renders when no
@@ -433,14 +430,14 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
         }
         None => match read_zeroclaw_schema_shm() {
             Some(schema) => {
-                warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
+                warn!("tched_router SHM state unavailable; using PluginSchema only");
                 (schema.clone(), Some(schema))
             }
             None => {
-                error!("Zeroclaw not available from SHM state tree or PluginSchema");
+                error!("tched_router not available from SHM state tree or PluginSchema");
                 return json_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "Zeroclaw projection not available",
+                    "tched_router projection not available",
                 );
             }
         },
@@ -511,7 +508,7 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     let chat_schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
-        "title": "Zeroclaw Chat",
+        "title": "tched_router Chat",
         "properties": {
             "provider": {
                 "type": "string",
@@ -560,7 +557,7 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     let openapi = compatibility_openapi(zeroclaw_schema.as_ref());
     let schema = json!({
         "openapi": openapi,
-        "zeroclaw": {
+        "tched_router": {
             "plugin_state": zeroclaw,
             "schema": zeroclaw_schema,
             "chat_form_schema": chat_schema,

@@ -1,7 +1,7 @@
 //! Router-plugin helpers backed by the SHM state tree.
 //!
-//! HTTP paths stay `/api/zeroclaw/*` and `/api/llm/*` (what the UI already
-//! calls). The sealed plugin those handlers read is `tched_router`.
+//! HTTP paths `/api/llm/*` and `/api/tched_router/*` read the sealed
+//! `tched_router` plugin. The retired `zeroclaw` plugin id is not a fallback.
 
 use anyhow::{bail, Result};
 use simd_json::prelude::*;
@@ -9,11 +9,8 @@ use simd_json::OwnedValue as Value;
 
 use crate::state_tree;
 
-/// Canonical D-Bus / SHM plugin id after the OpenCode rebrand.
+/// Canonical D-Bus / SHM plugin id.
 pub const ROUTER_PLUGIN_ID: &str = "tched_router";
-/// Pre-rebrand plugin id. Still accepted so a host that has not resealed yet
-/// keeps serving the same UI endpoints.
-pub const LEGACY_ROUTER_PLUGIN_ID: &str = "zeroclaw";
 
 #[derive(Debug, Clone)]
 pub struct ZeroclawRoute {
@@ -82,10 +79,9 @@ impl ZeroclawRoute {
     }
 }
 
-/// Live router plugin state: `tched_router` first, then legacy `zeroclaw`.
+/// Live router plugin state. The `zeroclaw` plugin id is retired.
 pub fn read_router_plugin() -> Option<Value> {
     state_tree::read_plugin(ROUTER_PLUGIN_ID)
-        .or_else(|| state_tree::read_plugin(LEGACY_ROUTER_PLUGIN_ID))
 }
 
 /// `model_routes` live at the top level (flattened catalog) or under the

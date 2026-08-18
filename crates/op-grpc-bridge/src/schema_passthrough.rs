@@ -140,7 +140,7 @@ impl SchemaPassthroughService {
         self.router.list_plugin_ids().await
     }
 
-    /// Build the read-only `ZeroclawProjection` proto for the `"zeroclaw"`
+    /// Build the read-only `ZeroclawProjection` proto for the `"tched_router"`
     /// plugin from the in-memory `TchedRouterState` (never a `/dev/shm` re-read).
     /// Returns `None` for any other plugin name.
     /// subid: `exp.service.zeroclaw-bridge.grpc-stream@v1`.

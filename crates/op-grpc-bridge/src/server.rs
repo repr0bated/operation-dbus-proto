@@ -67,7 +67,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            plugin_id: "zeroclaw".to_string(),
+            plugin_id: "tched_router".to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
@@ -83,8 +83,7 @@ impl ServerConfig {
     pub fn from_env() -> Self {
         Self {
             plugin_id: std::env::var("OP_DBUS_SCHEMA_PLUGIN_ID")
-                .or_else(|_| std::env::var("ZEROCLAW_PLUGIN_ID"))
-                .unwrap_or_else(|_| "zeroclaw".to_string()),
+                .unwrap_or_else(|_| "tched_router".to_string()),
             schema_path: PathBuf::from(
                 std::env::var("ZEROCLAW_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),

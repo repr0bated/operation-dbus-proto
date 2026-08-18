@@ -71,10 +71,10 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
     })
 }
 
-/// Build the model list from the zeroclaw plugin projection (`model_routes`).
+/// Build the model list from the tched_router plugin projection (`model_routes`).
 ///
-/// The zeroclaw plugin is the single source of truth: its live state
-/// is projected verbatim at `/org/opdbus/v1/plugins/zeroclaw`. We read it from
+/// The tched_router plugin is the single source of truth: its live state
+/// is projected verbatim at `/org/opdbus/v1/plugins/tched_router`. We read it from
 /// the SHM state tree and surface each route as a selectable model.
 async fn models_from_zeroclaw(state: &AppState) -> Option<Vec<ModelInfo>> {
     let routes = crate::zeroclaw_routes::routes()?;
@@ -140,9 +140,7 @@ pub async fn get_models(
             .into_response();
     };
 
-    if provider_str == crate::zeroclaw_routes::ROUTER_PLUGIN_ID
-        || provider_str == crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID
-    {
+    if provider_str == crate::zeroclaw_routes::ROUTER_PLUGIN_ID {
         if let Some(models) = models_from_zeroclaw(&state).await {
             return Json(ModelsResponse {
                 provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),

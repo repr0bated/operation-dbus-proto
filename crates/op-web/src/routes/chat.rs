@@ -75,7 +75,9 @@ pub async fn chat_message(
             StatusCode::CONFLICT,
             Json(ChatResponse {
                 content: String::new(),
-                provider: req.provider.unwrap_or_else(|| "zeroclaw".to_string()),
+                provider: req.provider.unwrap_or_else(|| {
+                    crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string()
+                }),
                 model: selected_model,
                 tools_used: None,
                 error: Some(e.to_string()),
@@ -107,10 +109,10 @@ pub async fn chat_message(
                 StatusCode::CONFLICT,
                 Json(ChatResponse {
                     content: String::new(),
-                    provider: "zeroclaw".to_string(),
+                    provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),
                     model: selected_model,
                     tools_used: None,
-                    error: Some("Model is not routed by Zeroclaw".to_string()),
+                    error: Some("Model is not routed by tched_router".to_string()),
                 }),
             );
         };

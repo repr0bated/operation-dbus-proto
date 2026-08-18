@@ -21,7 +21,12 @@ use simd_json::OwnedValue as Value;
 // PLUGIN ENTRY: identity and typed schema seed
 // =============================================================================
 
-const PLUGIN_NAME: &str = "tched_router";
+/// Canonical D-Bus / SHM / gRPC plugin id. The retired `zeroclaw` plugin id
+/// is not a fallback — reseal must produce `tched_router.<hash>.blob`.
+pub const PLUGIN_ID: &str = "tched_router";
+pub const CHAT_CAPABILITY: &str = "cap.software.3tched-router.chat@v1";
+pub const MODELS_READ_CAPABILITY: &str = "cap.software.3tched-router.models.read@v1";
+const PLUGIN_NAME: &str = PLUGIN_ID;
 const PLUGIN_VERSION: &str = "1.0.0";
 const PLUGIN_CATEGORY: &str = "llm";
 const PLUGIN_DESCRIPTION: &str = "3tched Router — schema/RPC-native model router for Antigravity UI, CLI providers, and structured JSON output";
@@ -40,9 +45,9 @@ pub struct LlmTransport {
     #[schemars(extend("x-oscal-subid" = "mut.service.3tched-router-transport.grpc-target@v1"))]
     pub grpc_target: String,
     /// Incus / WireGuard container target for xray routing. Kept as a
-    /// published-schema field for backward compatibility, but zeroclaw's LLM
+    /// published-schema field for backward compatibility, but tched_router's LLM
     /// transport now runs on the host (xray through its runit-managed service and
-    /// the gRPC-bridge via `op-grpc-bridge-zeroclaw`); there is no per-service
+    /// the gRPC-bridge via `op-grpc-bridge`); there is no per-service
     /// incus container. Defaults to the `"host"` sentinel.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.3tched-router-transport.incus-container@v1"))]
@@ -642,7 +647,7 @@ impl TchedRouterPlugin {
                 incus_container: "host".to_string(),
                 browser_surface: "gRPC-Web through op-web".to_string(),
                 rest_aliases: vec![
-                    "/api/zeroclaw/chat".to_string(),
+                    "/api/tched_router/chat".to_string(),
                     "/api/llm/chat".to_string(),
                 ],
                 policy_source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),

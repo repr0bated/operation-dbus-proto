@@ -95,7 +95,7 @@ fn names_contain(names: &[String], candidate: &str) -> bool {
 
 fn provider_type_for(state: &TchedRouterState, provider_id: &str) -> anyhow::Result<ProviderType> {
     let names = provider_names(state, provider_id)
-        .ok_or_else(|| anyhow!("provider '{provider_id}' is not declared by ZeroClaw"))?;
+        .ok_or_else(|| anyhow!("provider '{provider_id}' is not declared by tched_router"))?;
     names
         .iter()
         .find_map(|name| ProviderType::from_str(name).ok())
@@ -124,7 +124,7 @@ fn resolve_declared_route(
     };
 
     let provider_aliases = provider_names(state, provider_request)
-        .ok_or_else(|| anyhow!("provider '{provider_request}' is not declared by ZeroClaw"))?;
+        .ok_or_else(|| anyhow!("provider '{provider_request}' is not declared by tched_router"))?;
 
     let provider_matches =
         |route: &&op_plugins::state_plugins::common::llm_projection::ModelRoute| {
@@ -227,9 +227,9 @@ async fn execute_chat(
     Ok((route, response))
 }
 
-/// Execute the schema-declared `zeroclaw.Chat` method after the mutation
+/// Execute the schema-declared `tched_router.Chat` method after the mutation
 /// engine has recorded the call. Provider/model selection remains owned by
-/// the projected ZeroClaw schema; `ChatManager` only performs the resolved
+/// the projected tched_router schema; `ChatManager` only performs the resolved
 /// upstream call.
 pub(crate) async fn dispatch_schema_chat(
     chat_manager: &ChatManager,
@@ -285,9 +285,9 @@ impl ChatService for ChatServiceImpl {
             .cloned()
             .ok_or_else(|| Status::unauthenticated("Ghostbridge identity is required"))?;
         crate::grpc_server::authorize_schema_method(
-            "zeroclaw",
+            op_plugins::state_plugins::tched_router::PLUGIN_ID,
             "Chat",
-            Some("cap.software.zeroclaw.chat@v1"),
+            Some(op_plugins::state_plugins::tched_router::CHAT_CAPABILITY),
             Some(&identity),
         )?;
         let req = request.into_inner();
@@ -359,18 +359,18 @@ impl ChatService for ChatServiceImpl {
 
             let completion = tokio::select! {
                 result = engine.dispatch_method_call(
-                    "zeroclaw",
+                    op_plugins::state_plugins::tched_router::PLUGIN_ID,
                     "Chat",
                     &chat_args,
-                    Some("cap.software.zeroclaw.chat@v1"),
+                    Some(op_plugins::state_plugins::tched_router::CHAT_CAPABILITY),
                     &actor_id,
                 ) => result.and_then(|result| {
                     let payload = result
                         .get("result")
                         .cloned()
-                        .ok_or_else(|| anyhow!("zeroclaw.Chat returned no result payload"))?;
+                        .ok_or_else(|| anyhow!("tched_router.Chat returned no result payload"))?;
                     serde_json::from_value::<ChatOutput>(payload)
-                        .context("invalid zeroclaw.Chat result")
+                        .context("invalid tched_router.Chat result")
                 }),
                 changed = cancel_rx.changed() => {
                     match changed {

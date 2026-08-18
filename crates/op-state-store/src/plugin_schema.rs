@@ -164,7 +164,7 @@ pub struct SignalDecl {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityDecl {
     /// Capability id, canonical OSCAL form
-    /// (e.g. `cap.software.zeroclaw.gateway-config.read@v1`).
+    /// (e.g. `cap.software.3tched-router.gateway-config.read@v1`).
     pub id: String,
     /// What this capability authorizes.
     pub description: String,
@@ -4779,10 +4779,10 @@ mod tests {
     #[test]
     fn canonical_capability_ids_are_recognized() {
         assert!(is_canonical_capability_id(
-            "cap.software.zeroclaw.gateway-config.read@v1"
+            "cap.software.3tched-router.gateway-config.read@v1"
         ));
         assert!(!is_canonical_capability_id("agent.read"));
-        assert!(!is_canonical_capability_id("cap.software.zeroclaw.read"));
+        assert!(!is_canonical_capability_id("cap.software.3tched-router.read"));
         assert!(!is_canonical_capability_id(""));
     }
 

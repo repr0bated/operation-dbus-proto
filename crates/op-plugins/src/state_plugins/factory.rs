@@ -56,19 +56,11 @@ mod projection {
 
     /// Read tched_router model_routes from D-Bus projection cache
     pub fn read_zeroclaw_model_routes() -> Option<Value> {
-        // The sealed blob IS the plugin: tched_router exists iff its blob is in
-        // the SHM catalog. Accept the pre-rebrand id until the host reseals.
-        op_blob::catalog::read_plugin_schema_shm("tched_router")
-            .or_else(|| op_blob::catalog::read_plugin_schema_shm("zeroclaw"))?;
+        op_blob::catalog::read_plugin_schema_shm("tched_router")?;
 
         // Read router projection from D-Bus via /dev/shm projection cache
         // The actual projection is written by op-dbus at /dev/shm/plugin-{name}.json
-        let projection_path = if std::path::Path::new("/dev/shm/plugin-tched_router.json").exists() {
-            "/dev/shm/plugin-tched_router.json"
-        } else {
-            "/dev/shm/plugin-zeroclaw.json"
-        };
-        let proj_bytes = std::fs::read(projection_path).ok()?;
+        let proj_bytes = std::fs::read("/dev/shm/plugin-tched_router.json").ok()?;
         let mut proj_bytes = proj_bytes;
         let zeroclaw_proj: Value = simd_json::to_owned_value(&mut proj_bytes).ok()?;
 
@@ -131,18 +123,16 @@ impl FactoryPlugin {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
     }
 
-    /// Discover BYOM sources from zeroclaw D-Bus projection
+    /// Discover BYOM sources from the tched_router D-Bus projection
     fn discover_byom_sources() -> Value {
-        // Try to read zeroclaw model routes via D-Bus projection
         match projection::read_zeroclaw_model_routes() {
             Some(routes) => projection::routes_to_byom_sources(&routes),
             None => {
-                // Fallback: return empty array with discovery metadata
                 json!({
                     "sources": [],
-                    "discovery_status": "zeroclaw_projection_unavailable",
-                    "discovery_path": "/opdbus/v1/plugins/zeroclaw",
-                    "note": "BYOM sources will appear when zeroclaw plugin is projected via D-Bus"
+                    "discovery_status": "tched_router_projection_unavailable",
+                    "discovery_path": "/opdbus/v1/plugins/tched_router",
+                    "note": "BYOM sources will appear when tched_router is projected via D-Bus"
                 })
             }
         }
@@ -289,7 +279,7 @@ impl FactoryPlugin {
                 },
                 {
                     "id": "tched_router", "route": "tched_router", "kind": "byom_router",
-                    "aliases": ["byom", "local", "openrouter", "ollama", "zeroclaw"],
+                    "aliases": ["byom", "local", "openrouter", "ollama"],
                     "endpoint": "/opdbus/v1/plugins/tched_router", "auth": "dbus_projection",
                     "description": "BYOM source - discovers models from tched_router D-Bus projection",
                     "discovery_plugin": "tched_router",

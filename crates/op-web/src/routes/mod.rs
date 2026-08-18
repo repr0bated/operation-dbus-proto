@@ -83,16 +83,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/chat", post(handlers::chat::chat_handler))
         .route("/chat/stream", post(handlers::chat::chat_stream_handler))
         .route(
-            "/zeroclaw/chat",
+            "/tched_router/chat",
             post(handlers::zeroclaw::zeroclaw_chat_handler),
         )
         .route(
-            "/zeroclaw/chat/stream",
+            "/tched_router/chat/stream",
             post(handlers::zeroclaw::zeroclaw_chat_stream_handler),
-        )
-        .route(
-            "/zeroclaw/schema",
-            get(handlers::zeroclaw::zeroclaw_schema_handler),
         )
         .route(
             "/tched_router/schema",

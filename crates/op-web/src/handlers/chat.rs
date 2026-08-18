@@ -148,7 +148,7 @@ pub async fn chat_handler(
                 tools_executed: vec![],
                 session_id,
                 model: selected_model,
-                provider: "zeroclaw".to_string(),
+                provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),
                 container_id,
             });
         }
@@ -198,7 +198,7 @@ pub async fn chat_handler(
                     route.upstream_provider
                 )),
             },
-            None => Err(anyhow::anyhow!("Model is not routed by Zeroclaw")),
+            None => Err(anyhow::anyhow!("Model is not routed by tched_router")),
         },
         _ => state.chat_manager.chat(messages).await,
     };

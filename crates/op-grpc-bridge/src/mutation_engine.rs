@@ -1308,7 +1308,7 @@ impl MutationEngine {
                     ) {
                         Ok(outcome) => {
                             if method.starts_with("Set") {
-                                self.persist_zeroclaw_mutation(method, &outcome.result)
+                                self.persist_tched_router_mutation(method, &outcome.result)
                                     .await?;
                             }
                             if let Some(sig) = &outcome.signal {
@@ -1418,7 +1418,7 @@ impl MutationEngine {
         let _ = self.change_tx.send(signal);
     }
 
-    async fn persist_zeroclaw_mutation(
+    async fn persist_tched_router_mutation(
         &self,
         method: &str,
         result: &serde_json::Value,
@@ -1443,7 +1443,7 @@ impl MutationEngine {
     }
 
     /// Merge a flat JSON object of changed fields into the authoritative
-    /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
+    /// in-memory state cache for `plugin_id` (used to persist tched_router `Set*`
     /// selection changes so readers observe the new effective state).
     async fn merge_into_state_cache(&self, plugin_id: &str, changes: &serde_json::Value) {
         let changes_obj = match changes.as_object() {
