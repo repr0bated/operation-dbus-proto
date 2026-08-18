@@ -2172,7 +2172,10 @@ mod tests {
             std::env::remove_var("TCHED_ROUTER_CONFIG_PATH");
         }
 
-        assert!(result.is_err(), "patch must fail before touching the live file");
+        assert!(
+            result.is_err(),
+            "patch must fail before touching the live file"
+        );
         assert_eq!(contents, original, "failed patch must preserve live config");
     }
 }
