@@ -5,7 +5,8 @@
 //!  gRPC Client  →  AssistantGrpcServer  →  Transport (D-Bus | HTTP-RPC)  →  Assistant
 //! ```
 //!
-//! - Authentication is WireGuard-identity based (zero-trust at the network layer).
+//! - Authentication verifies Ghostbridge footprint against IdentitySled
+//!   (same gate as op-cognitive-mcp).
 //! - Primary transport is D-Bus; falls back to JSON-RPC over HTTP when D-Bus is unavailable.
 //! - Each Assistant API surface (agents, sessions, tasks, models, cron, soul, namespace,
 //!   memory) is exposed as its own gRPC service.
@@ -13,6 +14,7 @@
 pub mod agents;
 pub mod auth;
 pub mod client;
+pub mod cognitive_client;
 pub mod convert;
 pub mod cron;
 pub mod dbus_service;

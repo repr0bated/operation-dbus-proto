@@ -5171,6 +5171,7 @@ dependencies = [
  "futures",
  "hex",
  "op-cognitive-mcp",
+ "op-identity",
  "prost 0.13.5",
  "prost-types 0.13.5",
  "reqwest 0.11.27",

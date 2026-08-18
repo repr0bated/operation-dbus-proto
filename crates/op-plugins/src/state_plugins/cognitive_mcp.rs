@@ -143,24 +143,30 @@ impl CognitiveMcpPlugin {
 
         let reply = conn
             .call_method(
-                Some("opdbus.v1"),
-                "/org/opdbus/v1/plugins/s6/systemctl",
-                Some("opdbus.v1.S6.Systemctl"),
+                Some("org.opdbus.v1.Runit.Systemctl"),
+                "/org/opdbus/v1/plugins/runit/systemctl",
+                Some("org.opdbus.v1.Runit.Systemctl"),
                 "reload",
                 &("op-cognitive-mcp",),
             )
             .await
-            .context("Failed to call reload on s6-systemctl D-Bus service")?;
+            .context("Failed to call reload on runit-systemctl D-Bus service")?;
 
         let (success, message): (bool, String) = reply.body().deserialize().map_err(|e| {
-            anyhow::anyhow!("Failed to deserialize s6-systemctl reload response: {}", e)
+            anyhow::anyhow!(
+                "Failed to deserialize runit-systemctl reload response: {}",
+                e
+            )
         })?;
 
         if success {
             tracing::info!("Reloaded op-cognitive-mcp via D-Bus: {}", message);
             Ok(())
         } else {
-            Err(anyhow::anyhow!("s6-systemctl reload failed: {}", message))
+            Err(anyhow::anyhow!(
+                "runit-systemctl reload failed: {}",
+                message
+            ))
         }
     }
 }

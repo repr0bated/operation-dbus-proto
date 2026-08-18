@@ -1,7 +1,9 @@
 //! D-Bus service for systemctl-to-runit command mapping on Artix Linux.
 //!
-//! Implements the org.opdbus.v1.S6.Systemctl interface, mapping
+//! Implements the `org.opdbus.v1.Runit.Systemctl` interface, mapping
 //! systemctl commands to runit operations for Artix Linux systems.
+//! `org.opdbus.v1.S6.Systemctl` is a well-known-name alias only (one release);
+//! it is not the D-Bus interface.
 //!
 //! ## Runit layout (Artix convention)
 //!
@@ -233,7 +235,7 @@ impl ServiceStatus {
     }
 }
 
-#[interface(name = "org.opdbus.v1.S6.Systemctl")]
+#[interface(name = "org.opdbus.v1.Runit.Systemctl")]
 impl S6SystemctlService {
     /// Start a service (ensures live symlink, then `sv up <service>`)
     async fn start(&self, service: &str) -> (bool, String) {

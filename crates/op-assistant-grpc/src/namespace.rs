@@ -1,7 +1,10 @@
-//! NamespaceMemoryService — backed by `SoulMemoryStore::*_binding` for the
-//! agent → namespace mapping and `CognitiveMemoryStore` for the namespace
+//! NamespaceMemoryService — agent → namespace mapping plus the namespace
 //! itself.
+//!
+//! Production: D-Bus `PluginV1.Call` on the cognitive_mcp plugin (the Cozo
+//! owner). Tests: in-process `CognitiveMemoryStore` + `SoulMemoryStore`.
 
+use crate::cognitive_client::{MemoryBackend, SoulBackend};
 use crate::proto::namespace_memory_service_server::NamespaceMemoryService;
 use crate::proto::{
     ClearMemoryNamespaceRequest, Empty, GetMemoryNamespaceRequest, ListMemoryNamespacesRequest,
@@ -13,13 +16,24 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 pub struct NamespaceMemoryServiceImpl {
-    memory: Arc<CognitiveMemoryStore>,
-    bindings: Arc<SoulMemoryStore>,
+    memory: Arc<MemoryBackend>,
+    bindings: Arc<SoulBackend>,
 }
 
 impl NamespaceMemoryServiceImpl {
+    /// In-process stores — unit/integration tests only.
     pub fn new(memory: Arc<CognitiveMemoryStore>, bindings: Arc<SoulMemoryStore>) -> Self {
-        Self { memory, bindings }
+        Self {
+            memory: Arc::new(MemoryBackend::Local(memory)),
+            bindings: Arc::new(SoulBackend::Local(bindings)),
+        }
+    }
+
+    pub fn from_client(client: Arc<crate::cognitive_client::CognitivePluginClient>) -> Self {
+        Self {
+            memory: Arc::new(MemoryBackend::Remote(client.clone())),
+            bindings: Arc::new(SoulBackend::Remote(client)),
+        }
     }
 }
 
@@ -51,7 +65,10 @@ impl NamespaceMemoryService for NamespaceMemoryServiceImpl {
         if req.agent_id.is_empty() || req.namespace.is_empty() {
             return Err(Status::invalid_argument("agent_id and namespace required"));
         }
-        crate::memory::ensure_namespace(&self.memory, &req.namespace, NamespaceKind::Agent).await?;
+        self.memory
+            .ensure_namespace(&req.namespace, NamespaceKind::Agent)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
         let binding = self
             .bindings
             .bind_namespace(&req.agent_id, &req.namespace)
@@ -125,7 +142,7 @@ fn binding_to_proto(b: &AgentNamespaceBinding, entry_count: u64) -> MemoryNamesp
     }
 }
 
-async fn count_entries(store: &CognitiveMemoryStore, ns: &str) -> u64 {
+async fn count_entries(store: &MemoryBackend, ns: &str) -> u64 {
     store
         .query_entries(EntryQuery {
             namespace_id: Some(ns.into()),

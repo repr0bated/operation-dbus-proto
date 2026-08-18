@@ -27,6 +27,8 @@ CONVERTER=${CONVERTER:-/usr/local/sbin/systemd-unit-to-runit}
 
 DBUS_NAME="org.opdbus.v1.Runit.Systemctl"
 DBUS_PATH="/org/opdbus/v1/plugins/runit/systemctl"
+DBUS_IFACE="org.opdbus.v1.Runit.Systemctl"
+# Well-known-name alias only — never used as path or interface.
 DBUS_LEGACY_NAME="org.opdbus.v1.S6.Systemctl"
 
 log() { printf 'systemctl-shim: %s\n' "$*" >&2; }
@@ -87,13 +89,13 @@ dbus_available() {
 dbus_call() {
     method=$1
     unit=$2
-    name=$DBUS_NAME
-    path=$DBUS_PATH
+    dest=$DBUS_NAME
+    # Path and interface stay on the runit coordinates. Only the destination
+    # may fall back to the legacy well-known name if the Runit name is absent.
     if ! busctl --system list 2>/dev/null | grep -q "$DBUS_NAME"; then
-        name=$DBUS_LEGACY_NAME
-        path="/org/opdbus/v1/plugins/s6/systemctl"
+        dest=$DBUS_LEGACY_NAME
     fi
-    busctl --system call "$name" "$path" "$name" "$method" s "$unit" >/dev/null 2>&1
+    busctl --system call "$dest" "$DBUS_PATH" "$DBUS_IFACE" "$method" s "$unit" >/dev/null 2>&1
 }
 
 # Generate a runit service from a systemd unit if we have one but not the other.
