@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::QdrantSemanticShuttle;
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage};
+use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use serde::de::DeserializeSeed;
 use serde_json::Value as JsonValue;
@@ -668,9 +668,20 @@ impl OperationGrpcServer {
                     "failed to decode typed request for {plugin_id}.{method_name}: {error}"
                 ))
             })?;
-        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
+        let mut json_args = Vec::new();
+        request_dynamic
+            .serialize_with_options(
+                &mut serde_json::Serializer::new(&mut json_args),
+                &SerializeOptions::new().use_proto_field_name(true),
+            )
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        let json_args = String::from_utf8(json_args).map_err(|error| {
             Status::internal(format!(
-                "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+                "typed request JSON was not UTF-8 for {plugin_id}.{method_name}: {error}"
             ))
         })?;
         let args_value: JsonValue = serde_json::from_str(&json_args).map_err(|error| {
