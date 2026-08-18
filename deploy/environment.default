@@ -10,13 +10,7 @@ OP_DBUS_STATE_DIR=/var/lib/op-dbus
 
 # gRPC — consolidated op-grpc-bridge (HTTP/gRPC-Web + native gRPC)
 # Prefer loopback on the host; containers use shared UDS container.sock.
-# TLS is mandatory on :8090 (the bridge refuses to start without an identity),
-# so this MUST be https:// — an http:// value makes every tonic client speak
-# plaintext h2c at a TLS listener, which surfaces as
-# "h2 protocol error: GoAway FRAME_SIZE_ERROR" on every stream. "localhost"
-# (not 127.0.0.1) because that name is in the cert's SANs.
-OP_DBUS_GRPC_ADDR=https://localhost:8090
-OP_DBUS_GRPC_CA_FILE=/etc/op-dbus/tls/tonic-svc0.crt
+OP_DBUS_GRPC_ADDR=http://127.0.0.1:8090
 GRPC_BIND=0.0.0.0:8090
 ZEROCLAW_BIND_ADDR=0.0.0.0:8090
 # Host-local native gRPC (op-web, zbusctl)

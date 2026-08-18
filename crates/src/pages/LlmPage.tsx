@@ -36,12 +36,14 @@ export default function LlmPage() {
                   <div className="font-mono text-xs space-y-1.5">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">provider</span>
-                      <span className="text-foreground">{status?.active_provider ?? "—"}</span>
+                      <span className="text-foreground">
+                        {status?.active_provider ?? status?.provider ?? "—"}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">model</span>
                       <Badge variant="default" className="text-[10px] font-mono">
-                        {status?.active_model ?? "—"}
+                        {status?.active_model ?? status?.model ?? "—"}
                       </Badge>
                     </div>
                   </div>
@@ -61,7 +63,8 @@ export default function LlmPage() {
                   ))
                 ) : models && models.length > 0 ? (
                   models.map((model) => {
-                    const isActive = model.id === status?.active_model || model.name === status?.active_model;
+                    const activeModel = status?.active_model ?? status?.model;
+                    const isActive = model.id === activeModel || model.name === activeModel;
                     return (
                       <Card
                         key={model.id}

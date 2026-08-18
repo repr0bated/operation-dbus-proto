@@ -10,130 +10,7 @@ use serde_json::Value as JsonValue;
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 use zbus::{Connection, Proxy};
-
-const EMQX_OBJECT_PATH: &str = "/org/opdbus/v1/plugins/emqx";
-const PLUGIN_BUS_NAME: &str = "org.opdbus.v1.plugins";
-const PLUGIN_INTERFACE: &str = "org.opdbus.v1.PluginV1";
-
-fn session_bus_address() -> String {
-    std::env::var("DBUS_SESSION_BUS_ADDRESS")
-        .unwrap_or_else(|_| "unix:path=/run/opdbus/session-bus.sock".to_string())
-}
-
-/// Last EMQX payload seen through D-Bus. Used only when the bus is not up yet
-/// (schema defaults / unit tests). Live reads go through PluginV1.Call.
-fn last_emqx_payload() -> &'static Mutex<Option<super::emqx::EmqxState>> {
-    static LAST: OnceLock<Mutex<Option<super::emqx::EmqxState>>> = OnceLock::new();
-    LAST.get_or_init(|| Mutex::new(None))
-}
-
-async fn call_emqx_method(method: &str) -> Result<JsonValue> {
-    let address = session_bus_address();
-    let connection = zbus::connection::Builder::address(address.as_str())
-        .with_context(|| format!("invalid session bus address: {address}"))?
-        .build()
-        .await
-        .with_context(|| format!("connecting to session bus at {address}"))?;
-    let reply = connection
-        .call_method(
-            Some(PLUGIN_BUS_NAME),
-            EMQX_OBJECT_PATH,
-            Some(PLUGIN_INTERFACE),
-            "Call",
-            &(method, "{}"),
-        )
-        .await
-        .with_context(|| format!("PluginV1.Call emqx.{method}"))?;
-    let body: String = reply
-        .body()
-        .deserialize()
-        .context("emqx D-Bus reply was not a string")?;
-    let envelope: JsonValue =
-        serde_json::from_str(&body).context("emqx D-Bus reply was not JSON")?;
-    Ok(envelope.get("result").cloned().unwrap_or(envelope))
-}
-
-async fn read_emqx_state_over_dbus() -> Result<super::emqx::EmqxState> {
-    let status = call_emqx_method("get_status").await?;
-    let sockets = call_emqx_method("list_sockets").await?;
-    let mut state = super::emqx::EmqxState::observed();
-    if let Some(software) = status.get("software").and_then(|v| v.as_str()) {
-        state.software = software.to_string();
-    }
-    if let Some(broker_type) = status.get("broker_type").and_then(|v| v.as_str()) {
-        state.broker_type = broker_type.to_string();
-    }
-    if let Some(container_name) = status.get("container_name").and_then(|v| v.as_str()) {
-        state.container_name = container_name.to_string();
-    }
-    if let Some(nic) = status.get("nic").and_then(|v| v.as_bool()) {
-        state.nic = nic;
-    }
-    if let Some(container_socket) = status.get("container_socket").and_then(|v| v.as_str()) {
-        state.container_socket = container_socket.to_string();
-    }
-    if let Some(broker_socket) = status.get("broker_socket").and_then(|v| v.as_str()) {
-        state.broker_socket = broker_socket.to_string();
-    }
-    if let Some(api_socket) = status.get("api_socket").and_then(|v| v.as_str()) {
-        state.api_socket = api_socket.to_string();
-    }
-    if let Some(list) = sockets.get("sockets").and_then(|v| v.as_array()) {
-        state.sockets = list
-            .iter()
-            .filter_map(|sock| serde_json::from_value(sock.clone()).ok())
-            .collect();
-    } else {
-        for sock in &mut state.sockets {
-            let present = match sock.name.as_str() {
-                "broker" => status
-                    .get("broker_socket_present")
-                    .and_then(|v| v.as_bool()),
-                "api" => status.get("api_socket_present").and_then(|v| v.as_bool()),
-                "container" => status
-                    .get("container_socket_present")
-                    .and_then(|v| v.as_bool()),
-                _ => None,
-            };
-            if let Some(present) = present {
-                sock.present = present;
-            }
-        }
-    }
-    *last_emqx_payload()
-        .lock()
-        .expect("last EMQX payload mutex poisoned") = Some(state.clone());
-    Ok(state)
-}
-
-fn emqx_payload_for_state() -> super::emqx::EmqxState {
-    let live = std::thread::spawn(|| {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("building NetMaker EMQX D-Bus runtime")?;
-        runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(2), read_emqx_state_over_dbus())
-                .await
-                .context("timed out reading EMQX state over D-Bus")?
-        })
-    })
-    .join();
-    if let Ok(Ok(state)) = live {
-        return state;
-    }
-    if let Some(cached) = last_emqx_payload()
-        .lock()
-        .expect("last EMQX payload mutex poisoned")
-        .clone()
-    {
-        return cached;
-    }
-    super::emqx::EmqxState::observed()
-}
 
 /// Netmaker configuration.
 /// See: https://docs.netmaker.io/
@@ -147,23 +24,6 @@ pub struct NetmakerConfig {
     pub enrollment_token: Option<String>,
     /// API endpoint for Netmaker server (if self-hosted)
     pub api_endpoint: Option<String>,
-    /// Broker implementation. Live is EMQX, never Mosquitto.
-    #[serde(default)]
-    pub broker_type: Option<String>,
-}
-
-/// Sockets the NIC-less NetMaker container actually uses.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct NetmakerSockets {
-    /// Shared gRPC door bind-mounted into the container.
-    pub container_socket: String,
-    /// EMQX MQTT/WS payload socket.
-    pub broker_socket: String,
-    /// NetMaker REST API socket.
-    pub api_socket: String,
-    pub container_socket_present: bool,
-    pub broker_socket_present: bool,
-    pub api_socket_present: bool,
 }
 
 /// Netmaker network state.
@@ -187,26 +47,18 @@ pub struct NetmakerNetwork {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-category" = "network"))]
 pub struct NetmakerState {
-    /// Authoritative server process in the NIC-less container.
+    /// Software name (netclient)
     pub software: String,
     /// Version string
     pub version: String,
-    /// Other plugins whose present-state this payload reads. Not an owner graph.
+    /// Required dependencies
     pub dependencies: Vec<String>,
-    /// Incus container that runs NetMaker + EMQX.
-    pub container_name: String,
-    /// Containers have no NIC by design.
-    pub nic: bool,
-    /// Whether the NetMaker server is present in the live container.
+    /// Whether netclient is installed
     pub installed: bool,
-    /// Whether the NetMaker server process is up.
+    /// Whether the netclient service is running under s6
     pub daemon_running: bool,
-    /// Shared gRPC door, not host netclient.sock.
+    /// Netclient control socket used by the runtime
     pub control_socket: Option<String>,
-    /// Broker implementation. Live is EMQX.
-    pub broker_type: String,
-    /// Published Unix sockets (container / broker / api).
-    pub sockets: NetmakerSockets,
     /// Connected networks
     pub networks: Vec<NetmakerNetwork>,
     /// Public IP address
@@ -449,43 +301,17 @@ impl NetmakerPlugin {
 
     /// Base URL of the Netmaker server's own REST API (distinct from
     /// netclient, which is this host's/container's *client* daemon). Reached
-    /// through the host-loopback API door. The NetMaker container itself uses
-    /// `127.0.0.1:8081`; the host plugin reaches the same API through the Incus
-    /// loopback proxy. Override this only when the deployment publishes a
-    /// different explicit API door.
+    /// directly over the OVS bridge — no proxy hop needed since host and the
+    /// `NetMaker` container share `ovsbr0`.
     fn netmaker_api_base() -> String {
-        std::env::var("NETMAKER_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
+        std::env::var("NETMAKER_API_BASE").unwrap_or_else(|_| "http://10.200.0.3:8081".to_string())
     }
 
     /// Master-key Bearer auth for the Netmaker server API. Fails closed
     /// (explicit error) rather than silently calling the API unauthenticated.
     fn netmaker_master_key() -> Result<String> {
-        if let Ok(mk) = std::env::var("NETMAKER_MASTER_KEY") {
-            if !mk.trim().is_empty() {
-                return Ok(mk.trim().to_string());
-            }
-        }
-        if let Ok(mk) = std::env::var("MASTER_KEY") {
-            if !mk.trim().is_empty() {
-                return Ok(mk.trim().to_string());
-            }
-        }
-        if let Ok(content) = std::fs::read_to_string("/etc/netmaker/netmaker.env") {
-            for line in content.lines() {
-                if let Some(val) = line.strip_prefix("MASTER_KEY=") {
-                    let key = val.trim().trim_matches('"').trim_matches('\'');
-                    if !key.is_empty() {
-                        return Ok(key.to_string());
-                    }
-                }
-            }
-        }
-        if let Ok(mk) = std::fs::read_to_string("/etc/netmaker/masterkey") {
-            if !mk.trim().is_empty() {
-                return Ok(mk.trim().to_string());
-            }
-        }
-        anyhow::bail!("Netmaker API credential unavailable: set NETMAKER_MASTER_KEY or MASTER_KEY")
+        std::env::var("NETMAKER_MASTER_KEY")
+            .context("NETMAKER_MASTER_KEY not set — cannot authenticate to the Netmaker server API")
     }
 
     /// GET /api/networks — real server-side network list (distinct from
@@ -588,158 +414,7 @@ impl NetmakerPlugin {
             .context("Failed to parse Netmaker API response")
     }
 
-    /// POST /api/nodes/{network}/{node_id}/createegress (API egress gateway configuration)
-    async fn create_egress_api(
-        network: &str,
-        egress_range: &str,
-        node_id: Option<&str>,
-    ) -> Result<CreateEgressOutput> {
-        let master_key = Self::netmaker_master_key()?;
-        let target_node = if let Some(id) = node_id {
-            id.to_string()
-        } else {
-            let nodes_json = Self::list_nodes_api(network).await?;
-            nodes_json
-                .as_array()
-                .and_then(|arr| {
-                    arr.iter()
-                        .find_map(|n| n.get("id").and_then(|v| v.as_str()).map(String::from))
-                })
-                .context("no Netmaker node is available for the requested egress")?
-        };
-
-        let client = reqwest::Client::new();
-        let payload = serde_json::json!({
-            "netid": network,
-            "nodeid": target_node,
-            "egressrange": egress_range,
-            "egress_range": egress_range,
-            "nat": "yes"
-        });
-
-        // 1. Primary Netmaker gateway endpoint: POST /api/nodes/{network}/{target_node}/creategateway
-        let gateway_url = format!(
-            "{}/api/nodes/{network}/{target_node}/creategateway",
-            Self::netmaker_api_base()
-        );
-        let gw_payload = serde_json::json!({
-            "netid": network,
-            "nodeid": target_node,
-            "gatewaytype": "egress",
-            "ranges": [egress_range],
-            "egressgatewayranges": [egress_range],
-            "nat": "yes",
-            "egressgatewaynatenabled": true
-        });
-        let mut failures = Vec::new();
-        match client
-            .post(&gateway_url)
-            .bearer_auth(&master_key)
-            .json(&gw_payload)
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                return Ok(CreateEgressOutput {
-                    network: network.to_string(),
-                    node_id: target_node,
-                    egress_range: egress_range.to_string(),
-                });
-            }
-            Ok(response) => failures.push(format!(
-                "POST /api/nodes/{network}/{target_node}/creategateway returned {}",
-                response.status()
-            )),
-            Err(error) => failures.push(format!("creategateway transport error: {error}")),
-        }
-
-        // 2. Fallback Netmaker endpoint: POST /api/nodes/{network}/{target_node}/createegress
-        let primary_url = format!(
-            "{}/api/nodes/{network}/{target_node}/createegress",
-            Self::netmaker_api_base()
-        );
-        match client
-            .post(&primary_url)
-            .bearer_auth(&master_key)
-            .json(&payload)
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                return Ok(CreateEgressOutput {
-                    network: network.to_string(),
-                    node_id: target_node,
-                    egress_range: egress_range.to_string(),
-                });
-            }
-            Ok(response) => failures.push(format!(
-                "POST /api/nodes/{network}/{target_node}/createegress returned {}",
-                response.status()
-            )),
-            Err(error) => failures.push(format!("createegress transport error: {error}")),
-        }
-
-        // 2. Secondary Netmaker endpoint: POST /api/nodes/{network}/createegress
-        let secondary_url = format!(
-            "{}/api/nodes/{network}/createegress",
-            Self::netmaker_api_base()
-        );
-        match client
-            .post(&secondary_url)
-            .bearer_auth(&master_key)
-            .json(&payload)
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => Ok(CreateEgressOutput {
-                network: network.to_string(),
-                node_id: target_node,
-                egress_range: egress_range.to_string(),
-            }),
-            Ok(response) => {
-                failures.push(format!(
-                    "POST /api/nodes/{network}/createegress returned {}",
-                    response.status()
-                ));
-                anyhow::bail!("Netmaker rejected egress creation: {}", failures.join("; "))
-            }
-            Err(error) => {
-                failures.push(format!("network createegress transport error: {error}"));
-                anyhow::bail!("Netmaker egress creation failed: {}", failures.join("; "))
-            }
-        }
-    }
-
-    /// DELETE /api/nodes/{network}/{node_id}/deleteegress
-    async fn delete_egress_api(network: &str, node_id: &str) -> Result<DeleteEgressOutput> {
-        let master_key = Self::netmaker_master_key()?;
-        let client = reqwest::Client::new();
-        let url = format!(
-            "{}/api/nodes/{network}/{node_id}/deleteegress",
-            Self::netmaker_api_base()
-        );
-        match client.delete(&url).bearer_auth(&master_key).send().await {
-            Ok(response) if response.status().is_success() => Ok(DeleteEgressOutput {
-                network: network.to_string(),
-                node_id: node_id.to_string(),
-            }),
-            Ok(response) => {
-                anyhow::bail!(
-                    "Netmaker API returned {}: DELETE /api/nodes/{network}/{node_id}/deleteegress",
-                    response.status()
-                )
-            }
-            Err(error) => Err(error).context("Netmaker deleteegress API request failed"),
-        }
-    }
-
     pub(crate) fn current_state() -> NetmakerState {
-        // D-Bus first: PluginV1.Call on /org/opdbus/v1/plugins/emqx.
-        let emqx = emqx_payload_for_state();
-        Self::state_from_emqx(emqx)
-    }
-
-    fn state_from_emqx(emqx: super::emqx::EmqxState) -> NetmakerState {
         let tools = json!([
             {
                 "name": "netmaker.join",
@@ -771,58 +446,16 @@ impl NetmakerPlugin {
             }
         ]);
 
-        let container_present = std::path::Path::new("/var/lib/incus/containers")
-            .join(&emqx.container_name)
-            .exists()
-            || std::path::Path::new("/var/lib/incus/devices")
-                .join(&emqx.container_name)
-                .exists();
-        let broker_present = emqx
-            .sockets
-            .iter()
-            .find(|s| s.name == "broker")
-            .map(|s| s.present)
-            .unwrap_or(false);
-        let api_present = emqx
-            .sockets
-            .iter()
-            .find(|s| s.name == "api")
-            .map(|s| s.present)
-            .unwrap_or(false);
-        let container_sock_present = emqx
-            .sockets
-            .iter()
-            .find(|s| s.name == "container")
-            .map(|s| s.present)
-            .unwrap_or(false);
-
         NetmakerState {
-            software: "netmaker".to_string(),
+            software: "netclient".to_string(),
             version: "1.0.0".to_string(),
-            dependencies: vec!["unix_socket".to_string(), "net".to_string()],
-            container_name: emqx.container_name.clone(),
-            nic: false,
-            installed: container_present || broker_present || api_present,
-            daemon_running: broker_present && api_present,
-            control_socket: Some(emqx.container_socket.clone()),
-            broker_type: emqx.broker_type.clone(),
-            sockets: NetmakerSockets {
-                container_socket: emqx.container_socket,
-                broker_socket: emqx.broker_socket,
-                api_socket: emqx.api_socket,
-                container_socket_present: container_sock_present,
-                broker_socket_present: broker_present,
-                api_socket_present: api_present,
-            },
+            dependencies: vec!["net".to_string(), "service".to_string()],
+            installed: false,
+            daemon_running: false,
+            control_socket: Some("/var/run/netclient/netclient.sock".to_string()),
             networks: Vec::new(),
             public_ip: None,
-            config: NetmakerConfig {
-                enabled: true,
-                default_network: String::new(),
-                enrollment_token: None,
-                api_endpoint: Some("unix:/run/ghostbridge/NetMaker/api.sock".to_string()),
-                broker_type: Some(emqx.broker_type.clone()),
-            },
+            config: NetmakerConfig::default(),
             tools,
         }
     }
@@ -1056,33 +689,6 @@ pub struct UpdateNodeInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CreateEgressInput {
-    pub network: String,
-    pub egress_range: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DeleteEgressInput {
-    pub network: String,
-    pub node_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct CreateEgressOutput {
-    pub network: String,
-    pub node_id: String,
-    pub egress_range: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub struct DeleteEgressOutput {
-    pub network: String,
-    pub node_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListNetworksInput {}
 
 pub(crate) fn netmaker_schema() -> PluginSchema {
@@ -1091,17 +697,11 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "netmaker",
         "1.0.0",
-        "NetMaker server in the NIC-less container; reads EMQX present-state for broker/api sockets",
+        "Netmaker state and execution schema backed by s6-managed netclient",
         &root,
     );
     schema.category = "net".to_string();
-    schema.dependencies = vec!["unix_socket".to_string(), "net".to_string()];
-    // Schema generation is pure and deterministic. Live D-Bus reads belong to
-    // runtime state only; performing one here deadlocks the bridge build script's
-    // single-thread schema-collection runtime.
-    if let Ok(defaults) = simd_json::serde::to_owned_value(NetmakerPlugin::state_from_emqx(
-        super::emqx::EmqxState::observed(),
-    )) {
+    if let Ok(defaults) = simd_json::serde::to_owned_value(NetmakerPlugin::current_state()) {
         super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
     }
     schema.methods.insert(
@@ -1180,32 +780,6 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
             true,
             "cap.network.netmaker.networks.list@v1",
             "obs.network.netmaker.networks.list@v1",
-        ),
-    );
-    schema.methods.insert(
-        "create_egress".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            CreateEgressInput,
-            CreateEgressOutput,
-        >(
-            "create_egress",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.netmaker.egress.create@v1",
-            "mut.network.netmaker.egress.create@v1",
-        ),
-    );
-    schema.methods.insert(
-        "delete_egress".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            DeleteEgressInput,
-            DeleteEgressOutput,
-        >(
-            "delete_egress",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "cap.network.netmaker.egress.delete@v1",
-            "mut.network.netmaker.egress.delete@v1",
         ),
     );
     schema.capabilities.insert(
@@ -1322,23 +896,6 @@ pub async fn dispatch_netmaker_method(method: &str, args: &JsonValue) -> Result<
             let payload = args.get("payload").cloned().unwrap_or(json!({}));
             NetmakerPlugin::update_node_api(network, node_id, &payload).await
         }
-        "create_egress" | "CreateEgress" => {
-            let input: CreateEgressInput = serde_json::from_value(args.clone())
-                .context("invalid typed netmaker.create_egress input")?;
-            let output = NetmakerPlugin::create_egress_api(
-                &input.network,
-                &input.egress_range,
-                input.node_id.as_deref(),
-            )
-            .await?;
-            serde_json::to_value(output).context("serialize netmaker.create_egress output")
-        }
-        "delete_egress" | "DeleteEgress" => {
-            let input: DeleteEgressInput = serde_json::from_value(args.clone())
-                .context("invalid typed netmaker.delete_egress input")?;
-            let output = NetmakerPlugin::delete_egress_api(&input.network, &input.node_id).await?;
-            serde_json::to_value(output).context("serialize netmaker.delete_egress output")
-        }
         _ => anyhow::bail!("unknown netmaker method: {method}"),
     }
 }
@@ -1347,49 +904,4 @@ pub async fn dispatch_netmaker_method(method: &str, args: &JsonValue) -> Result<
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("netmaker", |_ctx| std::sync::Arc::new(NetmakerPlugin::new(NetmakerConfig::default())))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_netmaker_schema_methods() {
-        let schema = netmaker_schema();
-        assert_eq!(schema.name, "netmaker");
-        assert!(schema.methods.contains_key("create_egress"));
-        assert!(schema.methods.contains_key("delete_egress"));
-        assert!(schema.methods.contains_key("join_network"));
-        assert!(!schema.dependencies.iter().any(|d| d == "emqx"));
-        let state = NetmakerPlugin::current_state();
-        assert_eq!(state.software, "netmaker");
-        assert_eq!(state.broker_type, "emqx");
-        assert_eq!(state.nic, false);
-        assert_eq!(
-            state.control_socket.as_deref(),
-            Some(crate::state_plugins::unix_socket::SHARED_CONTAINER_SOCKET)
-        );
-        assert_eq!(
-            state.sockets.broker_socket,
-            crate::state_plugins::emqx::BROKER_SOCKET
-        );
-    }
-
-    #[test]
-    fn egress_methods_publish_typed_outputs() {
-        let schema = netmaker_schema();
-        let create = schema.methods.get("create_egress").expect("create_egress");
-        let delete = schema.methods.get("delete_egress").expect("delete_egress");
-        let create_returns = serde_json::to_value(create.returns.as_ref().expect("typed output"))
-            .expect("create output schema");
-        let delete_returns = serde_json::to_value(delete.returns.as_ref().expect("typed output"))
-            .expect("delete output schema");
-        let create_text = create_returns.to_string();
-        let delete_text = delete_returns.to_string();
-        assert!(create_text.contains("egress_range"));
-        assert!(create_text.contains("node_id"));
-        assert!(delete_text.contains("node_id"));
-        assert!(!create_text.contains("AckOutput"));
-        assert!(!delete_text.contains("AckOutput"));
-    }
 }

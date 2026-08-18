@@ -10,101 +10,9 @@
 //! must not install a flow that is looser than what was requested.
 
 use anyhow::{bail, Context, Result};
-use bytes::Bytes;
-use rovs_openflow::{nxm, ActionList, Flow, Match, Message, MessageType, OutputPort, Version};
+use rovs_openflow::{nxm, ActionList, Flow, Match, OutputPort};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-
-/// Port hardware addresses discovered from the controller's PortDesc reply.
-/// Static flow JSON can refer to one as `port_mac:<port-name>`, avoiding a
-/// boot-specific MAC address in persistent policy.
-pub type PortMacMap = HashMap<String, [u8; 6]>;
-
-/// A translated flow plus the two OpenFlow features that rovs-openflow 0.2
-/// does not yet model: OXM_OF_PACKET_TYPE and NXAST_ENCAP.
-pub struct TranslatedFlow {
-    flow: Flow,
-    packet_type: Option<u32>,
-    encap_ethernet: bool,
-}
-
-impl TranslatedFlow {
-    /// Encode a complete FlowMod. `packet_type` requires OpenFlow 1.5, while
-    /// OVS exposes `encap(ethernet)` as the Nicira NXAST_ENCAP action.
-    pub fn to_message(&self, version: Version, xid: u32) -> Result<Message> {
-        if self.packet_type.is_none() && !self.encap_ethernet {
-            return Ok(self.flow.to_message(version, xid));
-        }
-        if self.packet_type.is_some() && version < Version::Of15 {
-            bail!("packet_type match requires OpenFlow 1.5");
-        }
-
-        let base = self.flow.encode();
-        if base.len() < 48 {
-            bail!("encoded FlowMod is shorter than fixed fields plus match header");
-        }
-
-        // FlowMod fixed header is 40 bytes. The match length excludes its
-        // 8-byte alignment padding; instructions begin after the padded match.
-        let old_match_len = u16::from_be_bytes([base[42], base[43]]) as usize;
-        if old_match_len < 4 || 40 + old_match_len > base.len() {
-            bail!("encoded FlowMod contains an invalid match length");
-        }
-        let old_match_padded = old_match_len.next_multiple_of(8);
-        if 40 + old_match_padded > base.len() {
-            bail!("encoded FlowMod match padding exceeds message body");
-        }
-
-        let mut oxm = base[44..40 + old_match_len].to_vec();
-        if let Some(packet_type) = self.packet_type {
-            // OXM_OF_PACKET_TYPE(44), OpenFlow basic class, unmasked, 4 bytes.
-            let header = (0x8000u32 << 16) | (44u32 << 9) | 4;
-            oxm.extend_from_slice(&header.to_be_bytes());
-            oxm.extend_from_slice(&packet_type.to_be_bytes());
-        }
-
-        let new_match_len = 4 + oxm.len();
-        let mut encoded_match = Vec::with_capacity(new_match_len.next_multiple_of(8));
-        encoded_match.extend_from_slice(&1u16.to_be_bytes()); // OFPMT_OXM
-        encoded_match.extend_from_slice(&(new_match_len as u16).to_be_bytes());
-        encoded_match.extend_from_slice(&oxm);
-        encoded_match.resize(new_match_len.next_multiple_of(8), 0);
-
-        let mut instructions = base[40 + old_match_padded..].to_vec();
-        if self.encap_ethernet {
-            if instructions.len() < 8 || u16::from_be_bytes([instructions[0], instructions[1]]) != 4
-            {
-                bail!("encap action requires an ApplyActions instruction");
-            }
-            let old_instruction_len =
-                u16::from_be_bytes([instructions[2], instructions[3]]) as usize;
-            if old_instruction_len < 8 || old_instruction_len > instructions.len() {
-                bail!("invalid ApplyActions instruction length");
-            }
-
-            // NXAST_ENCAP: experimenter action, Nicira vendor 0x2320,
-            // subtype 46, hdr_size=0, PT_ETH=(0,0).
-            let encap = [
-                0xff, 0xff, 0x00, 0x10, 0x00, 0x00, 0x23, 0x20, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00,
-            ];
-            instructions.splice(8..8, encap);
-            let new_instruction_len = old_instruction_len + encap.len();
-            instructions[2..4].copy_from_slice(&(new_instruction_len as u16).to_be_bytes());
-        }
-
-        let mut body = Vec::with_capacity(40 + encoded_match.len() + instructions.len());
-        body.extend_from_slice(&base[..40]);
-        body.extend_from_slice(&encoded_match);
-        body.extend_from_slice(&instructions);
-        Ok(Message::new(
-            version,
-            MessageType::FlowMod,
-            xid,
-            Bytes::from(body),
-        ))
-    }
-}
 
 #[derive(serde::Deserialize)]
 pub struct JsonFlowEntry {
@@ -125,7 +33,6 @@ pub struct JsonFlowEntry {
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JsonFlowAction {
-    Encap { header: String },
     Output { port: String },
     LoadRegister { register: u8, value: u64 },
     Resubmit { table: u8 },
@@ -162,40 +69,6 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
         out[i] = u8::from_str_radix(p, 16).with_context(|| format!("invalid MAC octet '{p}'"))?;
     }
     Ok(out)
-}
-
-fn resolve_mac(s: &str, port_macs: &PortMacMap) -> Result<[u8; 6]> {
-    if let Some(port) = s.strip_prefix("port_mac:") {
-        return port_macs
-            .get(port)
-            .copied()
-            .with_context(|| format!("unknown port name '{port}' for symbolic MAC"));
-    }
-    parse_mac(s)
-}
-
-fn parse_u16_auto(s: &str) -> Result<u16> {
-    if let Some(hex) = s.strip_prefix("0x") {
-        u16::from_str_radix(hex, 16).with_context(|| format!("invalid u16 value '{s}'"))
-    } else {
-        s.parse::<u16>()
-            .with_context(|| format!("invalid u16 value '{s}'"))
-    }
-}
-
-/// Parse OVS packet_type syntax `(namespace,type)`, for example
-/// `(1,0x800)` for a bare IPv4 packet from an L3 WireGuard interface.
-fn parse_packet_type(s: &str) -> Result<u32> {
-    let inner = s
-        .trim()
-        .strip_prefix('(')
-        .and_then(|v| v.strip_suffix(')'))
-        .with_context(|| format!("packet_type must use '(namespace,type)' syntax, got '{s}'"))?;
-    let (namespace, packet_type) = inner
-        .split_once(',')
-        .with_context(|| format!("packet_type must contain namespace and type, got '{s}'"))?;
-    Ok(((parse_u16_auto(namespace.trim())? as u32) << 16)
-        | parse_u16_auto(packet_type.trim())? as u32)
 }
 
 fn mac_to_u64(mac: [u8; 6]) -> u64 {
@@ -276,12 +149,8 @@ fn parse_ct_state(s: &str) -> Result<(u32, u32)> {
 /// Two passes: first detect protocol markers (`tcp`/`udp`/`icmp`/`icmp6`/
 /// `arp`/`ip`) to establish `eth_type`/`ip_proto` context, since `HashMap`
 /// iteration order can't be relied on to see e.g. `udp` before `tp_dst`.
-fn parse_match(
-    fields: &HashMap<String, String>,
-    port_map: &HashMap<String, u32>,
-) -> Result<(Match, Option<u32>)> {
+fn parse_match(fields: &HashMap<String, String>, port_map: &HashMap<String, u32>) -> Result<Match> {
     let mut m = Match::new();
-    let mut packet_type = None;
     let mut ip_proto: Option<u8> = None;
     let mut eth_type: Option<u16> = None;
 
@@ -318,10 +187,6 @@ fn parse_match(
         m = match k.as_str() {
             "arp" | "ip" | "tcp" | "udp" | "icmp" | "icmp6" => m, // handled above
             "in_port" => m.in_port(resolve_port(v, port_map)?),
-            "packet_type" => {
-                packet_type = Some(parse_packet_type(v)?);
-                m
-            }
             "dl_type" => {
                 let et = if let Some(hex) = v.strip_prefix("0x") {
                     u16::from_str_radix(hex, 16)
@@ -378,7 +243,7 @@ fn parse_match(
             ),
         };
     }
-    Ok((m, packet_type))
+    Ok(m)
 }
 
 /// Translate `actions` into a `rovs_openflow::ActionList`.
@@ -388,23 +253,11 @@ fn parse_match(
 fn build_actions(
     actions: &[JsonFlowAction],
     port_map: &HashMap<String, u32>,
-    port_macs: &PortMacMap,
     ip_proto: Option<u8>,
-) -> Result<(ActionList, bool)> {
+) -> Result<ActionList> {
     let mut list = ActionList::new();
-    let mut encap_ethernet = false;
-    for (index, a) in actions.iter().enumerate() {
+    for a in actions {
         list = match a {
-            JsonFlowAction::Encap { header } => {
-                if index != 0 || encap_ethernet {
-                    bail!("encap must be the first and only encap action");
-                }
-                if !header.eq_ignore_ascii_case("ethernet") {
-                    bail!("unsupported encap header '{header}' (only 'ethernet' is supported)");
-                }
-                encap_ethernet = true;
-                list
-            }
             JsonFlowAction::Output { port } => {
                 if port.eq_ignore_ascii_case("LOCAL") {
                     list.output(OutputPort::Local)
@@ -439,8 +292,8 @@ fn build_actions(
                 list.load_field(field, 0, 32, *value)
             }
             JsonFlowAction::SetField { field, value } => match field.as_str() {
-                "dl_dst" | "eth_dst" => list.set_eth_dst(resolve_mac(value, port_macs)?),
-                "dl_src" | "eth_src" => list.set_eth_src(resolve_mac(value, port_macs)?),
+                "dl_dst" | "eth_dst" => list.set_eth_dst(parse_mac(value)?),
+                "dl_src" | "eth_src" => list.set_eth_src(parse_mac(value)?),
                 "dl_vlan" | "vlan_vid" => {
                     let vid: u16 = value
                         .parse()
@@ -502,21 +355,17 @@ fn build_actions(
             }
         };
     }
-    Ok((list, encap_ethernet))
+    Ok(list)
 }
 
 /// Translate a JSON-encoded `FlowEntry` (the openflow plugin's schema shape)
 /// into a `rovs_openflow::Flow` ADD, resolving symbolic port names via
 /// `port_map` (as discovered from the switch's own PortDesc reply).
-pub fn json_flow_to_add(
-    flow_json: &str,
-    port_map: &HashMap<String, u32>,
-    port_macs: &PortMacMap,
-) -> Result<TranslatedFlow> {
+pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
-    let (m, packet_type) = parse_match(&entry.match_fields, port_map)?;
+    let m = parse_match(&entry.match_fields, port_map)?;
     let ip_proto = m.ip_proto;
-    let (actions, encap_ethernet) = build_actions(&entry.actions, port_map, port_macs, ip_proto)?;
+    let actions = build_actions(&entry.actions, port_map, ip_proto)?;
 
     let mut flow = Flow::add()
         .priority(entry.priority)
@@ -527,84 +376,13 @@ pub fn json_flow_to_add(
     if let Some(c) = entry.cookie {
         flow = flow.cookie(c);
     }
-    Ok(TranslatedFlow {
-        flow,
-        packet_type,
-        encap_ethernet,
-    })
+    Ok(flow)
 }
 
 /// Translate a JSON-encoded `FlowEntry` into a `rovs_openflow::Flow` DELETE
 /// (matches on the same fields, no actions needed).
-pub fn json_flow_to_delete(
-    flow_json: &str,
-    port_map: &HashMap<String, u32>,
-) -> Result<TranslatedFlow> {
+pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
-    let (m, packet_type) = parse_match(&entry.match_fields, port_map)?;
-    Ok(TranslatedFlow {
-        flow: Flow::delete().match_fields(m),
-        packet_type,
-        encap_ethernet: false,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn l3_flow_json() -> String {
-        serde_json::json!({
-            "table": 0,
-            "priority": 200,
-            "match_fields": {
-                "in_port": "netmaker",
-                "packet_type": "(1,0x800)"
-            },
-            "actions": [
-                {"type": "encap", "header": "ethernet"},
-                {"type": "set_field", "field": "eth_src", "value": "02:00:64:45:00:01"},
-                {"type": "set_field", "field": "eth_dst", "value": "port_mac:ovsbr0"},
-                {"type": "output", "port": "LOCAL"}
-            ],
-            "cookie": 3694151570867355650u64,
-            "idle_timeout": 0,
-            "hard_timeout": 0
-        })
-        .to_string()
-    }
-
-    #[test]
-    fn l3_ingress_encodes_openflow15_packet_type_and_encap() {
-        let ports = HashMap::from([("netmaker".to_string(), 328)]);
-        let macs = HashMap::from([("ovsbr0".to_string(), [0x9e, 0x17, 0xad, 0x27, 0x94, 0x47])]);
-        let translated = json_flow_to_add(&l3_flow_json(), &ports, &macs).unwrap();
-        let bytes = translated.to_message(Version::Of15, 7).unwrap().encode();
-
-        assert_eq!(bytes[0], 0x06); // OpenFlow 1.5
-        assert_eq!(bytes[1], 14); // FlowMod
-        assert_eq!(
-            u16::from_be_bytes([bytes[2], bytes[3]]) as usize,
-            bytes.len()
-        );
-        assert!(bytes
-            .windows(8)
-            .any(|w| w == [0x80, 0x00, 0x58, 0x04, 0x00, 0x01, 0x08, 0x00]));
-        assert!(bytes.windows(16).any(|w| w
-            == [
-                0xff, 0xff, 0x00, 0x10, 0x00, 0x00, 0x23, 0x20, 0x00, 0x2e, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00,
-            ]));
-        assert!(bytes
-            .windows(6)
-            .any(|w| w == [0x9e, 0x17, 0xad, 0x27, 0x94, 0x47]));
-    }
-
-    #[test]
-    fn packet_type_is_rejected_before_openflow15() {
-        let ports = HashMap::from([("netmaker".to_string(), 328)]);
-        let macs = HashMap::from([("ovsbr0".to_string(), [0; 6])]);
-        let translated = json_flow_to_add(&l3_flow_json(), &ports, &macs).unwrap();
-        assert!(translated.to_message(Version::Of13, 7).is_err());
-    }
+    let m = parse_match(&entry.match_fields, port_map)?;
+    Ok(Flow::delete().match_fields(m))
 }

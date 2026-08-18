@@ -18,7 +18,6 @@ use tonic::{Request, Response, Status};
 
 const IMAP_SOCK: &str = "/run/mail-3tched/imap.sock";
 const SUBMISSION_SOCK: &str = "/run/mail-3tched/submission.sock";
-const ALT_SMTP_SOCK: &str = "/run/mail-3tched/smtp.sock";
 
 pub struct MailAdapter {
     imap_addr: String,
@@ -309,18 +308,10 @@ impl MailService for MailAdapter {
         req: Request<SendMessageRequest>,
     ) -> Result<Response<SendMessageResponse>, Status> {
         let r = req.into_inner();
-        // Use the submission or smtp socket via a raw SMTP conversation
-        let stream = match tokio::net::UnixStream::connect(&self.smtp_addr).await {
-            Ok(s) => s,
-            Err(_) => tokio::net::UnixStream::connect(ALT_SMTP_SOCK)
-                .await
-                .map_err(|e| {
-                    Status::unavailable(format!(
-                        "SMTP sockets unavailable at {} / {}: {}",
-                        self.smtp_addr, ALT_SMTP_SOCK, e
-                    ))
-                })?,
-        };
+        // Use the submission socket via a raw SMTP conversation
+        let stream = tokio::net::UnixStream::connect(&self.smtp_addr)
+            .await
+            .map_err(|e| Status::unavailable(format!("SMTP socket unavailable: {}", e)))?;
 
         // Build a minimal RFC 5321 SMTP transaction over the unix socket
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

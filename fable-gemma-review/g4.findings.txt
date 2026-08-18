@@ -1,0 +1,18 @@
+```json
+[
+  {
+    "path": "crates/op-web/src/handlers/llm.rs",
+    "line": 63,
+    "priority": "P1",
+    "title": "Inconsistent state between active and legacy model keys",
+    "why": "The `switch_model_handler` returns a JSON response where `active_model` and `model` are both set to `req.model`. However, the `llm_status_handler` (which provides the state for the UI) derives `active_provider` and `active_model` from `state.chat_manager`, while `provider` and `model` are also derived from the same manager. If `selected_provider_model()` (which reads from SHM) returns values that differ from the `chat_manager` state, the response will contain conflicting information (e.g., `active_model`!= `model`), causing UI flickering or incorrect state rendering in `LlmPage.tsx`."
+  },
+  {
+    "path": "crates/op-web/src/handlers/zeroclaw.rs",
+    "line": 317,
+    "priority": "P2",
+    "title": "Potential panic in schema handler via unwrap on SHM read",
+    "why": "In `zeroclaw_schema_handler`, the code calls `read_zeroclaw_schema_shm()`. Inside that function, `simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?` is used. While the `?` handles the `Option`, the logic relies on `serde_json::to_vec(&schema)` which can fail if the SHM data is malformed or contains non-serializable types, and the subsequent `ok()?` chain is fragile. If `read_plugin_schema_shm` returns a value that `simd_json` cannot parse, the handler returns `None` (effectively a 404/empty), but the logic in `zeroclaw_schema_handler` doesn't explicitly handle the mismatch between the `zeroclaw` plugin presence and the schema availability gracefully."
+  }
+]
+```

@@ -576,15 +576,17 @@ pub async fn run_compact_stdio_server() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // ── WireGuard identity ────────────────────────────────────────────────────
-    // Read the local WG pubkey and stamp it into the tool session so tools can
-    // use it for auth. The session-genesis model mints its own anchor at
-    // arrival, so the 152-byte `/dev/shm/plugin_schema.dat` sled is no longer
-    // projected here.
+    // Read the local WG pubkey, write the canonical IdentitySled to /dev/shm,
+    // and stamp peer_pubkey into the session so tools can use it for auth.
     let wg_iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
     let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
     let peer_pubkey = match wg_id.get_local_pubkey() {
         Ok(pubkey) => {
-            info!(interface = %wg_iface, pubkey = %pubkey, "WG identity read");
+            if let Err(e) = op_identity::write_sled_from_wg(&pubkey) {
+                tracing::warn!(error = %e, "Failed to write identity sled to /dev/shm");
+            } else {
+                info!(interface = %wg_iface, pubkey = %pubkey, "WG identity sled written");
+            }
             Some(pubkey)
         }
         Err(e) => {

@@ -20,7 +20,6 @@ pub mod metrics;
 pub mod plugin_schema;
 pub mod schema_validator;
 pub mod state_store;
-pub mod subid_ui;
 
 pub use disaster_recovery::{
     get_global_dependencies, get_plugin_dependencies, DisasterRecoveryExport, HostInfo,
@@ -34,19 +33,15 @@ pub use event_chain::{
 pub use execution_job::{ExecutionJob, ExecutionResult, ExecutionStatus};
 pub use memory_store::MemoryStore;
 pub use plugin_schema::{
-    builtin_plugin_schema, builtin_plugin_schemas, dialects, CapabilityDecl, Constraint, FieldSchema, FieldType,
-    MethodDecl, PluginCapabilities, PluginSchema, ReadOnlyCondition, SchemaCatalog,
-    SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
+    builtin_plugin_schema, builtin_plugin_schemas, dialects, CapabilityDecl, Constraint,
+    FieldSchema, FieldType, MethodDecl, PluginCapabilities, PluginSchema, ReadOnlyCondition,
+    SchemaCatalog, SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
     ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
 };
 pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };
 pub use state_store::StateStore;
-pub use subid_ui::{
-    element_key_from_subid, project_schema_ui, role_population, subid_category, ui_role_from_subid,
-    UiFieldShape, UiRole, UiSubidProjection, SUBID_CATEGORIES,
-};
 
 use serde::{Deserialize, Serialize};
 

@@ -24,7 +24,10 @@ pub struct Report {
 
 impl Report {
     pub fn ok(&self) -> bool {
-        !self.findings.iter().any(|f| f.severity == Severity::Fail)
+        !self
+            .findings
+            .iter()
+            .any(|f| f.severity == Severity::Fail)
     }
 
     pub fn fail(
@@ -72,10 +75,7 @@ impl Report {
     pub fn to_markdown(&self) -> String {
         let status = if self.ok() { "PASS" } else { "FAIL" };
         let mut out = String::new();
-        out.push_str(&format!(
-            "# Plugin render-contract audit: {}\n\n",
-            self.source
-        ));
+        out.push_str(&format!("# Plugin render-contract audit: {}\n\n", self.source));
         out.push_str(&format!("**Status:** {status}\n\n"));
         if self.findings.is_empty() {
             out.push_str("No findings.\n");
@@ -91,7 +91,10 @@ impl Report {
             };
             let loc = f.location.as_deref().unwrap_or("—");
             let msg = f.message.replace('|', "\\|").replace('\n', " ");
-            out.push_str(&format!("| {sev} | `{}` | `{loc}` | {msg} |\n", f.code));
+            out.push_str(&format!(
+                "| {sev} | `{}` | `{loc}` | {msg} |\n",
+                f.code
+            ));
         }
         out.push('\n');
         out

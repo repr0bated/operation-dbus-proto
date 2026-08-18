@@ -74,10 +74,7 @@ async fn start_tls_server() -> (SocketAddr, String) {
             .expect("valid TLS config")
             .accept_http1(true)
             .add_routes(op_grpc_bridge::grpc_server::build_operation_routes(server))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                health_service,
-            ))
+            .add_service(tonic_web::enable(health_service))
             .serve_with_incoming(incoming)
             .await
             .unwrap();

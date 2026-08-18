@@ -3,8 +3,6 @@
 //! ```text
 //! opblob demo-seal <dir>              blobify demo plugins into a catalog dir
 //! opblob seal-shm                     blobify real plugins into /dev/shm/opdbus/plugin-blobs
-//! opblob stage-shm                    stage the persisted catalog into SHM (boot path)
-//! opblob persist                      copy the SHM catalog to the persisted store
 //! opblob seal-plugins <dir>           blobify real plugins into a catalog dir
 //! opblob inspect <file.blob>          print identity, services, methods
 //! opblob catalog <dir>                list active services in a catalog dir
@@ -30,10 +28,6 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         [cmd, dir] if cmd == "demo-seal" => demo_seal(Path::new(dir)),
         [cmd] if cmd == "seal-shm" => seal_plugins(Path::new(DEFAULT_SHM_DIR)),
-        [cmd] if cmd == "stage-shm" => stage_shm(),
-        [cmd] if cmd == "persist" => {
-            persist_catalog(Path::new(DEFAULT_SHM_DIR), Path::new(PERSISTED_CATALOG_DIR))
-        }
         [cmd, dir] if cmd == "seal-plugins" => seal_plugins(Path::new(dir)),
         [cmd, file] if cmd == "inspect" => inspect(Path::new(file)),
         [cmd, dir] if cmd == "catalog" => catalog(Path::new(dir)),
@@ -41,7 +35,7 @@ fn main() -> ExitCode {
         [cmd, keyfile] if cmd == "keygen" => keygen(Path::new(keyfile)),
         _ => {
             eprintln!(
-                "usage: opblob demo-seal <dir> | seal-shm | stage-shm | persist | seal-plugins <dir> | inspect <file.blob> | catalog <dir> | btrfs-seal <image> <dir> | keygen <keyfile>"
+                "usage: opblob demo-seal <dir> | seal-shm | seal-plugins <dir> | inspect <file.blob> | catalog <dir> | btrfs-seal <image> <dir> | keygen <keyfile>"
             );
             return ExitCode::from(2);
         }
@@ -93,91 +87,6 @@ fn demo_seal(dir: &Path) -> Result<(), String> {
     for s in cat.list_services() {
         println!("  {s}");
     }
-    Ok(())
-}
-
-/// Where the sealed catalog survives a reboot. `/dev/shm` is tmpfs, so without
-/// a persisted copy the only way to refill it is to re-seal — which means
-/// loading every plugin and probing live backends on the boot path.
-const PERSISTED_CATALOG_DIR: &str = "/var/lib/opdbus/plugin-blobs";
-
-/// Catalog manifest filename — written LAST, as the atomic commit point that
-/// readers watch for. Mirrors `op_blob::catalog`'s own contract.
-const MANIFEST_NAME: &str = ".manifest.json";
-
-/// Boot path: stage the persisted catalog into SHM without regenerating it.
-///
-/// Sealing is a build-time act — it loads every plugin and calls
-/// `schema_live()`, which probes real backends. Doing that at boot makes
-/// startup depend on service ordering and costs minutes. Staging is a copy.
-///
-/// Falls back to a one-time seal when no persisted catalog exists yet (first
-/// boot after install), then persists it so later boots only ever stage.
-fn stage_shm() -> Result<(), String> {
-    let shm = Path::new(DEFAULT_SHM_DIR);
-    let persisted = Path::new(PERSISTED_CATALOG_DIR);
-
-    if !persisted.join(MANIFEST_NAME).is_file() {
-        eprintln!(
-            "opblob: no persisted catalog at {} — sealing once, then persisting",
-            persisted.display()
-        );
-        seal_plugins(shm)?;
-        return persist_catalog(shm, persisted);
-    }
-
-    copy_catalog(persisted, shm)?;
-    println!("staged    {} -> {}", persisted.display(), shm.display());
-    Ok(())
-}
-
-/// Capture the current SHM catalog as the artifact future boots will stage.
-/// Run this after a deliberate `seal-shm`, not on the boot path.
-fn persist_catalog(shm: &Path, persisted: &Path) -> Result<(), String> {
-    if !shm.join(MANIFEST_NAME).is_file() {
-        return Err(format!(
-            "no catalog to persist: {} has no {MANIFEST_NAME}",
-            shm.display()
-        ));
-    }
-    copy_catalog(shm, persisted)?;
-    println!("persisted {} -> {}", shm.display(), persisted.display());
-    Ok(())
-}
-
-/// Copy a sealed catalog, committing the manifest last so a reader never sees
-/// blobs that the manifest does not yet describe (or vice versa).
-fn copy_catalog(src: &Path, dst: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
-
-    // Drop blobs that are no longer in the source: a blob in the catalog IS
-    // the plugin, so a stale leftover would resurrect a deregistered one.
-    for entry in std::fs::read_dir(dst).map_err(|e| format!("read {}: {e}", dst.display()))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|x| x.to_str()) == Some("blob") {
-            std::fs::remove_file(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
-        }
-    }
-
-    let mut staged = 0usize;
-    for entry in std::fs::read_dir(src).map_err(|e| format!("read {}: {e}", src.display()))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("blob") {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .ok_or_else(|| format!("blob path has no name: {}", path.display()))?;
-        std::fs::copy(&path, dst.join(name))
-            .map_err(|e| format!("copy {}: {e}", path.display()))?;
-        staged += 1;
-    }
-
-    // Manifest last — the commit point.
-    std::fs::copy(src.join(MANIFEST_NAME), dst.join(MANIFEST_NAME))
-        .map_err(|e| format!("copy {MANIFEST_NAME}: {e}"))?;
-
-    eprintln!("opblob: {staged} blobs + manifest");
     Ok(())
 }
 

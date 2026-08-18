@@ -25,18 +25,10 @@ pub struct MailQueueItem {
     pub created_at: String,
 }
 
-/// Check whether Postfix/Dovecot process is running or mail sockets exist.
-/// Container processes are visible from host procfs and /run/mail-3tched/ sockets.
-async fn is_mail_server_running() -> bool {
-    let sockets = [
-        "/run/mail-3tched/submission.sock",
-        "/run/mail-3tched/smtp.sock",
-        "/run/mail-3tched/imap.sock",
-    ];
-    if sockets.iter().any(|p| std::path::Path::new(p).exists()) {
-        return true;
-    }
-
+/// Check whether the maddy process is running by scanning `/proc/*/comm`.
+/// Container processes are visible from the host procfs, so this covers
+/// both containerised and host-native deployments without shelling out.
+async fn is_maddy_running() -> bool {
     let mut entries = match tokio::fs::read_dir("/proc").await {
         Ok(e) => e,
         Err(_) => return false,
@@ -53,8 +45,7 @@ async fn is_mail_server_running() -> bool {
 
         let comm_path = entry.path().join("comm");
         if let Ok(comm) = tokio::fs::read_to_string(&comm_path).await {
-            let proc_name = comm.trim();
-            if proc_name == "postfix" || proc_name == "master" || proc_name == "dovecot" {
+            if comm.trim() == "maddy" {
                 return true;
             }
         }
@@ -65,7 +56,7 @@ async fn is_mail_server_running() -> bool {
 
 /// GET /api/mail/status - Get mail server status
 pub async fn mail_status_handler(Extension(_state): Extension<Arc<AppState>>) -> Json<MailStatus> {
-    let running = is_mail_server_running().await;
+    let running = is_maddy_running().await;
 
     Json(MailStatus {
         running,

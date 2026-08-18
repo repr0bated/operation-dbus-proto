@@ -1,9 +1,8 @@
 // ChatService — gRPC façade for the control-plane chatbot.
 //
-// The chatbot is a delegator, not an executor. Roles: orchestrator, planner,
-// suggestion giver, problem solver. It never executes backplane mutations
-// itself — it only calls agents. Forced tool calling is mandatory: even
-// user-facing responses are emitted as tool calls.
+// The chatbot is a delegator, not an executor. It plans, suggests, coordinates,
+// and orchestrates — but always delegates execution to agents. Forced tool
+// calling is mandatory: even user-facing responses are emitted as tool calls.
 //
 // zeroclaw owns LLM provider/model routing (OD-28). SendRequest carries
 // the provider/model selection from zeroclaw's state; the server does not

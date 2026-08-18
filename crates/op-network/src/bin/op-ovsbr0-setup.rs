@@ -763,11 +763,11 @@ async fn main() -> Result<()> {
         add_port(&mut client, &cfg.bridge, &cfg.uplink).await?;
     }
 
-    // ── 5. Bring the physical port up through native rtnetlink ───────────────
+    // ── 5. Bring ports up (ip link is a network utility, not an OVS tool) ────
     if !cfg.uplink.is_empty() {
-        op_network::rtnetlink::link_up(&cfg.uplink)
-            .await
-            .with_context(|| format!("bring uplink {} up", cfg.uplink))?;
+        let _ = Command::new("ip")
+            .args(["link", "set", &cfg.uplink, "up"])
+            .status();
     }
     info!("op-ovsbr0-setup: done");
     Ok(())

@@ -2,8 +2,8 @@
 //! optionally including introspect gap findings.
 
 use crate::audit::{audit_source_with_coverage, CoverageInputs};
-use crate::gadget::declared_field_paths_multi;
 use crate::gaps::{gaps_from_surface_json_for_plugin, IntrospectGaps};
+use crate::gadget::declared_field_paths_multi;
 use crate::report::Report;
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -132,20 +132,24 @@ pub fn emit_complete_plugin(
 
     let introspect = coverage.binary_surface_json.as_ref().map(|surface| {
         let v: Value = serde_json::from_str(surface).unwrap_or(json!({}));
-        let gaps =
-            gaps_from_surface_json_for_plugin(surface, &field_leaves, &method_names, &plugin_name)
-                .unwrap_or(IntrospectGaps {
-                    surface_paths_total: 0,
-                    signal_paths_considered: 0,
-                    covered_approx: 0,
-                    missing_from_plugin: 0,
-                    missing_cli_commands: vec![],
-                    missing_config_fields: vec![],
-                    missing_by_group: BTreeMap::new(),
-                    delegated_paths: vec![],
-                    missing_paths_sample: vec![],
-                    note: "failed to compute gaps".into(),
-                });
+        let gaps = gaps_from_surface_json_for_plugin(
+            surface,
+            &field_leaves,
+            &method_names,
+            &plugin_name,
+        )
+        .unwrap_or(IntrospectGaps {
+            surface_paths_total: 0,
+            signal_paths_considered: 0,
+            covered_approx: 0,
+            missing_from_plugin: 0,
+            missing_cli_commands: vec![],
+            missing_config_fields: vec![],
+            missing_by_group: BTreeMap::new(),
+            delegated_paths: vec![],
+            missing_paths_sample: vec![],
+            note: "failed to compute gaps".into(),
+        });
         IntrospectEmit {
             surface_kind: v
                 .get("kind")
@@ -200,12 +204,18 @@ pub fn complete_to_json(doc: &CompletePluginDocument) -> Result<String> {
 
 pub fn complete_to_markdown(doc: &CompletePluginDocument) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Complete plugin: {}\n\n", doc.plugin.name));
+    out.push_str(&format!(
+        "# Complete plugin: {}\n\n",
+        doc.plugin.name
+    ));
     out.push_str(&format!("**Contract:** {}\n\n", doc.contract));
     out.push_str(&format!("**Source:** `{}`\n\n", doc.source));
     out.push_str(&format!(
         "**Identity:** {} {} ({}) — {}\n\n",
-        doc.plugin.name, doc.plugin.version, doc.plugin.category, doc.plugin.description
+        doc.plugin.name,
+        doc.plugin.version,
+        doc.plugin.category,
+        doc.plugin.description
     ));
     if let Some(root) = &doc.plugin.state_root {
         out.push_str(&format!("**State root:** `{root}`\n\n"));
@@ -452,9 +462,7 @@ fn struct_to_json_schema(
 }
 
 fn has_jsonschema(attrs: &[Attribute]) -> bool {
-    attrs
-        .iter()
-        .any(|a| meta_str(&a.meta).contains("JsonSchema"))
+    attrs.iter().any(|a| meta_str(&a.meta).contains("JsonSchema"))
 }
 
 fn meta_str(meta: &Meta) -> String {

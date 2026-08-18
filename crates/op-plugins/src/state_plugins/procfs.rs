@@ -223,7 +223,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "list_processes".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            ListProcessesOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "ListProcesses",
             op_state_store::SideEffect::Read,
@@ -236,7 +236,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_process_info".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ProcessInfoInput,
-            GetProcessInfoOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "GetProcessInfo",
             op_state_store::SideEffect::Read,
@@ -249,7 +249,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_meminfo".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            GetMeminfoOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "GetMeminfo",
             op_state_store::SideEffect::Read,
@@ -262,7 +262,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_cpuinfo".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            GetCpuinfoOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "GetCpuinfo",
             op_state_store::SideEffect::Read,
@@ -275,7 +275,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_loadavg".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            GetLoadavgOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "GetLoadavg",
             op_state_store::SideEffect::Read,
@@ -288,7 +288,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_uptime".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            GetUptimeOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "GetUptime",
             op_state_store::SideEffect::Read,
@@ -301,7 +301,7 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_net_dev".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            GetNetDevOutput,
+            super::plugin_scaffold_helpers::AckOutput,
         >(
             "GetNetDev",
             op_state_store::SideEffect::Read,
@@ -327,140 +327,6 @@ pub(crate) fn procfs_schema() -> PluginSchema {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ProcessInfoInput {
     pub pid: i32,
-}
-
-/// Typed method outputs. Replace `AckOutput` for the read methods below —
-/// the gRPC bridge deserializes `dispatch_procfs_method`'s JSON result
-/// strictly against the schema's declared output descriptor
-/// (`call_generated_plugin_method_typed` in `op-grpc-bridge/src/grpc_server.rs`),
-/// so fields not declared here never reach the caller regardless of what
-/// the dispatch function returns.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetMeminfoOutput {
-    pub memory: std::collections::BTreeMap<String, u64>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetCpuinfoOutput {
-    #[schemars(with = "serde_json::Value")]
-    pub cpuinfo: Value,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetLoadavgOutput {
-    pub loadavg: LoadAvg,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetUptimeOutput {
-    pub uptime: Uptime,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetNetDevOutput {
-    pub net_dev: NetDev,
-}
-
-/// Minimal per-process summary from `/proc/<pid>/stat`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ProcessSummary {
-    pub pid: i32,
-    /// `comm` field — the executable name, truncated by the kernel at 15 bytes.
-    pub name: String,
-    /// Single-letter process state, e.g. `R`, `S`, `Z`.
-    pub state: String,
-    pub ppid: i32,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ListProcessesOutput {
-    pub processes: Vec<ProcessSummary>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetProcessInfoOutput {
-    pub process: ProcessSummary,
-}
-
-/// List every PID currently in `/proc`, best-effort: processes that exit
-/// mid-scan are silently skipped (`read_process_summary` returns `None`).
-async fn gather_processes() -> Vec<ProcessSummary> {
-    let mut out = Vec::new();
-    let mut entries = match fs::read_dir("/proc").await {
-        Ok(e) => e,
-        Err(_) => return out,
-    };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|s| s.parse::<i32>().ok())
-        {
-            if let Some(summary) = read_process_summary(pid).await {
-                out.push(summary);
-            }
-        }
-    }
-    out
-}
-
-/// Parse `/proc/<pid>/stat`. `comm` is parenthesized and may itself contain
-/// spaces/parens, so locate it by the outermost `(`...`)` pair rather than
-/// splitting on whitespace — the third field onward is a fixed-order list
-/// (state, ppid, ...) starting right after the closing paren.
-async fn read_process_summary(pid: i32) -> Option<ProcessSummary> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).await.ok()?;
-    let open = stat.find('(')?;
-    let close = stat.rfind(')')?;
-    let name = stat.get(open + 1..close)?.to_string();
-    let rest: Vec<&str> = stat.get(close + 2..)?.split_whitespace().collect();
-    let state = rest.first()?.to_string();
-    let ppid = rest.get(1)?.parse().ok()?;
-    Some(ProcessSummary {
-        pid,
-        name,
-        state,
-        ppid,
-    })
-}
-
-/// Backend for the `procfs` plugin's read methods, called from
-/// `mutation_engine::dispatch_method_call`'s `"procfs"` arm. Every method
-/// here is a live `/proc` read via the `gather_*` functions already used by
-/// `gather_procfs_state`/`current_state` — no D-Bus mirror, no CLI subprocess.
-pub async fn dispatch_procfs_method(
-    method: &str,
-    args: &serde_json::Value,
-) -> Result<serde_json::Value> {
-    match method {
-        "get_meminfo" => Ok(serde_json::to_value(GetMeminfoOutput {
-            memory: gather_memory().await,
-        })?),
-        "get_cpuinfo" => Ok(serde_json::to_value(GetCpuinfoOutput {
-            cpuinfo: gather_cpuinfo().await,
-        })?),
-        "get_loadavg" => Ok(serde_json::to_value(GetLoadavgOutput {
-            loadavg: gather_loadavg().await,
-        })?),
-        "get_uptime" => Ok(serde_json::to_value(GetUptimeOutput {
-            uptime: gather_uptime().await,
-        })?),
-        "get_net_dev" => Ok(serde_json::to_value(GetNetDevOutput {
-            net_dev: gather_net_dev().await,
-        })?),
-        "list_processes" => Ok(serde_json::to_value(ListProcessesOutput {
-            processes: gather_processes().await,
-        })?),
-        "get_process_info" => {
-            let input: ProcessInfoInput = serde_json::from_value(args.clone())
-                .map_err(|e| anyhow::anyhow!("invalid get_process_info args: {e}"))?;
-            let process = read_process_summary(input.pid)
-                .await
-                .ok_or_else(|| anyhow::anyhow!("no such process: pid {}", input.pid))?;
-            Ok(serde_json::to_value(GetProcessInfoOutput { process })?)
-        }
-        other => Err(anyhow::anyhow!("unknown procfs method: {}", other)),
-    }
 }
 
 async fn gather_procfs_state() -> ProcfsState {

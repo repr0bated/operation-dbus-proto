@@ -38,9 +38,7 @@ op-agents = { path = "../op-agents" }
 op-mcp = { path = "../op-mcp", features = ["grpc"] }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 tonic = { workspace = true }
-tonic-prost = { workspace = true }
 tonic-web = { workspace = true }
-tower = { workspace = true }
 tonic-reflection = { workspace = true }
 tokio-stream = { workspace = true }
 prost = { workspace = true }
@@ -53,5 +51,5 @@ op-identity = { path = "../op-identity" }
 tokio-test = "0.4"
 
 [build-dependencies]
-tonic-prost-build = { workspace = true }
-prost-build = "0.14.4"
+tonic-build = "0.11"
+prost-build = "0.12"

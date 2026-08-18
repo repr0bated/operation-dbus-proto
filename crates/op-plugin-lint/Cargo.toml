@@ -13,15 +13,10 @@ path = "src/main.rs"
 [features]
 default = []
 # Optional: call live op_inspector::IntrospectiveGadget (needs workspace zbus).
-# The deps have to be named here, not merely implied: the feature declared none,
-# so anything enabling it — `--all-features` included — compiled `gadget.rs`
-# against two crates this package never linked.
-inspector-gadget = ["dep:op-inspector", "dep:tokio"]
+inspector-gadget = []
 
 [dependencies]
 anyhow = { workspace = true }
-op-inspector = { path = "../op-inspector", optional = true }
-tokio = { workspace = true, optional = true }
 clap = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

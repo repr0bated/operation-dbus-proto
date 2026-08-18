@@ -222,7 +222,9 @@ pub(crate) fn workflows_schema() -> PluginSchema {
         "workflows.write".to_string(),
         CapabilityDecl {
             id: "workflows.write".to_string(),
-            description: "Grants: start_workflow, pause_workflow, resume_workflow, cancel_workflow.".to_string(),
+            description:
+                "Grants: start_workflow, pause_workflow, resume_workflow, cancel_workflow."
+                    .to_string(),
         },
     );
 

@@ -36,6 +36,10 @@ use zbus::connection::Connection;
 mod dbus;
 use dbus::S6SystemctlService;
 
+const RUNIT_OBJECT_PATH: &str = "/org/opdbus/v1/plugins/runit/systemctl";
+const RUNIT_BUS_NAME: &str = "org.opdbus.v1.Runit.Systemctl";
+const LEGACY_BUS_NAME: &str = "org.opdbus.v1.S6.Systemctl";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -55,24 +59,26 @@ async fn main() -> Result<()> {
 
     info!("Connected to system D-Bus");
 
-    // Register the service on the connection
+    // Register the service on the connection. The object lives at the runit
+    // path; the S6 well-known name below is a dest alias only, not a second
+    // object path or a second interface.
     conn.object_server()
-        .at("/org/opdbus/v1/plugins/s6/systemctl", service)
+        .at(RUNIT_OBJECT_PATH, service)
         .await
         .context("Failed to register D-Bus object")?;
 
     // Request the bus name. The legacy `S6.Systemctl` name is also claimed for
     // one release so already-installed clients keep working until the next
     // `recompile-and-update.sh` run replaces them.
-    conn.request_name("org.opdbus.v1.Runit.Systemctl")
+    conn.request_name(RUNIT_BUS_NAME)
         .await
         .context("Failed to request bus name")?;
-    if let Err(error) = conn.request_name("org.opdbus.v1.S6.Systemctl").await {
-        warn!("legacy bus name org.opdbus.v1.S6.Systemctl unavailable: {error}");
+    if let Err(error) = conn.request_name(LEGACY_BUS_NAME).await {
+        warn!("legacy bus name {LEGACY_BUS_NAME} unavailable: {error}");
     }
 
-    info!("D-Bus service registered at /org/opdbus/v1/plugins/runit/systemctl");
-    info!("Interface: org.opdbus.v1.Runit.Systemctl (legacy alias: org.opdbus.v1.S6.Systemctl)");
+    info!("D-Bus service registered at {RUNIT_OBJECT_PATH}");
+    info!("Interface: {RUNIT_BUS_NAME} (legacy dest alias: {LEGACY_BUS_NAME})");
     info!("Daemon ready - press Ctrl+C to stop");
 
     // Confirm the runit supervisor is actually running. `sv` needs a live

@@ -36,7 +36,7 @@ impl Default for WgcfConfig {
             enabled: true,
             fwmark: 0x51820,
             wireguard_port: 51820,
-            config_path: "/etc/wireguard/wgcf-egress.conf".to_string(),
+            config_path: "/etc/wireguard/wgcf.conf".to_string(),
         }
     }
 }
@@ -370,7 +370,7 @@ pub(crate) fn wgcf_schema() -> PluginSchema {
     // Refresh method
     schema.methods.insert(
         "refresh".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+        method_decl_from_schemars_with_output::<
             RefreshInput,
             super::plugin_scaffold_helpers::AckOutput,
         >(

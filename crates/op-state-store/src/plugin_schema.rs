@@ -175,9 +175,10 @@ pub struct CapabilityDecl {
 /// short-form id (`agent.read`, `factory.invoke`, …) tolerated until the
 /// capability refactor completes — see `validate_capability_closure`.
 pub fn is_canonical_capability_id(id: &str) -> bool {
-    id.starts_with("cap.") && id.rsplit('@').next().is_some_and(|v| {
-        v.len() > 1 && v.starts_with('v') && v[1..].chars().all(|c| c.is_ascii_digit())
-    })
+    id.starts_with("cap.")
+        && id.rsplit('@').next().is_some_and(|v| {
+            v.len() > 1 && v.starts_with('v') && v[1..].chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// Where a method's effective capability was found — the three migration

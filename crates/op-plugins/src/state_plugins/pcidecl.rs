@@ -170,13 +170,6 @@ impl StatePlugin for PciDeclPlugin {
             .build();
         // Add D-Bus methods for PCI devices
         add_pcidecl_methods(&mut schema);
-        schema.capabilities.insert(
-            "pcidecl.read".to_string(),
-            op_state_store::CapabilityDecl {
-                id: "pcidecl.read".to_string(),
-                description: "Grants: enumerate_devices, get_device_info.".to_string(),
-            },
-        );
         Some(schema)
     }
 
@@ -354,5 +347,12 @@ fn add_pcidecl_methods(schema: &mut PluginSchema) {
             "pcidecl.read",
             "obs.hardware.pci.device.info@v1",
         ),
+    );
+    schema.capabilities.insert(
+        "pcidecl.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "pcidecl.read".to_string(),
+            description: "Grants: enumerate_devices, get_device_info.".to_string(),
+        },
     );
 }

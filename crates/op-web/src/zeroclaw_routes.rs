@@ -1,17 +1,19 @@
-//! Zeroclaw route helpers backed by the SHM state tree.
+//! Router-plugin helpers backed by the SHM state tree.
+//!
+//! HTTP paths stay `/api/zeroclaw/*` and `/api/llm/*` (what the UI already
+//! calls). The sealed plugin those handlers read is `tched_router`.
 
 use anyhow::{bail, Result};
 use simd_json::prelude::*;
+use simd_json::OwnedValue as Value;
 
 use crate::state_tree;
 
-#[derive(Debug, Clone)]
-pub struct ZeroclawSelection {
-    pub provider: String,
-    pub model: String,
-    pub providers: Vec<String>,
-    pub available: bool,
-}
+/// Canonical D-Bus / SHM plugin id after the OpenCode rebrand.
+pub const ROUTER_PLUGIN_ID: &str = "tched_router";
+/// Pre-rebrand plugin id. Still accepted so a host that has not resealed yet
+/// keeps serving the same UI endpoints.
+pub const LEGACY_ROUTER_PLUGIN_ID: &str = "zeroclaw";
 
 #[derive(Debug, Clone)]
 pub struct ZeroclawRoute {
@@ -28,12 +30,12 @@ pub struct ZeroclawRoute {
 }
 
 impl ZeroclawRoute {
-    fn from_value(value: &simd_json::OwnedValue) -> Option<Self> {
+    fn from_value(value: &Value) -> Option<Self> {
         let model = value.get("model")?.as_str()?.to_string();
         let provider = value
             .get("provider")
             .and_then(|v| v.as_str())
-            .unwrap_or("zeroclaw")
+            .unwrap_or(ROUTER_PLUGIN_ID)
             .to_string();
         let upstream_provider = value
             .get("upstream_provider")
@@ -80,53 +82,41 @@ impl ZeroclawRoute {
     }
 }
 
+/// Live router plugin state: `tched_router` first, then legacy `zeroclaw`.
+pub fn read_router_plugin() -> Option<Value> {
+    state_tree::read_plugin(ROUTER_PLUGIN_ID)
+        .or_else(|| state_tree::read_plugin(LEGACY_ROUTER_PLUGIN_ID))
+}
+
+/// `model_routes` live at the top level (flattened catalog) or under the
+/// historical `projection` / `catalog` objects.
+pub fn model_route_values(state: &Value) -> Option<&Vec<Value>> {
+    state
+        .get("model_routes")
+        .and_then(|v| v.as_array())
+        .or_else(|| {
+            state
+                .get("catalog")
+                .and_then(|v| v.get("model_routes"))
+                .and_then(|v| v.as_array())
+        })
+        .or_else(|| {
+            state
+                .get("projection")
+                .and_then(|v| v.get("model_routes"))
+                .and_then(|v| v.as_array())
+        })
+}
+
 pub fn routes() -> Option<Vec<ZeroclawRoute>> {
-    let zeroclaw = state_tree::read_plugin("zeroclaw")?;
-    let route_values = zeroclaw.get("model_routes")?.as_array()?;
+    let state = read_router_plugin()?;
+    let route_values = model_route_values(&state)?;
     Some(
         route_values
             .iter()
             .filter_map(ZeroclawRoute::from_value)
             .collect(),
     )
-}
-
-pub fn selection() -> Option<ZeroclawSelection> {
-    let zeroclaw = state_tree::read_plugin("zeroclaw")?;
-    let provider = zeroclaw.get("selected_provider")?.as_str()?.to_string();
-    let model = zeroclaw.get("selected_model")?.as_str()?.to_string();
-    let mut providers = zeroclaw
-        .get("providers")
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.get("id").and_then(|id| id.as_str()))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    providers.sort();
-    providers.dedup();
-    let available = zeroclaw
-        .get("model_routes")
-        .and_then(|value| value.as_array())
-        .map(|routes| {
-            routes.iter().any(|route| {
-                route.get("model").and_then(|value| value.as_str()) == Some(model.as_str())
-                    && route
-                        .get("available")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-    Some(ZeroclawSelection {
-        provider,
-        model,
-        providers,
-        available,
-    })
 }
 
 pub fn route_for_model(model: &str) -> Option<ZeroclawRoute> {
@@ -140,7 +130,7 @@ pub fn ensure_model_available(model: &str) -> Result<()> {
                 .status_reason
                 .unwrap_or_else(|| "route is not available".to_string());
             bail!(
-                "Zeroclaw route '{}' is {} but not available: {}",
+                "Router route '{}' is {} but not available: {}",
                 model,
                 route.status,
                 reason
@@ -149,4 +139,41 @@ pub fn ensure_model_available(model: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn selected_provider_model() -> Option<(String, String)> {
+    let state = read_router_plugin()?;
+    let provider = state.get("selected_provider")?.as_str()?.to_string();
+    let model = state.get("selected_model")?.as_str()?.to_string();
+    if provider.is_empty() && model.is_empty() {
+        return None;
+    }
+    Some((provider, model))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simd_json::json;
+
+    #[test]
+    fn model_routes_read_flattened_catalog() {
+        let state = json!({
+            "selected_provider": "opencode",
+            "model_routes": [{"model": "deepseek-v4-flash-free", "provider": "opencode"}]
+        });
+        let routes = model_route_values(&state).expect("flattened routes");
+        assert_eq!(routes.len(), 1);
+    }
+
+    #[test]
+    fn model_routes_read_nested_projection() {
+        let state = json!({
+            "projection": {
+                "model_routes": [{"model": "qwen3.6-27b", "provider": "salad"}]
+            }
+        });
+        let routes = model_route_values(&state).expect("nested projection");
+        assert_eq!(routes[0].get("model").and_then(|v| v.as_str()), Some("qwen3.6-27b"));
+    }
 }

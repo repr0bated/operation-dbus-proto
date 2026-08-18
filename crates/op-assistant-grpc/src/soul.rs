@@ -1,6 +1,9 @@
-//! SoulService — persistent agent identity, backed by `SoulMemoryStore` in
-//! op-cognitive-mcp.
+//! SoulService — persistent agent identity.
+//!
+//! Production: D-Bus `PluginV1.Call` on the cognitive_mcp plugin (the Cozo
+//! owner). Tests: in-process `SoulMemoryStore` over in-memory Cozo.
 
+use crate::cognitive_client::SoulBackend;
 use crate::convert::*;
 use crate::proto::soul_service_server::SoulService;
 use crate::proto::{
@@ -12,12 +15,21 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 pub struct SoulServiceImpl {
-    store: Arc<SoulMemoryStore>,
+    backend: Arc<SoulBackend>,
 }
 
 impl SoulServiceImpl {
+    /// In-process store — unit/integration tests only.
     pub fn new(store: Arc<SoulMemoryStore>) -> Self {
-        Self { store }
+        Self {
+            backend: Arc::new(SoulBackend::Local(store)),
+        }
+    }
+
+    pub fn from_client(client: Arc<crate::cognitive_client::CognitivePluginClient>) -> Self {
+        Self {
+            backend: Arc::new(SoulBackend::Remote(client)),
+        }
     }
 }
 
@@ -32,7 +44,7 @@ impl SoulService for SoulServiceImpl {
             return Err(Status::invalid_argument("agent_id required"));
         }
         let soul = self
-            .store
+            .backend
             .get_soul(&id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?
@@ -54,7 +66,7 @@ impl SoulService for SoulServiceImpl {
             traits: req.traits.map(struct_to_json),
         };
         let soul = self
-            .store
+            .backend
             .upsert_soul(&req.agent_id, update)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -69,7 +81,7 @@ impl SoulService for SoulServiceImpl {
         if id.is_empty() {
             return Err(Status::invalid_argument("agent_id required"));
         }
-        self.store
+        self.backend
             .delete_soul(&id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -93,7 +105,7 @@ impl SoulService for SoulServiceImpl {
             .unwrap_or(0);
 
         let souls = self
-            .store
+            .backend
             .list_souls()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;

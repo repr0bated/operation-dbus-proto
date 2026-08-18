@@ -1,7 +1,11 @@
 {
   "mcpServers": {
     "cognitive-mcp": {
-      "httpUrl": "http://127.0.0.1:8080/mcp/agents/message"
+      "httpUrl": "http://10.200.0.2:3003/mcp",
+      "headers": {
+        "X-Ghostbridge-Footprint": "mcp-client",
+        "X-Ghostbridge-Trace-ID": "mcp-add-project"
+      }
     },
     "filesystem": {
       "command": "npx",
@@ -32,18 +36,21 @@
       ]
     },
     "op-dbus-compact": {
-      "httpUrl": "http://127.0.0.1:8090/mcp/compact"
+      "httpUrl": "http://127.0.0.1:8080/mcp/compact"
     },
     "op-dbus-agents": {
       "httpUrl": "http://127.0.0.1:8080/mcp/agents/message"
     },
     "op-cognitive-mcp": {
-      "command": "/usr/local/bin/op-mcp-server",
+      "command": "/usr/local/bin/op-cognitive-mcp",
       "args": [
         "--stdio",
-        "-m",
-        "full"
-      ]
+        "--no-http",
+        "--no-grpc"
+      ],
+      "env": {
+        "COGNITIVE_MCP_DB_PATH": "/home/admin/.local/share/op-cognitive-mcp/memory.db"
+      }
     },
     "op-web-compact": {
       "command": "/usr/local/bin/op-mcp-server",

@@ -28,13 +28,9 @@ op-grpc-bridge = { path = "../op-grpc-bridge" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-cozo-store = { path = "../op-cozo-store" }
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
-op-gallery-gen = { path = "../op-gallery-gen" }
 
 # Rate limiting
 tower_governor = "0.4"
-
-lazy_static = "1.4"
-async-stream = "0.3"
 
 # Web framework
 axum = { workspace = true, features = ["ws", "macros", "tokio"] }
@@ -42,7 +38,6 @@ tokio = { workspace = true, features = ["full", "signal"] }
 tower = { workspace = true }
 tower-http = { workspace = true, features = ["cors", "fs", "compression-gzip", "trace", "timeout"] }
 hyper = { workspace = true }
-hyper-util = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -55,6 +50,7 @@ toml = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
+async-stream = "0.3"
 
 # Utilities
 uuid = { workspace = true, features = ["v4", "serde"] }
@@ -67,6 +63,7 @@ thiserror = { workspace = true }
 # System info
 sysinfo = "0.30"
 gethostname = { workspace = true }
+lazy_static = "1.4"
 regex = { workspace = true }
 
 # Privacy router signup
@@ -81,7 +78,7 @@ ring = "0.17"
 
 # Google OAuth
 oauth2 = "4.4"
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.11", features = ["json"] }
 
 # Embedded UI
 axum-embed = "0.1"

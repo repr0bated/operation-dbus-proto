@@ -87,26 +87,12 @@ pub fn gaps_from_surface_json_for_plugin(
                 || p.starts_with("flag.")
                 || p.contains("Commands.")
                 || p.contains(".Commands.")
-                || ((p.starts_with("ts.") || p.starts_with("go.") || p.starts_with("xml."))
-                    && (p.contains(".method.") || p.contains(".function.")))
         })
         .cloned()
         .collect();
     let missing_config: Vec<String> = missing
         .iter()
-        .filter(|p| {
-            p.contains("zeroclaw_config")
-                || p.contains(".config.")
-                || (p.starts_with("ts.") && p.contains(".field."))
-                || is_python_class_field(p)
-                || is_rust_type_member(p)
-                || (p.starts_with("go.") && p.contains(".field."))
-                || (p.starts_with("json.") && p.contains(".ovsschema.") && p.contains(".field."))
-                || (p.starts_with("xml.")
-                    && (p.contains(".field.")
-                        || p.contains(".property.")
-                        || p.contains(".assembly.")))
-        })
+        .filter(|p| p.contains("zeroclaw_config") || p.contains(".config."))
         .cloned()
         .collect();
 
@@ -140,24 +126,6 @@ pub fn gaps_from_surface_json_for_plugin(
         missing_paths_sample: sample,
         note,
     })
-}
-
-fn is_python_class_field(path: &str) -> bool {
-    if !path.starts_with("py.") {
-        return false;
-    }
-    let parts = path.split('.').collect::<Vec<_>>();
-    parts
-        .iter()
-        .position(|part| *part == "class")
-        .is_some_and(|index| parts.len() > index + 2)
-}
-
-fn is_rust_type_member(path: &str) -> bool {
-    (path.starts_with("struct.") || path.starts_with("enum."))
-        && path.split('.').count() >= 4
-        && !path.contains("Commands.")
-        && !path.contains(".Commands.")
 }
 
 fn is_antigravity_plugin(name: &str) -> bool {
@@ -248,15 +216,12 @@ fn is_signal(p: &str) -> bool {
     p == "cmd"
         || p.starts_with("cmd.")
         || p.starts_with("flag.")
-        || p.starts_with("struct.")
-        || p.starts_with("enum.")
+        || p.starts_with("struct.zeroclaw")
+        || p.starts_with("enum.zeroclaw")
+        || p.starts_with("struct.zeroclaw_")
         || p.starts_with("toml.")
         || p.starts_with("proto.")
         || p.starts_with("py.")
-        || p.starts_with("ts.")
-        || p.starts_with("go.")
-        || (p.starts_with("json.") && p.contains(".ovsschema."))
-        || p.starts_with("xml.")
         || p.contains("zeroclaw_config")
         || p.contains("antigravity")
         || p.contains("Commands.")
@@ -273,14 +238,6 @@ fn group_of(p: &str) -> String {
         "zeroclaw_config".into()
     } else if p.starts_with("py.") {
         "python".into()
-    } else if p.starts_with("ts.") {
-        "typescript".into()
-    } else if p.starts_with("go.") {
-        "go".into()
-    } else if p.starts_with("json.") && p.contains(".ovsschema.") {
-        "ovsdb_schema".into()
-    } else if p.starts_with("xml.") {
-        "xml".into()
     } else if p.starts_with("toml.") {
         "toml".into()
     } else if p.starts_with("enum.") {
@@ -346,40 +303,34 @@ mod tests {
         }"#;
         let leaves = BTreeSet::from(["selected_model".into(), "bridge".into()]);
         let methods = BTreeSet::new();
-        let gaps =
-            gaps_from_surface_json_for_plugin(surface, &leaves, &methods, "antigravity").unwrap();
+        let gaps = gaps_from_surface_json_for_plugin(
+            surface,
+            &leaves,
+            &methods,
+            "antigravity_chat",
+        )
+        .unwrap();
         assert!(
             gaps.delegated_paths.iter().any(|p| p == "cmd.models"),
             "delegated={:?}",
             gaps.delegated_paths
         );
         assert!(
-            !gaps
-                .missing_cli_commands
-                .iter()
-                .any(|p| p.starts_with("cmd.models")),
+            !gaps.missing_cli_commands.iter().any(|p| p.starts_with("cmd.models")),
             "missing_cli={:?}",
             gaps.missing_cli_commands
         );
         // mode is product, not model
         assert!(
-            gaps.missing_cli_commands
-                .iter()
-                .any(|p| p == "flag.root.mode")
-                || gaps
-                    .missing_paths_sample
-                    .iter()
-                    .any(|p| p == "flag.root.mode"),
+            gaps.missing_cli_commands.iter().any(|p| p == "flag.root.mode")
+                || gaps.missing_paths_sample.iter().any(|p| p == "flag.root.mode"),
             "mode should remain a product gap; missing={:?} sample={:?}",
             gaps.missing_cli_commands,
             gaps.missing_paths_sample
         );
         // selected_model covers flag.root.model
         assert!(
-            !gaps
-                .missing_cli_commands
-                .iter()
-                .any(|p| p == "flag.root.model"),
+            !gaps.missing_cli_commands.iter().any(|p| p == "flag.root.model"),
             "selected_model should cover flag.root.model"
         );
         assert!(gaps.missing_by_group.contains_key("delegated_gemini"));

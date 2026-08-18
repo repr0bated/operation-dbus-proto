@@ -4,12 +4,12 @@
 //! Uses native rtnetlink (netlink) protocol — no CLI wrappers.
 //! Depends on: net, ovsdb_bridge (interfaces must exist before configuring)
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{CapabilityDecl, FieldSchema, FieldType, PluginSchema};
+use op_state_store::{FieldSchema, FieldType, CapabilityDecl, PluginSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -340,81 +340,6 @@ pub struct AddRuleInput {
     pub rule: String,
 }
 
-fn parse_ipv4_cidr(address: &str) -> Result<(&str, u8)> {
-    let (ip, prefix) = address
-        .split_once('/')
-        .context("address must use IPv4 CIDR notation")?;
-    let prefix = prefix.parse::<u8>().context("invalid IPv4 prefix")?;
-    if prefix > 32 {
-        bail!("IPv4 prefix must be between 0 and 32");
-    }
-    ip.parse::<std::net::Ipv4Addr>()
-        .context("invalid IPv4 address")?;
-    Ok((ip, prefix))
-}
-
-/// Execute schema-declared rtnetlink methods through the native netlink backend.
-///
-/// This is deliberately separate from `apply_state`: schema method calls arrive
-/// through the bridge's MutationEngine and must not fall through to its generic
-/// audit-only echo result.
-pub async fn dispatch_rtnetlink_method(
-    method: &str,
-    args: &serde_json::Value,
-) -> Result<serde_json::Value> {
-    match method {
-        "set_link_state" => {
-            let input: SetLinkStateInput = serde_json::from_value(args.clone())?;
-            match input.state.as_str() {
-                "up" => op_network::rtnetlink::link_up(&input.name).await?,
-                "down" => op_network::rtnetlink::link_down(&input.name).await?,
-                state => bail!("invalid link state '{state}'; expected 'up' or 'down'"),
-            }
-            Ok(serde_json::json!({
-                "success": true,
-                "name": input.name,
-                "state": input.state,
-            }))
-        }
-        "add_ipv4_address" => {
-            let input: AddIpv4AddressInput = serde_json::from_value(args.clone())?;
-            let (ip, prefix) = parse_ipv4_cidr(&input.address)?;
-            if let Err(error) =
-                op_network::rtnetlink::add_ipv4_address(&input.name, ip, prefix).await
-            {
-                if !error.to_string().to_ascii_lowercase().contains("exist") {
-                    return Err(error);
-                }
-            }
-            Ok(serde_json::json!({
-                "success": true,
-                "name": input.name,
-                "address": input.address,
-            }))
-        }
-        "set_mac_address" => {
-            let input: SetMacAddressInput = serde_json::from_value(args.clone())?;
-            op_network::rtnetlink::set_mac_address(&input.name, &input.mac).await?;
-            Ok(serde_json::json!({
-                "success": true,
-                "name": input.name,
-                "mac": input.mac,
-            }))
-        }
-        "set_default_route" => {
-            let input: SetDefaultRouteInput = serde_json::from_value(args.clone())?;
-            op_network::rtnetlink::replace_default_route_onlink(&input.name, &input.gateway)
-                .await?;
-            Ok(serde_json::json!({
-                "success": true,
-                "name": input.name,
-                "gateway": input.gateway,
-            }))
-        }
-        _ => bail!("rtnetlink method '{method}' has no native dispatcher"),
-    }
-}
-
 pub(crate) fn rtnetlink_schema() -> PluginSchema {
     let interface_fields = {
         let mut fields = HashMap::new();
@@ -625,7 +550,6 @@ pub(crate) fn rtnetlink_schema() -> PluginSchema {
             "mut.network.rtnetlink.rule.add@v1",
         ),
     );
-
     schema.capabilities.insert(
         "cap.network.rtnetlink.link-state.set@v1".to_string(),
         CapabilityDecl {

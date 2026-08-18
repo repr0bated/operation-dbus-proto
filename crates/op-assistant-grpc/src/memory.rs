@@ -1,6 +1,9 @@
-//! MemoryService implementation — backed directly by op-cognitive-mcp's
-//! `CognitiveMemoryStore` (CozoDB). No HTTP round-trip.
+//! MemoryService implementation.
+//!
+//! Production: D-Bus `PluginV1.Call` on the cognitive_mcp plugin (the Cozo
+//! owner). Tests: in-process `CognitiveMemoryStore` over in-memory Cozo.
 
+use crate::cognitive_client::MemoryBackend;
 use crate::convert::*;
 use crate::proto::memory_service_server::MemoryService;
 use crate::proto::{
@@ -16,12 +19,21 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 pub struct MemoryServiceImpl {
-    store: Arc<CognitiveMemoryStore>,
+    backend: Arc<MemoryBackend>,
 }
 
 impl MemoryServiceImpl {
+    /// In-process store — unit/integration tests only.
     pub fn new(store: Arc<CognitiveMemoryStore>) -> Self {
-        Self { store }
+        Self {
+            backend: Arc::new(MemoryBackend::Local(store)),
+        }
+    }
+
+    pub fn from_client(client: Arc<crate::cognitive_client::CognitivePluginClient>) -> Self {
+        Self {
+            backend: Arc::new(MemoryBackend::Remote(client)),
+        }
     }
 }
 
@@ -44,7 +56,7 @@ impl MemoryService for MemoryServiceImpl {
                 limit: req.pagination.as_ref().map(|p| p.limit as i64),
                 offset: req.pagination.as_ref().map(|p| p.offset as i64),
             };
-            self.store
+            self.backend
                 .query_entries(q)
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?
@@ -52,7 +64,7 @@ impl MemoryService for MemoryServiceImpl {
             let mut out = Vec::with_capacity(req.keys.len());
             for k in &req.keys {
                 if let Some(e) = self
-                    .store
+                    .backend
                     .retrieve_entry(&req.namespace, k)
                     .await
                     .map_err(|e| Status::internal(e.to_string()))?
@@ -77,15 +89,18 @@ impl MemoryService for MemoryServiceImpl {
             return Err(Status::invalid_argument("namespace required"));
         }
 
-        ensure_namespace(&self.store, &req.namespace, NamespaceKind::Custom).await?;
+        self.backend
+            .ensure_namespace(&req.namespace, NamespaceKind::Custom)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         let mut written = 0u32;
         for entry in req.entries {
             let value: Value =
                 serde_json::from_str(&entry.value).unwrap_or(Value::String(entry.value));
             let tags = tags_from_metadata(&entry.metadata);
-            self.store
-                .store_entry(&req.namespace, &entry.key, value, tags, None)
+            self.backend
+                .store_entry(&req.namespace, &entry.key, value, tags)
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
             written += 1;
@@ -104,7 +119,7 @@ impl MemoryService for MemoryServiceImpl {
         let mut deleted = 0u32;
         for k in req.keys {
             if self
-                .store
+                .backend
                 .delete_entry(&req.namespace, &k)
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?
@@ -141,7 +156,7 @@ impl MemoryService for MemoryServiceImpl {
                 offset: None,
             };
             let rows = self
-                .store
+                .backend
                 .query_entries(q)
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?;
@@ -164,7 +179,7 @@ impl MemoryService for MemoryServiceImpl {
             ..Default::default()
         };
         let entries = self
-            .store
+            .backend
             .query_entries(q)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -232,22 +247,13 @@ fn tags_from_metadata(meta: &Option<prost_types::Struct>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// In-process helper used by integration tests.
 pub async fn ensure_namespace(
     store: &CognitiveMemoryStore,
     name: &str,
     kind: NamespaceKind,
 ) -> Result<(), Status> {
-    if store
-        .get_namespace_by_name(name)
+    crate::cognitive_client::local_ensure_namespace(store, name, kind)
         .await
-        .map_err(|e| Status::internal(e.to_string()))?
-        .is_some()
-    {
-        return Ok(());
-    }
-    store
-        .upsert_namespace(name, kind, None, None, None, Value::Null)
-        .await
-        .map_err(|e| Status::internal(e.to_string()))?;
-    Ok(())
+        .map_err(|e| Status::internal(e.to_string()))
 }

@@ -239,18 +239,6 @@ pub(crate) fn login1_schema() -> PluginSchema {
                 read_only_when: None,
             },
         )
-        .capability(op_state_store::CapabilityDecl {
-            id: "login1.read".to_string(),
-            description: "Grants: list_sessions, list_users, list_seats, get_session, get_user, get_seat.".to_string(),
-        })
-        .capability(op_state_store::CapabilityDecl {
-            id: "login1.admin".to_string(),
-            description: "Grants: power_off, reboot, suspend, hibernate, sleep, terminate_seat, attach_device, flush_devices, terminate_user, kill_user, set_user_linger.".to_string(),
-        })
-        .capability(op_state_store::CapabilityDecl {
-            id: "login1.write".to_string(),
-            description: "Grants: create_session, release_session, terminate_session, lock_session, unlock_session, kill_session.".to_string(),
-        })
         .build();
 
     // org.freedesktop.login1.Manager methods
@@ -553,6 +541,29 @@ pub(crate) fn login1_schema() -> PluginSchema {
             "login1.admin",
             "mut.software.login1.system.sleep@v1",
         ),
+    );
+    schema.capabilities.insert(
+        "login1.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "login1.read".to_string(),
+            description:
+                "Grants: list_sessions, list_users, list_seats, get_session, get_user, get_seat."
+                    .to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "login1.admin".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "login1.admin".to_string(),
+            description: "Grants: power_off, reboot, suspend, hibernate, sleep, terminate_seat, attach_device, flush_devices, terminate_user, kill_user, set_user_linger.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "login1.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "login1.write".to_string(),
+            description: "Grants: create_session, release_session, terminate_session, lock_session, unlock_session, kill_session.".to_string(),
+        },
     );
 
     schema

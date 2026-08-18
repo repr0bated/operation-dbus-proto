@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
-use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,11 +10,9 @@ use std::sync::OnceLock;
 use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
-use op_cognitive_mcp::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
-use op_cognitive_mcp::{CognitiveGrpcService, CognitiveMcpServer, QdrantSemanticShuttle};
-use op_mcp::tool_registry::ToolRegistry;
+use op_cognitive_mcp::QdrantSemanticShuttle;
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage, SerializeOptions};
+use prost_reflect::{DescriptorPool, DynamicMessage};
 use prost_types::{Struct as ProstStruct, Timestamp as ProstTimestamp, Value as ProstValue};
 use serde::de::DeserializeSeed;
 use serde_json::Value as JsonValue;
@@ -31,43 +28,8 @@ use uuid::Uuid;
 use crate::interceptor::{self, load_capability_grants, GhostbridgeIdentity};
 use crate::oracle_assertion::{AssertionValidator, DecoyTrustStore};
 
-/// The actor id an audited event is stamped with for a gRPC request: the
-/// verified session identity the interceptor already resolved, never the
-/// self-asserted `actor_id` the client sent in the request body. The
-/// interceptor authenticated the caller and bound it to a session; reusing
-/// that verdict means every mutation the bridge records carries the
-/// `session_id` / genesis that `MutationEngine::session_context_for_actor`
-/// keys on — so footprinted chain events always resolve back to a session.
-fn effective_actor_id(identity: Option<&GhostbridgeIdentity>, fallback: &str) -> String {
-    match identity {
-        Some(id) if !id.session_id.is_empty() => id.session_id.clone(),
-        Some(id) => id.footprint.clone(),
-        None => fallback.to_string(),
-    }
-}
-
-fn root_disk_used_percent() -> Option<f64> {
-    use std::ffi::CString;
-    use std::mem::MaybeUninit;
-
-    let path = CString::new("/").ok()?;
-    let mut stat = MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: `statvfs` writes through the out-pointer on success (rc == 0).
-    let rc = unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) };
-    if rc != 0 {
-        return None;
-    }
-    let stat = unsafe { stat.assume_init() };
-    let total_bytes = stat.f_blocks as u64 * stat.f_frsize as u64;
-    let free_bytes = stat.f_bavail as u64 * stat.f_frsize as u64;
-    if total_bytes == 0 {
-        return None;
-    }
-    Some(total_bytes.saturating_sub(free_bytes) as f64 / total_bytes as f64 * 100.0)
-}
-
 use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
-use crate::mutation_engine::{ChangeType, CognitiveContextState, MutationEngine};
+use crate::mutation_engine::{ChangeType, MutationEngine};
 use crate::plugin_grpc_gen::MethodServiceRegistry;
 use crate::plugin_object_blob::blobify_plugin_schema;
 use crate::proto::{
@@ -82,24 +44,23 @@ use crate::proto::{
     GetSnapshotRequest, GetSnapshotResponse, GetStateRequest, GetStateResponse,
     ListPluginsResponse, MerkleProofSibling, MutateRequest, MutateResponse,
     MutationError as ProtoMutationError, NumaNode as ProtoNumaNode,
-    OperationType as ProtoOperationType, OvsdbAttachControllerSafeRequest,
-    OvsdbAttachControllerSafeResponse, OvsdbBridge as ProtoOvsdbBridge, OvsdbDelControllerRequest,
-    OvsdbDelControllerResponse, OvsdbDumpDbRequest, OvsdbDumpDbResponse, OvsdbEchoRequest,
-    OvsdbEchoResponse, OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
-    OvsdbGetBridgeStateRequest, OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest,
-    OvsdbGetDatapathHealthResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
+    OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
+    OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
+    OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest, OvsdbGetDatapathHealthResponse,
+    OvsdbAttachControllerSafeRequest, OvsdbAttachControllerSafeResponse,
+    OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
+    OvsdbDelControllerRequest, OvsdbDelControllerResponse,
+    OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
     OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse, OvsdbMonitorRequest,
     OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse, OvsdbUpdate,
     PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
-    ReadOnlyViolation as ProtoReadOnlyViolation, RuntimeCheckUnixSocketsRequest,
-    RuntimeCheckUnixSocketsResponse, RuntimeGetNumaTopologyResponse, RuntimeGetServiceRequest,
-    RuntimeGetSystemInfoResponse, RuntimeListInterfacesResponse, RuntimeListServicesRequest,
-    RuntimeListServicesResponse, RuntimeMetricUpdate,
+    ReadOnlyViolation as ProtoReadOnlyViolation, RuntimeGetNumaTopologyResponse,
+    RuntimeGetServiceRequest, RuntimeGetSystemInfoResponse, RuntimeListInterfacesResponse,
+    RuntimeListServicesRequest, RuntimeListServicesResponse, RuntimeMetricUpdate,
     RuntimeNetworkInterface as ProtoRuntimeNetworkInterface,
     RuntimeServiceInfo as ProtoRuntimeServiceInfo, RuntimeStreamMetricsRequest,
-    RuntimeUnixSocketStatus as ProtoRuntimeUnixSocketStatus, SearchSemanticTraceRequest,
-    SearchSemanticTraceResponse, SemanticTraceMatch, SetPropertyRequest, SetPropertyResponse,
-    Signal, StateChange as ProtoStateChange, StateFrameKind as ProtoStateFrameKind,
+    SearchSemanticTraceRequest, SearchSemanticTraceResponse, SemanticTraceMatch,
+    SetPropertyRequest, SetPropertyResponse, Signal, StateChange as ProtoStateChange,
     SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
     VerifyChainRequest, VerifyChainResponse,
 };
@@ -134,12 +95,10 @@ fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
 fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
     use op_state::StatePlugin;
     let schema = match plugin_id {
-        "human_principal" => {
-            op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new().schema()?
-        }
-        "identity_sled" => {
-            op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new().schema()?
-        }
+        "human_principal" => op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
+            .schema()?,
+        "identity_sled" => op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
+            .schema()?,
         _ => return None,
     };
     serde_json::to_value(&schema).ok()
@@ -276,6 +235,52 @@ pub(crate) fn authorize_schema_method(
         .map_err(|error| Status::permission_denied(error.message))
 }
 
+fn enforce_human_principal_self_service(
+    plugin_id: &str,
+    method_name: &str,
+    args: &JsonValue,
+    identity: Option<&crate::oracle_assertion::HumanPrincipalIdentity>,
+) -> Result<(), ProtoMutationError> {
+    if plugin_id != "human_principal" {
+        return Ok(());
+    }
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    let args = args
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(args);
+    let authorized = match method_name {
+        "register_key" | "revoke_key" => args
+            .get("human_pubkey")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|pubkey| pubkey == identity.human_pubkey),
+        "set_alias" => args
+            .get("principal_id")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|principal_id| principal_id == identity.principal_id),
+        _ => true,
+    };
+    if authorized {
+        return Ok(());
+    }
+    Err(ProtoMutationError {
+        code: ProtoErrorCode::PermissionDenied as i32,
+        message: format!(
+            "AccessDenied: human assertion may only mutate its own principal via \
+             human_principal.{method_name}"
+        ),
+        deny_reason: Some(ProtoDenyReason {
+            reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
+                ProtoCapabilityMissing {
+                    capability: "human_principal.write:self".to_string(),
+                },
+            )),
+        }),
+    })
+}
+
 fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
     let prefix = "/org/opdbus/v1/plugins/";
     path.strip_prefix(prefix)
@@ -401,18 +406,13 @@ impl RegistryInner {
 use crate::per_plugin_reflection::PerMethodReflectionRegistry;
 use crate::plugin_grpc_gen::PerMethodGrpcServices;
 
-/// gRPC service name for the NotebookLM cognitive ingress surface.
-pub const COGNITIVE_TOOL_SERVICE: &str = "operation.cognitive.v1.CognitiveToolService";
-
 #[derive(Clone)]
 pub struct OperationGrpcServer {
     mutation_engine: Arc<MutationEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
-    /// CognitiveToolService — in-process on the :8090 / socket surface.
-    cognitive_grpc: Option<CognitiveGrpcService>,
-    /// Keeps CognitiveMcpServer background tasks alive while gRPC is mounted.
-    cognitive_server: Option<Arc<CognitiveMcpServer>>,
+    /// Broadcast channel for chain events
+    chain_events: broadcast::Sender<ProtoChainEvent>,
     /// Component registry state (shared across clones)
     registry: Arc<RwLock<RegistryInner>>,
     /// Per-method gRPC services (frozen at D-Bus object creation)
@@ -425,13 +425,13 @@ pub struct OperationGrpcServer {
 
 impl OperationGrpcServer {
     pub fn new(mutation_engine: Arc<MutationEngine>) -> Self {
+        let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
             mutation_engine,
             plugin_provider: Arc::new(SchemaCatalogPluginProvider),
             semantic_shuttle: None,
-            cognitive_grpc: None,
-            cognitive_server: None,
+            chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
             per_method_services: PerMethodGrpcServices::new(),
             per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
@@ -443,13 +443,13 @@ impl OperationGrpcServer {
         mutation_engine: Arc<MutationEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
     ) -> Self {
+        let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
             mutation_engine,
             plugin_provider,
             semantic_shuttle: None,
-            cognitive_grpc: None,
-            cognitive_server: None,
+            chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
             per_method_services: PerMethodGrpcServices::new(),
             per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
@@ -460,20 +460,6 @@ impl OperationGrpcServer {
     pub fn with_semantic_shuttle(mut self, semantic_shuttle: Arc<QdrantSemanticShuttle>) -> Self {
         self.semantic_shuttle = Some(semantic_shuttle);
         self
-    }
-
-    pub fn with_cognitive_grpc(
-        mut self,
-        service: CognitiveGrpcService,
-        server: Option<Arc<CognitiveMcpServer>>,
-    ) -> Self {
-        self.cognitive_grpc = Some(service);
-        self.cognitive_server = server;
-        self
-    }
-
-    pub fn has_cognitive_tool_service(&self) -> bool {
-        self.cognitive_grpc.is_some()
     }
 
     /// Hydrate in-memory reflection from the sealed SHM blob catalog.
@@ -631,6 +617,10 @@ impl OperationGrpcServer {
         Req: prost::Message + Default,
         Res: prost::Message + Default,
     {
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
         let identity = interceptor::bridge_capability_identity(request.extensions());
 
         // The caller declares which capability it is exercising, and the bridge
@@ -665,22 +655,36 @@ impl OperationGrpcServer {
         }
 
         let request_bytes = request.into_inner().encode_to_vec();
-        let request_desc = plugin_message_descriptor(request_message_name).ok_or_else(|| {
-            Status::internal(format!(
-                "missing request descriptor for {plugin_id}.{method_name}"
-            ))
-        })?;
+        let request_desc = plugin_descriptor_pool()
+            .get_message_by_name(request_message_name)
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "missing request descriptor for {plugin_id}.{method_name}"
+                ))
+            })?;
         let request_dynamic = DynamicMessage::decode(request_desc, request_bytes.as_slice())
             .map_err(|error| {
                 Status::internal(format!(
                     "failed to decode typed request for {plugin_id}.{method_name}: {error}"
                 ))
             })?;
-        let json_args = dynamic_message_to_plugin_json(&request_dynamic).map_err(|error| {
+        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
             Status::internal(format!(
                 "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
             ))
         })?;
+        let args_value: JsonValue = serde_json::from_str(&json_args).map_err(|error| {
+            Status::internal(format!(
+                "failed to inspect typed request for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        enforce_human_principal_self_service(
+            plugin_id,
+            method_name,
+            &args_value,
+            human_identity.as_ref(),
+        )
+        .map_err(|error| Status::permission_denied(error.message))?;
 
         let result = self
             .mutation_engine
@@ -699,17 +703,18 @@ impl OperationGrpcServer {
                 ))
             })?;
 
-        let result_json =
-            serde_json::to_string(plugin_method_domain_result(&result)).map_err(|error| {
-                Status::internal(format!(
-                    "failed to serialize method result for {plugin_id}.{method_name}: {error}"
-                ))
-            })?;
-        let response_desc = plugin_message_descriptor(response_message_name).ok_or_else(|| {
+        let result_json = serde_json::to_string(&result).map_err(|error| {
             Status::internal(format!(
-                "missing response descriptor for {plugin_id}.{method_name}"
+                "failed to serialize method result for {plugin_id}.{method_name}: {error}"
             ))
         })?;
+        let response_desc = plugin_descriptor_pool()
+            .get_message_by_name(response_message_name)
+            .ok_or_else(|| {
+                Status::internal(format!(
+                    "missing response descriptor for {plugin_id}.{method_name}"
+                ))
+            })?;
         let mut deserializer = serde_json::de::Deserializer::from_str(&result_json);
         let response_dynamic = response_desc
             .deserialize(&mut deserializer)
@@ -747,51 +752,20 @@ fn plugin_descriptor_pool() -> &'static DescriptorPool {
     })
 }
 
-fn plugin_message_descriptor(name: &str) -> Option<prost_reflect::MessageDescriptor> {
-    let pool = plugin_descriptor_pool();
-    pool.get_message_by_name(name).or_else(|| {
-        // Generated aggregate handlers pass Rust message names, while protobuf
-        // descriptors are keyed by their package-qualified names.
-        pool.get_message_by_name(&format!("operation.plugin.v1.{name}"))
-    })
-}
-
-/// Serialize a generated protobuf request back into the field names declared
-/// by the plugin schema. The generic dispatcher consumes schema-native JSON
-/// (`session_id`, `wireguard_pubkey`, ...), while protobuf's canonical JSON
-/// mapping defaults to lowerCamelCase (`sessionId`, `wireguardPubkey`).
-fn dynamic_message_to_plugin_json(message: &DynamicMessage) -> Result<String, serde_json::Error> {
-    let value = message.serialize_with_options(
-        serde_json::value::Serializer,
-        &SerializeOptions::new().use_proto_field_name(true),
-    )?;
-    serde_json::to_string(&value)
-}
-
-fn plugin_method_domain_result(envelope: &serde_json::Value) -> &serde_json::Value {
-    // MutationEngine deliberately returns an accountability envelope for the
-    // generic D-Bus/PluginService transports. A generated typed RPC already
-    // has a concrete protobuf response, so only its domain result belongs in
-    // that message; event metadata remains in EventChainService.
-    envelope.get("result").unwrap_or(envelope)
-}
-
 include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 
 /// Mount the COMPLETE Operation gRPC service surface onto a `tonic::service::Routes`.
 ///
 /// This is the SINGLE source of the backplane's service set. Every endpoint that
-/// serves the backplane — the Unix sockets and the one TCP door (`:8090`
-/// tonic-web, HTTP + native gRPC) — builds its routes from here, so reflection
-/// can never advertise a service that isn't actually mounted.
+/// serves the backplane — the op-dbus bridge (`run_grpc_server`, TCP `:50051`) and
+/// the zeroclaw bridge (`run_zeroclaw_server`, `:8090` + `container.sock`) — builds
+/// its routes from here, so reflection can never advertise a service that isn't
+/// actually mounted (the bug the gRPC-Web probe surfaced).
 ///
 /// Services (all behind the Ghostbridge interceptor, all gRPC-Web enabled):
-///   StateSync, PluginService, EventChainService, ComponentRegistry,
-///   MailService, PrivacyNetworkService, RegistrationService, ChatService,
-///   CognitiveToolService (when mounted), plus gRPC server reflection.
-///
-/// Legacy OvsdbMirror / RuntimeMirror / DbusPassthrough are **not** mounted —
-/// use PluginService.CallMethod (host_runtime, ovsdb_bridge, rovs_commands).
+///   StateSync, PluginService, EventChainService, OvsdbMirror, RuntimeMirror,
+///   ComponentRegistry, MailService, PrivacyNetworkService, RegistrationService,
+///   DbusPassthrough, ChatService, plus gRPC server reflection.
 ///
 /// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
 /// semantic shuttle already attached) and adds endpoint-specific extras
@@ -809,12 +783,15 @@ pub fn build_operation_routes_with_validator(
     server: OperationGrpcServer,
     validator: Arc<AssertionValidator>,
 ) -> tonic::service::Routes {
+    use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
+    use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
     use crate::proto::plugin_service_server::PluginServiceServer;
     use crate::proto::privacy::privacy_network_service_server::PrivacyNetworkServiceServer;
     use crate::proto::registration::registration_service_server::RegistrationServiceServer;
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
+    use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
     // Reflection — DynamicReflectionService serves from the live
@@ -841,9 +818,12 @@ pub fn build_operation_routes_with_validator(
     .add_service(crate::grpc_web::enable(
         EventChainServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
-    // OvsdbMirror / RuntimeMirror / DbusPassthrough intentionally unmounted —
-    // UI and operators use host_runtime + ovsdb_bridge / rovs_commands via
-    // PluginService.CallMethod. Impls remain in-tree for reference only.
+    .add_service(crate::grpc_web::enable(
+        OvsdbMirrorServer::with_interceptor(server.clone(), intercept.clone()),
+    ))
+    .add_service(crate::grpc_web::enable(
+        RuntimeMirrorServer::with_interceptor(server.clone(), intercept.clone()),
+    ))
     .add_service(crate::grpc_web::enable(
         ComponentRegistryServer::with_interceptor(server.clone(), intercept.clone()),
     ))
@@ -854,12 +834,18 @@ pub fn build_operation_routes_with_validator(
         PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        RegistrationServiceServer::with_interceptor(server.clone(), registration_intercept),
+        RegistrationServiceServer::with_interceptor(
+            server.clone(),
+            registration_intercept,
+        ),
+    ))
+    .add_service(crate::grpc_web::enable(
+        DbusPassthroughServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
             crate::chat_service::ChatServiceImpl::new(server.mutation_engine.clone()),
-            intercept.clone(),
+            intercept,
         ),
     ))
     // EMQX is the gRPC client and does not carry Ghostbridge identity headers.
@@ -870,88 +856,8 @@ pub fn build_operation_routes_with_validator(
         ),
     );
 
-    // Generated aggregate plugin services enforce capabilities inside their
-    // typed handlers, so they must receive the same interceptor-inserted caller
-    // identity as the static services above. Mounting them with `new` left their
-    // request extensions empty and made every capability-gated plugin method
-    // fail even when the durable footprint grant was present.
-    let routes = add_routes(routes, server.clone(), intercept.clone());
-    let mut routes = routes.add_service(crate::grpc_web::enable(reflection_v1));
-    if let Some(cognitive) = server.cognitive_grpc.clone() {
-        routes = routes.add_service(crate::grpc_web::enable(
-            CognitiveToolServiceServer::with_interceptor(cognitive, intercept),
-        ));
-    }
-    routes
-}
-
-/// Shared in-process cognitive MCP instance — tool registry, context state, and gRPC ingress.
-pub struct CognitiveMcpHandle {
-    server: Arc<CognitiveMcpServer>,
-}
-
-impl CognitiveMcpHandle {
-    pub fn tool_registry(&self) -> Arc<ToolRegistry> {
-        self.server.tool_registry()
-    }
-
-    pub fn context_state(&self) -> CognitiveContextState {
-        (
-            self.server.context_engine(),
-            self.server.memory_store(),
-            self.server.session_manager(),
-        )
-    }
-
-    pub fn grpc_service(&self) -> CognitiveGrpcService {
-        self.server.cognitive_grpc_service()
-    }
-}
-
-/// Construct the in-process cognitive MCP server for tool dispatch and gRPC ingress.
-pub async fn init_cognitive_mcp() -> Option<CognitiveMcpHandle> {
-    let db_path = std::env::var("COGNITIVE_MCP_DB_PATH")
-        .unwrap_or_else(|_| "/var/lib/op-cognitive-mcp/memory.db".into());
-
-    match CognitiveMcpServer::new(&db_path).await {
-        Ok(server) => {
-            let handle = CognitiveMcpHandle {
-                server: Arc::new(server),
-            };
-            tracing::info!(
-                tools = handle.tool_registry().count().await,
-                "CognitiveMcpServer loaded in-process"
-            );
-            Some(handle)
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                "CognitiveMcpServer init failed; cognitive_mcp tools unavailable but bridge continues"
-            );
-            None
-        }
-    }
-}
-
-/// Mount [`CognitiveToolService`] when a shared [`CognitiveMcpHandle`] is available.
-pub async fn attach_cognitive_tool_service(
-    server: OperationGrpcServer,
-    handle: Option<CognitiveMcpHandle>,
-) -> OperationGrpcServer {
-    let Some(handle) = handle else {
-        return server;
-    };
-    let grpc_service = handle.grpc_service();
-    server
-        .active_reflection()
-        .register_static_service(
-            op_cognitive_mcp::proto::FILE_DESCRIPTOR_SET,
-            COGNITIVE_TOOL_SERVICE,
-        )
-        .await;
-    info!("CognitiveToolService mounted on bridge native gRPC surface");
-    server.with_cognitive_grpc(grpc_service, Some(handle.server))
+    let routes = add_routes(routes, server.clone());
+    routes.add_service(crate::grpc_web::enable(reflection_v1))
 }
 
 /// Run gRPC server for all Operation services.
@@ -969,10 +875,12 @@ pub async fn run_grpc_server(
     // the service *instances* are mounted in `build_operation_routes`.
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
+    use crate::proto::ovsdb_mirror_server::OvsdbMirrorServer;
     use crate::proto::plugin_service_server::PluginServiceServer;
     use crate::proto::privacy::privacy_network_service_server::PrivacyNetworkServiceServer;
     use crate::proto::registration::registration_service_server::RegistrationServiceServer;
     use crate::proto::registry::component_registry_server::ComponentRegistryServer;
+    use crate::proto::runtime_mirror_server::RuntimeMirrorServer;
     use crate::proto::state_sync_server::StateSyncServer;
 
     // Restore the durable audit trail before serving: a query issued right
@@ -985,19 +893,6 @@ pub async fn run_grpc_server(
     match mutation_engine.seed_missing_plugin_projections().await {
         Ok(count) => info!(count, "Plugin projections seeded"),
         Err(error) => warn!(%error, "Plugin projection seeding failed"),
-    }
-
-    // Start the OVSDB → process_authoritative_change feed (template mutation path).
-    // Only safe once monitor_db is a real native Idl stream (not a stub bail).
-    match mutation_engine.clone().start().await {
-        Ok(()) => info!("MutationEngine OVSDB monitor started"),
-        Err(error) => warn!(%error, "MutationEngine::start failed; continuing without OVSDB feed"),
-    }
-
-    let cognitive = init_cognitive_mcp().await;
-    if let Some(ref handle) = cognitive {
-        mutation_engine
-            .attach_cognitive_mcp(Some(handle.tool_registry()), Some(handle.context_state()));
     }
 
     let server = if let Some(provider) = plugin_provider {
@@ -1016,7 +911,6 @@ pub async fn run_grpc_server(
         }
     };
     server.freeze_plugin_method_reflection().await;
-    let server = attach_cognitive_tool_service(server, cognitive).await;
 
     // Health — standard gRPC health protocol for deploy verification and LB probes.
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -1028,6 +922,12 @@ pub async fn run_grpc_server(
         .await;
     health_reporter
         .set_serving::<EventChainServiceServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<OvsdbMirrorServer<OperationGrpcServer>>()
+        .await;
+    health_reporter
+        .set_serving::<RuntimeMirrorServer<OperationGrpcServer>>()
         .await;
     health_reporter
         .set_serving::<ComponentRegistryServer<OperationGrpcServer>>()
@@ -1046,11 +946,6 @@ pub async fn run_grpc_server(
             crate::chat_service::ChatServiceImpl,
         >>()
         .await;
-    if server.has_cognitive_tool_service() {
-        health_reporter
-            .set_serving::<CognitiveToolServiceServer<CognitiveGrpcService>>()
-            .await;
-    }
 
     info!(addr = %addr, "gRPC bridge listening");
 
@@ -1098,79 +993,33 @@ impl StateSync for OperationGrpcServer {
         request: Request<SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let req = request.into_inner();
-        info!(
-            "gRPC Subscribe: plugins={:?}, include_initial_state={}",
-            req.plugin_ids, req.include_initial_state
-        );
+        info!("gRPC Subscribe: plugins={:?}", req.plugin_ids);
 
-        // Subscribe before taking the snapshot so a mutation concurrent with
-        // hydration cannot fall into a gap between the initial stage and live
-        // updates. A duplicate value is harmless; a missing update is not.
         let mut rx = self.mutation_engine.change_tx().subscribe();
         let plugin_filters = req.plugin_ids;
         let path_filters = req.path_patterns;
         let tag_filters = req.tags;
-        let initial_state = if req.include_initial_state {
-            self.mutation_engine.state_snapshot().await
-        } else {
-            Vec::new()
-        };
-        // Contracts hydrate ahead of present state so a consumer that renders
-        // from schema has the shape before the first value arrives.
-        let initial_schemas = if req.include_schema {
-            self.mutation_engine.schema_snapshot().await
-        } else {
-            Vec::new()
-        };
-
-        let engine = self.mutation_engine.clone();
 
         let stream = stream! {
-            for (plugin_id, snapshot) in initial_schemas {
-                let mut frame = schema_state_frame(plugin_id, &snapshot);
-                stamp_identity(&engine, &mut frame).await;
-                if state_frame_matches(&frame, &plugin_filters, &path_filters, &tag_filters) {
-                    yield Ok(frame);
-                }
-            }
-
-            for (plugin_id, state) in initial_state {
-                let mut frame = initial_state_frame(plugin_id, state);
-                stamp_identity(&engine, &mut frame).await;
-                if state_frame_matches(&frame, &plugin_filters, &path_filters, &tag_filters) {
-                    yield Ok(frame);
-                }
-            }
-
-            let mut heartbeat = stream_heartbeat();
-
             loop {
-                tokio::select! {
-                    result = rx.recv() => {
-                        match result {
-                            Ok(update) => {
-                                let mut frame = proto_state_change(&update);
-                                stamp_identity(&engine, &mut frame).await;
-                                if state_frame_matches(&frame, &plugin_filters, &path_filters, &tag_filters) {
-                                    yield Ok(frame);
-                                }
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                // The subscriber just lost frames it will never
-                                // see. The next stamped frame is what lets it
-                                // notice, which is why the hashes ride on
-                                // everything rather than only on schema frames.
-                                warn!("Subscriber lagged, missed {} updates", n);
-                                continue;
-                            }
-                            Err(broadcast::error::RecvError::Closed) => break,
+                match rx.recv().await {
+                    Ok(update) => {
+                        let matches_plugin = plugin_filters.is_empty()
+                            || plugin_filters.contains(&update.plugin_id);
+                        let matches_path = path_filters.is_empty()
+                            || path_filters.iter().any(|p| update.object_path.starts_with(p));
+                        let matches_tag = tag_filters.is_empty()
+                            || update.tags_touched.iter().any(|t| tag_filters.contains(t));
+
+                        if matches_plugin && matches_path && matches_tag {
+                            yield Ok(proto_state_change(&update));
                         }
                     }
-                    _ = heartbeat.tick() => {
-                        let mut frame = heartbeat_state_frame();
-                        stamp_identity(&engine, &mut frame).await;
-                        yield Ok(frame);
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Subscriber lagged, missed {} updates", n);
+                        continue;
                     }
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         };
@@ -1182,6 +1031,10 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
         let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
@@ -1221,6 +1074,25 @@ impl StateSync for OperationGrpcServer {
                     }));
                 }
             }
+            let args_value = serde_json::to_value(&value)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if let Err(error) = enforce_human_principal_self_service(
+                &req.plugin_id,
+                req.member_name
+                    .strip_prefix("method:")
+                    .unwrap_or(&req.member_name),
+                &args_value,
+                human_identity.as_ref(),
+            ) {
+                return Ok(Response::new(MutateResponse {
+                    success: false,
+                    event_id: 0,
+                    event_hash: String::new(),
+                    result: None,
+                    error: Some(error),
+                    effective_hash: String::new(),
+                }));
+            }
         }
 
         let result = self
@@ -1235,7 +1107,7 @@ impl StateSync for OperationGrpcServer {
                     Some(req.member_name.clone())
                 },
                 value,
-                effective_actor_id(identity.as_ref(), &req.actor_id),
+                req.actor_id.clone(),
                 capability_id,
             )
             .await;
@@ -1351,6 +1223,10 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
         let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let capability_id = if req.capability_id.is_empty() {
@@ -1385,6 +1261,22 @@ impl PluginService for OperationGrpcServer {
 
         let json_args = simd_json::to_string(&args)
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let args_value: JsonValue = serde_json::from_str(&json_args)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        if let Err(error) = enforce_human_principal_self_service(
+            &req.plugin_id,
+            &req.method_name,
+            &args_value,
+            human_identity.as_ref(),
+        ) {
+            return Ok(Response::new(CallMethodResponse {
+                success: false,
+                result: None,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(error),
+            }));
+        }
 
         // Route through the same schema dispatcher as PluginV1.Call. That
         // dispatcher records the method event before returning its audited
@@ -1396,7 +1288,7 @@ impl PluginService for OperationGrpcServer {
                 &req.method_name,
                 &json_args,
                 capability_id.as_deref(),
-                &effective_actor_id(identity.as_ref(), &req.actor_id),
+                &req.actor_id,
             )
             .await;
 
@@ -1469,7 +1361,6 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
-        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
 
@@ -1481,7 +1372,7 @@ impl PluginService for OperationGrpcServer {
                 ChangeType::PropertySet,
                 Some(req.property_name),
                 value,
-                effective_actor_id(identity.as_ref(), &req.actor_id),
+                req.actor_id,
                 if req.capability_id.is_empty() {
                     None
                 } else {
@@ -1522,17 +1413,8 @@ impl PluginService for OperationGrpcServer {
         let mut rx = self.mutation_engine.change_tx().subscribe();
 
         let stream = stream! {
-            let mut heartbeat = stream_heartbeat();
-
             loop {
-                let update = tokio::select! {
-                    result = rx.recv() => result,
-                    _ = heartbeat.tick() => {
-                        yield Ok(heartbeat_signal());
-                        continue;
-                    }
-                };
-                match update {
+                match rx.recv().await {
                     Ok(update) => {
                         // Only emit Signal change types
                         if update.change_type != ChangeType::Signal {
@@ -1622,37 +1504,22 @@ impl EventChainService for OperationGrpcServer {
         request: Request<SubscribeEventsRequest>,
     ) -> Result<Response<Self::SubscribeEventsStream>, Status> {
         let req = request.into_inner();
-        // The mutation engine publishes every event it appends to the chain, from
-        // inside the pipeline that appends it. Subscribing to that channel is what
-        // keeps this stream and GetEvents from disagreeing: there is one producer.
-        let mut rx = self.mutation_engine.chain_tx().subscribe();
+        let mut rx = self.chain_events.subscribe();
         let plugin_filter = req.plugin_id;
         let tag_filters = req.tags;
 
         let stream = stream! {
-            let mut heartbeat = stream_heartbeat();
-
             loop {
-                tokio::select! {
-                    result = rx.recv() => {
-                        match result {
-                            Ok(event) => {
-                                let matches_plugin = plugin_filter.is_empty() || event.plugin_id == plugin_filter;
-                                let matches_tag = tag_filters.is_empty() || event.tags_touched.iter().any(|t| tag_filters.contains(t));
-                                if matches_plugin && matches_tag {
-                                    yield Ok(proto_chain_event(&event));
-                                }
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                warn!("Chain event subscriber lagged, missed {} events", n);
-                                continue;
-                            }
-                            Err(broadcast::error::RecvError::Closed) => break,
+                match rx.recv().await {
+                    Ok(event) => {
+                        let matches_plugin = plugin_filter.is_empty() || event.plugin_id == plugin_filter;
+                        let matches_tag = tag_filters.is_empty() || event.tags_touched.iter().any(|t| tag_filters.contains(t));
+                        if matches_plugin && matches_tag {
+                            yield Ok(event);
                         }
                     }
-                    _ = heartbeat.tick() => {
-                        yield Ok(heartbeat_chain_event());
-                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         };
@@ -1799,280 +1666,6 @@ fn proto_state_change(change: &crate::mutation_engine::StateChange) -> ProtoStat
         event_hash: change.event_hash.clone(),
         timestamp: Some(proto_timestamp(change.timestamp)),
         actor_id: change.actor_id.clone(),
-        frame_kind: ProtoStateFrameKind::Update as i32,
-        // Filled by `stamp_identity` before the frame leaves.
-        schema_hash: String::new(),
-        catalog_hash: String::new(),
-    }
-}
-
-fn initial_state_frame(plugin_id: String, state: simd_json::OwnedValue) -> ProtoStateChange {
-    ProtoStateChange {
-        change_id: format!("initial:{plugin_id}"),
-        event_id: 0,
-        object_path: format!("/org/opdbus/v1/plugins/{plugin_id}"),
-        plugin_id,
-        change_type: ProtoChangeType::PropertySet as i32,
-        member_name: String::new(),
-        old_value: None,
-        new_value: Some(simd_to_prost_value(&state)),
-        tags_touched: Vec::new(),
-        event_hash: String::new(),
-        timestamp: Some(proto_timestamp(Utc::now())),
-        actor_id: "state_sync_initial_state".to_string(),
-        frame_kind: ProtoStateFrameKind::InitialState as i32,
-        schema_hash: String::new(),
-        catalog_hash: String::new(),
-    }
-}
-
-/// A hydration frame carrying one plugin's sealed contract.
-///
-/// `frame_kind` is INITIAL_STATE because this is part of the hydration stage;
-/// `change_type` is what says the payload is a contract rather than present
-/// state. Keeping the two axes separate is why no new frame kind is needed.
-fn schema_state_frame(
-    plugin_id: String,
-    snapshot: &crate::mutation_engine::SchemaSnapshot,
-) -> ProtoStateChange {
-    ProtoStateChange {
-        change_id: format!("schema:{plugin_id}:{}", snapshot.schema_hash),
-        event_id: 0,
-        object_path: format!("/org/opdbus/v1/plugins/{plugin_id}"),
-        plugin_id,
-        change_type: ProtoChangeType::SchemaMigration as i32,
-        // The hash has a field of its own now; member_name is left to mean
-        // what it means on every other frame — a property or method name.
-        member_name: String::new(),
-        old_value: None,
-        new_value: Some(simd_to_prost_value(&snapshot.schema_json)),
-        tags_touched: Vec::new(),
-        event_hash: String::new(),
-        timestamp: Some(proto_timestamp(Utc::now())),
-        actor_id: "schema_hydration".to_string(),
-        frame_kind: ProtoStateFrameKind::InitialState as i32,
-        schema_hash: snapshot.schema_hash.clone(),
-        catalog_hash: String::new(),
-    }
-}
-
-/// Fill in the identity fields every outgoing frame carries.
-///
-/// Done in one place, after the frame is otherwise built, so no frame path can
-/// forget them: the whole point of stamping the catalog hash on keepalives is
-/// that a subscriber which has received nothing else still learns the catalog
-/// moved. A frame that already knows its own contract hash (a schema frame)
-/// keeps it.
-async fn stamp_identity(engine: &MutationEngine, frame: &mut ProtoStateChange) {
-    frame.catalog_hash = engine.catalog_hash().await;
-    if frame.schema_hash.is_empty() && !frame.plugin_id.is_empty() {
-        frame.schema_hash = engine.plugin_schema_hash(&frame.plugin_id).await;
-    }
-}
-
-fn heartbeat_state_frame() -> ProtoStateChange {
-    ProtoStateChange {
-        change_id: Uuid::new_v4().to_string(),
-        event_id: 0,
-        plugin_id: String::new(),
-        object_path: String::new(),
-        change_type: ProtoChangeType::Signal as i32,
-        member_name: String::new(),
-        old_value: None,
-        new_value: None,
-        tags_touched: Vec::new(),
-        event_hash: String::new(),
-        timestamp: Some(proto_timestamp(Utc::now())),
-        actor_id: "state_sync_keepalive".to_string(),
-        frame_kind: ProtoStateFrameKind::Heartbeat as i32,
-        // No plugin, so no contract hash — but the catalog hash is stamped on,
-        // and that is what makes an idle stream able to report drift at all.
-        schema_hash: String::new(),
-        catalog_hash: String::new(),
-    }
-}
-
-/// How often a server stream emits an application-level keepalive.
-const STREAM_HEARTBEAT_PERIOD: std::time::Duration = std::time::Duration::from_secs(15);
-
-/// Ticker for a stream keepalive.
-///
-/// gRPC-Web commonly traverses HTTP/1 proxies, where HTTP/2 PING frames cannot
-/// prevent an idle response from being buffered or timed out. Every stream a
-/// browser holds open needs bytes to cross the whole path even when it has
-/// nothing to report. The first tick is one full period out, so a busy stream
-/// pays nothing at connect time, and `Delay` keeps a stalled task from firing a
-/// burst of catch-up ticks.
-fn stream_heartbeat() -> tokio::time::Interval {
-    let mut heartbeat = tokio::time::interval_at(
-        tokio::time::Instant::now() + STREAM_HEARTBEAT_PERIOD,
-        STREAM_HEARTBEAT_PERIOD,
-    );
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    heartbeat
-}
-
-/// Marker `actor_id` on the `SubscribeEvents` keepalive frame.
-const CHAIN_KEEPALIVE_ACTOR: &str = "event_chain_keepalive";
-
-/// Keepalive frame for `EventChainService.SubscribeEvents`.
-///
-/// `ChainEvent` has no frame-kind discriminator, so the keepalive is instead an
-/// event that cannot exist: chain event ids start at 1 and every recorded event
-/// carries a hash. A client skips it with `event_id == 0` (or an empty
-/// `event_hash`); `operation_type` and `actor_id` name it for anything that
-/// displays raw frames.
-fn heartbeat_chain_event() -> ProtoChainEvent {
-    ProtoChainEvent {
-        event_id: 0,
-        prev_hash: String::new(),
-        event_hash: String::new(),
-        timestamp: Some(proto_timestamp(Utc::now())),
-        actor_id: CHAIN_KEEPALIVE_ACTOR.to_string(),
-        capability_id: String::new(),
-        plugin_id: String::new(),
-        schema_version: String::new(),
-        operation_type: "Heartbeat".to_string(),
-        target: String::new(),
-        tags_touched: Vec::new(),
-        decision: ProtoDecision::Unspecified as i32,
-        deny_reason: None,
-        input_patch_hash: String::new(),
-        result_effective_hash: String::new(),
-    }
-}
-
-/// Marker `signal_name` on the `SubscribeSignals` keepalive frame. D-Bus signal
-/// names are CamelCase members, so this cannot collide with a real signal.
-const SIGNAL_KEEPALIVE_NAME: &str = "__keepalive__";
-
-/// Keepalive frame for `PluginService.SubscribeSignals`.
-///
-/// Carries no plugin, path or arguments, so a consumer that dispatches on
-/// `signal_name` ignores it without needing to know it exists.
-fn heartbeat_signal() -> Signal {
-    Signal {
-        plugin_id: String::new(),
-        object_path: String::new(),
-        interface_name: String::new(),
-        signal_name: SIGNAL_KEEPALIVE_NAME.to_string(),
-        arguments: Vec::new(),
-        timestamp: Some(proto_timestamp(Utc::now())),
-    }
-}
-
-fn state_frame_matches(
-    frame: &ProtoStateChange,
-    plugin_filters: &[String],
-    path_filters: &[String],
-    tag_filters: &[String],
-) -> bool {
-    (plugin_filters.is_empty() || plugin_filters.contains(&frame.plugin_id))
-        && (path_filters.is_empty()
-            || path_filters
-                .iter()
-                .any(|path| frame.object_path.starts_with(path)))
-        && (tag_filters.is_empty()
-            || frame
-                .tags_touched
-                .iter()
-                .any(|tag| tag_filters.contains(tag)))
-}
-
-#[cfg(test)]
-mod state_sync_frame_tests {
-    use super::*;
-
-    #[test]
-    fn initial_frame_carries_one_whole_plugin_state() {
-        let frame = initial_state_frame(
-            "incus".to_string(),
-            simd_json::json!({"instances": [{"name": "netmaker"}]}),
-        );
-
-        assert_eq!(frame.frame_kind, ProtoStateFrameKind::InitialState as i32);
-        assert_eq!(frame.plugin_id, "incus");
-        assert!(frame.member_name.is_empty());
-        assert!(frame.new_value.is_some());
-        assert!(state_frame_matches(
-            &frame,
-            &["incus".to_string()],
-            &[],
-            &[]
-        ));
-    }
-
-    #[test]
-    fn heartbeat_frame_has_no_state_payload() {
-        let frame = heartbeat_state_frame();
-        assert_eq!(frame.frame_kind, ProtoStateFrameKind::Heartbeat as i32);
-        assert!(frame.plugin_id.is_empty());
-        assert!(frame.new_value.is_none());
-    }
-
-    /// `ChainEvent` has no frame-kind field, so the keepalive has to be an event
-    /// that could never have been recorded.
-    #[test]
-    fn chain_keepalive_is_not_a_recordable_event() {
-        let frame = heartbeat_chain_event();
-        assert_eq!(frame.event_id, 0, "chain event ids start at 1");
-        assert!(frame.event_hash.is_empty(), "recorded events carry a hash");
-        assert_eq!(frame.actor_id, CHAIN_KEEPALIVE_ACTOR);
-        assert_eq!(frame.decision, ProtoDecision::Unspecified as i32);
-    }
-
-    #[test]
-    fn signal_keepalive_carries_no_plugin_or_arguments() {
-        let frame = heartbeat_signal();
-        assert_eq!(frame.signal_name, SIGNAL_KEEPALIVE_NAME);
-        assert!(frame.plugin_id.is_empty());
-        assert!(frame.arguments.is_empty());
-    }
-
-    #[test]
-    fn registry_keepalive_carries_no_component() {
-        let frame = heartbeat_registry_event();
-        assert_eq!(
-            frame.event_type,
-            crate::proto::registry::RegistryEventType::RegistryEventUnspecified as i32
-        );
-        assert!(frame.component.is_none());
-    }
-
-    #[test]
-    fn generated_plugin_descriptors_resolve_short_names() {
-        assert!(plugin_message_descriptor("TchedRouterListProvidersRequest").is_some());
-        assert!(plugin_message_descriptor("GemmaBrainGetUiSpecResponse").is_some());
-    }
-
-    #[test]
-    fn generated_plugin_request_preserves_schema_field_names() {
-        let request = crate::proto::plugin_methods::IdentitySledGetIdentityRequest {
-            session_id: "chatbot-session".to_string(),
-        };
-        let descriptor = plugin_message_descriptor("IdentitySledGetIdentityRequest")
-            .expect("identity request descriptor");
-        let dynamic = DynamicMessage::decode(descriptor, request.encode_to_vec().as_slice())
-            .expect("decode typed request");
-
-        let json = dynamic_message_to_plugin_json(&dynamic).expect("serialize plugin request");
-        assert_eq!(
-            serde_json::from_str::<JsonValue>(&json).expect("valid JSON"),
-            serde_json::json!({"session_id": "chatbot-session"})
-        );
-    }
-
-    #[test]
-    fn generated_plugin_response_uses_domain_result_not_audit_envelope() {
-        let envelope = serde_json::json!({
-            "success": true,
-            "event_hash": "abc",
-            "result": {"providers": [{"id": "local"}]}
-        });
-        assert_eq!(
-            plugin_method_domain_result(&envelope),
-            &serde_json::json!({"providers": [{"id": "local"}]})
-        );
     }
 }
 
@@ -2954,52 +2547,6 @@ async fn runit_service_info(
     })
 }
 
-async fn probe_unix_socket(path: &str) -> ProtoRuntimeUnixSocketStatus {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return ProtoRuntimeUnixSocketStatus {
-            path: path.to_string(),
-            exists: false,
-            connectable: false,
-            detail: "empty path".to_string(),
-        };
-    }
-
-    let meta = tokio::fs::metadata(trimmed).await;
-    let exists = meta.is_ok();
-    let is_socket = meta
-        .as_ref()
-        .ok()
-        .map(|m| m.file_type().is_socket())
-        .unwrap_or(false);
-
-    let connectable = if is_socket {
-        tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            tokio::net::UnixStream::connect(trimmed),
-        )
-        .await
-        .map(|r| r.is_ok())
-        .unwrap_or(false)
-    } else {
-        false
-    };
-
-    let detail = match (exists, is_socket, connectable) {
-        (false, _, _) => "missing".to_string(),
-        (true, false, _) => "path exists but is not a socket".to_string(),
-        (true, true, true) => "connectable".to_string(),
-        (true, true, false) => "present but not accepting connections".to_string(),
-    };
-
-    ProtoRuntimeUnixSocketStatus {
-        path: trimmed.to_string(),
-        exists,
-        connectable,
-        detail,
-    }
-}
-
 #[tonic::async_trait]
 impl RuntimeMirror for OperationGrpcServer {
     type StreamMetricsStream =
@@ -3117,129 +2664,24 @@ impl RuntimeMirror for OperationGrpcServer {
 
         let stream = stream! {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
-            // CPU and network are rate metrics — both need a prior sample to
-            // compute a delta, so the first tick after connect seeds state
-            // without yielding those two (memory/disk are point-in-time, no
-            // seed needed).
-            let mut prev_cpu: Option<(u64, u64)> = None; // (idle+iowait, total)
-            let mut prev_net: Option<(u64, u64, tokio::time::Instant)> = None; // (rx, tx, at)
-
             loop {
                 ticker.tick().await;
-                let now = Some(ProstTimestamp {
-                    seconds: chrono::Utc::now().timestamp(),
-                    nanos: 0,
-                });
 
-                // Memory — used percent of total (dashboard gauge unit).
+                // Read /proc/meminfo
                 if let Ok(meminfo) = tokio::fs::read_to_string("/proc/meminfo").await {
                     let total = OperationGrpcServer::parse_meminfo_kb(&meminfo, "MemTotal") * 1024;
                     let available = OperationGrpcServer::parse_meminfo_kb(&meminfo, "MemAvailable") * 1024;
-                    if total > 0 {
-                        let used_percent =
-                            total.saturating_sub(available) as f64 / total as f64 * 100.0;
-                        yield Ok(RuntimeMetricUpdate {
-                            category: "memory".to_string(),
-                            name: "used_percent".to_string(),
-                            value: used_percent,
-                            unit: "percent".to_string(),
-                            labels: Default::default(),
-                            timestamp: now.clone(),
-                        });
-                    }
-                }
-
-                // CPU — aggregate usage percent from the first "cpu" line of
-                // /proc/stat, computed as a delta between ticks (the raw
-                // counters are cumulative since boot, not instantaneous).
-                if let Ok(stat) = tokio::fs::read_to_string("/proc/stat").await {
-                    if let Some(fields) = stat
-                        .lines()
-                        .next()
-                        .filter(|l| l.starts_with("cpu "))
-                        .map(|l| {
-                            l.split_whitespace()
-                                .skip(1)
-                                .filter_map(|f| f.parse::<u64>().ok())
-                                .collect::<Vec<_>>()
-                        })
-                    {
-                        // user nice system idle iowait irq softirq [steal guest guest_nice]
-                        if fields.len() >= 4 {
-                            let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
-                            let total: u64 = fields.iter().sum();
-                            if let Some((prev_idle, prev_total)) = prev_cpu {
-                                let delta_total = total.saturating_sub(prev_total);
-                                let delta_idle = idle.saturating_sub(prev_idle);
-                                if delta_total > 0 {
-                                    let used_percent = delta_total.saturating_sub(delta_idle) as f64
-                                        / delta_total as f64
-                                        * 100.0;
-                                    yield Ok(RuntimeMetricUpdate {
-                                        category: "cpu".to_string(),
-                                        name: "used_percent".to_string(),
-                                        value: used_percent,
-                                        unit: "percent".to_string(),
-                                        labels: Default::default(),
-                                        timestamp: now.clone(),
-                                    });
-                                }
-                            }
-                            prev_cpu = Some((idle, total));
-                        }
-                    }
-                }
-
-                // Disk — used percent of the root filesystem.
-                if let Some(used_percent) = root_disk_used_percent() {
                     yield Ok(RuntimeMetricUpdate {
-                        category: "disk".to_string(),
-                        name: "used_percent".to_string(),
-                        value: used_percent,
-                        unit: "percent".to_string(),
+                        category: "memory".to_string(),
+                        name: "used_bytes".to_string(),
+                        value: (total - available) as f64,
+                        unit: "bytes".to_string(),
                         labels: Default::default(),
-                        timestamp: now.clone(),
+                        timestamp: Some(ProstTimestamp {
+                            seconds: chrono::Utc::now().timestamp(),
+                            nanos: 0,
+                        }),
                     });
-                }
-
-                // Network — combined rx+tx throughput across all interfaces
-                // except loopback, computed as a byte-delta over wall-clock
-                // elapsed time (not the tick interval, in case of scheduling
-                // jitter) and reported in Mbps.
-                if let Ok(net) = tokio::fs::read_to_string("/proc/net/dev").await {
-                    let mut rx_total = 0u64;
-                    let mut tx_total = 0u64;
-                    for line in net.lines().skip(2) {
-                        if let Some((iface, stats)) = line.split_once(':') {
-                            if iface.trim() == "lo" {
-                                continue;
-                            }
-                            let vals: Vec<u64> = stats
-                                .split_whitespace()
-                                .map(|v| v.parse::<u64>().unwrap_or(0))
-                                .collect();
-                            if vals.len() >= 9 {
-                                rx_total += vals[0];
-                                tx_total += vals[8];
-                            }
-                        }
-                    }
-                    let sampled_at = tokio::time::Instant::now();
-                    if let Some((prev_rx, prev_tx, prev_at)) = prev_net {
-                        let elapsed_secs = sampled_at.duration_since(prev_at).as_secs_f64().max(0.001);
-                        let rx_rate = rx_total.saturating_sub(prev_rx) as f64 / elapsed_secs;
-                        let tx_rate = tx_total.saturating_sub(prev_tx) as f64 / elapsed_secs;
-                        let mbps = (rx_rate + tx_rate) * 8.0 / 1_000_000.0;
-                        yield Ok(RuntimeMetricUpdate {
-                            category: "network".to_string(),
-                            name: "throughput_mbps".to_string(),
-                            value: mbps,
-                            unit: "mbps".to_string(),
-                            labels: Default::default(),
-                            timestamp: now.clone(),
-                        });
-                    }
-                    prev_net = Some((rx_total, tx_total, sampled_at));
                 }
             }
         };
@@ -3340,32 +2782,6 @@ impl RuntimeMirror for OperationGrpcServer {
 
         Ok(Response::new(RuntimeGetNumaTopologyResponse { nodes }))
     }
-
-    async fn check_unix_sockets(
-        &self,
-        request: Request<RuntimeCheckUnixSocketsRequest>,
-    ) -> Result<Response<RuntimeCheckUnixSocketsResponse>, Status> {
-        let paths = request.into_inner().paths;
-        if paths.is_empty() {
-            return Err(Status::invalid_argument("paths must not be empty"));
-        }
-        if paths.len() > 64 {
-            return Err(Status::invalid_argument("paths exceeds limit of 64"));
-        }
-
-        let mut sockets = Vec::with_capacity(paths.len());
-        for path in paths {
-            sockets.push(probe_unix_socket(&path).await);
-        }
-
-        Ok(Response::new(RuntimeCheckUnixSocketsResponse {
-            sockets,
-            queried_at: Some(ProstTimestamp {
-                seconds: chrono::Utc::now().timestamp(),
-                nanos: 0,
-            }),
-        }))
-    }
 }
 
 impl OperationGrpcServer {
@@ -3413,19 +2829,6 @@ use crate::proto::registry::{
     GetComponentResponse, HeartbeatRequest, HeartbeatResponse, RegisterRequest, RegisterResponse,
     RegistryEvent, RegistryEventType, WatchRequest,
 };
-
-/// Keepalive frame for `ComponentRegistry.Watch`.
-///
-/// A registry event with no component describes nothing, so the unspecified
-/// event type is unambiguous here and needs no new enum value: a consumer that
-/// reads `component` before acting already skips it.
-fn heartbeat_registry_event() -> RegistryEvent {
-    RegistryEvent {
-        event_type: RegistryEventType::RegistryEventUnspecified as i32,
-        component: None,
-        timestamp: Some(OperationGrpcServer::now_ts()),
-    }
-}
 
 #[tonic::async_trait]
 impl ComponentRegistry for OperationGrpcServer {
@@ -3624,16 +3027,8 @@ impl ComponentRegistry for OperationGrpcServer {
                 }
             }
             // Stream live events.
-            let mut heartbeat = stream_heartbeat();
             loop {
-                let event = tokio::select! {
-                    result = rx.recv() => result,
-                    _ = heartbeat.tick() => {
-                        yield Ok(heartbeat_registry_event());
-                        continue;
-                    }
-                };
-                match event {
+                match rx.recv().await {
                     Ok(event) => {
                         let passes_filter = type_filter.is_empty()
                             || event
@@ -4004,7 +3399,7 @@ impl MailService for OperationGrpcServer {
                         .and_then(|o| o.get("is_running"))
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
-                    mail_server_type: "postfix-dovecot".to_string(),
+                    mail_server_type: "maddy".to_string(),
                     webmail_url: format!("https://mail.{}", req.domain),
                     smtp_status: "unknown".to_string(),
                     imap_status: "unknown".to_string(),
@@ -4038,7 +3433,7 @@ impl MailService for OperationGrpcServer {
                     mail_server_type: parsed
                         .get("mail_server_type")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("postfix-dovecot")
+                        .unwrap_or("maddy")
                         .to_string(),
                     webmail_url: parsed
                         .get("webmail_url")

@@ -1,4 +1,4 @@
-//! OpenFlow 1.5 controller for ovsbr0
+//! OpenFlow 1.3 controller for ovsbr0
 //!
 //! Listens on OF_CONTROLLER_LISTEN (default 10.200.0.1:6653) for OVS to
 //! connect, then installs bidirectional flows between the configured port pairs.
@@ -18,8 +18,9 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use op_network::{
-    attach_controller_safe, del_controller, ensure_fallback_normal, get_datapath_health,
-    set_controller, set_fail_mode, OpenFlowController, OpenFlowControllerHandle,
+    attach_controller_safe, del_controller, ensure_fallback_normal,
+    get_datapath_health, set_controller, set_fail_mode, OpenFlowController,
+    OpenFlowControllerHandle,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -128,12 +129,6 @@ async fn main() -> Result<()> {
     let mut controller = OpenFlowController::new(listen);
 
     for pair in pairs_env.split(',') {
-        // A blank entry is how "no port pairs configured" is expressed (the
-        // runit unit exports OF_FLOW_PAIRS="" explicitly), so it is not
-        // malformed and must not warn on every start.
-        if pair.trim().is_empty() {
-            continue;
-        }
         let parts: Vec<&str> = pair.trim().splitn(2, ':').collect();
         if parts.len() != 2 {
             tracing::warn!("Ignoring malformed flow pair: {:?}", pair);
@@ -156,34 +151,11 @@ async fn main() -> Result<()> {
                 for e in &entries {
                     controller = controller.add_static_flow(&e.to_string());
                 }
-                info!(
-                    "Loaded {} static flow(s) from {}",
-                    entries.len(),
-                    static_flows_path
-                );
+                info!("Loaded {} static flow(s) from {}", entries.len(), static_flows_path);
             }
-            Err(e) => tracing::warn!(
-                "Failed to parse static flows {}: {:#}",
-                static_flows_path,
-                e
-            ),
+            Err(e) => tracing::warn!("Failed to parse static flows {}: {:#}", static_flows_path, e),
         },
         Err(_) => info!("No static flows file at {} (skipping)", static_flows_path),
-    }
-
-    // Static L2 pins (OF_STATIC_FDB="bridge:port:vlan:mac,..."). Re-asserted on
-    // every OVS reconnect: without them NORMAL floods instead of unicasting.
-    match op_network::static_fdb_from_env() {
-        Ok(entries) => {
-            for e in entries {
-                info!(
-                    "Static FDB pin: {} -> {} (vlan {}) on {}",
-                    e.mac, e.port, e.vlan, e.bridge
-                );
-                controller = controller.add_static_fdb(e);
-            }
-        }
-        Err(e) => tracing::warn!("Ignoring malformed OF_STATIC_FDB: {e:#}"),
     }
 
     let dbus_handle = controller.handle();

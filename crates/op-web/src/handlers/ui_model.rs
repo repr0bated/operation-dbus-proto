@@ -1,32 +1,27 @@
-//! Model-agnostic UI gallery generation + catalog routes.
+//! Gemma / agent-GPU UI-spec gallery + catalog routes.
 //!
-//! The Antigravity chat UI renders json-render `Spec`s. The model-agnostic
-//! inference loop (`op-gallery-gen`) is the producer: any model loaded through
-//! ZeroClaw reads the sealed blob `PluginSchema` plus json-render.dev docs
-//! and emits specs. The operator interacts through the /gallery-gen/* API.
-//!
-//! Legacy compatibility: the old `/api/ui-model/gallery` endpoint still reads
-//! from `/dev/shm/ui-specs.json` if present, for backward compat with existing
-//! dashboard deployments. New generation bypasses this file entirely.
+//! The LOVABLE SPA (`operation-dashboard-ui-07`) renders json-render `Spec`s.
+//! The inference agent (local Ollama historically, now the SaladCloud GPU
+//! agent — "just another model") is the producer: it reads the sealed blob
+//! `PluginSchema` (the base contract) plus the live SIGNALS/event-chain, notes
+//! an interesting *slice*, and emits a json-render `Spec` rendering just that
+//! part. The agent writes specs to `/dev/shm/gemma-ui-specs.json`; this module
+//! is the consumer surface that serves them over HTTP and provides the
+//! promote-to-catalog path that seals a winning lens into a durable SHM file.
 //!
 //! Source-of-truth rules (per CLAUDE.md):
 //! - Plugin schemas come from the sealed blob catalog via
 //!   `op_blob::catalog::read_plugin_schema_shm`, never a monolith file.
-//! - Gallery generation uses `op-gallery-gen` (model-agnostic, via ZeroClaw).
+//! - Spec files are tmpfs (`/dev/shm`); promotion rewrites them atomically.
 
 use crate::state::AppState;
-use crate::state_tree;
 use axum::{
     extract::{Extension, Path},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 // Deliberately renamed off the old "gemma"-prefixed paths (were independently
@@ -124,16 +119,9 @@ fn err(status: StatusCode, msg: &str) -> Response {
 }
 
 // ── Gallery ─────────────────────────────────────────────────────────────────
-// NOTE: The legacy file-based gallery (/dev/shm/ui-specs.json, produced by
-// op-gemma's ui_gallery.rs) is replaced by the model-agnostic op-gallery-gen
-// system. These endpoints now return data from the new generation system.
-// The /api/gallery-gen/* endpoints are the primary operator interface.
 
 /// GET /api/ui-model/gallery
-/// Returns the gallery (legacy compat — reads from SHM if present, empty otherwise).
 pub async fn ui_model_gallery_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    // Legacy fallback: if the old SHM file exists, serve it for backward compat.
-    // New generation writes directly to CatalogStore, not this file.
     let gallery: SpecGallery = read_json(GEMMA_SPECS_PATH).unwrap_or_else(empty_gallery);
     ok(json!({ "version": gallery.version, "specs": gallery.specs }))
 }
@@ -238,8 +226,8 @@ pub async fn ui_model_catalog_delete_handler(
 
 /// GET /api/ui-model/plugins — every plugin actually in the sealed blob catalog.
 /// A plugin exists iff its blob is sealed here; this is NOT the same list as
-/// "plugins with generated RPC methods" (some plugins, e.g. antigravity,
-/// are state-only with zero compiled RPC methods, so they're absent
+/// "plugins with generated RPC methods" (some plugins, e.g. antigravity/
+/// antigravity_chat, are state-only with zero methods, so they're absent
 /// from the frontend's method-index but very much present as real blobs).
 pub async fn ui_model_list_plugins_handler(
     Extension(_state): Extension<Arc<AppState>>,
@@ -253,50 +241,9 @@ pub async fn ui_model_list_plugins_handler(
     }
 }
 
-/// GET /api/ui-model/state — live present-state from `/dev/shm/opdbus/state/`.
-///
-/// Replaces the projection daemon and `/api/dashboard/projections`. Empty
-/// `{ plugins: [], state: {} }` is correct when nothing has been mutated.
-pub async fn ui_model_state_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    ok(catalog_state_body(simd_tree_to_serde(
-        state_tree::read_all(),
-    )))
-}
-
-/// Catalog JSON for the SHM state tree: sorted plugin ids plus the objects.
-pub(crate) fn catalog_state_body(tree: HashMap<String, Value>) -> Value {
-    let mut plugins: Vec<String> = tree.keys().cloned().collect();
-    plugins.sort();
-    json!({ "plugins": plugins, "state": tree })
-}
-
-fn simd_tree_to_serde(tree: HashMap<String, simd_json::OwnedValue>) -> HashMap<String, Value> {
-    tree.into_iter()
-        .filter_map(|(key, value)| {
-            let text = simd_json::to_string(&value).ok()?;
-            match serde_json::from_str(&text) {
-                Ok(parsed) => Some((key, parsed)),
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to convert simd_json to serde_json for plugin '{}': {}",
-                        key,
-                        e
-                    );
-                    None
-                }
-            }
-        })
-        .collect()
-}
-
 /// GET /api/ui-model/plugin-schema/:plugin
 /// The base schema is the render source: read straight from the sealed blob
 /// catalog. Resolve by exact id, then by manifest prefix/contains match.
-///
-/// Presentation remap (display / arrangement / priority / audience / element
-/// role) is derived from `docs/subid-taxonomy.md` categories via
-/// `op_state_store::subid_ui` — not Card/Button names. Live values come from
-/// the second SHM (`/dev/shm/opdbus/state/`).
 pub async fn ui_model_plugin_schema_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(plugin): Path<String>,
@@ -314,48 +261,10 @@ pub async fn ui_model_plugin_schema_handler(
         },
     };
 
-    let ui_projection = op_state_store::project_schema_ui(&resolved_id, &schema);
-    // Second SHM: live present values (not sealed schema).
-    let state =
-        crate::state_tree::read_plugin(&resolved_id).and_then(|v| serde_json::to_value(v).ok());
-
     ok(json!({
         "plugin": resolved_id,
         "schema_hash": schema_hash_for(&resolved_id),
         "schema": schema,
-        "ui_projection": ui_projection,
-        "state": state,
-    }))
-}
-
-/// GET /api/ui-model/subid-projection
-/// Dump every sealed plugin's subid → UI role rows (populate the catalog).
-/// Keep what fills; clear unused later; chatbot wires to this surface.
-pub async fn ui_model_subid_projection_handler(
-    Extension(_state): Extension<Arc<AppState>>,
-) -> Response {
-    let Some(ids) = op_blob::catalog::read_manifest_plugin_ids_shm() else {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "blob catalog manifest unavailable",
-        );
-    };
-
-    let mut rows = Vec::new();
-    for id in &ids {
-        if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(id) {
-            rows.extend(op_state_store::project_schema_ui(id, &schema));
-        }
-    }
-    let population = op_state_store::role_population(&rows);
-
-    ok(json!({
-        "source": "docs/subid-taxonomy.md + sealed PluginSchema.subids",
-        "scope": "render/display/arrangement/priority/audience/element-role only",
-        "plugins": ids.len(),
-        "rows": rows.len(),
-        "population": population,
-        "projections": rows,
     }))
 }
 
@@ -377,197 +286,4 @@ fn schema_hash_for(plugin: &str) -> Option<String> {
         .get(plugin)
         .and_then(|h| h.as_str())
         .map(|s| s.to_string())
-}
-
-// ── Gallery Generation API ─────────────────────────────────────────────────
-
-use axum::response::sse::{Event, Sse};
-use lazy_static::lazy_static;
-
-lazy_static! {
-    static ref GEN_PROGRESS: Arc<op_gallery_gen::RunProgress> =
-        Arc::new(op_gallery_gen::RunProgress::new());
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GalleryGenConfig {
-    pub target_count: usize,
-    pub enable_mcp: bool,
-    pub enable_qdrant: bool,
-    pub operator_guidance: String,
-}
-
-/// POST /gallery-gen/start - Start a generation session
-pub async fn start_generation(
-    Extension(_state): Extension<Arc<AppState>>,
-    axum::Json(config): axum::Json<GalleryGenConfig>,
-) -> Result<impl IntoResponse, StatusCode> {
-    // Check if already running
-    if GEN_PROGRESS.running.load(Ordering::SeqCst) {
-        return Err(StatusCode::CONFLICT);
-    }
-
-    // Assemble context from live blob catalog
-    let ctx = match op_gallery_gen::assemble_context(
-        config.enable_mcp,
-        config.enable_qdrant,
-        if config.operator_guidance.is_empty() {
-            None
-        } else {
-            Some(config.operator_guidance.clone())
-        },
-    ) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            tracing::error!("Failed to assemble generation context: {}", e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-
-    let plugin_count = ctx.schemas.len();
-    let catalog_hash = ctx.catalog_hash.clone();
-
-    // Build the run config
-    let run_config = op_gallery_gen::GalleryGenConfig {
-        target_count: config.target_count,
-        stable_core_max: 40,
-        zeroclaw_endpoint: "http://127.0.0.1:8080".to_string(),
-        enable_mcp: config.enable_mcp,
-        enable_qdrant: config.enable_qdrant,
-        max_turns: 10,
-        // Where the exported json-render catalog lives; the run loads the
-        // vocabulary from it and refuses to start if it cannot.
-        catalog_dir: op_gallery_gen::default_catalog_dir(),
-    };
-
-    // Reset progress and mark as running
-    GEN_PROGRESS.reset(config.target_count);
-
-    // Create the gallery store for this run.
-    // InMemoryGalleryStore handles signature dedup and counting in-process.
-    // TODO: Replace with CatalogStore bridge when catalog is exposed via AppState or gRPC.
-    let store: Arc<dyn op_gallery_gen::GalleryStore> =
-        Arc::new(op_gallery_gen::InMemoryGalleryStore::new());
-
-    // Spawn the background generation task
-    let progress = Arc::clone(&GEN_PROGRESS);
-    tokio::spawn(async move {
-        match op_gallery_gen::run_gallery_fill(&run_config, ctx, store, progress.clone()).await {
-            Ok(count) => {
-                tracing::info!("Gallery generation completed: {} specs produced", count);
-            }
-            Err(e) => {
-                tracing::error!("Gallery generation failed: {}", e);
-                progress.finish();
-            }
-        }
-    });
-
-    let response = json!({
-        "status": "started",
-        "config": {
-            "target_count": config.target_count,
-            "enable_mcp": config.enable_mcp,
-            "enable_qdrant": config.enable_qdrant,
-        },
-        "context": {
-            "plugin_count": plugin_count,
-            "catalog_hash": catalog_hash,
-        }
-    });
-
-    Ok(axum::Json(response))
-}
-
-/// POST /gallery-gen/stop - Stop a running generation session
-pub async fn stop_generation(
-    Extension(_state): Extension<Arc<AppState>>,
-) -> Result<impl IntoResponse, StatusCode> {
-    GEN_PROGRESS.stop_signal.store(true, Ordering::SeqCst);
-
-    let response = json!({
-        "status": "stopping"
-    });
-
-    Ok(axum::Json(response))
-}
-
-/// GET /gallery-gen/stream - SSE stream for generation progress
-pub async fn generation_stream(
-    Extension(_state): Extension<Arc<AppState>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = async_stream::stream! {
-        // Send initial status
-        yield Ok(Event::default().json_data(json!({
-            "type": "status",
-            "running": GEN_PROGRESS.running.load(Ordering::SeqCst),
-            "generated": GEN_PROGRESS.generated.load(Ordering::SeqCst),
-            "attempts": GEN_PROGRESS.attempts.load(Ordering::SeqCst),
-            "target": GEN_PROGRESS.target.load(Ordering::SeqCst),
-        })).unwrap());
-
-        // Keep connection alive with periodic updates
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
-        loop {
-            interval.tick().await;
-
-            let running = GEN_PROGRESS.running.load(Ordering::SeqCst);
-            let generated = GEN_PROGRESS.generated.load(Ordering::SeqCst);
-            let attempts = GEN_PROGRESS.attempts.load(Ordering::SeqCst);
-            let target = GEN_PROGRESS.target.load(Ordering::SeqCst);
-
-            if !running {
-                yield Ok(Event::default().json_data(json!({
-                    "type": "complete",
-                    "generated": generated,
-                    "attempts": attempts,
-                    "target": target,
-                })).unwrap());
-                break;
-            }
-
-            if GEN_PROGRESS.stop_signal.load(Ordering::SeqCst) && !running {
-                yield Ok(Event::default().json_data(json!({
-                    "type": "cancelled",
-                    "generated": generated,
-                    "attempts": attempts,
-                })).unwrap());
-                break;
-            }
-
-            // Send progress update
-            yield Ok(Event::default().json_data(json!({
-                "type": "progress",
-                "running": running,
-                "generated": generated,
-                "attempts": attempts,
-                "target": target,
-            })).unwrap());
-        }
-    };
-
-    Sse::new(stream)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_state_body_lists_shm_state_plugins_not_projections() {
-        let mut tree = HashMap::new();
-        tree.insert("zeroclaw".into(), json!({ "selected_model": "qwen" }));
-        tree.insert("system.memory".into(), json!({ "rss": 1 }));
-        let body = catalog_state_body(tree);
-        assert_eq!(body["plugins"], json!(["system.memory", "zeroclaw"]));
-        assert_eq!(body["state"]["zeroclaw"]["selected_model"], "qwen");
-        assert!(body.get("projections").is_none());
-    }
-
-    #[test]
-    fn catalog_state_body_empty_tree_is_valid() {
-        let body = catalog_state_body(HashMap::new());
-        assert_eq!(body["plugins"], json!([]));
-        assert_eq!(body["state"], json!({}));
-    }
 }

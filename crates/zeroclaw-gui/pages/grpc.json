@@ -1,0 +1,44 @@
+{
+  "title": "gRPC Diagnostics",
+  "source": {
+    "plugin": "json_render",
+    "method": "get_health",
+    "args": [],
+    "poll_secs": 10
+  },
+  "data": {
+    "bridge": { "status": "sample", "endpoint": "http://127.0.0.1:18789" },
+    "services": [
+      { "name": "operation.v1.PluginService", "status": "ok" },
+      { "name": "operation.v1.StateSync", "status": "ok" },
+      { "name": "grpc.reflection.v1.ServerReflection", "status": "ok" }
+    ]
+  },
+  "spec": {
+    "kind": "stack",
+    "children": [
+      { "kind": "heading", "text": "gRPC Diagnostics", "size": 18 },
+      { "kind": "muted", "text": "Live health from json_render.get_health; reflection services listed below." },
+      { "kind": "space", "px": 12 },
+      { "kind": "card", "children": [
+        { "kind": "stack", "dir": "h", "children": [
+          { "kind": "label", "text": "Bridge:" },
+          { "kind": "status_pill", "bind": "/bridge/status" },
+          { "kind": "space", "px": 16 },
+          { "kind": "label", "bind": "/bridge/endpoint" }
+        ]}
+      ]},
+      { "kind": "space", "px": 8 },
+      { "kind": "card", "children": [
+        { "kind": "heading", "text": "Services", "size": 13 },
+        { "kind": "repeat", "bind": "/services", "child": {
+          "kind": "stack", "dir": "h", "children": [
+            { "kind": "label", "bind": "/name" },
+            { "kind": "space", "px": 12 },
+            { "kind": "status_pill", "bind": "/status" }
+          ]
+        }}
+      ]}
+    ]
+  }
+}

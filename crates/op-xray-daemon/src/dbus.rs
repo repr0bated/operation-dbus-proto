@@ -29,7 +29,7 @@ struct XrayStatus {
 /// Find running `xray` process PIDs by scanning `/proc` directly — no
 /// `pgrep`/`pkill` subprocess spawning (CLAUDE.md: no `Command::new(...)`
 /// subprocesses in plugin/service code).
-fn find_xray_pids() -> Vec<i32> {
+fn find_xray_pids() -> Vec<nix::unistd::Pid> {
     let mut pids = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return pids;
@@ -40,20 +40,11 @@ fn find_xray_pids() -> Vec<i32> {
         };
         if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
             if comm.trim() == "xray" {
-                pids.push(pid);
+                pids.push(nix::unistd::Pid::from_raw(pid));
             }
         }
     }
     pids
-}
-
-fn signal_process(pid: i32, sig: i32) -> Result<(), std::io::Error> {
-    let rc = unsafe { libc::kill(pid, sig) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
 }
 
 /// Last config path this daemon was told about via `start()`/`restart()`
@@ -88,7 +79,7 @@ impl XrayService {
         let state = self.state.lock().await;
         XrayStatus {
             running: !pids.is_empty(),
-            pid: pids.first().copied().map(|p| p as u32),
+            pid: pids.first().map(|p| p.as_raw() as u32),
             config_path: state.config_path.clone(),
         }
     }
@@ -148,7 +139,7 @@ impl XrayService {
 
         let mut errors = Vec::new();
         for pid in &pids {
-            if let Err(e) = signal_process(*pid, libc::SIGTERM) {
+            if let Err(e) = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGTERM) {
                 errors.push(format!("pid {pid}: {e}"));
             }
         }
@@ -204,7 +195,7 @@ impl XrayService {
 
         let mut errors = Vec::new();
         for pid in &pids {
-            if let Err(e) = signal_process(*pid, libc::SIGHUP) {
+            if let Err(e) = nix::sys::signal::kill(*pid, nix::sys::signal::Signal::SIGHUP) {
                 errors.push(format!("pid {pid}: {e}"));
             }
         }

@@ -44,8 +44,6 @@ impl Default for ActiveReflectionCatalog {
 #[derive(Debug, Clone)]
 struct ActiveReflectionInner {
     descriptor_sets: Vec<Vec<u8>>,
-    /// Services mounted outside the SHM blob catalog (e.g. CognitiveToolService).
-    static_services: BTreeSet<String>,
     blobs: BTreeMap<String, PluginObjectBlob>,
     index: ReflectionIndex,
     /// Last seen `catalog_hash` from the sealed manifest — the change marker
@@ -57,7 +55,6 @@ impl Default for ActiveReflectionInner {
     fn default() -> Self {
         let mut inner = Self {
             descriptor_sets: Vec::new(),
-            static_services: BTreeSet::new(),
             blobs: BTreeMap::new(),
             index: ReflectionIndex::default(),
             catalog_hash: None,
@@ -83,17 +80,6 @@ impl ActiveReflectionCatalog {
             inner: Arc::new(RwLock::new(ActiveReflectionInner::default())),
             shm_dir,
         }
-    }
-
-    /// Register a statically mounted gRPC service and its file descriptor set.
-    ///
-    /// Used for services hosted directly on the bridge (not derived from sealed
-    /// plugin blobs), e.g. `operation.cognitive.v1.CognitiveToolService`.
-    pub async fn register_static_service(&self, descriptor_set: &[u8], service_name: &str) {
-        let mut inner = self.inner.write().await;
-        inner.static_services.insert(service_name.to_string());
-        inner.descriptor_sets.push(descriptor_set.to_vec());
-        inner.rebuild_index();
     }
 
     pub async fn upsert_blob(&self, blob: PluginObjectBlob) {
@@ -176,7 +162,6 @@ impl ActiveReflectionInner {
             .blobs
             .values()
             .flat_map(|blob| blob.manifest.grpc.services.clone())
-            .chain(self.static_services.iter().cloned())
             .collect::<BTreeSet<_>>();
 
         // A blob manifest only carries the per-method `operation.method.*`
@@ -530,7 +515,7 @@ mod tests {
         // Removal by the external sealer propagates on the next arrival too.
         {
             let mut store = op_blob::BlobStore::open(&dir).unwrap();
-            store.remove_blob("zeroclaw").unwrap();
+            store.remove_blob("tched_router").unwrap();
         }
         catalog.sync_from_shm().await;
         let removed = catalog.list_services().await;

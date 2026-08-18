@@ -29,7 +29,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tched_router_blob_couples_dbus_schema_and_grpc_identity() {
+    fn zeroclaw_blob_couples_dbus_schema_and_grpc_identity() {
         let blob = from_plugin_schema();
 
         assert_eq!(blob.manifest.plugin_id, "tched_router");

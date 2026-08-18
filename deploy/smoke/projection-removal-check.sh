@@ -27,19 +27,19 @@ FAIL=0
 pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1"; FAIL=1; }
 
-echo "=== SHM state route (projection daemon removed) ==="
+echo "=== Projection Removal End-to-End Smoke Test ==="
 echo ""
 
-# 1. Live SHM state route returns valid JSON (empty is correct per REQ-3.4)
-echo "[1] UI-model state endpoint..."
-if RESP=$(curl -sf "${API_BASE}/api/ui-model/state" 2>/dev/null); then
+# 1. Dashboard returns valid JSON (empty is correct per REQ-3.4)
+echo "[1] Dashboard endpoint..."
+if RESP=$(curl -sf "${API_BASE}/api/dashboard/projections" 2>/dev/null); then
     if echo "$RESP" | python3 -m json.tool >/dev/null 2>&1; then
-        pass "GET /api/ui-model/state returns valid JSON"
+        pass "dashboard returns valid JSON"
     else
-        fail "ui-model/state returned non-JSON: ${RESP:0:100}"
+        fail "dashboard returned non-JSON: ${RESP:0:100}"
     fi
 else
-    fail "state endpoint unreachable at ${API_BASE}/api/ui-model/state"
+    fail "dashboard endpoint unreachable at ${API_BASE}/api/dashboard/projections"
 fi
 
 # 2. No projection daemon running

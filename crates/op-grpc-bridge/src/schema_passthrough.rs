@@ -145,13 +145,13 @@ impl SchemaPassthroughService {
     /// Returns `None` for any other plugin name.
     /// subid: `exp.service.zeroclaw-bridge.grpc-stream@v1`.
     pub fn zeroclaw_projection(plugin_name: &str) -> Option<crate::proto::ZeroclawProjection> {
-        if plugin_name != "zeroclaw" {
+        if plugin_name != "tched_router" {
             return None;
         }
         let state = op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state();
         let schema_json = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_string());
         let model_routes = state
-            .projection
+            .catalog
             .model_routes
             .iter()
             .map(|r| crate::proto::ModelRouteProto {
@@ -165,7 +165,7 @@ impl SchemaPassthroughService {
             })
             .collect();
         let providers = state
-            .projection
+            .catalog
             .providers
             .iter()
             .map(|p| crate::proto::ProviderProto {

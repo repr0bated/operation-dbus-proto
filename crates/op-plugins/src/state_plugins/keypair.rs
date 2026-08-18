@@ -244,6 +244,7 @@ pub fn keypair_schema() -> PluginSchema {
             description: "Grants: list_keypairs.".to_string(),
         },
     );
+
     schema
 }
 

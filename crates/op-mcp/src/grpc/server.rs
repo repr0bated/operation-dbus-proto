@@ -163,10 +163,7 @@ impl GrpcTransport {
             .max_concurrent_streams(self.config.max_concurrent_streams)
             .http2_keepalive_interval(Some(self.config.keepalive_interval))
             .http2_keepalive_timeout(Some(self.config.keepalive_timeout))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                mcp_service,
-            ));
+            .add_service(tonic_web::enable(mcp_service));
 
         if self.config.enable_reflection {
             let reflection = tonic_reflection::server::Builder::configure()
@@ -176,10 +173,7 @@ impl GrpcTransport {
                     error!(error = %e, "reflection build failed");
                     anyhow::anyhow!("reflection build failed: {}", e)
                 })?;
-            builder = builder.add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                reflection,
-            ));
+            builder = builder.add_service(tonic_web::enable(reflection));
         }
 
         if self.config.enable_health {
@@ -187,10 +181,7 @@ impl GrpcTransport {
             health_reporter
                 .set_serving::<McpServiceServer<McpGrpcService>>()
                 .await;
-            builder = builder.add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                health_service,
-            ));
+            builder = builder.add_service(tonic_web::enable(health_service));
         }
 
         builder.serve(addr).await.map_err(|e| {
@@ -221,10 +212,7 @@ impl GrpcTransport {
         let mut builder = Server::builder()
             .accept_http1(true)
             .timeout(self.config.request_timeout)
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                mcp_service,
-            ));
+            .add_service(tonic_web::enable(mcp_service));
 
         if self.config.enable_reflection {
             let reflection = tonic_reflection::server::Builder::configure()
@@ -234,10 +222,7 @@ impl GrpcTransport {
                     error!(error = %e, "reflection build failed");
                     anyhow::anyhow!("reflection build failed: {}", e)
                 })?;
-            builder = builder.add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                reflection,
-            ));
+            builder = builder.add_service(tonic_web::enable(reflection));
         }
 
         if self.config.enable_health {
@@ -245,10 +230,7 @@ impl GrpcTransport {
             health_reporter
                 .set_serving::<McpServiceServer<McpGrpcService>>()
                 .await;
-            builder = builder.add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                health_service,
-            ));
+            builder = builder.add_service(tonic_web::enable(health_service));
         }
 
         builder.serve_with_shutdown(addr, shutdown).await?;
@@ -279,10 +261,7 @@ pub async fn run_grpc_server_lightweight(address: SocketAddr, mode: ServerMode) 
 
     Server::builder()
         .accept_http1(true)
-        .add_service(tower::Layer::layer(
-            &tonic_web::GrpcWebLayer::new(),
-            McpServiceServer::new(service),
-        ))
+        .add_service(tonic_web::enable(McpServiceServer::new(service)))
         .serve(address)
         .await?;
 

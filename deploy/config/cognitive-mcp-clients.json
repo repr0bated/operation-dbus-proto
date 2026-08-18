@@ -1,40 +1,134 @@
 {
-  "_comment": "One Model Context door. All tools are served from the shared Ghostbridge socket; identity is authenticated at the socket (Ghostbridge footprint / WireGuard), not via a menu of HTTP ports.",
-  "endpoint": {
-    "url": "unix:///run/ghostbridge/container.sock",
-    "also": "unix:///run/opdbus/grpc.sock",
-    "description": "Single MCP/gRPC surface — demux by service/method via reflection. Auth at socket connect (x-ghostbridge-footprint / x-ghostbridge-trace-id / x-wireguard-pubkey).",
-    "auth": {
-      "type": "ghostbridge",
-      "at": "socket",
-      "headers": [
-        "x-ghostbridge-footprint",
-        "x-ghostbridge-trace-id",
-        "x-wireguard-pubkey"
-      ]
+  "_comment": "Cognitive MCP Client Configuration - External Clients MUST use :3003 endpoint",
+  "endpoints": {
+    "cognitive_mcp": {
+      "url": "http://10.200.0.2:3003/mcp",
+      "description": "Universal gateway for ALL external clients (Droid, Cursor, Codex, NotebookLM, Gemini CLI)",
+      "auth": {
+        "type": "ghostbridge",
+        "headers": {
+          "X-Ghostbridge-Footprint": "client-id",
+          "X-Ghostbridge-Trace-ID": "session-id"
+        },
+        "via_wireguard": true
+      },
+      "protocols": ["http", "sse", "jsonrpc"],
+      "features": ["memory", "rag", "session", "quota"]
     },
-    "protocols": ["grpc", "grpc-web", "mcp"],
-    "tcp": "127.0.0.1:8090",
-    "also_tcp": "100.69.0.1:8090"
-  },
-  "not_doors": {
-    "_comment": "These are NOT separate MCP control-plane endpoints. Browser UI is :8080; chatbot loopback is not an external MCP door.",
-    "browser_address": "http://127.0.0.1:8080",
-    "chatbot_loopback_only": "http://127.0.0.1:11436"
+    "compact_mcp": {
+      "url": "http://127.0.0.1:11436",
+      "description": "Loopback/chatbot only - NEVER expose externally",
+      "restrictions": ["loopback_only", "no_external_access"],
+      "protocols": ["stdio", "sse"]
+    },
+    "grpc_cognitive": {
+      "url": "http://10.200.0.2:50052",
+      "description": "gRPC ingress for high-performance tool execution",
+      "auth": {
+        "type": "ghostbridge",
+        "header": "X-Ghostbridge-Trace-ID"
+      },
+      "reflection": true,
+      "health_check": "/health"
+    }
   },
   "client_profiles": {
-    "default": {
-      "endpoint": "unix:///run/ghostbridge/container.sock",
-      "description": "All MCP clients — one socket, full tool catalog after auth"
+    "notebooklm": {
+      "endpoint": "cognitive_mcp",
+      "quota_tier": "notebooklm",
+      "daily_limit": 50,
+      "description": "NotebookLM-compatible client per R11 spec"
+    },
+    "droid": {
+      "endpoint": "cognitive_mcp",
+      "quota_tier": "standard",
+      "daily_limit": 1000,
+      "pooling": {
+        "max_idle": 10,
+        "idle_timeout_secs": 90
+      },
+      "retry": {
+        "max_retries": 3,
+        "base_delay_ms": 100
+      },
+      "cache": {
+        "tools_ttl_secs": 300,
+        "resources_ttl_secs": 60
+      }
+    },
+    "cursor": {
+      "endpoint": "cognitive_mcp",
+      "quota_tier": "standard",
+      "daily_limit": 1000,
+      "low_latency": true,
+      "pooling": {
+        "max_idle": 20,
+        "idle_timeout_secs": 300
+      },
+      "timeout_secs": 5
+    },
+    "codex": {
+      "endpoint": "cognitive_mcp",
+      "quota_tier": "high_throughput",
+      "daily_limit": 10000,
+      "batch_operations": true
+    },
+    "gemini_cli": {
+      "endpoint": "cognitive_mcp",
+      "quota_tier": "standard",
+      "daily_limit": 1000,
+      "fallback_to_gemini": true
     },
     "local_chatbot": {
-      "endpoint": "unix:///run/ghostbridge/container.sock",
-      "description": "Chatbot also uses the socket door; lazy meta-tools are a client UX, not a second server"
+      "endpoint": "compact_mcp",
+      "quota_tier": "unlimited",
+      "loopback_only": true,
+      "no_wg_auth": true
+    }
+  },
+  "optimization_defaults": {
+    "connection_pool": {
+      "max_idle_per_host": 10,
+      "idle_timeout_secs": 90,
+      "max_connections": 100,
+      "use_http2": true
+    },
+    "retry": {
+      "max_retries": 3,
+      "base_delay_ms": 100,
+      "max_delay_ms": 5000,
+      "backoff_multiplier": 2.0,
+      "use_jitter": true
+    },
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "success_threshold": 3,
+      "timeout_secs": 30
+    },
+    "cache": {
+      "tools_list_ttl_secs": 300,
+      "resources_list_ttl_secs": 60,
+      "max_entries": 1000,
+      "stale_while_revalidate": true
+    },
+    "timeouts": {
+      "request_default_secs": 30,
+      "connect_secs": 10,
+      "read_secs": 30,
+      "write_secs": 10
     }
   },
   "security": {
+    "allowed_client_ids": [
+      "droid-*",
+      "cursor-*",
+      "codex-*",
+      "gemini-*",
+      "notebooklm-*",
+      "local-*"
+    ],
     "enforce_wg_identity": true,
-    "auth_at": "socket",
+    "audit_log": true,
     "inject_trace_headers": [
       "X-Ghostbridge-Footprint",
       "X-Ghostbridge-Trace-ID",

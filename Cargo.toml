@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/op-services",
     "crates/op-gateway",
     "crates/op-core",
     "crates/op-tools",
@@ -15,7 +16,6 @@ members = [
     "crates/op-jsonrpc",
     "crates/op-llm",
     "crates/op-network",
-    "crates/op-uds-relay",
     "crates/op-inspector",
     "crates/op-agents",
     "crates/op-plugins",
@@ -41,7 +41,7 @@ members = [
     "crates/op-xray-daemon",
     "crates/op-mcp-shim",
     "crates/op-gemma",
-    "crates/op-gallery-gen",
+    "crates/zeroclaw-gui",
     "crates/op-dbus-cli",
 ]
 
@@ -54,10 +54,11 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal Crates
 # ZeroClaw base runtime — imported for its REAL types (config, tools, providers).
-# The sealed zeroclaw blob is projected from these, not from hand-written structs.
+# The sealed tched_router blob is projected from these, not from hand-written structs.
 # default-features = false: skip nostr/prometheus/skill-creation extras.
-# TODO: pin to git rev once the upstream pin policy is decided.
-zeroclaw = { package = "zeroclawlabs", path = "/srv/git/zeroclaw", default-features = false }
+# In-repo stand-in so this workspace loads without the live-host checkout.
+# On the host, override to `{ package = "zeroclawlabs", path = "/srv/git/zeroclaw", default-features = false }`.
+zeroclaw = { package = "zeroclawlabs", path = "vendor/zeroclawlabs", default-features = false }
 op-core = { path = "crates/op-core" }
 op-tools = { path = "crates/op-tools" }
 op-chat = { path = "crates/op-chat" }
@@ -85,7 +86,6 @@ op-cozo-store = { path = "crates/op-cozo-store" }
 op-s6-systemctl = { path = "crates/op-s6-systemctl" }
 op-xray-daemon = { path = "crates/op-xray-daemon" }
 op-gemma = { path = "crates/op-gemma" }
-op-gallery-gen = { path = "crates/op-gallery-gen" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -107,9 +107,9 @@ zbus = { version = "5", features = ["tokio"] }
 zbus_xml = "5"
 
 # Web
-axum = { version = "0.8", features = ["ws", "macros", "tokio"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }
+axum = { version = "0.7", features = ["ws", "macros", "tokio"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs", "trace", "compression-gzip"] }
 
 # HTTP client
 reqwest = { version = "0.11", features = ["json", "stream"] }
@@ -147,15 +147,14 @@ glob = "0.3"
 mime_guess = "2.0"
 
 # gRPC
-tonic = { version = "0.14.6", features = ["tls-native-roots", "tls-webpki-roots"] }
-tonic-prost = "0.14.6"
-prost = "0.14.4"
-prost-types = "0.14.4"
-tonic-prost-build = "0.14.6"
-tonic-reflection = "0.14.6"
-prost-reflect = { version = "0.16.5", features = ["serde"] }
-tonic-health = "0.14.6"
-tonic-web = "0.14.6"
+tonic = { version = "0.12", features = ["tls", "tls-roots", "tls-webpki-roots"] }
+prost = "0.13"
+prost-types = "0.13"
+tonic-build = "0.12"
+tonic-reflection = "0.12"
+prost-reflect = { version = "0.14", features = ["serde"] }
+tonic-health = "0.12"
+tonic-web = "0.12"
 
 # Databases
 rusqlite = { version = "0.37", features = ["bundled"] }

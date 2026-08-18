@@ -748,7 +748,8 @@ pub(crate) fn ctl_plane_chatbot_schema() -> PluginSchema {
         "chatbot.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "chatbot.read".to_string(),
-            description: "Grants: get_config, list_episodes, get_episode, query_context.".to_string(),
+            description: "Grants: get_config, list_episodes, get_episode, query_context."
+                .to_string(),
         },
     );
     schema.capabilities.insert(

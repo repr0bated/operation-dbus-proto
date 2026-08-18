@@ -17,13 +17,13 @@ pub use op_plugins::state_plugins::tched_router::{
     tched_router_plugin_schema, LlmTransport, TchedRouterPlugin, TchedRouterState,
 };
 
-/// The single Zeroclaw `PluginSchema`, included from the plugin. op-llm reads
-/// the provider/model/tool contract from here — never a separate copy.
+/// The single 3tched Router `PluginSchema`, included from the plugin. op-llm
+/// reads the provider/model/tool contract from here — never a separate copy.
 pub fn embedded_plugin_schema() -> op_state_store::PluginSchema {
     tched_router_plugin_schema()
 }
 
-/// The in-memory typed projection state (declared providers, model routes,
+/// The in-memory typed catalog state (declared providers, model routes,
 /// tools, selector policy) from the plugin — the schema-backed authority.
 pub fn embedded_projection() -> LlmProjection {
     TchedRouterPlugin::current_state().catalog

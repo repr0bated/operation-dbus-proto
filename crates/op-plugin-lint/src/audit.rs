@@ -3,7 +3,9 @@
 use crate::report::Report;
 use crate::subid::{validate_subid, KNOWN_X_KEYS};
 use anyhow::{Context, Result};
-use syn::{parse_file, Attribute, Expr, Fields, Item, ItemStruct, Lit, Meta, MetaNameValue};
+use syn::{
+    parse_file, Attribute, Expr, Fields, Item, ItemStruct, Lit, Meta, MetaNameValue,
+};
 
 /// Optional Inspector-Gadget coverage inputs.
 #[derive(Debug, Clone, Default)]
@@ -162,14 +164,14 @@ pub fn audit_source_with_coverage(
     if !has_schema_seeded_test {
         report.warn(
             "missing_schema_seeded_test",
-            "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity.rs)",
+            "add #[test] fn schema_is_schemars_seeded_and_typed (see antigravity_chat.rs)",
             None,
         );
     }
     if !has_subid_test {
         report.warn(
             "missing_subid_validity_test",
-            "add #[test] fn all_subids_are_valid (see antigravity.rs)",
+            "add #[test] fn all_subids_are_valid (see antigravity_chat.rs)",
             None,
         );
     }
@@ -436,8 +438,7 @@ fn audit_struct(report: &mut Report, st: &ItemStruct, has_category: &mut bool) {
             );
         }
 
-        let has_serde_default =
-            fattrs.contains("serde(default") || fattrs.contains("serde(default)");
+        let has_serde_default = fattrs.contains("serde(default") || fattrs.contains("serde(default)");
         // syn pretty may normalize differently; also check attribute path
         let serde_default = field.attrs.iter().any(|a| {
             let s = attr_tokens(a);
@@ -483,6 +484,7 @@ fn audit_struct(report: &mut Report, st: &ItemStruct, has_category: &mut bool) {
                 Some(floc.clone()),
             );
         }
+
     }
 }
 
@@ -674,3 +676,4 @@ fn type_string(ty: &syn::Type) -> String {
         _ => String::new(),
     }
 }
+

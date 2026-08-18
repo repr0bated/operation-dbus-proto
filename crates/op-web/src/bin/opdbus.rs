@@ -5,10 +5,10 @@
 //! choke point. No hardcoded IP — the address follows whatever ovsbr0 is
 //! assigned.
 //!
-//! Listen address override: `OP_DBUS_GRPC_LISTEN` (e.g. "127.0.0.1:8090").
-//! When unset, op-dbus resolves the first IPv4 on `OP_DBUS_GRPC_IFACE`
-//! (default `ovsbr0`) and binds `<that-ip>:8090`; if the interface has no
-//! IPv4 it falls back to `127.0.0.1:8090`. Do not invent a second TCP door.
+//! Listen address override: `OP_DBUS_GRPC_LISTEN` (e.g. "0.0.0.0:50051" for
+//! dev, or an explicit `ip:port`). When unset, op-dbus resolves the first
+//! IPv4 on `OP_DBUS_GRPC_IFACE` (default `ovsbr0`) and binds `<that-ip>:50051`;
+//! if the interface has no IPv4 it falls back to `0.0.0.0:50051`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use op_state_store::{ChainConfig, EventChain};
 use tokio::sync::RwLock;
 
 /// Default port when no explicit listen address is supplied.
-const DEFAULT_GRPC_PORT: u16 = 8090;
+const DEFAULT_GRPC_PORT: u16 = 50051;
 /// Interface whose IPv4 is used for the default bind address.
 const DEFAULT_GRPC_IFACE: &str = "ovsbr0";
 
@@ -62,10 +62,10 @@ async fn resolve_listen_addr() -> SocketAddr {
         }
     }
 
-    warn!(iface = %iface, "no IPv4 on interface; binding 127.0.0.1");
-    format!("127.0.0.1:{}", port)
+    warn!(iface = %iface, "no IPv4 on interface; binding 0.0.0.0");
+    format!("0.0.0.0:{}", port)
         .parse()
-        .expect("127.0.0.1:port always parses")
+        .expect("0.0.0.0:port always parses")
 }
 
 #[tokio::main]

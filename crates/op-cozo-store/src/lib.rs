@@ -73,13 +73,7 @@ pub struct IdentitySledRecord {
     pub interface: String,
     pub peer_ip: String,
     pub mutation_index: i64,
-    /// Hex blake3 session genesis (`""` = not yet minted). Stored in the
-    /// `identity_sleds.hashed_footprint` column: a stored Cozo relation cannot
-    /// have a column renamed without destroying it, so the on-disk column name
-    /// stays as-is while the Rust field carries the one name the rest of the
-    /// workspace uses. Legacy (version ≤ 2) rows hold their old
-    /// etch_footprint-derived value in the same column.
-    pub genesis: String,
+    pub hashed_footprint: String,
     pub trace_id: String,
     pub schema_version: i64,
     pub vector_id: String,
@@ -92,15 +86,6 @@ pub struct IdentitySledRecord {
     /// 0 = permanent (no expiry); otherwise unix seconds this identity
     /// stops being valid (temporary/consumer identities like Lovable).
     pub expires_at: i64,
-    /// Unix seconds the session arrived (genesis mint moment). `0` = never
-    /// minted. Irreproducible — without it the genesis cannot be recomputed.
-    pub arrival_timestamp: i64,
-    /// Hex chain-head hash at genesis mint time (`""` = never minted).
-    pub chain_head_at_arrival: String,
-    /// Hex schema-catalog hash at genesis mint time (`""` = never minted).
-    pub catalog_hash_at_arrival: String,
-    /// Timestamp of the chain head event at genesis mint time.
-    pub head_timestamp_at_arrival: i64,
 }
 
 /// One row of a session's append-only "snowball" event ledger.
@@ -388,21 +373,6 @@ impl CozoGraphShuttle {
                 last_seen_at: Int default 0,
                 active: Bool default false,
                 expires_at: Int default 0
-            }"#,
-            // the inputs the session genesis was minted from (version 3
-            // records). Separate relation because they are additive to an
-            // already-deployed `identity_sleds` shape and a stored Cozo
-            // relation cannot gain columns without being destroyed; the
-            // genesis itself stays in `identity_sleds`, so no fact is stored
-            // twice. `schema_content_hash` is the record-shape drift check.
-            r#":create identity_genesis {
-                session_id: String
-                =>
-                arrival_timestamp: Int default 0,
-                chain_head_at_arrival: String default "",
-                catalog_hash_at_arrival: String default "",
-                head_timestamp_at_arrival: Int default 0,
-                schema_content_hash: String default ""
             }"#,
             // append-only per-session "snowball" event ledger archive
             // (the immutable event chain is the proof; this is the queryable copy)
@@ -1402,7 +1372,7 @@ impl CozoGraphShuttle {
         p.insert("mut_idx".into(), dv_int(rec.mutation_index));
         p.insert(
             "footprint".into(),
-            DataValue::Str(rec.genesis.as_str().into()),
+            DataValue::Str(rec.hashed_footprint.as_str().into()),
         );
         p.insert("trace".into(), DataValue::Str(rec.trace_id.as_str().into()));
         p.insert("schema_ver".into(), dv_int(rec.schema_version));
@@ -1429,62 +1399,6 @@ impl CozoGraphShuttle {
         cozo_run(&self.db, query, p)
             .map_err(|e| CozoError::Other(format!("put identity sled: {e}")))?;
         Ok(())
-    }
-
-    /// Upsert the genesis inputs of one session (version 3 records only).
-    ///
-    /// Written once, at arrival, by the mutation engine — the inputs are
-    /// immutable for the life of the session, and without `arrival_timestamp`
-    /// the genesis can never be recomputed, so this write is the durability of
-    /// the whole anchor.
-    pub fn put_identity_genesis(
-        &self,
-        rec: &GenesisInputsRecord,
-    ) -> std::result::Result<(), CozoError> {
-        let query = r#"
-            ?[session_id, arrival_timestamp, chain_head_at_arrival,
-              catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash]
-                <- [[$sid, $arrival, $head, $catalog, $head_ts, $shape]]
-            :put identity_genesis {
-                session_id => arrival_timestamp, chain_head_at_arrival,
-                catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash
-            }
-        "#;
-        let mut p: Params = BTreeMap::new();
-        p.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
-        p.insert("arrival".into(), dv_int(rec.arrival_timestamp));
-        p.insert(
-            "head".into(),
-            DataValue::Str(rec.chain_head_at_arrival.as_str().into()),
-        );
-        p.insert(
-            "catalog".into(),
-            DataValue::Str(rec.catalog_hash_at_arrival.as_str().into()),
-        );
-        p.insert("head_ts".into(), dv_int(rec.head_timestamp_at_arrival));
-        p.insert(
-            "shape".into(),
-            DataValue::Str(rec.schema_content_hash.as_str().into()),
-        );
-        cozo_run(&self.db, query, p)
-            .map_err(|e| CozoError::Other(format!("put identity genesis: {e}")))?;
-        Ok(())
-    }
-
-    /// Every stored genesis-input row, for the one hydration read.
-    pub fn list_identity_genesis(
-        &self,
-    ) -> std::result::Result<Vec<GenesisInputsRecord>, CozoError> {
-        let r = cozo_run(
-            &self.db,
-            "?[session_id, arrival_timestamp, chain_head_at_arrival, \
-             catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash] := \
-             *identity_genesis[session_id, arrival_timestamp, chain_head_at_arrival, \
-             catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash]",
-            BTreeMap::new(),
-        )
-        .map_err(|e| CozoError::Other(format!("list identity genesis: {e}")))?;
-        Ok(r.rows.iter().map(|r| row_to_genesis_inputs(r)).collect())
     }
 
     /// Fetch a single identity sled row by session_id.
@@ -1888,7 +1802,7 @@ fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
         interface: s(2),
         peer_ip: s(3),
         mutation_index: dv_as_int(&row[4]),
-        genesis: s(5),
+        hashed_footprint: s(5),
         trace_id: s(6),
         schema_version: dv_as_int(&row[7]),
         vector_id: s(8),
@@ -1899,36 +1813,6 @@ fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
         last_seen_at: dv_as_int(&row[13]),
         active: dv_as_bool(&row[14]),
         expires_at: dv_as_int(&row[15]),
-        // Filled in from the `identity_genesis` relation by the caller
-        // (`join_genesis_inputs`); the sled row itself does not carry them.
-        arrival_timestamp: 0,
-        chain_head_at_arrival: String::new(),
-        catalog_hash_at_arrival: String::new(),
-        head_timestamp_at_arrival: 0,
-    }
-}
-
-/// The genesis inputs stored beside a session's sled row (version 3 records).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GenesisInputsRecord {
-    pub session_id: String,
-    pub arrival_timestamp: i64,
-    pub chain_head_at_arrival: String,
-    pub catalog_hash_at_arrival: String,
-    pub head_timestamp_at_arrival: i64,
-    /// `SCHEMA_CONTENT_HASH` of the record shape this row was written against.
-    pub schema_content_hash: String,
-}
-
-fn row_to_genesis_inputs(row: &[DataValue]) -> GenesisInputsRecord {
-    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
-    GenesisInputsRecord {
-        session_id: s(0),
-        arrival_timestamp: dv_as_int(&row[1]),
-        chain_head_at_arrival: s(2),
-        catalog_hash_at_arrival: s(3),
-        head_timestamp_at_arrival: dv_as_int(&row[4]),
-        schema_content_hash: s(5),
     }
 }
 
@@ -2012,7 +1896,7 @@ mod identity_sled_tests {
             interface: "".to_string(),
             peer_ip: "10.0.0.2".to_string(),
             mutation_index: 3,
-            genesis: "fp".to_string(),
+            hashed_footprint: "fp".to_string(),
             trace_id: "tr".to_string(),
             schema_version: 1,
             vector_id: "".to_string(),
@@ -2023,10 +1907,6 @@ mod identity_sled_tests {
             last_seen_at: 200,
             active: true,
             expires_at: 0,
-            arrival_timestamp: 0,
-            chain_head_at_arrival: String::new(),
-            catalog_hash_at_arrival: String::new(),
-            head_timestamp_at_arrival: 0,
         }
     }
 
@@ -2052,31 +1932,6 @@ mod identity_sled_tests {
 
         assert_eq!(store.list_identity_sleds().unwrap().len(), 1);
         assert!(store.get_identity_sled("nope").unwrap().is_none());
-    }
-
-    /// The genesis inputs live beside the sled row and survive the round trip;
-    /// the sled relation itself is untouched, so an already-deployed store
-    /// gains the relation without a destructive migration.
-    #[test]
-    fn identity_genesis_inputs_round_trip() {
-        let store = CozoGraphShuttle::new_in_memory().unwrap();
-        store.put_identity_sled(&sample("sid-g")).unwrap();
-        let inputs = GenesisInputsRecord {
-            session_id: "sid-g".to_string(),
-            arrival_timestamp: 1_787_000_000,
-            chain_head_at_arrival: "ab".repeat(32),
-            catalog_hash_at_arrival: "cd".repeat(32),
-            head_timestamp_at_arrival: 1_786_999_000,
-            schema_content_hash: "ef".repeat(32),
-        };
-        store.put_identity_genesis(&inputs).unwrap();
-
-        let rows = store.list_identity_genesis().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], inputs);
-        // The sled row is unchanged by the genesis-input write.
-        let sled = store.get_identity_sled("sid-g").unwrap().unwrap();
-        assert_eq!(sled.genesis, "fp");
     }
 
     #[test]

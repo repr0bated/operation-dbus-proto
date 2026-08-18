@@ -14,7 +14,6 @@ op-identity = { path = "../op-identity" }
 op-core = { workspace = true }
 
 tonic = { workspace = true }
-tonic-prost = { workspace = true }
 tonic-web = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
@@ -49,4 +48,4 @@ bytes = { workspace = true }
 zbus = { workspace = true }
 
 [build-dependencies]
-tonic-prost-build = { workspace = true }
+tonic-build = { workspace = true }

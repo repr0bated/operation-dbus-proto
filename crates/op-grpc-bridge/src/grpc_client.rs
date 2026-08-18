@@ -10,7 +10,7 @@ use std::time::Duration;
 use prost_types::{value::Kind as ProstKind, Struct as ProstStruct, Value as ProstValue};
 use tokio::sync::RwLock;
 use tonic::metadata::MetadataValue;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, Endpoint};
 use tonic::Request;
 use tracing::info;
 
@@ -50,8 +50,8 @@ pub struct GhostbridgeCallMetadata {
 impl Default for RemoteEndpoint {
     fn default() -> Self {
         Self {
-            address: "https://localhost:8090".to_string(),
-            tls_enabled: true,
+            address: "http://127.0.0.1:8090".to_string(),
+            tls_enabled: false,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(30),
         }
@@ -87,41 +87,6 @@ impl GrpcClientPool {
         }
     }
 
-    fn configure_endpoint(
-        &self,
-        address: &str,
-        endpoint: Endpoint,
-    ) -> Result<Endpoint, GrpcClientError> {
-        let endpoint = endpoint
-            .connect_timeout(self.default_config.connect_timeout)
-            .timeout(self.default_config.request_timeout);
-
-        if !address.starts_with("https://") {
-            return Ok(endpoint);
-        }
-
-        let mut tls = ClientTlsConfig::new().with_native_roots();
-        if let Ok(path) = std::env::var("OP_DBUS_GRPC_CA_FILE") {
-            if !path.trim().is_empty() {
-                let pem = std::fs::read(&path).map_err(|error| {
-                    GrpcClientError::ConnectionFailed(format!(
-                        "failed to read gRPC CA certificate {path}: {error}"
-                    ))
-                })?;
-                tls = tls.ca_certificate(Certificate::from_pem(pem));
-            }
-        }
-        if let Ok(domain) = std::env::var("OP_DBUS_GRPC_TLS_DOMAIN") {
-            if !domain.trim().is_empty() {
-                tls = tls.domain_name(domain);
-            }
-        }
-
-        endpoint
-            .tls_config(tls)
-            .map_err(|error| GrpcClientError::ConnectionFailed(error.to_string()))
-    }
-
     /// Get or create a channel to the specified address (supports comma-separated endpoints for load balancing)
     async fn get_channel(&self, address: &str) -> Result<Channel, GrpcClientError> {
         {
@@ -142,21 +107,23 @@ impl GrpcClientPool {
             let endpoints = addrs
                 .into_iter()
                 .map(|addr| {
-                    let endpoint = Endpoint::from_shared(addr.to_string()).map_err(|error| {
-                        GrpcClientError::ConnectionFailed(format!(
-                            "Invalid endpoint {addr}: {error}"
-                        ))
-                    })?;
-                    self.configure_endpoint(addr, endpoint)
+                    Endpoint::from_shared(addr.to_string()).map(|e| {
+                        e.connect_timeout(self.default_config.connect_timeout)
+                            .timeout(self.default_config.request_timeout)
+                    })
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    GrpcClientError::ConnectionFailed(format!("Invalid endpoint: {}", e))
+                })?;
 
             Channel::balance_list(endpoints.into_iter())
         } else {
             // Single endpoint
             let endpoint = Endpoint::from_shared(address.to_string())
-                .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?;
-            let endpoint = self.configure_endpoint(address, endpoint)?;
+                .map_err(|e| GrpcClientError::ConnectionFailed(e.to_string()))?
+                .connect_timeout(self.default_config.connect_timeout)
+                .timeout(self.default_config.request_timeout);
 
             endpoint
                 .connect()
@@ -428,19 +395,11 @@ impl RemoteOperationClient {
     }
 
     /// Subscribe to state updates from a remote endpoint
-    /// Subscribe to state changes.
-    ///
-    /// The two hydration flags mirror the proto fields and are independent on
-    /// purpose, but a consumer that renders needs both: contracts give it the
-    /// shape, present state gives it the values, and one without the other
-    /// renders either empty forms or untyped blobs.
     pub async fn subscribe(
         &self,
         plugin_filters: Vec<String>,
         path_filters: Vec<String>,
         tag_filters: Vec<String>,
-        include_initial_state: bool,
-        include_schema: bool,
     ) -> Result<
         impl tokio_stream::Stream<Item = Result<StateUpdateMessage, GrpcClientError>>,
         GrpcClientError,
@@ -451,8 +410,7 @@ impl RemoteOperationClient {
             plugin_ids: plugin_filters,
             path_patterns: path_filters,
             tags: tag_filters,
-            include_initial_state,
-            include_schema,
+            include_initial_state: false,
         });
         attach_ghostbridge_metadata(&mut request)?;
 
@@ -465,40 +423,17 @@ impl RemoteOperationClient {
 
         Ok(tokio_stream::StreamExt::map(stream, |result| {
             result
-                .map(|update| {
-                    let change_type = change_type_name(update.change_type);
-                    StateUpdateMessage {
-                        change_id: update.change_id,
-                        plugin_id: update.plugin_id,
-                        object_path: update.object_path,
-                        property_name: if update.member_name.is_empty() {
-                            None
-                        } else {
-                            Some(update.member_name)
-                        },
-                        // Present on every frame that names a plugin, not just
-                        // contract frames: it is what a consumer compares
-                        // against the contract it is currently holding.
-                        schema_hash: if update.schema_hash.is_empty() {
-                            None
-                        } else {
-                            Some(update.schema_hash)
-                        },
-                        catalog_hash: update.catalog_hash,
-                        old_value: update.old_value.as_ref().map(prost_value_to_simd),
-                        new_value: update.new_value.as_ref().map(prost_value_to_simd),
-                        event_id: update.event_id.to_string(),
-                        event_hash: update.event_hash,
-                        tags_touched: update.tags_touched,
-                        actor_id: update.actor_id,
-                        timestamp: update.timestamp.map(|ts| {
-                            chrono::DateTime::from_timestamp(ts.seconds, ts.nanos.max(0) as u32)
-                                .unwrap_or_default()
-                                .to_rfc3339()
-                        }),
-                        change_type: change_type.to_string(),
-                        frame_kind: frame_kind_name(update.frame_kind).to_string(),
-                    }
+                .map(|update| StateUpdateMessage {
+                    plugin_id: update.plugin_id,
+                    object_path: update.object_path,
+                    property_name: if update.member_name.is_empty() {
+                        None
+                    } else {
+                        Some(update.member_name)
+                    },
+                    new_value: update.new_value.as_ref().map(prost_value_to_simd),
+                    event_id: update.event_id.to_string(),
+                    tags_touched: update.tags_touched,
                 })
                 .map_err(|e| GrpcClientError::StreamError(e.to_string()))
         }))
@@ -554,78 +489,19 @@ pub struct SetStateResult {
     pub effective_hash: String,
 }
 
-/// State update message from subscription.
-///
-/// Every field the wire frame carries.
-///
-/// This is deliberately total rather than a useful subset: it is what
-/// downstream transports (op-web's SSE bridge) re-serialize wholesale, so a
-/// field omitted here is a field no browser subscriber can ever see. When the
-/// proto message grows, grow this with it instead of letting consumers choose.
-#[derive(Debug, Clone, serde::Serialize)]
+/// State update message from subscription
+#[derive(Debug, Clone)]
 pub struct StateUpdateMessage {
-    pub change_id: String,
     pub plugin_id: String,
     pub object_path: String,
     pub property_name: Option<String>,
-    pub old_value: Option<simd_json::OwnedValue>,
     pub new_value: Option<simd_json::OwnedValue>,
     pub event_id: String,
-    pub event_hash: String,
     pub tags_touched: Vec<String>,
-    pub actor_id: String,
-    /// RFC 3339, or `None` when the frame carried no timestamp.
-    pub timestamp: Option<String>,
-    /// Snake-case rendering of the proto `ChangeType`. Consumers that bridge
-    /// this to another transport need it to tell a contract frame from a value
-    /// frame; without it every frame looks like a property set.
-    pub change_type: String,
-    /// Snake-case rendering of the proto `StateFrameKind`: where in the stream
-    /// this frame sits (hydration, live update, keepalive).
-    pub frame_kind: String,
-    /// Hash of the contract the frame's plugin is published under. On a
-    /// `schema_migration` frame it identifies the contract in `new_value`; on
-    /// every other frame it says which contract the value should be read
-    /// against. `None` only when the frame names no plugin.
-    pub schema_hash: Option<String>,
-    /// Identity of the whole published catalog, on every frame including
-    /// keepalives. A consumer that sees this change without having received the
-    /// matching schema frame knows it missed one and must re-hydrate.
-    pub catalog_hash: String,
 }
 
-/// Render a proto `ChangeType` discriminant as a stable snake-case name.
-/// Unknown discriminants degrade to "unspecified" rather than failing the
-/// stream — an older client must not drop frames a newer server adds.
-fn change_type_name(value: i32) -> &'static str {
-    match crate::proto::ChangeType::try_from(value) {
-        Ok(crate::proto::ChangeType::PropertySet) => "property_set",
-        Ok(crate::proto::ChangeType::PropertyDelete) => "property_delete",
-        Ok(crate::proto::ChangeType::MethodCall) => "method_call",
-        Ok(crate::proto::ChangeType::Signal) => "signal",
-        Ok(crate::proto::ChangeType::ObjectAdded) => "object_added",
-        Ok(crate::proto::ChangeType::ObjectRemoved) => "object_removed",
-        Ok(crate::proto::ChangeType::SchemaMigration) => "schema_migration",
-        Ok(crate::proto::ChangeType::Unspecified) | Err(_) => "unspecified",
-    }
-}
-
-/// Render a proto `StateFrameKind` discriminant as a stable snake-case name.
-fn frame_kind_name(value: i32) -> &'static str {
-    match crate::proto::StateFrameKind::try_from(value) {
-        Ok(crate::proto::StateFrameKind::InitialState) => "initial_state",
-        Ok(crate::proto::StateFrameKind::Update) => "update",
-        Ok(crate::proto::StateFrameKind::Heartbeat) => "heartbeat",
-        Ok(crate::proto::StateFrameKind::Unspecified) | Err(_) => "unspecified",
-    }
-}
-
-/// Chain event message from event stream.
-///
-/// Serialized wholesale by downstream transports for the same reason as
-/// [`StateUpdateMessage`]: the hashes are what make the record verifiable, so
-/// no hop gets to decide they are uninteresting.
-#[derive(Debug, Clone, serde::Serialize)]
+/// Chain event message from event stream
+#[derive(Debug, Clone)]
 pub struct ChainEventMessage {
     pub event_id: String,
     pub event_hash: String,
@@ -664,28 +540,28 @@ impl std::fmt::Display for GrpcClientError {
 impl std::error::Error for GrpcClientError {}
 
 fn attach_ghostbridge_metadata<T>(request: &mut Request<T>) -> Result<(), GrpcClientError> {
-    let session_id = crate::identity_sled_dispatch::host_session_id().ok_or_else(|| {
-        GrpcClientError::RequestFailed(
-            "Host session id is unavailable; refusing unauthenticated gRPC call".to_string(),
-        )
-    })?;
-    let identity = crate::shared_socket::CanonicalPeerIdentity::from_session(&session_id);
-    if !identity.is_valid {
+    let (sled_ptr, _mmap) = op_identity::read_sled()
+        .map_err(|e| GrpcClientError::RequestFailed(format!("Identity Sled unreadable: {e}")))?;
+    let sled = unsafe { &*sled_ptr };
+
+    if !sled.is_sled_valid() {
         return Err(GrpcClientError::RequestFailed(
-            "Host session identity is unavailable; refusing unauthenticated gRPC call".to_string(),
+            "Identity Sled is invalid; refusing unauthenticated gRPC call".to_string(),
         ));
     }
 
+    let footprint = hex::encode(sled.hashed_footprint);
+    let trace_id = sled.trace_id_hex();
     let metadata = request.metadata_mut();
     metadata.insert(
-        "x-ghostbridge-genesis",
-        MetadataValue::try_from(identity.genesis_hex).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
+        "x-ghostbridge-footprint",
+        MetadataValue::try_from(footprint).map_err(|e| {
+            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
         })?,
     );
     metadata.insert(
         "x-ghostbridge-trace-id",
-        MetadataValue::try_from(identity.trace_id_hex)
+        MetadataValue::try_from(trace_id)
             .map_err(|e| GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}")))?,
     );
 
@@ -698,9 +574,9 @@ fn attach_supplied_ghostbridge_metadata<T>(
 ) -> Result<(), GrpcClientError> {
     let metadata = request.metadata_mut();
     metadata.insert(
-        "x-ghostbridge-genesis",
+        "x-ghostbridge-footprint",
         MetadataValue::try_from(identity.footprint.as_str()).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
+            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
         })?,
     );
     if let Some(trace_id) = identity.trace_id.as_deref() {

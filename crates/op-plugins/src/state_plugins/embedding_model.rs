@@ -166,34 +166,21 @@ pub struct VoyageEmbedParams {
 pub fn voyage_embed_params() -> Option<VoyageEmbedParams> {
     let api_key = EmbeddingModelPlugin::voyage_api_key()?;
 
-    let projected = op_core::projection_shm::read_projection_bytes("embedding_model")
-        .and_then(|bytes| serde_json::from_slice::<EmbeddingModelState>(&bytes).ok());
-    let fallback = EmbeddingModelPlugin::config_state();
-
-    // Merge per field rather than all-or-nothing. A projection written by a
-    // mutation that touched only one property is a complete record with the
-    // other fields empty, so trusting it wholesale yields `endpoint: ""` and a
-    // "relative URL without a base" failure at call time. An endpoint is only
-    // usable if it is absolute.
-    let endpoint = projected
-        .as_ref()
-        .map(|state| state.endpoint.trim().to_string())
-        .filter(|endpoint| endpoint.starts_with("http"))
-        .unwrap_or(fallback.endpoint);
+    let state = op_core::projection_shm::read_projection_bytes("embedding_model")
+        .and_then(|bytes| serde_json::from_slice::<EmbeddingModelState>(&bytes).ok())
+        .unwrap_or_else(EmbeddingModelPlugin::config_state);
 
     // model_id is deliberately unresolved ("no hardcoded model") in config_state
     // when nothing configures it; a Voyage call still needs a concrete model, so
     // fall back to the documented POC-target default of the shared-space trio.
-    let model_id = projected
-        .and_then(|state| {
-            let id = state.model_id.trim().to_string();
-            (!id.is_empty()).then_some(id)
-        })
-        .or_else(|| (!fallback.model_id.is_empty()).then_some(fallback.model_id))
-        .unwrap_or_else(|| VoyageModel::default().model_id().to_string());
+    let model_id = if state.model_id.is_empty() {
+        VoyageModel::default().model_id().to_string()
+    } else {
+        state.model_id
+    };
 
     Some(VoyageEmbedParams {
-        endpoint,
+        endpoint: state.endpoint,
         model_id,
         api_key,
     })

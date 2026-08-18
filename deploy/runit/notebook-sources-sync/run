@@ -15,19 +15,9 @@ wait_dep() {
     done
 }
 
-# Cognitive gRPC + identity sled needed for ingest.
-#
-# Depend on the BRIDGE, never on the standalone op-cognitive-mcp service.
-# cognitive_mcp is reached through the bridge's socket (PluginV1.Call on
-# /org/opdbus/v1/plugins/cognitive_mcp), and that socket is doing two jobs:
-# it is the single-writer path to CozoDB, and it is the identity gate
-# (WireGuard pubkey -> sessionid). Starting op-cognitive-mcp opens the store
-# in-process instead, which races the bridge for the RocksDB LOCK *and*
-# bypasses authentication entirely. `wait_dep` calls `sv start`, so naming it
-# here does not just wait for it — it resurrects it. That is how the service
-# kept coming back despite its `down` file.
+# Cognitive gRPC + identity sled needed for ingest
 wait_dep opdbus-rundirs
-wait_dep op-grpc-bridge
+wait_dep op-cognitive-mcp 2>/dev/null || true
 
 export HOME="${HOME:-/home/admin}"
 export OP_DBUS_ROOT="${OP_DBUS_ROOT:-/home/admin/git/odbus}"

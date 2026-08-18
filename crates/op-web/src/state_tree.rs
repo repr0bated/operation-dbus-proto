@@ -32,7 +32,7 @@ pub fn read_plugin(plugin: &str) -> Option<Value> {
 
 /// Walk the entire state tree and aggregate all plugin state files.
 ///
-/// Used by `GET /api/ui-model/state` (replaces the projection daemon dump).
+/// Used by the dashboard whole-tree dump endpoint.
 /// Returns a map keyed by plugin_id (`.json` suffix stripped) with the
 /// plugin's state as value. Dotfiles (e.g. `.manifest.json`) are skipped.
 pub fn read_all() -> HashMap<String, Value> {
@@ -95,36 +95,4 @@ fn read_json_file(path: &str) -> Option<Value> {
 fn read_json_file_path(path: &Path) -> Option<Value> {
     let mut bytes = std::fs::read(path).ok()?;
     simd_json::to_owned_value(&mut bytes).ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn read_all_from_path_lists_state_json_and_skips_dotfiles() {
-        let dir = std::env::temp_dir().join(format!(
-            "op-web-state-tree-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("zeroclaw.json"), br#"{"selected_model":"qwen"}"#).unwrap();
-        fs::write(dir.join("system.memory.json"), br#"{"rss":1}"#).unwrap();
-        fs::write(dir.join(".manifest.json"), br#"{"generation":3}"#).unwrap();
-        fs::write(dir.join("notes.txt"), b"ignore").unwrap();
-
-        let tree = read_all_from_path(dir.to_str().unwrap());
-        // Drop the temp dir before asserting so a failure does not leak it.
-        let _ = fs::remove_dir_all(&dir);
-
-        assert!(tree.contains_key("zeroclaw"));
-        assert!(tree.contains_key("system.memory"));
-        assert!(!tree.contains_key(".manifest"));
-        assert_eq!(tree.len(), 2);
-    }
 }

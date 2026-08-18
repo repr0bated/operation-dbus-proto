@@ -34,15 +34,15 @@
         },
         "cognitive-mcp": {
             "type": "http",
-            "url": "http://127.0.0.1:8080/mcp/agents/message"
-        },
-        "op-dbus-socket": {
-            "type": "stdio",
-            "url": "unix:///run/ghostbridge/container.sock"
+            "url": "http://10.200.0.2:3003/mcp",
+            "headers": {
+                "X-Ghostbridge-Footprint": "antigravity",
+                "X-Ghostbridge-Trace-ID": "antigravity-local"
+            }
         },
         "op-dbus-compact": {
             "type": "http",
-            "url": "http://127.0.0.1:8090/mcp/compact"
+            "url": "http://127.0.0.1:8080/mcp/compact"
         },
         "op-dbus-agents": {
             "type": "http",

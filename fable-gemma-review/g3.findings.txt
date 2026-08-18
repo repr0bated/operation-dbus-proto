@@ -1,0 +1,25 @@
+```json
+[
+  {
+    "path": "crates/op-grpc-bridge/src/chat_service.rs",
+    "line": 108,
+    "priority": "P2",
+    "title": "Incorrect error message for failed provider resolution",
+    "why": "The error message hardcodes 'not declared by ZeroClaw' instead of using the new plugin name 'tched_router', which will mislead operators during debugging of the migration."
+  },
+  {
+    "path": "crates/op-grpc-bridge/src/mutation_engine.rs",
+    "line": 1303,
+    "priority": "P2",
+    "title": "Incorrect error context for failed Chat argument parsing",
+    "why": "The error message hardcodes 'invalid zeroclaw.Chat arguments' instead of 'invalid tched_router.Chat arguments', causing incorrect error reporting for the new plugin."
+  },
+  {
+    "path": "crates/op-grpc-bridge/src/schema_passthrough.rs",
+    "line": 141,
+    "priority": "P2",
+    "title": "Incorrect docstring for ZeroclawProjection projection",
+    "why": "The docstring still refers to 'ZeroclawProjection' and 'zeroclaw' instead of 'TchedRouterProjection' and 'tched_router', which is inconsistent with the updated implementation."
+  }
+]
+```

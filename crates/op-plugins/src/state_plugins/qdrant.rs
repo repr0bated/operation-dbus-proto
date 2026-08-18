@@ -6,7 +6,7 @@
 //! `OptimizersConfig`, and `CollectionStatus` schemas defined there.
 
 use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
@@ -28,7 +28,7 @@ const PLUGIN_DESCRIPTION: &str =
 const PLUGIN_DISPLAY_NAME: &str = "GB.Qdrant";
 
 const DEFAULT_QDRANT_HTTP_ENDPOINT: &str = "http://127.0.0.1:6333";
-const DEFAULT_QDRANT_GRPC_ENDPOINT: &str = "http://10.200.0.2:6334";
+const DEFAULT_QDRANT_GRPC_ENDPOINT: &str = "http://127.0.0.1:6334";
 
 // ── State structs with schemars::JsonSchema ──────────────────────────────────
 
@@ -139,9 +139,6 @@ pub struct QdrantState {
     pub cluster_status: Option<serde_json::Value>,
     #[serde(default)]
     pub telemetry: Option<serde_json::Value>,
-    /// Uncapped fields discovered from the authoritative Qdrant sources.
-    #[serde(default)]
-    pub inspector_fields: inspector_gadget_generated::InspectorGadgetFields,
 }
 
 // ── Method input types ───────────────────────────────────────────────────────
@@ -253,7 +250,7 @@ impl QdrantPlugin {
             .unwrap_or_else(|_| DEFAULT_QDRANT_GRPC_ENDPOINT.to_string())
     }
 
-    pub fn exemplar_state() -> QdrantState {
+    pub(crate) fn exemplar_state() -> QdrantState {
         QdrantState {
             version: "1.18.2".to_string(),
             title: "qdrant - vector search engine".to_string(),
@@ -311,254 +308,7 @@ impl QdrantPlugin {
             }],
             cluster_status: None,
             telemetry: None,
-            inspector_fields: inspector_gadget_generated::InspectorGadgetFields::default(),
         }
-    }
-
-    /// Preferred HTTP base for mutation dispatch (fabric first, then env default).
-    pub fn resolved_http_endpoint() -> String {
-        let configured = Self::http_endpoint();
-        if !configured.is_empty() {
-            return configured;
-        }
-        DEFAULT_QDRANT_HTTP_ENDPOINT.to_string()
-    }
-}
-
-/// Mutation-path dispatch for qdrant. Never echo — live HTTP or fail closed.
-pub async fn dispatch_qdrant_method(
-    method: &str,
-    args: &serde_json::Value,
-) -> Result<serde_json::Value> {
-    let base = QdrantPlugin::resolved_http_endpoint()
-        .trim_end_matches('/')
-        .to_string();
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .context("qdrant http client")?;
-
-    match method {
-        "list_collections" => {
-            let url = format!("{base}/collections");
-            let body: serde_json::Value = client
-                .get(&url)
-                .send()
-                .await
-                .with_context(|| format!("GET {url}"))?
-                .error_for_status()
-                .with_context(|| format!("GET {url} status"))?
-                .json()
-                .await
-                .context("decode /collections")?;
-            let names: Vec<String> = body
-                .pointer("/result/collections")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok(serde_json::to_value(ListCollectionsOutput {
-                collections: names,
-            })?)
-        }
-        "create_collection" => {
-            let input: CreateCollectionInput =
-                serde_json::from_value(args.clone()).context("invalid create_collection args")?;
-            let url = format!("{base}/collections/{}", input.name);
-            let resp = client
-                .put(&url)
-                .json(&serde_json::json!({ "vectors": input.vectors_config }))
-                .send()
-                .await
-                .with_context(|| format!("PUT {url}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("create_collection failed ({status}): {text}");
-            }
-            Ok(serde_json::to_value(AckOutput { success: true })?)
-        }
-        "delete_collection" => {
-            let input: DeleteCollectionInput =
-                serde_json::from_value(args.clone()).context("invalid delete_collection args")?;
-            let url = format!("{base}/collections/{}", input.name);
-            let resp = client
-                .delete(&url)
-                .send()
-                .await
-                .with_context(|| format!("DELETE {url}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("delete_collection failed ({status}): {text}");
-            }
-            Ok(serde_json::to_value(AckOutput { success: true })?)
-        }
-        "upsert_points" => {
-            let input: UpsertPointsInput =
-                serde_json::from_value(args.clone()).context("invalid upsert_points args")?;
-            let url = format!(
-                "{base}/collections/{}/points?wait=true",
-                input.collection_name
-            );
-            let resp = client
-                .put(&url)
-                .json(&serde_json::json!({ "points": input.points }))
-                .send()
-                .await
-                .with_context(|| format!("PUT {url}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("upsert_points failed ({status}): {text}");
-            }
-            Ok(serde_json::to_value(AckOutput { success: true })?)
-        }
-        "search_points" => {
-            let input: SearchPointsInput =
-                serde_json::from_value(args.clone()).context("invalid search_points args")?;
-            let url = format!("{base}/collections/{}/points/search", input.collection_name);
-            let body: serde_json::Value = client
-                .post(&url)
-                .json(&serde_json::json!({
-                    "vector": input.vector,
-                    "limit": input.limit,
-                    "with_payload": true,
-                }))
-                .send()
-                .await
-                .with_context(|| format!("POST {url}"))?
-                .error_for_status()
-                .with_context(|| format!("POST {url} status"))?
-                .json()
-                .await
-                .context("decode search")?;
-            let results = body
-                .get("result")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([]));
-            let results = results.as_array().cloned().unwrap_or_default();
-            Ok(serde_json::to_value(SearchPointsOutput { results })?)
-        }
-        "delete_points" => {
-            let input: DeletePointsInput =
-                serde_json::from_value(args.clone()).context("invalid delete_points args")?;
-            let url = format!(
-                "{base}/collections/{}/points/delete?wait=true",
-                input.collection_name
-            );
-            let resp = client
-                .post(&url)
-                .json(&serde_json::json!({ "points": input.points }))
-                .send()
-                .await
-                .with_context(|| format!("POST {url}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("delete_points failed ({status}): {text}");
-            }
-            Ok(serde_json::to_value(AckOutput { success: true })?)
-        }
-        "scroll_points" => {
-            let input: ScrollPointsInput =
-                serde_json::from_value(args.clone()).context("invalid scroll_points args")?;
-            let url = format!("{base}/collections/{}/points/scroll", input.collection_name);
-            let body: serde_json::Value = client
-                .post(&url)
-                .json(&serde_json::json!({
-                    "limit": input.limit,
-                    "with_payload": true,
-                    "with_vector": false,
-                }))
-                .send()
-                .await
-                .with_context(|| format!("POST {url}"))?
-                .error_for_status()
-                .with_context(|| format!("POST {url} status"))?
-                .json()
-                .await
-                .context("decode scroll")?;
-            let result = body.get("result").cloned().unwrap_or(serde_json::json!({}));
-            Ok(serde_json::to_value(ScrollPointsOutput {
-                points: result
-                    .get("points")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default(),
-                next_page_offset: result.get("next_page_offset").cloned(),
-            })?)
-        }
-        "create_snapshot" => {
-            let input: CreateSnapshotInput =
-                serde_json::from_value(args.clone()).context("invalid create_snapshot args")?;
-            let url = format!("{base}/collections/{}/snapshots", input.collection_name);
-            let resp = client
-                .post(&url)
-                .send()
-                .await
-                .with_context(|| format!("POST {url}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("create_snapshot failed ({status}): {text}");
-            }
-            Ok(serde_json::to_value(AckOutput { success: true })?)
-        }
-        "list_snapshots" => {
-            let input: ListSnapshotsInput =
-                serde_json::from_value(args.clone()).context("invalid list_snapshots args")?;
-            let url = format!("{base}/collections/{}/snapshots", input.collection_name);
-            let body: serde_json::Value = client
-                .get(&url)
-                .send()
-                .await
-                .with_context(|| format!("GET {url}"))?
-                .error_for_status()
-                .with_context(|| format!("GET {url} status"))?
-                .json()
-                .await
-                .context("decode snapshots")?;
-            let snapshots: Vec<String> = body
-                .get("result")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok(serde_json::to_value(ListSnapshotsOutput { snapshots })?)
-        }
-        "create_payload_index" => {
-            let input: CreatePayloadIndexInput = serde_json::from_value(args.clone())
-                .context("invalid create_payload_index args")?;
-            let url = format!(
-                "{base}/collections/{}/index?wait=true",
-                input.collection_name
-            );
-            let resp = client
-                .put(&url)
-                .json(&serde_json::json!({
-                    "field_name": input.field_name,
-                    "field_schema": input.field_schema,
-                }))
-                .send()
-                .await
-                .with_context(|| format!("PUT {url}"))?;
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                anyhow::bail!("create_payload_index failed ({status}): {text}");
-            }
-            Ok(serde_json::to_value(AckOutput { success: true })?)
-        }
-        other => Err(anyhow::anyhow!(
-            "qdrant method '{other}' has no mutation dispatch arm"
-        )),
     }
 }
 
@@ -860,67 +610,3 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
 inventory::submit! {
     crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(QdrantPlugin::new()))
 }
-
-// ── Inspector Gadget + Repomix generated candidates ───────────────────────
-// Generated against PLUGIN-RENDER-CONTRACT.md. The original plugin above is
-// preserved. Review ownership, concrete types, defaults, side effects, and
-// runtime dispatch before flattening these candidates into the live state/schema.
-#[allow(dead_code)]
-mod inspector_gadget_generated {
-    use serde::{Deserialize, Serialize};
-
-    /// Repomix-discovered fields not represented by the input plugin.
-    #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.qdrant.inspector-candidates.schema@v1"))]
-    pub struct InspectorGadgetFields {
-        /// Discovered from Repomix path `struct.rs.CollectionPath.collection_name`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.collection-name@v1"))]
-        pub collection_name: Option<String>,
-
-        /// Discovered from Repomix path `struct.rs.CollectionShardPath.shard`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.shard@v1"))]
-        pub shard: Option<String>,
-
-        /// Discovered from Repomix path `struct.rs.CollectionShardSnapshotPath.snapshot`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.snapshot@v1"))]
-        pub snapshot: Option<String>,
-
-        /// Discovered from Repomix path `struct.rs.CollectionSnapshotPath.snapshot_name`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.snapshot-name@v1"))]
-        pub snapshot_name: Option<String>,
-
-        /// Discovered from Repomix path `struct.rs.InternalUpdateResult.op_num`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.qdrant.op-num@v1"))]
-        pub op_num: Option<String>,
-    }
-
-    /// Metadata needed when promoting a generated typed method into `schema.methods`.
-    pub struct MethodCandidate {
-        pub name: &'static str,
-        pub side_effect: &'static str,
-        pub idempotent: bool,
-        pub required_capability: &'static str,
-        pub subid: &'static str,
-        pub repomix_path: &'static str,
-        pub command: &'static [&'static str],
-    }
-
-    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[];
-
-    /// Promote every generated method into the sealed plugin schema.
-    pub(super) fn register_methods(schema: &mut op_state_store::PluginSchema) {
-        use super::super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    }
-}
-
-// Promotion checklist (Fable contract):
-// 1. Move owned fields into the plugin State struct with concrete Rust types.
-// 2. Replace method placeholders with dedicated typed Input/Output fields.
-// 3. Register with method_decl_from_schemars_with_output and correct SideEffect.
-// 4. Register every subid, implement dispatch, and add schema/subid tests.
-// 5. Re-run op-plugin-lint; only then replace the original plugin file.

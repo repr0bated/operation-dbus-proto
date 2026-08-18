@@ -1,12 +1,16 @@
-//! s6d — D-Bus wrapper for the canonical S6 control-plane service.
+//! s6d — D-Bus wrapper for the canonical runit control-plane service.
 
 use anyhow::{bail, Context, Result};
 use zbus::{proxy, Connection};
 
+const RUNIT_BUS_NAME: &str = "org.opdbus.v1.Runit.Systemctl";
+const RUNIT_OBJECT_PATH: &str = "/org/opdbus/v1/plugins/runit/systemctl";
+const LEGACY_BUS_NAME: &str = "org.opdbus.v1.S6.Systemctl";
+
 #[proxy(
-    default_service = "org.opdbus.v1.S6.Systemctl",
-    default_path = "/org/opdbus/v1/plugins/s6/systemctl",
-    interface = "org.opdbus.v1.S6.Systemctl"
+    default_service = "org.opdbus.v1.Runit.Systemctl",
+    default_path = "/org/opdbus/v1/plugins/runit/systemctl",
+    interface = "org.opdbus.v1.Runit.Systemctl"
 )]
 trait S6Systemctl {
     async fn start(&self, unit: &str) -> zbus::Result<(bool, String)>;
@@ -37,10 +41,8 @@ async fn main() -> Result<()> {
 
     let conn = Connection::system()
         .await
-        .context("connect to system D-Bus for S6Systemctl")?;
-    let proxy = S6SystemctlProxy::new(&conn)
-        .await
-        .context("connect to org.opdbus.v1.S6.Systemctl")?;
+        .context("connect to system D-Bus for RunitSystemctl")?;
+    let proxy = connect_proxy(&conn).await?;
 
     match command.as_str() {
         "start" => print_result(proxy.start(&required_unit(args)?).await?)?,
@@ -74,6 +76,27 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn connect_proxy(conn: &Connection) -> Result<S6SystemctlProxy<'_>> {
+    let dbus = zbus::fdo::DBusProxy::new(conn)
+        .await
+        .context("connect to org.freedesktop.DBus")?;
+    let runit_name = zbus::names::BusName::try_from(RUNIT_BUS_NAME)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let destination = if dbus.name_has_owner(runit_name).await.unwrap_or(false) {
+        RUNIT_BUS_NAME
+    } else {
+        LEGACY_BUS_NAME
+    };
+    S6SystemctlProxy::builder(conn)
+        .destination(destination)
+        .map_err(|error| anyhow::anyhow!("{error}"))?
+        .path(RUNIT_OBJECT_PATH)
+        .map_err(|error| anyhow::anyhow!("{error}"))?
+        .build()
+        .await
+        .with_context(|| format!("connect to {destination}"))
 }
 
 fn required_unit(mut args: impl Iterator<Item = String>) -> Result<String> {

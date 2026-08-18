@@ -11,14 +11,15 @@ How to use:
 Registration is discovery-based via `inventory::submit!(PluginReg)`.
 **65 plugins are registered (active).** 3 files exist but are NOT registered (orphans).
 
-Method counts = number of `method_decl_from_schemars` declarations today.
-All existing method **inputs are typed**; all existing method **returns are untyped**
-(`{"type":"object"}`). The 4 plugins marked `*` declare methods via a path other
-than `.methods.insert` (migration must handle them specially).
+Method counts = number of schema method declarations in this curation snapshot;
+verify the source before acting on a row. Method return migration is at mixed
+stages: the Antigravity rows already use typed inputs and outputs. The 4 plugins
+marked `*` declare methods via a path other than `.methods.insert` (migration
+must handle them specially).
 
 ---
 
-## A. Registered plugins WITH methods (38) — need typed returns
+## A. Registered plugins WITH methods (40) — curate and complete typed returns
 
 | Keep? | Plugin | File | Methods | Notes |
 |-------|--------|------|--------:|-------|
@@ -53,16 +54,18 @@ than `.methods.insert` (migration must handle them specially).
 |       | proxy_server | proxy_server.rs | 3 | |
 |       | service | service.rs | 3 | |
 |       | zeroclaw | zeroclaw.rs | 3 | has real domain results |
+|       | antigravity | antigravity.rs | 3 | typed I/O; auth/usage/safety only; model catalog delegated to large_language_model |
+|       | antigravity_chat | antigravity_chat.rs | 3 | typed I/O; schema-declared bridge controls; model catalog delegated to large_language_model |
 |       | net | net.rs | 2 | |
 |       | openflow_obfuscation | openflow_obfuscation.rs | 2 | OVS; the obfuscation OpenFlow table (sibling of the xray-controlled routing table). |
 |       | pcidecl | pcidecl.rs | 2 | |
 |       | keypair | keypair.rs | 1 | |
 
-Subtotal methods: 263
+Subtotal methods: 269
 
 ---
 
-## B. Registered plugins WITH NO methods (27) — need method surfaces
+## B. Registered plugins WITH NO methods (25) — need method surfaces
 
 These declare a schema/state but expose zero callable methods. Research agents
 will propose optimal methods per plugin AFTER you curate (keep/deprecate).
@@ -71,8 +74,6 @@ will propose optimal methods per plugin AFTER you curate (keep/deprecate).
 |-------|--------|------|-------|
 |       | adc | adc.rs | |
 |       | agent_config | agent_config.rs | |
-|       | antigravity | antigravity.rs | (you thought this had methods) |
-|       | antigravity_chat | antigravity_chat.rs | |
 |       | blockchain | blockchain_plugin.rs | |
 | keep  | cognitive_mcp | cognitive_mcp.rs | Universal MCP gateway :3003. Absorbs `mcp` registry + compact toolset. Gating: local agents = full execute access; chatbot = read-only (no execute). |
 | keep  | compact_mcp | compact_mcp.rs | Compact toolset surfaced via cognitive_mcp (local-agent gated). compact_mcp server lifecycle retained. |

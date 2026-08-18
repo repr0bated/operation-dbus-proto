@@ -1,10 +1,14 @@
 //! Tonic gRPC server wiring. Registers every Assistant gateway service,
 //! reflection, health checks, the WireGuard auth interceptor, and an optional
 //! gRPC-Web layer for browser clients.
+//!
+//! Memory / soul / namespace services talk to cognitive-mcp over the session
+//! bus (`PluginV1.Call`). This process never opens Cozo RocksDB.
 
 use crate::agents::AgentServiceImpl;
 use crate::auth::wireguard_auth_interceptor;
 use crate::client::AssistantClient;
+use crate::cognitive_client::{default_cognitive_bus_address, CognitivePluginClient};
 use crate::cron::CronServiceImpl;
 use crate::memory::MemoryServiceImpl;
 use crate::models::ModelServiceImpl;
@@ -21,11 +25,7 @@ use crate::sessions::SessionServiceImpl;
 use crate::soul::SoulServiceImpl;
 use crate::tasks::TaskServiceImpl;
 use crate::transport::TransportConfig;
-use op_cognitive_mcp::cozo_shuttle::CozoGraphShuttle;
-use op_cognitive_mcp::memory_store::CognitiveMemoryStore;
-use op_cognitive_mcp::soul_memory::SoulMemoryStore;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::info;
@@ -40,8 +40,9 @@ pub struct ServerConfig {
     pub transport: TransportConfig,
     pub enable_grpc_web: bool,
     pub enable_reflection: bool,
-    /// CozoDB path backing memory / soul / namespace stores. Empty = in-memory.
-    pub cozo_db_path: String,
+    /// Session-bus address for `PluginV1.Call` on cognitive_mcp.
+    /// Default: `DBUS_SESSION_BUS_ADDRESS` or `unix:path=/run/opdbus/session-bus.sock`.
+    pub cognitive_bus_address: String,
 }
 
 impl Default for ServerConfig {
@@ -58,7 +59,7 @@ impl Default for ServerConfig {
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
                 .unwrap_or(false),
             enable_reflection: true,
-            cozo_db_path: std::env::var("OP_ASSISTANT_COZO_PATH").unwrap_or_default(),
+            cognitive_bus_address: default_cognitive_bus_address(),
         }
     }
 }
@@ -66,28 +67,18 @@ impl Default for ServerConfig {
 pub struct AssistantGrpcServer {
     cfg: ServerConfig,
     client: AssistantClient,
-    memory_store: Arc<CognitiveMemoryStore>,
-    soul_store: Arc<SoulMemoryStore>,
+    cognitive: Arc<CognitivePluginClient>,
 }
 
 impl AssistantGrpcServer {
     pub async fn new(cfg: ServerConfig) -> anyhow::Result<Self> {
         let client = AssistantClient::new(cfg.transport.clone()).await?;
-
-        let shuttle = if cfg.cozo_db_path.is_empty() {
-            CozoGraphShuttle::new_in_memory()?
-        } else {
-            CozoGraphShuttle::new_persistent(PathBuf::from(&cfg.cozo_db_path))?
-        };
-        let shuttle = Arc::new(shuttle);
-        let memory_store = Arc::new(CognitiveMemoryStore::new(shuttle.clone()).await?);
-        let soul_store = Arc::new(SoulMemoryStore::new(shuttle));
+        let cognitive = Arc::new(CognitivePluginClient::connect(&cfg.cognitive_bus_address).await?);
 
         Ok(Self {
             cfg,
             client,
-            memory_store,
-            soul_store,
+            cognitive,
         })
     }
 
@@ -95,17 +86,14 @@ impl AssistantGrpcServer {
         &self.client
     }
 
-    pub fn memory_store(&self) -> Arc<CognitiveMemoryStore> {
-        self.memory_store.clone()
-    }
-
-    pub fn soul_store(&self) -> Arc<SoulMemoryStore> {
-        self.soul_store.clone()
-    }
-
     pub async fn serve(self) -> anyhow::Result<()> {
         let addr: SocketAddr = format!("{}:{}", self.cfg.host, self.cfg.port).parse()?;
-        info!(%addr, transport = ?self.client.transport().primary_kind(), "starting op-assistant-grpc");
+        info!(
+            %addr,
+            transport = ?self.client.transport().primary_kind(),
+            cognitive_bus = %self.cfg.cognitive_bus_address,
+            "starting op-assistant-grpc"
+        );
         // Publish D-Bus interface so model calls work over the session bus.
         let _dbus_conn = crate::dbus_service::serve(Arc::new(self.client.clone())).await?;
 
@@ -130,53 +118,41 @@ impl AssistantGrpcServer {
             wireguard_auth_interceptor,
         );
         let soul = SoulServiceServer::with_interceptor(
-            SoulServiceImpl::new(self.soul_store.clone()),
+            SoulServiceImpl::from_client(self.cognitive.clone()),
             wireguard_auth_interceptor,
         );
         let namespace = NamespaceMemoryServiceServer::with_interceptor(
-            NamespaceMemoryServiceImpl::new(self.memory_store.clone(), self.soul_store.clone()),
+            NamespaceMemoryServiceImpl::from_client(self.cognitive.clone()),
             wireguard_auth_interceptor,
         );
         let memory = MemoryServiceServer::with_interceptor(
-            MemoryServiceImpl::new(self.memory_store.clone()),
+            MemoryServiceImpl::from_client(self.cognitive.clone()),
             wireguard_auth_interceptor,
         );
 
         let mut builder = Server::builder()
             .accept_http1(true)
-            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), agent))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                session,
-            ))
-            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), task))
-            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), model))
-            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), cron))
-            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), soul))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                namespace,
-            ))
-            .add_service(tower::Layer::layer(&tonic_web::GrpcWebLayer::new(), memory));
+            .add_service(tonic_web::enable(agent))
+            .add_service(tonic_web::enable(session))
+            .add_service(tonic_web::enable(task))
+            .add_service(tonic_web::enable(model))
+            .add_service(tonic_web::enable(cron))
+            .add_service(tonic_web::enable(soul))
+            .add_service(tonic_web::enable(namespace))
+            .add_service(tonic_web::enable(memory));
 
         if self.cfg.enable_reflection {
             let reflection = tonic_reflection::server::Builder::configure()
                 .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
                 .build_v1()?;
-            builder = builder.add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                reflection,
-            ));
+            builder = builder.add_service(tonic_web::enable(reflection));
         }
 
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
             .set_serving::<AgentServiceServer<AgentServiceImpl>>()
             .await;
-        builder = builder.add_service(tower::Layer::layer(
-            &tonic_web::GrpcWebLayer::new(),
-            health_service,
-        ));
+        builder = builder.add_service(tonic_web::enable(health_service));
 
         builder.serve(addr).await?;
         Ok(())
@@ -197,5 +173,13 @@ mod tests {
         let cfg = ServerConfig::default();
         assert!(cfg.port > 0);
         assert!(!cfg.host.is_empty());
+        assert!(!cfg.cognitive_bus_address.is_empty());
+        assert!(
+            cfg.cognitive_bus_address.contains("unix:path=")
+                || cfg.cognitive_bus_address.contains("unix:abstract=")
+                || cfg.cognitive_bus_address.contains("tcp:"),
+            "cognitive bus address should be a D-Bus socket, got {}",
+            cfg.cognitive_bus_address
+        );
     }
 }

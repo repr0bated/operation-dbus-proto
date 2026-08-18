@@ -42,7 +42,6 @@ pub mod server;
 pub mod shared_socket;
 pub mod tracing;
 pub mod zeroclaw_object_blob;
-mod zeroclaw_runtime;
 
 // Re-export main types
 pub use grpc_client::{
@@ -155,9 +154,7 @@ mod oracle_assertion_crate_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn corrupted_store_rejects_unknown_decoy_key_at_validate() {
-        crate::oracle_assertion::tests::corrupted_store_rejects_unknown_decoy_key_at_validate_impl(
-        )
-        .await;
+        crate::oracle_assertion::tests::corrupted_store_rejects_unknown_decoy_key_at_validate_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -211,8 +208,7 @@ mod oracle_assertion_crate_tests {
 mod interceptor_crate_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn assertion_present_valid_inserts_human_principal_identity() {
-        crate::interceptor::tests::assertion_present_valid_inserts_human_principal_identity_impl()
-            .await;
+        crate::interceptor::tests::assertion_present_valid_inserts_human_principal_identity_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -232,8 +228,7 @@ mod interceptor_crate_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn duplicate_assertion_metadata_values_reject_malformed() {
-        crate::interceptor::tests::duplicate_assertion_metadata_values_reject_malformed_impl()
-            .await;
+        crate::interceptor::tests::duplicate_assertion_metadata_values_reject_malformed_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -248,14 +243,12 @@ mod interceptor_crate_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn human_footprint_missing_grant_denies_capability_gate() {
-        crate::interceptor::tests::human_footprint_missing_grant_denies_capability_gate_impl()
-            .await;
+        crate::interceptor::tests::human_footprint_missing_grant_denies_capability_gate_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn human_identity_shadows_ghostbridge_for_capability_gate() {
-        crate::interceptor::tests::human_identity_shadows_ghostbridge_for_capability_gate_impl()
-            .await;
+        crate::interceptor::tests::human_identity_shadows_ghostbridge_for_capability_gate_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -278,3 +271,4 @@ mod interceptor_crate_tests {
         crate::interceptor::tests::assertion_bad_signature_does_not_insert_ghostbridge_impl().await;
     }
 }
+

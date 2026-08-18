@@ -73,8 +73,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     if let Err(e) = ws_sender
         .send(Message::Text(
             simd_json::to_string(&welcome)
-                .expect("websocket message serialization should not fail")
-                .into(),
+                .expect("websocket message serialization should not fail"),
         ))
         .await
     {
@@ -90,7 +89,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Task to send messages from session channel to WebSocket
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = session_rx.recv().await {
-            if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+            if ws_sender.send(Message::Text(msg)).await.is_err() {
                 break;
             }
         }
@@ -118,7 +117,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 .await;
                             continue;
                         }
-                        _ => text.to_string(), // Treat as plain text
+                        _ => text.clone(), // Treat as plain text
                     };
 
                     if message_text.trim().is_empty() {

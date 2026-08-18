@@ -100,28 +100,6 @@ pub struct NamedDevice {
     pub device: Device,
 }
 
-impl NamedDevice {
-    /// Reject every device this control plane refuses to create, naming each one
-    /// so the operator sees which device on which instance is the problem.
-    /// Fail-closed: one banned device rejects the whole apply rather than
-    /// silently dropping it, since a partially-applied device set is worse than
-    /// a refused one.
-    pub fn enforce_device_policy(devices: &[NamedDevice]) -> anyhow::Result<()> {
-        let denied: Vec<String> = devices
-            .iter()
-            .filter_map(|nd| {
-                nd.device
-                    .policy_denied_reason()
-                    .map(|why| format!("{} ({}): {}", nd.name, nd.device.type_str(), why))
-            })
-            .collect();
-        if denied.is_empty() {
-            return Ok(());
-        }
-        anyhow::bail!("device policy violation: {}", denied.join("; "))
-    }
-}
-
 /// A single Incus device, tagged by its `type` key.
 ///
 /// One variant per official Incus device type. `nic`, `gpu` and `infiniband`
@@ -608,34 +586,6 @@ impl Device {
         }
     }
 
-    /// Why this control plane refuses to create the device, if it does.
-    ///
-    /// Containers here are NIC-less and proxy-less by design: inbound reaches a
-    /// container over the bind-mounted ghostbridge UDS (published by
-    /// `op-uds-relay`), never a per-port host forward. Both banned types quietly
-    /// undo that — a `proxy` reintroduces a TCP path that bypasses the shared
-    /// socket and its identity gate, and a `nic` puts the container back on the
-    /// wire. They are cheap to add by hand and invisible afterwards, which is
-    /// how the fleet drifted back to per-port forwards; refusing them here makes
-    /// the control plane the thing that says no.
-    ///
-    /// This gates *creation through this plugin*. Devices added out-of-band with
-    /// `incus config device add` are reported by the audit, not blocked here.
-    pub fn policy_denied_reason(&self) -> Option<&'static str> {
-        match self {
-            Device::Proxy(_) => Some(
-                "proxy devices are banned: they reintroduce a per-port host TCP forward that \
-                 bypasses the ghostbridge UDS and its identity gate — publish the service with \
-                 op-uds-relay over /run/ghostbridge instead",
-            ),
-            Device::Nic(_) => Some(
-                "nic devices are banned: containers are NIC-less by design — inbound arrives \
-                 over the bind-mounted ghostbridge UDS, not an address on the wire",
-            ),
-            _ => None,
-        }
-    }
-
     /// Convert to Incus's `map[string]string` form (every value a string),
     /// including the `type` key. This is exactly what the REST API expects.
     pub fn to_incus_map(&self) -> BTreeMap<String, String> {
@@ -665,66 +615,6 @@ impl Device {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-
-    fn named(name: &str, map: BTreeMap<String, String>) -> NamedDevice {
-        NamedDevice {
-            name: name.to_string(),
-            device: Device::from_incus_map(&map).expect("parse device"),
-        }
-    }
-
-    fn proxy_map() -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("type".to_string(), "proxy".to_string()),
-            ("listen".to_string(), "tcp:0.0.0.0:8444".to_string()),
-            ("connect".to_string(), "tcp:127.0.0.1:8444".to_string()),
-        ])
-    }
-
-    #[test]
-    fn device_policy_bans_proxy_and_nic() {
-        let disk = BTreeMap::from([
-            ("type".to_string(), "disk".to_string()),
-            (
-                "path".to_string(),
-                "/opt/run-mounts/ghostbridge".to_string(),
-            ),
-            ("source".to_string(), "/run/ghostbridge".to_string()),
-        ]);
-        // The sanctioned shape: a bind-mounted socket dir, no proxy, no nic.
-        NamedDevice::enforce_device_policy(&[named("ghostbridge-socket", disk.clone())])
-            .expect("disk devices stay allowed");
-
-        let err = NamedDevice::enforce_device_policy(&[named("proxy8444", proxy_map())])
-            .expect_err("proxy must be refused");
-        let msg = err.to_string();
-        assert!(msg.contains("proxy8444"), "names the device: {msg}");
-        assert!(msg.contains("op-uds-relay"), "points at the fix: {msg}");
-
-        let nic = BTreeMap::from([
-            ("type".to_string(), "nic".to_string()),
-            ("nictype".to_string(), "bridged".to_string()),
-            ("parent".to_string(), "ovsbr0".to_string()),
-        ]);
-        assert!(NamedDevice::enforce_device_policy(&[named("eth0", nic)]).is_err());
-    }
-
-    /// One banned device fails the whole set — no partial apply.
-    #[test]
-    fn device_policy_reports_every_violation_at_once() {
-        let nic = BTreeMap::from([
-            ("type".to_string(), "nic".to_string()),
-            ("nictype".to_string(), "bridged".to_string()),
-            ("parent".to_string(), "ovsbr0".to_string()),
-        ]);
-        let err = NamedDevice::enforce_device_policy(&[
-            named("proxy8444", proxy_map()),
-            named("eth0", nic),
-        ])
-        .expect_err("both refused");
-        let msg = err.to_string();
-        assert!(msg.contains("proxy8444") && msg.contains("eth0"), "{msg}");
-    }
 
     #[test]
     fn proxy_round_trips_through_string_map() {

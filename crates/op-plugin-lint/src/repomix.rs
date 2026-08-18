@@ -18,10 +18,6 @@
 //! | XML Schema | `.xsd` | `xsd.` |
 //! | CSV | `.csv` | `csv.` (header columns) |
 //! | Python | `.py` (classes / pydantic fields) | `py.` |
-//! | TypeScript | `.ts` / `.tsx` (interfaces, types, classes, functions) | `ts.` |
-//! | Go | `.go` (structs, interfaces, JSON fields, Cobra commands) | `go.` / `cmd.` |
-//! | XML | `.xml` (D-Bus interfaces and OSCAL metaschemas) | `xml.` |
-//! | XML | `.xml` (D-Bus interfaces and OSCAL metaschema definitions) | `xml.` |
 
 use crate::gadget::introspect_json_paths;
 use anyhow::{bail, Context, Result};
@@ -52,9 +48,6 @@ pub enum StructuredKind {
     Xsd,
     Csv,
     Python,
-    TypeScript,
-    Go,
-    Xml,
 }
 
 impl StructuredKind {
@@ -77,9 +70,6 @@ impl StructuredKind {
             Self::Xsd => "xsd",
             Self::Csv => "csv",
             Self::Python => "python",
-            Self::TypeScript => "typescript",
-            Self::Go => "go",
-            Self::Xml => "xml",
         }
     }
 }
@@ -200,36 +190,13 @@ fn extract_structured(file_path: &str, body: &str) -> Option<(StructuredKind, Ve
     }
     if lower.ends_with(".py") {
         // Skip unit tests — schema surface is production modules.
-        if lower.ends_with("_test.py") || lower.ends_with("/test_") || lower.contains("/tests/") {
+        if lower.ends_with("_test.py") || lower.ends_with("/test_") || lower.contains("/tests/")
+        {
             return None;
         }
         return Some((
             StructuredKind::Python,
             extract_python_element_paths(file_path, body),
-        ));
-    }
-    if lower.ends_with(".ts") || lower.ends_with(".tsx") {
-        if lower.ends_with(".test.ts")
-            || lower.ends_with(".test.tsx")
-            || lower.ends_with(".spec.ts")
-            || lower.ends_with(".spec.tsx")
-            || lower.contains("/tests/")
-            || lower.contains("/__tests__/")
-        {
-            return None;
-        }
-        return Some((
-            StructuredKind::TypeScript,
-            extract_typescript_element_paths(file_path, body),
-        ));
-    }
-    if lower.ends_with(".go") {
-        if lower.ends_with("_test.go") || lower.contains("/testdata/") {
-            return None;
-        }
-        return Some((
-            StructuredKind::Go,
-            extract_go_element_paths(file_path, body),
         ));
     }
     if lower.ends_with(".toml") {
@@ -239,12 +206,9 @@ fn extract_structured(file_path: &str, body: &str) -> Option<(StructuredKind, Ve
         return Some(extract_yaml_or_openapi(file_path, body));
     }
     if lower.ends_with(".avsc") {
-        return Some((
-            StructuredKind::Avro,
-            extract_jsonish(file_path, body, "avro"),
-        ));
+        return Some((StructuredKind::Avro, extract_jsonish(file_path, body, "avro")));
     }
-    if lower.ends_with(".json") || lower.ends_with(".ovsschema") {
+    if lower.ends_with(".json") {
         return Some(extract_json_family(file_path, body));
     }
     if lower.ends_with(".sql") {
@@ -282,12 +246,6 @@ fn extract_structured(file_path: &str, body: &str) -> Option<(StructuredKind, Ve
     }
     if lower.ends_with(".xsd") {
         return Some((StructuredKind::Xsd, extract_xsd_paths(file_path, body)));
-    }
-    if lower.ends_with(".xml") {
-        return Some((
-            StructuredKind::Xml,
-            extract_xml_contract_paths(file_path, body),
-        ));
     }
     if lower.ends_with(".csv") {
         return Some((StructuredKind::Csv, extract_csv_paths(file_path, body)));
@@ -333,10 +291,6 @@ fn file_key(file_path: &str) -> String {
         ".gql",
         ".py",
         ".rs",
-        ".tsx",
-        ".ts",
-        ".go",
-        ".xml",
     ];
     let mut stem = file_path;
     for ext in strip {
@@ -350,132 +304,6 @@ fn file_key(file_path: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(".")
-}
-
-fn extract_typescript_element_paths(file_path: &str, body: &str) -> Vec<String> {
-    let base = format!("ts.{}", file_key(file_path));
-    let mut out = BTreeSet::new();
-    out.insert(base.clone());
-
-    let declaration_re = re(
-        r"(?m)(?:export\s+)?(?:declare\s+)?(interface|class|type|enum)\s+([A-Za-z_$][\w$]*)[^\{=]*[\{=]",
-    );
-    let property_re = re(r"(?m)^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:\s*([^;\n,}]+)[;,]?");
-    let method_re = re(r"(?m)^\s*([A-Za-z_$][\w$]*)\??\s*\([^\n)]*\)\s*:\s*([^;\n}]+)");
-    let function_re = re(r"(?m)(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(");
-
-    let declarations = declaration_re
-        .captures_iter(body)
-        .filter_map(|capture| {
-            Some((
-                capture.get(0)?.start(),
-                capture.get(1)?.as_str().to_ascii_lowercase(),
-                capture.get(2)?.as_str().to_string(),
-            ))
-        })
-        .collect::<Vec<_>>();
-
-    for (index, (start, kind, name)) in declarations.iter().enumerate() {
-        let end = declarations
-            .get(index + 1)
-            .map(|(next, _, _)| *next)
-            .unwrap_or(body.len());
-        let block = &body[*start..end];
-        let declaration = format!("{base}.{kind}.{name}");
-        out.insert(declaration.clone());
-        for capture in property_re.captures_iter(block) {
-            if let Some(field) = capture.get(1) {
-                out.insert(format!("{declaration}.field.{}", field.as_str()));
-            }
-        }
-        for capture in method_re.captures_iter(block) {
-            if let Some(method) = capture.get(1) {
-                out.insert(format!("{declaration}.method.{}", method.as_str()));
-            }
-        }
-    }
-    for capture in function_re.captures_iter(body) {
-        if let Some(function) = capture.get(1) {
-            out.insert(format!("{base}.function.{}", function.as_str()));
-        }
-    }
-    out.into_iter().collect()
-}
-
-fn extract_go_element_paths(file_path: &str, body: &str) -> Vec<String> {
-    let base = format!("go.{}", file_key(file_path));
-    let mut out = BTreeSet::new();
-    out.insert(base.clone());
-
-    let type_re = re(r"(?m)^type\s+([A-Za-z_][\w]*)\s+(struct|interface)\s*\{");
-    let field_re = re(r#"(?m)^\s*([A-Z][A-Za-z0-9_]*)\s+[^\n`]+(?:`json:\"([^\",]+)[^`]*`)?"#);
-    let method_re = re(r"(?m)^\s*([A-Z][A-Za-z0-9_]*)\s*\([^\n)]*\)");
-    let declarations = type_re
-        .captures_iter(body)
-        .filter_map(|capture| {
-            Some((
-                capture.get(0)?.start(),
-                capture.get(1)?.as_str().to_string(),
-                capture.get(2)?.as_str().to_string(),
-            ))
-        })
-        .collect::<Vec<_>>();
-    for (index, (start, name, kind)) in declarations.iter().enumerate() {
-        let end = declarations
-            .get(index + 1)
-            .map(|(next, _, _)| *next)
-            .unwrap_or(body.len());
-        let block = &body[*start..end];
-        let declaration = format!("{base}.{kind}.{name}");
-        out.insert(declaration.clone());
-        if kind == "struct" {
-            for capture in field_re.captures_iter(block) {
-                let Some(field) = capture.get(1) else {
-                    continue;
-                };
-                let json_name = capture
-                    .get(2)
-                    .map(|value| value.as_str())
-                    .filter(|value| *value != "-")
-                    .unwrap_or_else(|| field.as_str());
-                out.insert(format!("{declaration}.field.{json_name}"));
-            }
-        } else {
-            for capture in method_re.captures_iter(block) {
-                if let Some(method) = capture.get(1) {
-                    out.insert(format!("{declaration}.method.{}", method.as_str()));
-                }
-            }
-        }
-    }
-
-    let cobra_use_re = re(r#"(?m)\bUse:\s*\"([a-zA-Z0-9_-]+)(?:\s+[^\"]*)?\""#);
-    for capture in cobra_use_re.captures_iter(body) {
-        if let Some(command) = capture.get(1) {
-            out.insert(format!("cmd.{}", command.as_str().replace('-', "_")));
-        }
-    }
-    out.into_iter().collect()
-}
-
-fn extract_xml_contract_paths(file_path: &str, body: &str) -> Vec<String> {
-    let base = format!("xml.{}", file_key(file_path));
-    let mut out = BTreeSet::new();
-    out.insert(base.clone());
-    let tagged_name = re(
-        r#"<(interface|method|property|signal|define-assembly|define-field|define-flag)\b[^>]*\bname=[\"']([^\"']+)[\"']"#,
-    );
-    for capture in tagged_name.captures_iter(body) {
-        let Some(kind) = capture.get(1) else { continue };
-        let Some(name) = capture.get(2) else { continue };
-        let kind = match kind.as_str() {
-            "define-assembly" => "assembly",
-            "define-field" | "define-flag" => "field",
-            other => other,
-        };
-        out.insert(format!("{base}.{kind}.{}", sanitize_path(name.as_str())));
-    }
-    out.into_iter().collect()
 }
 
 /// Extract `class Name` and annotated attributes (`field: Type`) from Python.
@@ -505,7 +333,10 @@ fn extract_python_element_paths(file_path: &str, body: &str) -> Vec<String> {
     }
 
     for (i, (start, name)) in class_iter.iter().enumerate() {
-        let end = class_iter.get(i + 1).map(|(s, _)| *s).unwrap_or(body.len());
+        let end = class_iter
+            .get(i + 1)
+            .map(|(s, _)| *s)
+            .unwrap_or(body.len());
         let block = &body[*start..end];
         let cpath = format!("{base}.class.{name}");
         out.insert(cpath.clone());
@@ -603,9 +434,6 @@ fn extract_json_family(file_path: &str, body: &str) -> (StructuredKind, Vec<Stri
             vec![format!("json.{}.<parse_error>", file_key(file_path))],
         );
     };
-    if file_path.to_ascii_lowercase().ends_with(".ovsschema") {
-        return (StructuredKind::Json, extract_ovsdb_schema(file_path, &json));
-    }
     if is_openapi(&json) {
         (
             StructuredKind::OpenApi,
@@ -621,26 +449,6 @@ fn extract_json_family(file_path: &str, body: &str) -> (StructuredKind, Vec<Stri
     } else {
         (StructuredKind::Json, prefix_paths("json", file_path, &json))
     }
-}
-
-/// Reduce an OVSDB schema to its source-owned typed state surface.  Generic
-/// JSON walking mostly reports implementation metadata (`type`, `min`, `max`)
-/// and loses the table/column relationship that a plugin UI needs.
-fn extract_ovsdb_schema(file_path: &str, json: &JsonValue) -> Vec<String> {
-    let base = format!("json.{}", file_key(file_path));
-    let mut out = BTreeSet::new();
-    if let Some(tables) = json.get("tables").and_then(JsonValue::as_object) {
-        for (table_name, table) in tables {
-            let table_base = format!("{base}.table.{table_name}");
-            out.insert(table_base.clone());
-            if let Some(columns) = table.get("columns").and_then(JsonValue::as_object) {
-                for column_name in columns.keys() {
-                    out.insert(format!("{table_base}.field.{column_name}"));
-                }
-            }
-        }
-    }
-    out.into_iter().collect()
 }
 
 fn extract_jsonish(file_path: &str, body: &str, fmt: &str) -> Vec<String> {
@@ -683,8 +491,9 @@ fn extract_sql_paths(file_path: &str, body: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
     out.insert(base.clone());
 
-    let create_table =
-        re(r"(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\w+\.)?(\w+)\s*\((.*?)\)");
+    let create_table = re(
+        r"(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\w+\.)?(\w+)\s*\((.*?)\)",
+    );
     let create_type = re(r"(?is)CREATE\s+TYPE\s+(?:\w+\.)?(\w+)");
     let create_view = re(r"(?is)CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:\w+\.)?(\w+)");
     // Type token stops at whitespace/comma so we don't swallow following columns.
@@ -883,12 +692,7 @@ fn extract_prisma_paths(file_path: &str, body: &str) -> Vec<String> {
 // ── Thrift / Cap'n / FlatBuffers / XSD / CSV ─────────────────────────────────
 
 fn extract_thrift_paths(file_path: &str, body: &str) -> Vec<String> {
-    extract_keyword_blocks(
-        file_path,
-        body,
-        "thrift",
-        &["struct", "enum", "service", "union"],
-    )
+    extract_keyword_blocks(file_path, body, "thrift", &["struct", "enum", "service", "union"])
 }
 
 fn extract_capnp_paths(file_path: &str, body: &str) -> Vec<String> {
@@ -896,12 +700,7 @@ fn extract_capnp_paths(file_path: &str, body: &str) -> Vec<String> {
 }
 
 fn extract_fbs_paths(file_path: &str, body: &str) -> Vec<String> {
-    extract_keyword_blocks(
-        file_path,
-        body,
-        "fbs",
-        &["table", "struct", "enum", "union"],
-    )
+    extract_keyword_blocks(file_path, body, "fbs", &["table", "struct", "enum", "union"])
 }
 
 fn extract_keyword_blocks(
@@ -935,9 +734,7 @@ fn extract_xsd_paths(file_path: &str, body: &str) -> Vec<String> {
     let base = format!("xsd.{}", file_key(file_path));
     let mut out = BTreeSet::new();
     out.insert(base.clone());
-    let names = re(
-        r#"(?i)<(?:xs:|xsd:)?(element|complexType|simpleType|attribute)\s+[^>]*name\s*=\s*"([^"]+)""#,
-    );
+    let names = re(r#"(?i)<(?:xs:|xsd:)?(element|complexType|simpleType|attribute)\s+[^>]*name\s*=\s*"([^"]+)""#);
     for cap in names.captures_iter(body) {
         let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("element");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -1180,38 +977,5 @@ paths:
             .element_paths
             .iter()
             .any(|p| p.contains("openapi.") && p.contains("paths")));
-    }
-
-    #[test]
-    fn extracts_typescript_interfaces_and_functions() {
-        let xml = r#"
-<file_summary>Repomix pack</file_summary>
-<file path="packages/core/src/spec.ts">
-export interface RenderSpec {
-  readonly renderer?: string;
-  components: Component[];
-  validate(input: unknown): ValidationResult;
-}
-export type Action = {
-  name: string;
-  payload?: Record&lt;string, unknown&gt;;
-};
-export function renderSchema(spec: RenderSpec): string { return ""; }
-</file>
-"#;
-        let surface = introspect_repomix(Path::new("repomix-output.xml"), xml).unwrap();
-        assert_eq!(surface.file_count("typescript"), 1);
-        assert!(surface
-            .element_paths
-            .iter()
-            .any(|p| p.ends_with("interface.RenderSpec.field.components")));
-        assert!(surface
-            .element_paths
-            .iter()
-            .any(|p| p.ends_with("interface.RenderSpec.method.validate")));
-        assert!(surface
-            .element_paths
-            .iter()
-            .any(|p| p.ends_with("function.renderSchema")));
     }
 }

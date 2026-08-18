@@ -54,20 +54,20 @@ pub struct ModelsQuery {
 
 /// GET /api/llm/status - Get current LLM status
 pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl IntoResponse {
-    let _ = state;
-    let selection = crate::zeroclaw_routes::selection();
+    let status = state.chat_manager.get_status().await;
 
     Json(LlmStatusResponse {
-        provider: selection
-            .as_ref()
-            .map(|value| value.provider.clone())
-            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
-        model: selection
-            .as_ref()
-            .map(|value| value.model.clone())
+        provider: status["provider"].as_str().unwrap_or("unknown").to_string(),
+        model: status["model"].as_str().unwrap_or("").to_string(),
+        model_non_sandboxed: state.chat_manager.current_model_non_sandboxed().await,
+        available_providers: status["available_providers"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
-        model_non_sandboxed: false,
-        available_providers: selection.map(|value| value.providers).unwrap_or_default(),
     })
 }
 
@@ -76,7 +76,7 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
 /// The zeroclaw plugin is the single source of truth: its live state
 /// is projected verbatim at `/org/opdbus/v1/plugins/zeroclaw`. We read it from
 /// the SHM state tree and surface each route as a selectable model.
-async fn models_from_zeroclaw(_state: &AppState) -> Option<Vec<ModelInfo>> {
+async fn models_from_zeroclaw(state: &AppState) -> Option<Vec<ModelInfo>> {
     let routes = crate::zeroclaw_routes::routes()?;
 
     let models: Vec<ModelInfo> = routes
@@ -123,7 +123,7 @@ pub async fn get_models(
         // The zeroclaw plugin projection is the default source of truth for the combined model list.
         if let Some(models) = models_from_zeroclaw(&state).await {
             return Json(ModelsResponse {
-                provider: "zeroclaw".to_string(),
+                provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),
                 models,
             })
             .into_response();
@@ -132,18 +132,20 @@ pub async fn get_models(
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(simd_json::json!({
-                "error": "Zeroclaw model route projection is unavailable",
-                "provider": "zeroclaw",
+                "error": "tched_router model route catalog is unavailable",
+                "provider": crate::zeroclaw_routes::ROUTER_PLUGIN_ID,
                 "models": []
             })),
         )
             .into_response();
     };
 
-    if provider_str == "zeroclaw" {
+    if provider_str == crate::zeroclaw_routes::ROUTER_PLUGIN_ID
+        || provider_str == crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID
+    {
         if let Some(models) = models_from_zeroclaw(&state).await {
             return Json(ModelsResponse {
-                provider: "zeroclaw".to_string(),
+                provider: crate::zeroclaw_routes::ROUTER_PLUGIN_ID.to_string(),
                 models,
             })
             .into_response();

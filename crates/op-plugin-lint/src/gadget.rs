@@ -130,8 +130,7 @@ pub fn declared_field_paths_multi(sources: &[&str]) -> Result<BTreeSet<String>> 
     let mut root_candidates: Vec<String> = Vec::new();
 
     for (i, source) in sources.iter().enumerate() {
-        let file =
-            parse_file(source).with_context(|| format!("parse source #{i} for field paths"))?;
+        let file = parse_file(source).with_context(|| format!("parse source #{i} for field paths"))?;
         for item in &file.items {
             let Item::Struct(st) = item else { continue };
             if !st.attrs.iter().any(|a| {

@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let proto = "proto/waypipe_tunnel.proto";
 
-    tonic_prost_build::configure()
+    tonic_build::configure()
         .build_server(true)
         .build_client(true)
         .file_descriptor_set_path(out_dir.join("waypipe_descriptor.bin"))

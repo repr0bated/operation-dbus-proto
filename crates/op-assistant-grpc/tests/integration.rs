@@ -1,7 +1,8 @@
 //! Integration tests for op-assistant-grpc.
 //!
 //! These hit the in-process CognitiveMemoryStore + SoulMemoryStore directly
-//! through the service implementations; no live Assistant gateway required.
+//! through the service implementations (in-memory Cozo). Production serve
+//! uses D-Bus PluginV1.Call to cognitive-mcp instead — see cognitive_client.rs.
 
 use op_assistant_grpc::memory::{ensure_namespace, MemoryServiceImpl};
 use op_assistant_grpc::namespace::NamespaceMemoryServiceImpl;

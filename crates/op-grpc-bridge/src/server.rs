@@ -3,7 +3,7 @@
 //! Serves the plugin-owned schema JSON on:
 //!   - host native gRPC over Unix socket `/run/opdbus/grpc.sock`
 //!   - shared container UDS `/run/ghostbridge/container.sock` (same routes)
-//!   - one TCP door: tonic-web on `:8090` (HTTP + native gRPC demux)
+//!   - gRPC + gRPC-Web on TCP `0.0.0.0:8090` (configurable by environment)
 //!
 //! The schema itself is never generated here; it is read from the plugin's
 //! sealed blob in the SHM catalog (`/dev/shm/opdbus/plugin-blobs`).
@@ -14,14 +14,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_stream::stream;
-use axum::body::Body;
-use axum::extract::{Request, State};
-use axum::http::{header, Response, StatusCode};
-use axum::routing::get;
 use axum::Router;
-use hyper::client::conn::http1;
-use hyper_util::rt::TokioIo;
-use tokio::net::UnixStream;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request as TonicRequest, Response as TonicResponse, Status};
 use tower_http::cors::{Any, CorsLayer};
@@ -33,9 +26,7 @@ use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
 use crate::schema_router::SchemaRouter;
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
-use crate::grpc_server::{
-    attach_cognitive_tool_service, build_operation_routes, init_cognitive_mcp,
-};
+use crate::grpc_server::build_operation_routes;
 use crate::proto::zeroclaw::{
     zeroclaw_service_server::{ZeroclawService, ZeroclawServiceServer},
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
@@ -45,16 +36,12 @@ use crate::proto::zeroclaw::{
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
 /// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
 const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
-/// EMQX's MQTT-over-WebSocket payload socket. `/mqtt` on the one TCP door is
-/// reverse-upgraded through this socket; port 8083 remains container-internal.
-const DEFAULT_EMQX_BROKER_SOCKET: &str = op_plugins::state_plugins::emqx::BROKER_SOCKET;
-// One TCP door: tonic-web on :8090 demuxes HTTP and native gRPC.
-// CognitiveToolService is mounted on that same surface (and the sockets).
-// Bind loopback only. Mesh/svc0 publications forward to this listener so every
-// client traverses the same HTTP/gRPC/MQTT demux and boot does not depend on
-// netclient creating the mesh address first.
-// Live override: ZEROCLAW_BIND_ADDR / deploy/runit/op-grpc-bridge/run.
-const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8090";
+// NOTE: 50052 deliberately excluded — already owned by op-cognitive-mcp
+// (COGNITIVE_MCP_GRPC_BIND=10.200.0.2:50052; 0.0.0.0:50052 here would
+// collide with that, since 0.0.0.0 covers every interface including
+// 10.200.0.2 — confirmed live via "Address already in use (os error 98)"
+// crash-looping the service before this was narrowed).
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090,0.0.0.0:50051";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
 /// the catalog IS the plugin); a file path is still accepted for tests and
@@ -72,9 +59,8 @@ pub struct ServerConfig {
     /// `/run/ghostbridge/container.sock`). Served with the same route set.
     /// When equal to `unix_socket`, only one listener is opened.
     pub shared_socket: PathBuf,
-    /// EMQX MQTT/WebSocket payload UDS used by the `/mqtt` demux on `:8090`.
-    pub emqx_broker_socket: PathBuf,
     pub bind_addr: String,
+    pub tls_bind_addr: Option<String>,
     pub tls_identity: Option<Identity>,
 }
 
@@ -85,8 +71,8 @@ impl Default for ServerConfig {
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
-            emqx_broker_socket: PathBuf::from(DEFAULT_EMQX_BROKER_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
+            tls_bind_addr: None,
             tls_identity: None,
         }
     }
@@ -111,60 +97,22 @@ impl ServerConfig {
                 std::env::var("GHOSTBRIDGE_SOCKET_PATH")
                     .unwrap_or_else(|_| DEFAULT_SHARED_SOCKET.to_string()),
             ),
-            emqx_broker_socket: PathBuf::from(
-                std::env::var("EMQX_BROKER_SOCKET")
-                    .unwrap_or_else(|_| DEFAULT_EMQX_BROKER_SOCKET.to_string()),
-            ),
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
-                .or_else(|| {
-                    std::env::var("GRPC_BIND")
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                })
+                .or_else(|| std::env::var("GRPC_BIND").ok().filter(|s| !s.trim().is_empty()))
                 .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string()),
+            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
             tls_identity: Self::load_tls_identity(),
         }
     }
 
-    /// Load the TLS identity used by the primary TCP listener.
-    ///
-    /// Env: `ZEROCLAW_TLS_CERT_FILE`/`ZEROCLAW_TLS_KEY_FILE` (preferred) or
-    /// `ZEROCLAW_TLS_CERT`/`ZEROCLAW_TLS_KEY` (PEM). If neither pair is set,
-    /// generate a self-signed development identity. Production runit wiring
-    /// always supplies stable certificate files.
+    /// Load TLS identity from env vars or auto-generate self-signed.
+    /// Env: `ZEROCLAW_TLS_CERT`, `ZEROCLAW_TLS_KEY` (PEM).
+    /// If both absent, generates one via rcgen (localhost, ghostbridge.tech, 3tched.com).
     fn load_tls_identity() -> Option<Identity> {
-        let cert_file = std::env::var("ZEROCLAW_TLS_CERT_FILE")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let key_file = std::env::var("ZEROCLAW_TLS_KEY_FILE")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-
-        match (cert_file, key_file) {
-            (Some(cert_path), Some(key_path)) => {
-                let cert = std::fs::read(&cert_path).unwrap_or_else(|error| {
-                    panic!("failed to read TLS certificate {cert_path}: {error}")
-                });
-                let key = std::fs::read(&key_path).unwrap_or_else(|error| {
-                    panic!("failed to read TLS private key {key_path}: {error}")
-                });
-                tracing::info!(
-                    cert_path,
-                    key_path,
-                    "TLS identity loaded from certificate files"
-                );
-                return Some(Identity::from_pem(cert, key));
-            }
-            (Some(_), None) | (None, Some(_)) => {
-                panic!(
-                    "ZEROCLAW_TLS_CERT_FILE and ZEROCLAW_TLS_KEY_FILE must be configured together"
-                );
-            }
-            (None, None) => {}
-        }
-
         let cert_pem = std::env::var("ZEROCLAW_TLS_CERT").ok();
         let key_pem = std::env::var("ZEROCLAW_TLS_KEY").ok();
 
@@ -175,10 +123,7 @@ impl ServerConfig {
                 );
                 Some(Identity::from_pem(cert, key))
             }
-            (Some(_), None) | (None, Some(_)) => {
-                panic!("ZEROCLAW_TLS_CERT and ZEROCLAW_TLS_KEY must be configured together");
-            }
-            (None, None) => {
+            _ => {
                 let ck = rcgen::generate_simple_self_signed(vec![
                     "localhost".to_string(),
                     "ghostbridge.tech".to_string(),
@@ -219,7 +164,7 @@ impl ZeroclawService for ZeroclawGrpcService {
         let mut response = TonicResponse::new(SchemaResponse {
             schema_json,
             trace_id: context.trace_id.clone(),
-            footprint: context.genesis.clone().unwrap_or_default(),
+            footprint: context.footprint.clone(),
         });
         inject_trace_metadata(&mut response, &context);
         Ok(response)
@@ -253,17 +198,13 @@ impl ZeroclawService for ZeroclawGrpcService {
 }
 
 fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceContext) {
-    if let Ok(trace_id) = context.trace_id.parse() {
+    if let (Ok(trace_id), Ok(footprint)) = (context.trace_id.parse(), context.footprint.parse()) {
         response
             .metadata_mut()
             .insert("x-ghostbridge-trace-id", trace_id);
-    }
-    if let Some(genesis) = context.genesis.as_deref() {
-        if let Ok(genesis) = genesis.parse() {
-            response
-                .metadata_mut()
-                .insert("x-ghostbridge-genesis", genesis);
-        }
+        response
+            .metadata_mut()
+            .insert("x-ghostbridge-footprint", footprint);
     }
 }
 
@@ -287,114 +228,10 @@ fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic
     build_operation_routes(server).add_service(zeroclaw_svc)
 }
 
-#[derive(Clone)]
-struct MqttProxyState {
-    broker_socket: PathBuf,
-}
-
-fn mqtt_proxy_error(status: StatusCode, message: &'static str) -> Response<Body> {
-    Response::builder()
-        .status(status)
-        .body(Body::from(message))
-        .expect("static MQTT proxy error response")
-}
-
-fn header_has_token(
-    headers: &axum::http::HeaderMap,
-    name: header::HeaderName,
-    token: &str,
-) -> bool {
-    headers
-        .get_all(name)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .any(|value| value.trim().eq_ignore_ascii_case(token))
-}
-
-/// Reverse-proxy an MQTT-over-WebSocket upgrade from the one TCP door to the
-/// broker's Unix socket. EMQX performs the real HTTP handshake; after both
-/// peers return `101`, the bridge copies the upgraded streams as opaque bytes.
-async fn mqtt_websocket_proxy(
-    State(state): State<MqttProxyState>,
-    mut request: Request,
-) -> Response<Body> {
-    if request.method() != axum::http::Method::GET
-        || !header_has_token(request.headers(), header::CONNECTION, "upgrade")
-        || !header_has_token(request.headers(), header::UPGRADE, "websocket")
-    {
-        return mqtt_proxy_error(
-            StatusCode::BAD_REQUEST,
-            "the /mqtt route requires a WebSocket upgrade",
-        );
-    }
-
-    let downstream_upgrade = hyper::upgrade::on(&mut request);
-    let broker = match UnixStream::connect(&state.broker_socket).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            tracing::warn!(
-                path = %state.broker_socket.display(),
-                %error,
-                "MQTT demux could not connect to EMQX broker socket"
-            );
-            return mqtt_proxy_error(StatusCode::BAD_GATEWAY, "EMQX broker socket unavailable");
-        }
-    };
-
-    let (mut sender, connection) = match http1::handshake(TokioIo::new(broker)).await {
-        Ok(parts) => parts,
-        Err(error) => {
-            tracing::warn!(%error, "MQTT demux could not open upstream HTTP connection");
-            return mqtt_proxy_error(StatusCode::BAD_GATEWAY, "EMQX broker handshake unavailable");
-        }
-    };
-    tokio::spawn(async move {
-        if let Err(error) = connection.with_upgrades().await {
-            tracing::debug!(%error, "MQTT upstream HTTP connection ended");
-        }
-    });
-
-    let mut response = match sender.send_request(request).await {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::warn!(%error, "MQTT demux request to EMQX failed");
-            return mqtt_proxy_error(StatusCode::BAD_GATEWAY, "EMQX broker request failed");
-        }
-    };
-
-    if response.status() == StatusCode::SWITCHING_PROTOCOLS {
-        let upstream_upgrade = hyper::upgrade::on(&mut response);
-        tokio::spawn(async move {
-            let (downstream, upstream) =
-                match tokio::try_join!(downstream_upgrade, upstream_upgrade) {
-                    Ok(upgrades) => upgrades,
-                    Err(error) => {
-                        tracing::debug!(%error, "MQTT WebSocket upgrade did not complete");
-                        return;
-                    }
-                };
-            let mut downstream = TokioIo::new(downstream);
-            let mut upstream = TokioIo::new(upstream);
-            match tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await {
-                Ok((to_broker, to_client)) => {
-                    tracing::debug!(to_broker, to_client, "MQTT WebSocket demux stream closed")
-                }
-                Err(error) => tracing::debug!(%error, "MQTT WebSocket demux stream failed"),
-            }
-        });
-    }
-
-    response.map(Body::new)
-}
-
-/// Build the Axum router for the one TCP door. Exact `/mqtt` WebSocket traffic
-/// goes to EMQX; every other route remains on the tonic gRPC/gRPC-Web surface.
-pub fn build_axum_app_with_mqtt_socket(
-    loader: Arc<SchemaLoader>,
-    server: OperationGrpcServer,
-    broker_socket: PathBuf,
-) -> Router {
+/// Build the axum `Router` that serves only gRPC and gRPC-Web.
+///
+/// Ordinary HTTP/REST compatibility routes belong to op-web on port 8080.
+pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -407,17 +244,8 @@ pub fn build_axum_app_with_mqtt_socket(
 
     build_routes(loader, server)
         .into_axum_router()
-        .route(
-            "/mqtt",
-            get(mqtt_websocket_proxy).with_state(MqttProxyState { broker_socket }),
-        )
         .layer(cors)
         .layer(GhostbridgeTraceLayer::new())
-}
-
-/// Build the production Axum app using the canonical NetMaker broker socket.
-pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> Router {
-    build_axum_app_with_mqtt_socket(loader, server, PathBuf::from(DEFAULT_EMQX_BROKER_SOCKET))
 }
 
 /// Build the tonic `Routes` used for the native-gRPC Unix socket side.
@@ -451,11 +279,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
-    let cognitive = init_cognitive_mcp().await;
-    if let Some(ref handle) = cognitive {
-        mutation_engine
-            .attach_cognitive_mcp(Some(handle.tool_registry()), Some(handle.context_state()));
-    }
     // Open the durable audit sink and replay the pre-restart trail before any
     // surface accepts traffic, so an immediate query sees prior history.
     let replayed = mutation_engine.init_audit_durability().await;
@@ -463,14 +286,6 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
-    // Start the OVSDB → process_authoritative_change feed after seed (same as run_grpc_server).
-    match mutation_engine.clone().start().await {
-        Ok(()) => tracing::info!("MutationEngine OVSDB monitor started"),
-        Err(error) => tracing::warn!(
-            %error,
-            "MutationEngine::start failed; continuing without OVSDB feed"
-        ),
-    }
     let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine);
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
@@ -487,13 +302,10 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     //
     // Must run before `build_axum_app` below: tonic-reflection is immutable once
     // mounted, so a service activated after route construction can never be served.
-    // `run_grpc_server` already did this; omitting it here meant the
+    // `run_grpc_server` (op-dbus :50051) already did this; omitting it here meant the
     // zeroclaw bridge advertised sealed plugins while serving none of their typed
     // per-method services.
     operation_server.freeze_plugin_method_reflection().await;
-
-    // Mount CognitiveToolService on the same 8090 / socket surface.
-    let operation_server = attach_cognitive_tool_service(operation_server, cognitive).await;
 
     // ── D-Bus plugin object registration ──────────────────────────────────
     // Register all plugin objects from the SHM blob catalog on the session bus
@@ -619,61 +431,75 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // it the socket is h2-only and rejects browser gRPC-Web. Matches the TCP/axum side.
     let tonic_server = tonic::transport::Server::builder()
         .accept_http1(true)
-        .layer(tonic::service::InterceptorLayer::new(
-            crate::shared_socket::uds_identity_interceptor,
-        ))
         .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
         .serve_with_incoming(unix_incoming);
 
     let shared_server = shared_incoming.map(|incoming| {
         tonic::transport::Server::builder()
             .accept_http1(true)
-            .layer(tonic::service::InterceptorLayer::new(
-                crate::shared_socket::uds_identity_interceptor,
-            ))
             .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
             .serve_with_incoming(incoming)
     });
 
-    // TLS TCP listeners for MQTT/WSS + gRPC + gRPC-Web. REST is served by
-    // op-web on :8080. The Axum router is converted back into tonic Routes so
-    // ServerTlsConfig protects the actual one-door surface rather than an
-    // unrelated second listener.
+    // TCP listeners for gRPC + gRPC-Web. REST is served by op-web on :8080.
     let bind_addrs: Vec<&str> = config
         .bind_addr
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
-    let tls_identity = config
-        .tls_identity
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("TLS identity is required for TCP gRPC ingress"))?;
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
-        info!(addr = %bind_addr, "zeroclaw MQTT/gRPC/gRPC-Web TLS demux listening on TCP");
-        let app = build_axum_app_with_mqtt_socket(
-            loader.clone(),
-            operation_server.clone(),
-            config.emqx_broker_socket.clone(),
-        );
-        let routes: tonic::service::Routes = app.into();
-        let tls_config = ServerTlsConfig::new().identity(tls_identity.clone());
-        let server = tonic::transport::Server::builder()
-            .accept_http1(true)
-            .tls_config(tls_config)?
-            .add_routes(routes)
-            .serve(bind_addr);
+        let listener = std::net::TcpListener::bind(bind_addr)?;
+        listener.set_nonblocking(true)?;
+        let listener = tokio::net::TcpListener::from_std(listener)?;
+        info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
+        let app = build_axum_app(loader.clone(), operation_server.clone());
+        let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 
-    // Drive all listeners concurrently. Absent shared servers are no-ops.
+    // Optional TLS listener for gRPC-Web over TLS (GUI/public-facing).
+    let tls_server_fut = match (config.tls_bind_addr, config.tls_identity) {
+        (Some(ref tls_addr), Some(identity)) => {
+            let tls_bind: SocketAddr = tls_addr.parse()?;
+            info!(addr = %tls_bind, "zeroclaw TLS gRPC-Web listening on TCP");
+            let cors = CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any);
+            let tls_config = ServerTlsConfig::new().identity(identity);
+            let server: std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>,
+            > = Box::pin(
+                tonic::transport::Server::builder()
+                    .accept_http1(true)
+                    .tls_config(tls_config)
+                    .expect("invalid TLS config")
+                    .layer(cors)
+                    .add_routes(build_tonic_routes(loader.clone(), operation_server))
+                    .serve(tls_bind),
+            );
+            Some(server)
+        }
+        _ => None,
+    };
+
+    // Drive all listeners concurrently. Absent optional servers are no-ops.
     let shared_fut = async {
         match shared_server {
             Some(s) => s
                 .await
                 .map_err(|e| anyhow::anyhow!("Shared container.sock: {e}")),
+            None => Ok(()),
+        }
+    };
+    let tls_fut = async {
+        match tls_server_fut {
+            Some(s) => s
+                .await
+                .map_err(|e| anyhow::anyhow!("TLS server error: {e}")),
             None => Ok(()),
         }
     };
@@ -694,10 +520,11 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         }
     };
 
-    let (u, s, t) = tokio::join!(unix_fut, shared_fut, tcp_fut);
+    let (u, s, t, tls_r) = tokio::join!(unix_fut, shared_fut, tcp_fut, tls_fut);
     u?;
     s?;
     t?;
+    tls_r?;
     Ok(())
 }
 

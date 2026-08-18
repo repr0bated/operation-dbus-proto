@@ -2,9 +2,10 @@
 
 use axum::{
     extract::{Extension, Path},
+    http::StatusCode,
     response::Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use simd_json::{json, OwnedValue as Value};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -12,12 +13,27 @@ use std::sync::Arc;
 use crate::state::AppState;
 use op_llm::provider::ProviderType;
 
+/// Matches `crates/src/api/types.ts` `LlmProvider`.
+#[derive(Serialize)]
+pub struct LlmProviderCard {
+    pub name: String,
+    pub enabled: bool,
+    pub models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// Matches `crates/src/api/types.ts` `LlmStatus` (`active_*`) plus the
+/// older `provider`/`model` keys so both UIs can read the same payload.
 #[derive(Serialize)]
 pub struct LlmStatusResponse {
     pub provider: String,
     pub model: String,
+    pub active_provider: String,
+    pub active_model: String,
     pub model_non_sandboxed: bool,
     pub available: bool,
+    pub providers: Vec<LlmProviderCard>,
 }
 
 #[derive(Serialize)]
@@ -28,37 +44,83 @@ pub struct LlmProvidersResponse {
 
 /// GET /api/llm/status - Get LLM status
 pub async fn llm_status_handler(
-    Extension(_state): Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Json<LlmStatusResponse> {
-    let selection = crate::zeroclaw_routes::selection();
+    let mut provider = state.chat_manager.current_provider().await.to_string();
+    let mut model = state.chat_manager.current_model().await;
+    if let Some((selected_provider, selected_model)) =
+        crate::zeroclaw_routes::selected_provider_model()
+    {
+        if !selected_provider.is_empty() {
+            provider = selected_provider;
+        }
+        if !selected_model.is_empty() {
+            model = selected_model;
+        }
+    }
+    let available = !state.chat_manager.available_providers().is_empty();
+    let model_non_sandboxed = state.chat_manager.current_model_non_sandboxed().await;
+    let providers: Vec<LlmProviderCard> = state
+        .chat_manager
+        .available_providers()
+        .into_iter()
+        .map(|p| LlmProviderCard {
+            name: p.to_string(),
+            enabled: true,
+            models: Vec::new(),
+            status: Some("available".to_string()),
+        })
+        .collect();
     Json(LlmStatusResponse {
-        provider: selection
-            .as_ref()
-            .map(|value| value.provider.clone())
-            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
-        model: selection
-            .as_ref()
-            .map(|value| value.model.clone())
-            .unwrap_or_default(),
-        model_non_sandboxed: false,
-        available: selection.map(|value| value.available).unwrap_or(false),
+        active_provider: provider.clone(),
+        active_model: model.clone(),
+        provider,
+        model,
+        model_non_sandboxed,
+        available,
+        providers,
     })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SwitchModelRequest {
+    pub model: String,
+}
+
+/// POST /api/llm/model — LlmPage "Switch" button.
+pub async fn switch_model_handler(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(req): axum::Json<SwitchModelRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state
+        .chat_manager
+        .switch_model(&req.model)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+        })?;
+    Ok(Json(json!({
+        "ok": true,
+        "active_model": req.model,
+        "model": req.model,
+    })))
 }
 
 /// GET /api/llm/providers - List available providers
 pub async fn list_providers_handler(
-    Extension(_state): Extension<Arc<AppState>>,
+    Extension(state): Extension<Arc<AppState>>,
 ) -> Json<LlmProvidersResponse> {
-    let selection = crate::zeroclaw_routes::selection();
-    Json(LlmProvidersResponse {
-        providers: selection
-            .as_ref()
-            .map(|value| value.providers.clone())
-            .unwrap_or_default(),
-        current: selection
-            .map(|value| value.provider)
-            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
-    })
+    let providers: Vec<String> = state
+        .chat_manager
+        .available_providers()
+        .into_iter()
+        .map(|provider| provider.to_string())
+        .collect();
+    let current = state.chat_manager.current_provider().await.to_string();
+    Json(LlmProvidersResponse { providers, current })
 }
 
 /// GET /api/llm/models - List available models

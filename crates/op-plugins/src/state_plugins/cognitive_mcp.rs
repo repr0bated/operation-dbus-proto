@@ -1,8 +1,8 @@
 //! Cognitive MCP state plugin — GB.CognitiveMcp.
 //!
-//! Tracks and manages the op-cognitive-mcp server: WireGuard identity, tool
-//! registrations, and health.  Publishes live state to D-Bus under
-//! `/opdbus/v1/plugins/cognitive_mcp` for introspection by clients.
+//! Tracks and manages the op-cognitive-mcp server: bind addresses, WireGuard
+//! identity, tool registrations, and gRPC/HTTP health.  Publishes live state
+//! to D-Bus under `/opdbus/v1/plugins/cognitive_mcp` for introspection by clients.
 //!
 //! The canonical schema (every gRPC method, every MCP tool, every
 //! request/response field) lives in the `cognitive_mcp_schema()` function below.
@@ -34,18 +34,34 @@ const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
 const SUPERVISED_PATH: &str = "/run/runit/service/op-cognitive-mcp";
 const ENV_DIR: &str = "/etc/runit/sv/op-cognitive-mcp/env";
 const RUNTIME_ENV_DIR: &str = "/run/runit/service/op-cognitive-mcp/env";
+const DEFAULT_HTTP: &str = "100.90.37.254:3003";
+const DEFAULT_GRPC: &str = "100.90.37.254:50052";
 const DEFAULT_WG: &str = "netmaker";
 
 // ── Deployment config (tunable via env-dir / apply_state) ──────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CognitiveMcpConfig {
+    #[serde(default = "default_http")]
+    pub http: String,
+    #[serde(default = "default_grpc")]
+    pub grpc: String,
     #[serde(default = "default_wg")]
     pub wg_interface: String,
+    #[serde(default = "default_true")]
+    pub http_enabled: bool,
+    #[serde(default = "default_true")]
+    pub grpc_enabled: bool,
     #[serde(default = "default_true")]
     pub dbus_enabled: bool,
 }
 
+fn default_http() -> String {
+    DEFAULT_HTTP.into()
+}
+fn default_grpc() -> String {
+    DEFAULT_GRPC.into()
+}
 fn default_wg() -> String {
     DEFAULT_WG.into()
 }
@@ -56,7 +72,11 @@ fn default_true() -> bool {
 impl Default for CognitiveMcpConfig {
     fn default() -> Self {
         Self {
+            http: default_http(),
+            grpc: default_grpc(),
             wg_interface: default_wg(),
+            http_enabled: true,
+            grpc_enabled: true,
             dbus_enabled: true,
         }
     }
@@ -89,7 +109,11 @@ impl CognitiveMcpPlugin {
 
     fn current_config() -> CognitiveMcpConfig {
         CognitiveMcpConfig {
+            http: Self::read_env("COGNITIVE_MCP_BIND").unwrap_or_else(default_http),
+            grpc: Self::read_env("COGNITIVE_MCP_GRPC_BIND").unwrap_or_else(default_grpc),
             wg_interface: Self::read_env("WG_INTERFACE").unwrap_or_else(default_wg),
+            http_enabled: Self::read_env("COGNITIVE_MCP_HTTP_DISABLED").is_none(),
+            grpc_enabled: Self::read_env("COGNITIVE_MCP_GRPC_DISABLED").is_none(),
             dbus_enabled: Self::read_env("COGNITIVE_MCP_DBUS_DISABLED").is_none(),
         }
     }
@@ -119,24 +143,30 @@ impl CognitiveMcpPlugin {
 
         let reply = conn
             .call_method(
-                Some("opdbus.v1"),
-                "/org/opdbus/v1/plugins/s6/systemctl",
-                Some("opdbus.v1.S6.Systemctl"),
+                Some("org.opdbus.v1.Runit.Systemctl"),
+                "/org/opdbus/v1/plugins/runit/systemctl",
+                Some("org.opdbus.v1.Runit.Systemctl"),
                 "reload",
                 &("op-cognitive-mcp",),
             )
             .await
-            .context("Failed to call reload on s6-systemctl D-Bus service")?;
+            .context("Failed to call reload on runit-systemctl D-Bus service")?;
 
         let (success, message): (bool, String) = reply.body().deserialize().map_err(|e| {
-            anyhow::anyhow!("Failed to deserialize s6-systemctl reload response: {}", e)
+            anyhow::anyhow!(
+                "Failed to deserialize runit-systemctl reload response: {}",
+                e
+            )
         })?;
 
         if success {
             tracing::info!("Reloaded op-cognitive-mcp via D-Bus: {}", message);
             Ok(())
         } else {
-            Err(anyhow::anyhow!("s6-systemctl reload failed: {}", message))
+            Err(anyhow::anyhow!(
+                "runit-systemctl reload failed: {}",
+                message
+            ))
         }
     }
 }
@@ -201,7 +231,11 @@ impl StatePlugin for CognitiveMcpPlugin {
                 }
             };
         }
+        field_diff!(http, "http");
+        field_diff!(grpc, "grpc");
         field_diff!(wg_interface, "wg_interface");
+        field_diff!(http_enabled, "http_enabled");
+        field_diff!(grpc_enabled, "grpc_enabled");
         field_diff!(dbus_enabled, "dbus_enabled");
 
         Ok(StateDiff {
@@ -227,6 +261,24 @@ impl StatePlugin for CognitiveMcpPlugin {
             } = action
             {
                 let result: Result<()> = match resource.as_str() {
+                    "http" => {
+                        if let Some(s) = val.as_str() {
+                            Self::write_env("COGNITIVE_MCP_BIND", s).await?;
+                            needs_reload = true;
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!("http must be a string"))
+                        }
+                    }
+                    "grpc" => {
+                        if let Some(s) = val.as_str() {
+                            Self::write_env("COGNITIVE_MCP_GRPC_BIND", s).await?;
+                            needs_reload = true;
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!("grpc must be a string"))
+                        }
+                    }
                     "wg_interface" => {
                         if let Some(s) = val.as_str() {
                             Self::write_env("WG_INTERFACE", s).await?;
@@ -235,6 +287,30 @@ impl StatePlugin for CognitiveMcpPlugin {
                         } else {
                             Err(anyhow::anyhow!("wg_interface must be a string"))
                         }
+                    }
+                    "http_enabled" => {
+                        if val.as_bool() == Some(false) {
+                            Self::write_env("COGNITIVE_MCP_HTTP_DISABLED", "1").await?;
+                        } else {
+                            let _ = tokio::fs::remove_file(format!(
+                                "{ENV_DIR}/COGNITIVE_MCP_HTTP_DISABLED"
+                            ))
+                            .await;
+                        }
+                        needs_reload = true;
+                        Ok(())
+                    }
+                    "grpc_enabled" => {
+                        if val.as_bool() == Some(false) {
+                            Self::write_env("COGNITIVE_MCP_GRPC_DISABLED", "1").await?;
+                        } else {
+                            let _ = tokio::fs::remove_file(format!(
+                                "{ENV_DIR}/COGNITIVE_MCP_GRPC_DISABLED"
+                            ))
+                            .await;
+                        }
+                        needs_reload = true;
+                        Ok(())
                     }
                     "dbus_enabled" => {
                         if val.as_bool() == Some(false) {
@@ -447,6 +523,14 @@ fn default_code_index_mode() -> CodeIndexMode {
 }
 
 // Defaults matching the hand-rolled schema contract
+fn default_cognitive_http() -> String {
+    "0.0.0.0:3003".to_string()
+}
+
+fn default_cognitive_grpc() -> String {
+    "0.0.0.0:50052".to_string()
+}
+
 fn default_running() -> bool {
     false
 }
@@ -488,6 +572,14 @@ fn default_session_id() -> String {
 }
 
 // Examples
+fn example_cognitive_http() -> String {
+    "100.90.37.254:3003".to_string()
+}
+
+fn example_cognitive_grpc() -> String {
+    "100.90.37.254:50052".to_string()
+}
+
 fn example_wg_interface() -> String {
     "netmaker".to_string()
 }
@@ -705,7 +797,11 @@ pub struct InvokeToolOutput {
 /// Output for GetConfig method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetConfigOutput {
+    pub http: String,
+    pub grpc: String,
     pub wg_interface: String,
+    pub http_enabled: bool,
+    pub grpc_enabled: bool,
     pub dbus_enabled: bool,
 }
 
@@ -813,9 +909,21 @@ pub struct RestartServiceOutput {
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.cognitive-mcp.schema@v1"))]
 #[schemars(extend("x-oscal-category" = "service"))]
 pub struct CognitiveMcpState {
+    #[serde(default = "default_cognitive_http")]
+    #[schemars(description = "HTTP/SSE bind address for the MCP protocol endpoint", example = example_cognitive_http(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.http@v1"))]
+    pub http: String,
+    #[serde(default = "default_cognitive_grpc")]
+    #[schemars(description = "gRPC bind address for the CognitiveToolService endpoint", example = example_cognitive_grpc(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc@v1"))]
+    pub grpc: String,
     #[serde(default = "default_wg")]
     #[schemars(description = "WireGuard interface to read identity from", example = example_wg_interface(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.wg-interface@v1"))]
     pub wg_interface: String,
+    #[serde(default = "default_true")]
+    #[schemars(description = "Enable the HTTP/SSE MCP transport", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.http-enabled@v1"))]
+    pub http_enabled: bool,
+    #[serde(default = "default_true")]
+    #[schemars(description = "Enable the gRPC CognitiveToolService transport", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc-enabled@v1"))]
+    pub grpc_enabled: bool,
     #[serde(default = "default_true")]
     #[schemars(description = "Register on D-Bus as org.opdbus.CognitiveMcp", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.dbus-enabled@v1"))]
     pub dbus_enabled: bool,

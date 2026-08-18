@@ -8,7 +8,6 @@ description = "gRPC byte tunnel for waypipe (Hyprland/apps in a local Wayland wi
 [dependencies]
 op-identity = { path = "../op-identity" }
 tonic = { workspace = true }
-tonic-prost = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
 prost = { workspace = true }
@@ -28,7 +27,7 @@ uuid = { workspace = true }
 hex = { workspace = true }
 
 [build-dependencies]
-tonic-prost-build = { workspace = true }
+tonic-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

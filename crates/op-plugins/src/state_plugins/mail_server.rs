@@ -66,24 +66,24 @@ impl MailServerPlugin {
         Self
     }
 
-    /// Default state for 3tched.com mail stack (no NICs in container by design; Unix sockets in /run/mail-3tched/)
+    /// Default state for 3tched.com mail stack
     fn default_state() -> MailServerState {
         MailServerState {
             container_name: "mail-3tched".to_string(),
-            container_status: "Running".to_string(),
+            container_status: "Unknown".to_string(),
             domain: "3tched.com".to_string(),
             xray_socket_path: "/run/xray/mail-naive.sock".to_string(),
             dbus_service_name: "org.opdbus.MailServer.3tched".to_string(),
             endpoints: MailEndpoints {
-                smtp_submission: Some("/run/mail-3tched/submission.sock".to_string()),
-                smtp_tls: Some("/run/mail-3tched/smtps.sock".to_string()),
-                imap: Some("/run/mail-3tched/imap.sock".to_string()),
-                imaps: Some("/run/mail-3tched/imaps.sock".to_string()),
-                dovecot_lmtp: Some("/run/mail-3tched/lmtp.sock".to_string()),
-                postfix_pickup: Some("/run/mail-3tched/pickup.sock".to_string()),
+                smtp_submission: Some("0.0.0.0:587".to_string()),
+                smtp_tls: Some("0.0.0.0:465".to_string()),
+                imap: Some("0.0.0.0:143".to_string()),
+                imaps: Some("0.0.0.0:993".to_string()),
+                dovecot_lmtp: Some("/var/spool/postfix/private/dovecot-lmtp".to_string()),
+                postfix_pickup: Some("/var/spool/postfix/private/pickup".to_string()),
             },
             container_ip: None,
-            healthy: true,
+            healthy: false,
             last_error: None,
             devices: None,
         }
@@ -199,29 +199,21 @@ impl MailServerPlugin {
                         None
                     }
                 })
-            })
-            .or_else(|| Some("127.0.0.1".to_string()));
+            });
 
         Ok((status, ip))
     }
 
-    /// Check container running state or Unix socket presence for mail health
+    /// Check if container is Running as a proxy for mail health
+    /// (AGENTS.md §4: incus exec is a subprocess bypass; we use container state instead)
     async fn check_mail_health(&self, container: &str) -> (bool, Option<String>) {
-        let sockets = [
-            "/run/mail-3tched/submission.sock",
-            "/run/mail-3tched/smtp.sock",
-            "/run/mail-3tched/imap.sock",
-            "/run/mail-3tched/imaps.sock",
-        ];
-        let sockets_exist = sockets.iter().any(|p| std::path::Path::new(p).exists());
-
         match Self::incus_api_get(&format!("/1.0/instances/{}?recursion=1", container)).await {
             Ok(inst) => {
                 let status = inst
                     .get("status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown");
-                if status == "Running" || sockets_exist {
+                if status == "Running" {
                     (true, None)
                 } else {
                     let err = format!("container_status={}", status);
@@ -229,12 +221,8 @@ impl MailServerPlugin {
                 }
             }
             Err(e) => {
-                if sockets_exist {
-                    (true, None)
-                } else {
-                    let err = format!("failed to query container: {}", e);
-                    (false, Some(err))
-                }
+                let err = format!("failed to query container: {}", e);
+                (false, Some(err))
             }
         }
     }
@@ -334,8 +322,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "SMTP submission unix socket endpoint".to_string(),
-                default: Some(json!("/run/mail-3tched/submission.sock")),
+                description: "SMTP submission endpoint (port 587)".to_string(),
+                default: Some(json!("0.0.0.0:587")),
                 example: None,
                 constraints: Vec::new(),
                 read_only: false,
@@ -347,8 +335,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "SMTP TLS unix socket endpoint".to_string(),
-                default: Some(json!("/run/mail-3tched/smtps.sock")),
+                description: "SMTP TLS endpoint (port 465)".to_string(),
+                default: Some(json!("0.0.0.0:465")),
                 example: None,
                 constraints: Vec::new(),
                 read_only: false,
@@ -360,8 +348,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "IMAP unix socket endpoint".to_string(),
-                default: Some(json!("/run/mail-3tched/imap.sock")),
+                description: "IMAP endpoint (port 143)".to_string(),
+                default: Some(json!("0.0.0.0:143")),
                 example: None,
                 constraints: Vec::new(),
                 read_only: false,
@@ -373,8 +361,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "IMAPS unix socket endpoint".to_string(),
-                default: Some(json!("/run/mail-3tched/imaps.sock")),
+                description: "IMAPS endpoint (port 993)".to_string(),
+                default: Some(json!("0.0.0.0:993")),
                 example: None,
                 constraints: Vec::new(),
                 read_only: false,
@@ -387,7 +375,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: false,
                 description: "Dovecot LMTP unix socket path inside container".to_string(),
-                default: Some(json!("/run/mail-3tched/lmtp.sock")),
+                default: Some(json!("/var/spool/postfix/private/dovecot-lmtp")),
                 example: None,
                 constraints: Vec::new(),
                 read_only: false,
@@ -400,7 +388,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
                 field_type: FieldType::String,
                 required: false,
                 description: "Postfix pickup unix socket path inside container".to_string(),
-                default: Some(json!("/run/mail-3tched/pickup.sock")),
+                default: Some(json!("/var/spool/postfix/private/pickup")),
                 example: None,
                 constraints: Vec::new(),
                 read_only: false,
@@ -499,7 +487,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             FieldSchema {
                 field_type: FieldType::String,
                 required: false,
-                description: "Container IPv4 address (None for no-NIC container)".to_string(),
+                description: "Container IPv4 address".to_string(),
                 default: None,
                 example: None,
                 constraints: Vec::new(),
@@ -540,25 +528,17 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             "xray_socket_path": "/run/xray/mail-naive.sock",
             "dbus_service_name": "org.opdbus.MailServer.3tched",
             "endpoints": {
-                "smtp_submission": "/run/mail-3tched/submission.sock",
-                "smtp_tls": "/run/mail-3tched/smtps.sock",
-                "imap": "/run/mail-3tched/imap.sock",
-                "imaps": "/run/mail-3tched/imaps.sock",
-                "dovecot_lmtp": "/run/mail-3tched/lmtp.sock",
-                "postfix_pickup": "/run/mail-3tched/pickup.sock"
+                "smtp_submission": "0.0.0.0:587",
+                "smtp_tls": "0.0.0.0:465",
+                "imap": "0.0.0.0:143",
+                "imaps": "0.0.0.0:993",
+                "dovecot_lmtp": "/var/spool/postfix/private/dovecot-lmtp",
+                "postfix_pickup": "/var/spool/postfix/private/pickup"
             },
-            "container_ip": null,
+            "container_ip": "10.200.0.2",
             "healthy": true,
             "last_error": null
         }))
-        .capability(op_state_store::CapabilityDecl {
-            id: "mail.write".to_string(),
-            description: "Grants: add_domain, remove_domain, add_mailbox, remove_mailbox, add_alias, remove_alias, set_quota, flush_queue.".to_string(),
-        })
-        .capability(op_state_store::CapabilityDecl {
-            id: "mail.read".to_string(),
-            description: "Grants: get_queue, connect.".to_string(),
-        })
         .build();
 
     schema.methods.insert(
@@ -678,18 +658,19 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             "mut.service.mail.queue.flush@v1",
         ),
     );
-    schema.methods.insert(
-        "connect".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            ConnectInput,
-            ConnectOutput,
-        >(
-            "Connect",
-            op_state_store::SideEffect::Read,
-            true,
-            "mail.read",
-            "obs.service.mail.connect@v1",
-        ),
+    schema.capabilities.insert(
+        "mail.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "mail.write".to_string(),
+            description: "Grants: add_domain, remove_domain, add_mailbox, remove_mailbox, add_alias, remove_alias, set_quota, flush_queue.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "mail.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "mail.read".to_string(),
+            description: "Grants: get_queue, connect.".to_string(),
+        },
     );
 
     schema
@@ -699,21 +680,6 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("mail_server", |_ctx| std::sync::Arc::new(MailServerPlugin::new()))
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct ConnectInput {
-    pub service: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct ConnectOutput {
-    pub success: bool,
-    pub socket_path: String,
-    pub container_name: String,
-    pub has_nics: bool,
-    pub container_target: String,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -739,233 +705,4 @@ pub struct QuotaInput {
     pub domain: String,
     pub user: String,
     pub quota_mb: u32,
-}
-
-/// Dispatch method calls for the mail_server plugin.
-pub async fn dispatch_mail_server_method(
-    method: &str,
-    args: &serde_json::Value,
-) -> Result<serde_json::Value> {
-    match method {
-        "connect" | "Connect" => {
-            let input: ConnectInput =
-                serde_json::from_value(args.clone()).unwrap_or_else(|_| ConnectInput {
-                    service: "smtp".to_string(),
-                });
-            let (target_sock, target_port) = match input.service.to_lowercase().as_str() {
-                "imap" => ("/run/mail-3tched/imap.sock", 143),
-                "imaps" => ("/run/mail-3tched/imaps.sock", 993),
-                "smtps" | "smtp_tls" => ("/run/mail-3tched/smtps.sock", 465),
-                _ => {
-                    if std::path::Path::new("/run/mail-3tched/submission.sock").exists() {
-                        ("/run/mail-3tched/submission.sock", 587)
-                    } else {
-                        ("/run/mail-3tched/smtp.sock", 587)
-                    }
-                }
-            };
-            let socket_exists = std::path::Path::new(target_sock).exists();
-            let mut connected = false;
-            if socket_exists {
-                if let Ok(_stream) = tokio::net::UnixStream::connect(target_sock).await {
-                    connected = true;
-                }
-            }
-            Ok(serde_json::to_value(ConnectOutput {
-                success: connected || socket_exists,
-                socket_path: target_sock.to_string(),
-                container_name: "mail-3tched".to_string(),
-                has_nics: false,
-                container_target: format!("127.0.0.1:{}", target_port),
-                message: if connected {
-                    "Connected to mail Unix socket".to_string()
-                } else if socket_exists {
-                    "Unix socket exists".to_string()
-                } else {
-                    "Unix socket path configured; container uses loopback socket networking"
-                        .to_string()
-                },
-            })?)
-        }
-        "send_email" | "SendEmail" | "send_message" | "SendMessage" => {
-            let from = args
-                .get("from")
-                .or_else(|| args.get("from_email"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("noreply@3tched.com");
-            let to = args
-                .get("to")
-                .or_else(|| args.get("to_email"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let subject = args.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-            let body = args
-                .get("body")
-                .or_else(|| args.get("body_text"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            let sock_path = if std::path::Path::new("/run/mail-3tched/submission.sock").exists() {
-                "/run/mail-3tched/submission.sock"
-            } else {
-                "/run/mail-3tched/smtp.sock"
-            };
-
-            let msg_id = uuid::Uuid::new_v4().to_string();
-
-            if let Ok(mut stream) = tokio::net::UnixStream::connect(sock_path).await {
-                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-                let (reader, writer) = stream.split();
-                let mut lines = BufReader::new(reader).lines();
-                let mut writer = writer;
-
-                lines.next_line().await.ok();
-                let _ = writer.write_all(b"EHLO localhost\r\n").await;
-                lines.next_line().await.ok();
-                let _ = writer
-                    .write_all(format!("MAIL FROM:<{}>\r\n", from).as_bytes())
-                    .await;
-                lines.next_line().await.ok();
-                let _ = writer
-                    .write_all(format!("RCPT TO:<{}>\r\n", to).as_bytes())
-                    .await;
-                lines.next_line().await.ok();
-                let _ = writer.write_all(b"DATA\r\n").await;
-                lines.next_line().await.ok();
-                let payload = format!(
-                    "Message-ID: <{}>\r\nFrom: {}\r\nTo: {}\r\nSubject: {}\r\nContent-Type: text/plain\r\n\r\n{}\r\n.\r\n",
-                    msg_id, from, to, subject, body
-                );
-                let _ = writer.write_all(payload.as_bytes()).await;
-                lines.next_line().await.ok();
-                let _ = writer.write_all(b"QUIT\r\n").await;
-
-                Ok(serde_json::json!({
-                    "success": true,
-                    "message_id": msg_id,
-                    "message": "Email sent via Unix socket bridge"
-                }))
-            } else {
-                Ok(serde_json::json!({
-                    "success": true,
-                    "message_id": msg_id,
-                    "message": "Mail container uses socket networking; queued for unix socket dispatch"
-                }))
-            }
-        }
-        "get_inbox" | "GetInbox" => {
-            let folder = args
-                .get("folder")
-                .and_then(|v| v.as_str())
-                .unwrap_or("inbox");
-            Ok(serde_json::json!({
-                "messages": [],
-                "total_count": 0,
-                "unread_count": 0,
-                "folder": folder
-            }))
-        }
-        "get_message" | "GetMessage" => {
-            let msg_id = args
-                .get("message_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            Ok(serde_json::json!({
-                "success": true,
-                "message_id": msg_id,
-                "body": "",
-                "is_html": false,
-                "raw_content": ""
-            }))
-        }
-        "get_status" | "GetStatus" | "check_mail_health" | "CheckMailHealth" => {
-            let sockets_exist = std::path::Path::new("/run/mail-3tched/submission.sock").exists()
-                || std::path::Path::new("/run/mail-3tched/smtp.sock").exists()
-                || std::path::Path::new("/run/mail-3tched/imap.sock").exists();
-            let domain = args
-                .get("domain")
-                .and_then(|v| v.as_str())
-                .unwrap_or("3tched.com");
-            Ok(serde_json::json!({
-                "is_configured": true,
-                "is_running": true,
-                "mail_server_type": "postfix-dovecot",
-                "container_name": "mail-3tched",
-                "domain": domain,
-                "has_nics": false,
-                "networking": "loopback+unix_sockets",
-                "smtp_socket": "/run/mail-3tched/submission.sock",
-                "imap_socket": "/run/mail-3tched/imap.sock",
-                "imaps_socket": "/run/mail-3tched/imaps.sock",
-                "healthy": sockets_exist || true,
-                "message": "Mail server container operating without NICs via /run socket networking"
-            }))
-        }
-        "add_domain" | "AddDomain" | "remove_domain" | "RemoveDomain" | "add_mailbox"
-        | "AddMailbox" | "remove_mailbox" | "RemoveMailbox" | "add_alias" | "AddAlias"
-        | "remove_alias" | "RemoveAlias" | "set_quota" | "SetQuota" | "get_queue" | "GetQueue"
-        | "flush_queue" | "FlushQueue" => Ok(serde_json::to_value(
-            super::plugin_scaffold_helpers::AckOutput { success: true },
-        )?),
-        other => Err(anyhow::anyhow!(
-            "mail_server method '{other}' has no dispatch arm"
-        )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_mail_server_default_state_and_schema() {
-        let plugin = MailServerPlugin::new();
-        let state = MailServerPlugin::default_state();
-        assert_eq!(state.container_name, "mail-3tched");
-        assert_eq!(state.container_ip, None);
-        assert_eq!(
-            state.endpoints.smtp_submission.as_deref(),
-            Some("/run/mail-3tched/submission.sock")
-        );
-        assert_eq!(
-            state.endpoints.imap.as_deref(),
-            Some("/run/mail-3tched/imap.sock")
-        );
-
-        let schema = plugin.schema().expect("schema must exist");
-        assert_eq!(schema.name, "mail_server");
-        assert!(schema.methods.contains_key("connect"));
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_mail_server_connect() {
-        let args = serde_json::json!({"service": "smtp"});
-        let result = dispatch_mail_server_method("connect", &args)
-            .await
-            .expect("dispatch connect");
-        assert_eq!(
-            result.get("container_name").and_then(|v| v.as_str()),
-            Some("mail-3tched")
-        );
-        assert_eq!(
-            result.get("has_nics").and_then(|v| v.as_bool()),
-            Some(false)
-        );
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_mail_server_status() {
-        let args = serde_json::json!({"domain": "3tched.com"});
-        let result = dispatch_mail_server_method("get_status", &args)
-            .await
-            .expect("dispatch get_status");
-        assert_eq!(
-            result.get("networking").and_then(|v| v.as_str()),
-            Some("loopback+unix_sockets")
-        );
-        assert_eq!(
-            result.get("has_nics").and_then(|v| v.as_bool()),
-            Some(false)
-        );
-    }
 }

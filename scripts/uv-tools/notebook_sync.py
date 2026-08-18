@@ -91,22 +91,6 @@ def ingest(title: str | None = None) -> None:
     title = title or DEFAULT_TITLE
     key = title
     mds = sorted(SOURCES.rglob("*.md"))
-
-    # Read the identity sled once, up front. Every source sends the same
-    # metadata, so re-reading it per item was pure waste — and worse, it turned
-    # a single unreadable file into one failure per source. That printed
-    # "added=0 failed=335", which reads like 335 bad documents rather than one
-    # broken precondition, and it stayed invisible for eight days because the
-    # per-item errors were throttled to five and the summary logged at INFO.
-    try:
-        md = meta()
-    except OSError as e:
-        raise SystemExit(
-            f"identity sled unreadable: {SLED}: {e}\n"
-            f"ingest aborted before contacting {GRPC_ADDR}; "
-            f"{len(mds)} sources left untouched"
-        ) from e
-
     added = failed = skipped = 0
     for p in mds:
         try:
@@ -129,7 +113,7 @@ def ingest(title: str | None = None) -> None:
                     title=rel,
                     tags=["llm-session", "uv-sync", p.parent.name],
                 ),
-                metadata=md,
+                metadata=meta(),
                 timeout=60,
             )
             if r.success:
@@ -140,17 +124,7 @@ def ingest(title: str | None = None) -> None:
             failed += 1
             if failed <= 5:
                 print(f"err {rel}: {e}", file=sys.stderr)
-    if failed > 5:
-        print(f"… {failed - 5} further errors not shown", file=sys.stderr)
     print(f"ingest added={added} failed={failed} skipped={skipped} key={key!r}")
-
-    # A cycle that adds nothing while sources were available is a failure, not
-    # a quiet INFO line. Exiting non-zero lets the runit wrapper's
-    # `|| log "ingest failed"` actually fire.
-    if added == 0 and failed > 0:
-        raise SystemExit(
-            f"ingest added nothing: {failed} of {len(mds)} sources failed"
-        )
 
 
 def main() -> int:

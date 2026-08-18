@@ -356,7 +356,9 @@ pub(crate) fn cron_schema() -> PluginSchema {
         "cron.invoke".to_string(),
         op_state_store::CapabilityDecl {
             id: "cron.invoke".to_string(),
-            description: "Grants: create_job, update_job, delete_job, enable_job, disable_job, run_job.".to_string(),
+            description:
+                "Grants: create_job, update_job, delete_job, enable_job, disable_job, run_job."
+                    .to_string(),
         },
     );
 

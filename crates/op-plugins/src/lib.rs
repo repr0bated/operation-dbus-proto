@@ -94,16 +94,16 @@ pub mod prelude {
     // Re-export state plugins
     pub use super::dynamic_loading::DynamicLoadingPlugin;
     pub use super::state_plugins::{
-        AdcPlugin, AgentConfigPlugin, AntigravityPlugin, BtrfsPlugin, CognitiveMcpPlugin,
-        CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin, DnsResolverPlugin,
-        EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
-        FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin,
-        KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
+        AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
+        CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
+        DnsResolverPlugin, EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin,
+        FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
+        KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
         NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
         OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
         RovsCommandsPlugin, RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
-        SoftwarePlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgOpdbusPlugin,
-        WireGuardPlugin, WorkflowsPlugin, TchedRouterPlugin,
+        SoftwarePlugin, TchedRouterPlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin,
+        WebUiPlugin, WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin,
     };
 }
 pub mod state_publisher;

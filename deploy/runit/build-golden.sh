@@ -19,7 +19,6 @@
 #     bin/                       release binaries
 #     sbin/                      control scripts + systemd compat layer
 #     sv/<service>/run           runit service definitions
-#     libexec/3tched/            runit helper scripts
 #     etc/                       environment defaults, pacman hooks
 #     MANIFEST                   commit, build time, sha256 per binary
 #
@@ -28,7 +27,6 @@
 #   build-golden.sh --golden-only   # skip touching the running host
 #   build-golden.sh --live-only     # skip the subvolume
 #   build-golden.sh --no-restart    # install live but leave services running old code
-#   build-golden.sh --replace-service NAME  # replace one hand-tuned run definition
 #   build-golden.sh --dry-run
 #
 # Requires root for the subvolume and the live install. Never builds: run
@@ -48,7 +46,6 @@ DO_GOLDEN=1
 DO_LIVE=1
 DO_RESTART=1
 DRY_RUN=0
-REPLACE_SERVICES=""
 
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
@@ -59,7 +56,7 @@ else
 fi
 RELEASE_DIR="$PROJECT_ROOT/target/release"
 
-log()  { printf '\033[1;36m[golden]\033[0m %s\n' "$*"; }
+log()  { printf '\033[0;34m[golden]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[0;32m[ ok  ]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn ]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[0;31m[fail ]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -77,11 +74,6 @@ while [ $# -gt 0 ]; do
         --golden-only) DO_LIVE=0 ;;
         --live-only)   DO_GOLDEN=0 ;;
         --no-restart)  DO_RESTART=0 ;;
-        --replace-service)
-            shift
-            [ $# -gt 0 ] || die "--replace-service requires a service name"
-            REPLACE_SERVICES="$REPLACE_SERVICES $1"
-            ;;
         --dry-run)     DRY_RUN=1 ;;
         -h|--help)     sed -n '2,35p' "$SCRIPT_PATH"; exit 0 ;;
         *)             die "unknown option: $1" ;;
@@ -126,8 +118,7 @@ build_golden() {
         log "reusing existing subvolume $GOLDEN_DIR"
     fi
 
-    run mkdir -p "$GOLDEN_DIR/bin" "$GOLDEN_DIR/sbin" "$GOLDEN_DIR/sv" \
-        "$GOLDEN_DIR/etc" "$GOLDEN_DIR/libexec/3tched"
+    run mkdir -p "$GOLDEN_DIR/bin" "$GOLDEN_DIR/sbin" "$GOLDEN_DIR/sv" "$GOLDEN_DIR/etc"
 
     # Binaries
     printf '%s\n' "$BINARIES" | while IFS= read -r bin; do
@@ -137,24 +128,13 @@ build_golden() {
 
     # Control scripts + the systemd compatibility layer.
     for script in systemd-unit-to-runit op-convert-systemd-units systemctl-shim \
-                  build-golden.sh 3tched-incus-svcgen; do
+                  build-golden.sh; do
         [ -f "$SCRIPT_DIR/$script" ] &&
             run install -Dm755 "$SCRIPT_DIR/$script" "$GOLDEN_DIR/sbin/$script"
     done
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$GOLDEN_DIR/sbin/agent-runit-guard.sh"
-    [ -f "$PROJECT_ROOT/scripts/opdbus-rundirs-up" ] &&
-        run install -Dm755 "$PROJECT_ROOT/scripts/opdbus-rundirs-up" \
-            "$GOLDEN_DIR/libexec/3tched/opdbus-rundirs-up"
-    [ -f "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" ] &&
-        run install -Dm755 "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" \
-            "$GOLDEN_DIR/sbin/configure-netmaker-broker-8090"
-    for asset in emqx-ws-8090.hocon op-uds-relay-8090.conf; do
-        [ -f "$PROJECT_ROOT/deploy/netmaker/$asset" ] &&
-            run install -Dm644 "$PROJECT_ROOT/deploy/netmaker/$asset" \
-                "$GOLDEN_DIR/etc/op-dbus/netmaker/$asset"
-    done
     ok "staged control scripts into golden/sbin"
 
     # Runit service definitions tracked in the repo.
@@ -167,14 +147,6 @@ build_golden() {
             run install -Dm755 "${svc_dir}log/run" "$GOLDEN_DIR/sv/$svc/log/run"
         [ -f "${svc_dir}finish" ] &&
             run install -Dm755 "${svc_dir}finish" "$GOLDEN_DIR/sv/$svc/finish"
-        [ -f "${svc_dir}check" ] &&
-            run install -Dm755 "${svc_dir}check" "$GOLDEN_DIR/sv/$svc/check"
-        [ -f "${svc_dir}down" ] &&
-            run install -Dm644 "${svc_dir}down" "$GOLDEN_DIR/sv/$svc/down"
-    done
-    for helper in "$SCRIPT_DIR/libexec-3tched"/*; do
-        [ -f "$helper" ] || continue
-        run install -Dm755 "$helper" "$GOLDEN_DIR/libexec/3tched/$(basename "$helper")"
     done
     ok "staged runit service definitions into golden/sv"
 
@@ -182,36 +154,12 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../environment.default" ] &&
         run install -Dm644 "$SCRIPT_DIR/../environment.default" \
             "$GOLDEN_DIR/etc/environment.default"
-    [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
-            "$GOLDEN_DIR/etc/zeroclaw-runtime.toml"
-    [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
-            "$GOLDEN_DIR/etc/netmaker-broker.env"
     [ -f "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" ] &&
         run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
             "$GOLDEN_DIR/etc/pacman-hooks/99-systemd-unit-to-runit.hook"
     [ -f "$SCRIPT_DIR/../99-agent-runit-guard.hook" ] &&
         run install -Dm644 "$SCRIPT_DIR/../99-agent-runit-guard.hook" \
             "$GOLDEN_DIR/etc/pacman-hooks/99-agent-runit-guard.hook"
-
-    # Network config. Without these, golden reproduces the programs but not the
-    # network they need to work — the binaries come up on a host with no MSS
-    # clamp and an empty OpenFlow table. Both lived only under /etc until
-    # 2026-08-13, which is exactly how the flow set was lost for three days and
-    # how the mesh MSS clamp stayed mistuned. Staged into golden/etc; installing
-    # them onto a running host is deliberately NOT part of the live path, since
-    # nftables.conf is partly netclient-generated and blindly overwriting it
-    # would clobber the NETMAKER-ACL chains.
-    [ -f "$SCRIPT_DIR/../config/nftables.conf" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/nftables.conf" \
-            "$GOLDEN_DIR/etc/nftables.conf"
-    [ -f "$SCRIPT_DIR/../config/openflow-static-flows.json" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/openflow-static-flows.json" \
-            "$GOLDEN_DIR/etc/openflow-static-flows.json"
-    [ -f "$SCRIPT_DIR/../config/network.conf" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/network.conf" \
-            "$GOLDEN_DIR/etc/network.conf"
 
     # MANIFEST: what this snapshot is, and the hashes to prove the running host
     # matches it.
@@ -238,7 +186,7 @@ build_golden() {
 # reparent the control plane. They are reported so an operator can restart them
 # deliberately, on the console, in a chosen order.
 NEVER_AUTO_RESTART="ovs-vswitchd ovsbr0-addr ovsbr0-svc-addr ovsbr0-uplink \
-uplink-dhcp op-grpc-bridge op-session-bus opdbus-rundirs dbus"
+uplink-dhcp op-session-bus opdbus-rundirs dbus"
 
 # Which enabled services actually exec a given binary?
 #
@@ -263,8 +211,6 @@ services_using() {
 install_live() {
     log "installing into the live runtime"
 
-    rundirs_helper_changed=0
-
     changed_binaries=""
     printf '%s\n' "$BINARIES" | while IFS= read -r bin; do
         name=$(basename "$bin")
@@ -286,8 +232,7 @@ install_live() {
 
     # Control scripts. The systemctl shim goes in $INSTALL_BIN because sudo's
     # secure_path searches it before /usr/bin, so it wins for installers.
-    for script in systemd-unit-to-runit op-convert-systemd-units \
-                  3tched-incus-svcgen; do
+    for script in systemd-unit-to-runit op-convert-systemd-units; do
         [ -f "$SCRIPT_DIR/$script" ] &&
             run install -Dm755 "$SCRIPT_DIR/$script" "$INSTALL_SBIN/$script"
     done
@@ -296,23 +241,6 @@ install_live() {
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$INSTALL_SBIN/agent-runit-guard"
-    [ -f "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" ] &&
-        run install -Dm755 "$PROJECT_ROOT/deploy/netmaker/configure-broker-8090.sh" \
-            "$INSTALL_SBIN/configure-netmaker-broker-8090"
-    for asset in emqx-ws-8090.hocon op-uds-relay-8090.conf; do
-        [ -f "$PROJECT_ROOT/deploy/netmaker/$asset" ] &&
-            run install -Dm644 "$PROJECT_ROOT/deploy/netmaker/$asset" \
-                "/etc/op-dbus/netmaker/$asset"
-    done
-    if [ -f "$PROJECT_ROOT/scripts/opdbus-rundirs-up" ]; then
-        rundirs_helper_target=/usr/local/libexec/3tched/opdbus-rundirs-up
-        if [ ! -f "$rundirs_helper_target" ] || \
-            ! cmp -s "$PROJECT_ROOT/scripts/opdbus-rundirs-up" "$rundirs_helper_target"; then
-            rundirs_helper_changed=1
-        fi
-        run install -Dm755 "$PROJECT_ROOT/scripts/opdbus-rundirs-up" \
-            "$rundirs_helper_target"
-    fi
     ok "installed control scripts + systemd compat layer"
 
     if [ -d /etc/pacman.d/hooks ] || mkdir -p /etc/pacman.d/hooks 2>/dev/null; then
@@ -320,19 +248,6 @@ install_live() {
             run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
                 /etc/pacman.d/hooks/99-systemd-unit-to-runit.hook
     fi
-
-    [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
-            /etc/op-dbus/zeroclaw-runtime.toml
-    [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
-            /etc/op-dbus/netmaker-broker.env
-    [ -f "$SCRIPT_DIR/../config/openflow-static-flows.json" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/openflow-static-flows.json" \
-            /etc/op-dbus/openflow-static-flows.json
-    [ -f "$SCRIPT_DIR/../config/network.conf" ] &&
-        run install -Dm644 "$SCRIPT_DIR/../config/network.conf" \
-            /etc/op-dbus/network.conf
 
     # Service definitions: install new ones, never clobber a hand-tuned run
     # script that differs (the host copy is authoritative until an operator says
@@ -342,40 +257,17 @@ install_live() {
         svc=$(basename "$svc_dir")
         dest="$RUNIT_SV_DIR/$svc/run"
         if [ -f "$dest" ] && ! cmp -s "${svc_dir}run" "$dest"; then
-            case " $REPLACE_SERVICES " in
-                *" $svc "*)
-                    warn "$dest differs from the repo copy — replacing by explicit request"
-                    ;;
-                *)
-                    warn "$dest differs from the repo copy — leaving the host version alone"
-                    continue
-                    ;;
-            esac
+            warn "$dest differs from the repo copy — leaving the host version alone"
+            continue
         fi
         run install -Dm755 "${svc_dir}run" "$dest"
         [ -f "${svc_dir}log/run" ] &&
             run install -Dm755 "${svc_dir}log/run" "$RUNIT_SV_DIR/$svc/log/run"
-        [ -f "${svc_dir}check" ] &&
-            run install -Dm755 "${svc_dir}check" "$RUNIT_SV_DIR/$svc/check"
-        if [ -f "${svc_dir}down" ]; then
-            run install -Dm644 "${svc_dir}down" "$RUNIT_SV_DIR/$svc/down"
-        else
-            run rm -f "$RUNIT_SV_DIR/$svc/down"
-        fi
-    done
-    for helper in "$SCRIPT_DIR/libexec-3tched"/*; do
-        [ -f "$helper" ] || continue
-        run install -Dm755 "$helper" \
-            "/usr/local/libexec/3tched/$(basename "$helper")"
     done
 
     if [ "$DO_RESTART" != 1 ]; then
         warn "--no-restart: services still running the previous binaries"
         return 0
-    fi
-    if [ "$rundirs_helper_changed" = 1 ]; then
-        warn "updated opdbus-rundirs-up; opdbus-rundirs is not auto-restarted"
-        warn "  apply it deliberately from the console: sudo sv restart opdbus-rundirs"
     fi
     if [ -z "$changed_binaries" ]; then
         log "nothing changed; no restarts needed"

@@ -8,9 +8,8 @@
 //! Per AGENTS.md §4: D-Bus is the control plane; Gemma is a host service that
 //! produces structured state, not a CLI bypass. It never shells out to network
 //! tools. OpenFlow rules may be applied via D-Bus by a separate controller.
-//!
-//! NOTE: UI gallery generation has been moved to `op-gallery-gen` (model-agnostic
-//! inference loop). The legacy `ui_gallery` module is removed.
+
+mod ui_gallery;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 const SUBID_REGISTRY: &str = "/etc/ghostbridge/subid-registry.json";
 const XRAY_ROUTES: &str = "/dev/shm/xray-routes.json";
@@ -122,6 +121,11 @@ fn main() -> Result<()> {
         openflow_rules = routes.openflow_rules.len(),
         "Gemma wrote routing artifacts"
     );
+
+    // Generate the json-render.dev UI spec gallery (200 unique specs)
+    if let Err(e) = ui_gallery::generate_gallery() {
+        warn!("Gemma UI gallery generation failed: {e}");
+    }
 
     Ok(())
 }

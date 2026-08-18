@@ -14,6 +14,7 @@ use axum::{
     Json,
 };
 use op_core::security::AccessZone;
+use op_identity::schema_bridge::{read_sled, IdentitySled};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -97,48 +98,15 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response {
         .expect("response builder")
 }
 
-/// The identity a paired browser will present: `(genesis_hex, trace_id_hex)`.
-///
-/// Reads the host's own record from the identity_sled state in SHM. This used to
-/// mmap the global 152-byte sled at `/dev/shm/plugin_schema.dat`, which no
-/// longer exists — the genesis work retired every writer of it and moved
-/// identity to per-session records. Pairing was the one call site left behind,
-/// so it failed with "No such file or directory", which meant a browser could
-/// never obtain a footprint, which meant every gRPC-Web call was correctly
-/// rejected by the interceptor as "Missing Ghostbridge Identity Sled".
-///
-/// Which record is "the host" comes from `IDENTITY_SLED_HOST_SESSION_ID`, the
-/// same variable the gRPC client path uses, so both agree by construction.
 fn read_live_identity() -> Result<(String, String), String> {
-    const STATE: &str = "/dev/shm/opdbus/state/identity_sled.json";
-    let path = std::env::var("IDENTITY_SLED_STATE").unwrap_or_else(|_| STATE.to_string());
-    let session_id = std::env::var("IDENTITY_SLED_HOST_SESSION_ID")
-        .map_err(|_| "IDENTITY_SLED_HOST_SESSION_ID is not set".to_string())?;
-    let bytes = std::fs::read(&path)
-        .map_err(|e| format!("identity state unavailable at {path}: {e}"))?;
-    let state: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("identity state is not valid json: {e}"))?;
-
-    let record = state
-        .get("sleds")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .find(|s| s.get("session_id").and_then(|v| v.as_str()) == Some(session_id.trim()))
-        .ok_or_else(|| format!("no identity record for host session '{session_id}'"))?;
-
-    let genesis = record
-        .get("genesis")
-        .and_then(|v| v.as_str())
-        .filter(|g| !g.is_empty())
-        .ok_or("host identity has no genesis; its arrival was never anchored")?;
-    let trace_id = record
-        .get("trace_id")
-        .and_then(|v| v.as_str())
-        .filter(|t| !t.is_empty())
-        .ok_or("host identity has no trace_id")?;
-
-    Ok((genesis.to_string(), trace_id.to_string()))
+    let (ptr, _mmap) = read_sled().map_err(|e| format!("identity sled unavailable: {e}"))?;
+    // SAFETY: mmap outlives the borrow; IdentitySled is plain data.
+    let sled: &IdentitySled = unsafe { &*ptr };
+    let is_valid = sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
+    if !is_valid {
+        return Err("identity sled is present but not valid".into());
+    }
+    Ok((hex::encode(sled.hashed_footprint), sled.trace_id_hex()))
 }
 
 /// `POST /admin/paircode/new` — generate a one-time pairing code.

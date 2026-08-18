@@ -229,6 +229,7 @@ pub(crate) fn wg_opdbus_schema() -> PluginSchema {
         ),
     );
 
+    schema.example = Some(default_state_value());
     schema.capabilities.insert(
         "wg_opdbus.invoke".to_string(),
         CapabilityDecl {
@@ -244,7 +245,6 @@ pub(crate) fn wg_opdbus_schema() -> PluginSchema {
         },
     );
 
-    schema.example = Some(default_state_value());
     schema
 }
 

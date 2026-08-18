@@ -6,12 +6,11 @@
 mod audit;
 mod binary;
 mod emit;
-mod gadget;
 mod gaps;
+mod gadget;
 mod introspect;
 mod repomix;
 mod report;
-mod rust_emit;
 mod subid;
 
 pub use audit::{audit_source, audit_source_with_coverage, CoverageInputs};
@@ -33,4 +32,3 @@ pub use introspect::{
 };
 pub use repomix::{introspect_repomix, read_and_introspect as read_repomix, RepomixSurface};
 pub use report::{Finding, Report, Severity};
-pub use rust_emit::emit_inspector_rust;

@@ -911,6 +911,7 @@ mod tests {
             subids: std::collections::HashMap::new(),
             org: None,
             methods: std::collections::HashMap::new(),
+            capabilities: std::collections::HashMap::new(),
             signals: vec![],
             guarantees: op_state_store::PluginCapabilities::default(),
         };

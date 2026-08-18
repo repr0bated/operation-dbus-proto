@@ -16,9 +16,7 @@ use op_grpc_bridge::grpc_server::{
 };
 use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY};
 use op_grpc_bridge::mutation_engine::MutationEngine;
-use op_grpc_bridge::oracle_assertion::{
-    derive_human_footprint, AssertionValidator, DecoyTrustStore,
-};
+use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidator, DecoyTrustStore};
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
 use op_grpc_bridge::proto::{CallMethodRequest, ErrorCode as ProtoErrorCode};
 use op_identity::oracle_assertion::{
@@ -143,17 +141,11 @@ fn envelope_result(v: &ProstValue) -> &ProstValue {
 }
 
 fn principal_id_from(v: &ProstValue) -> String {
-    string_field(
-        struct_field(envelope_result(v), "principal"),
-        "principal_id",
-    )
+    string_field(struct_field(envelope_result(v), "principal"), "principal_id")
 }
 
 fn human_pubkey_from(v: &ProstValue) -> String {
-    string_field(
-        struct_field(envelope_result(v), "principal"),
-        "human_pubkey",
-    )
+    string_field(struct_field(envelope_result(v), "principal"), "human_pubkey")
 }
 
 const HOST_SLED_FOOTPRINT: [u8; 32] = [0xAA; 32];
@@ -206,7 +198,10 @@ fn fresh_signed(issuer: &DecoyIssuer, pubkey: &str, nonce: [u8; 16]) -> SignedAs
 }
 
 fn attach_assertion(meta: &mut MetadataMap, wire: &[u8]) {
-    meta.insert_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(wire));
+    meta.insert_bin(
+        ASSERTION_METADATA_KEY,
+        MetadataValue::from_bytes(wire),
+    );
 }
 
 fn attach_capability(meta: &mut MetadataMap, cap: &str) {
@@ -322,11 +317,16 @@ async fn start_server(strip_connect_info: bool) -> (RunningServer, TestEnv) {
     start_server_with_env(strip_connect_info, TestEnv::new()).await
 }
 
-async fn start_server_with_env(strip_connect_info: bool, env: TestEnv) -> (RunningServer, TestEnv) {
+async fn start_server_with_env(
+    strip_connect_info: bool,
+    env: TestEnv,
+) -> (RunningServer, TestEnv) {
     install_crypto_provider();
-    let ck =
-        rcgen::generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
-            .expect("tls cert");
+    let ck = rcgen::generate_simple_self_signed(vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ])
+    .expect("tls cert");
     let ca_pem = ck.cert.pem();
     let identity = Identity::from_pem(ck.cert.pem(), ck.key_pair.serialize_pem());
 
@@ -518,7 +518,10 @@ async fn register_human(
     alias: &str,
     nonce: [u8; 16],
 ) {
-    env.grant_human(pubkey, &["human_principal.write", "human_principal.read"]);
+    env.grant_human(
+        pubkey,
+        &["human_principal.write", "human_principal.read"],
+    );
     let args = prost_struct(BTreeMap::from([
         ("human_pubkey".to_string(), prost_str(pubkey)),
         ("display_alias".to_string(), prost_str(alias)),
@@ -703,7 +706,10 @@ async fn rejects_revoked_human_key() {
     let pubkey = pk(3);
     register_human(ch.clone(), &env, &pubkey, "revoke-me", [0x04; 16]).await;
     resolve_human(ch.clone(), &env, &pubkey, [0x05; 16]).await;
-    env.grant_human(&pubkey, &["human_principal.write", "human_principal.read"]);
+    env.grant_human(
+        &pubkey,
+        &["human_principal.write", "human_principal.read"],
+    );
     let revoke_args = prost_struct(BTreeMap::from([(
         "human_pubkey".to_string(),
         prost_str(&pubkey),
@@ -754,15 +760,7 @@ async fn rejects_expired_assertion() {
     register_human(ch.clone(), &env, &pubkey, "exp", [0x08; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        test_ip(),
-        now - 600,
-        now - 60,
-        [0x09; 16],
-        None,
-    );
+    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now - 600, now - 60, [0x09; 16], None);
     let out = call_method(
         ch,
         CallOpts {
@@ -840,15 +838,7 @@ async fn rejects_source_ip_substitution() {
     register_human(ch.clone(), &env, &pubkey, "ip", [0x0C; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let bad = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        alt_ip(),
-        now - 5,
-        now + 300,
-        [0x0D; 16],
-        None,
-    );
+    let bad = signed_with_fields(&env.issuer, &pubkey, alt_ip(), now - 5, now + 300, [0x0D; 16], None);
     let out = call_method(
         ch.clone(),
         CallOpts {
@@ -908,8 +898,7 @@ async fn rejects_container_key_substitution() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let container_pk = pk(8);
-    let (_fp, _trace) =
-        provision_container_identity(ch.clone(), &env, &container_pk, [0x11; 16]).await;
+    let (_fp, _trace) = provision_container_identity(ch.clone(), &env, &container_pk, [0x11; 16]).await;
     env.grant_human(&container_pk, &["human_principal.read"]);
     let signed = fresh_signed(&env.issuer, &container_pk, [0x12; 16]);
     let out = call_method(
@@ -942,15 +931,7 @@ async fn rejects_over_long_ttl() {
     register_human(ch.clone(), &env, &pubkey, "long", [0x13; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        test_ip(),
-        now,
-        now + 901,
-        [0x14; 16],
-        None,
-    );
+    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now, now + 901, [0x14; 16], None);
     verify_signature(
         &signed.assertion,
         &signed.signature,
@@ -1133,16 +1114,14 @@ async fn rejects_malformed_assertion_metadata() {
             actor_id: "e2e".to_string(),
             capability_id: "human_principal.read".to_string(),
         });
-        req.metadata_mut()
-            .insert_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(&wire));
+        req.metadata_mut().insert_bin(
+            ASSERTION_METADATA_KEY,
+            MetadataValue::from_bytes(&wire),
+        );
         attach_capability(req.metadata_mut(), "human_principal.read");
         let status = client.call_method(req).await.unwrap_err();
         assert_eq!(status.code(), Code::Unauthenticated, "nonce {nonce_byte}");
-        assert!(
-            status.message().contains("Malformed"),
-            "{}",
-            status.message()
-        );
+        assert!(status.message().contains("Malformed"), "{}", status.message());
     }
 }
 
@@ -1156,15 +1135,7 @@ async fn rejects_not_yet_valid_assertion() {
     register_human(ch.clone(), &env, &pubkey, "future", [0x20; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        test_ip(),
-        now + 300,
-        now + 900,
-        [0x21; 16],
-        None,
-    );
+    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now + 300, now + 900, [0x21; 16], None);
     let out = call_method(
         ch,
         CallOpts {
@@ -1195,15 +1166,7 @@ async fn accepts_within_leeway_expired_assertion() {
     register_human(ch.clone(), &env, &pubkey, "leeway", [0x22; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        test_ip(),
-        now - 300,
-        now - 10,
-        [0x23; 16],
-        None,
-    );
+    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now - 300, now - 10, [0x23; 16], None);
     assert_ok(
         call_method(
             ch,
@@ -1235,15 +1198,7 @@ async fn accepts_lifetime_exactly_900s() {
     register_human(ch.clone(), &env, &pubkey, "900", [0x24; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        test_ip(),
-        now,
-        now + 900,
-        [0x25; 16],
-        None,
-    );
+    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now, now + 900, [0x25; 16], None);
     assert_ok(
         call_method(
             ch,
@@ -1307,6 +1262,35 @@ async fn registration_bootstrap_requires_grant() {
                     ("display_alias".to_string(), prost_str("denied")),
                 ])),
                 assertion: Some(fresh_signed(&env.issuer, &pubkey2, [0x27; 16])),
+                ghostbridge: None,
+                wireguard_pubkey: None,
+                extra_assertion: None,
+            },
+        )
+        .await,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn registration_bootstrap_cannot_register_another_humans_key() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let attacker = pk(61);
+    let victim = pk(62);
+    env.grant_human(&attacker, &["human_principal.write"]);
+
+    assert_permission_denied(
+        call_method(
+            ch,
+            CallOpts {
+                plugin_id: "human_principal",
+                method: "register_key",
+                capability: "human_principal.write",
+                args: prost_struct(BTreeMap::from([
+                    ("human_pubkey".to_string(), prost_str(&victim)),
+                    ("display_alias".to_string(), prost_str("stolen")),
+                ])),
+                assertion: Some(fresh_signed(&env.issuer, &attacker, [0x61; 16])),
                 ghostbridge: None,
                 wireguard_pubkey: None,
                 extra_assertion: None,
@@ -1493,11 +1477,8 @@ async fn e2e_assertion_precedence_over_footprint_headers() {
     let mut bad = fresh_signed(&env.issuer, &pubkey, [0x36; 16]);
     bad.signature[0] ^= 0x01;
     let container_pk = pk(33);
-    let (fp, trace) =
-        provision_container_identity(ch.clone(), &env, &container_pk, [0x37; 16]).await;
-    env.set_grants(
-        &serde_json::json!({ fp.clone(): { "capabilities": ["human_principal.read"] } }),
-    );
+    let (fp, trace) = provision_container_identity(ch.clone(), &env, &container_pk, [0x37; 16]).await;
+    env.set_grants(&serde_json::json!({ fp.clone(): { "capabilities": ["human_principal.read"] } }));
     let out = call_method(
         ch,
         CallOpts {
@@ -1550,9 +1531,7 @@ async fn e2e_container_and_human_never_cross_authenticate() {
     let human_pk = pk(35);
     register_human(ch.clone(), &env, &human_pk, "human", [0x3A; 16]).await;
     let hfp = footprint_hex(&human_pk);
-    env.set_grants(
-        &serde_json::json!({ hfp.clone(): { "capabilities": ["human_principal.read"] } }),
-    );
+    env.set_grants(&serde_json::json!({ hfp.clone(): { "capabilities": ["human_principal.read"] } }));
     assert_ghostbridge_identity_rejected(
         call_method(
             ch.clone(),
@@ -1758,10 +1737,7 @@ async fn e2e_empty_trust_store_fail_closed() {
     drop(srv);
     drop(ch);
     std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", &cozo);
-    write_grants(
-        &grants_template,
-        &grants_for(&pubkey, &["human_principal.read"]),
-    );
+    write_grants(&grants_template, &grants_for(&pubkey, &["human_principal.read"]));
     let missing = tempfile::tempdir().expect("missing");
     std::env::set_var(
         "OP_DECOY_TRUST_STORE",
@@ -1790,8 +1766,7 @@ async fn e2e_empty_trust_store_fail_closed() {
         "UnknownDecoyKey",
     );
     let container_pk = pk(39);
-    let (fp, trace) =
-        provision_container_identity(ch.clone(), &env, &container_pk, [0x46; 16]).await;
+    let (fp, trace) = provision_container_identity(ch.clone(), &env, &container_pk, [0x46; 16]).await;
     env.set_grants(&serde_json::json!({ fp.clone(): { "capabilities": ["identity_sled.read"] } }));
     assert_ok(
         call_method(
@@ -1883,10 +1858,7 @@ async fn e2e_alias_mutation_has_no_auth_effect() {
     );
     assert_eq!(principal_id_from(&before), principal_id_from(&after));
     assert_eq!(human_pubkey_from(&before), human_pubkey_from(&after));
-    assert_eq!(
-        footprint_hex(&pubkey),
-        hex::encode(derive_human_footprint(&pubkey))
-    );
+    assert_eq!(footprint_hex(&pubkey), hex::encode(derive_human_footprint(&pubkey)));
 }
 
 // ?? VAL-CROSS-011 ???????????????????????????????????????????????????????????
@@ -2148,7 +2120,10 @@ async fn e2e_revocation_tombstone_end_to_end() {
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(49);
     register_human(ch.clone(), &env, &pubkey, "tomb", [0x5D; 16]).await;
-    env.grant_human(&pubkey, &["human_principal.write", "human_principal.read"]);
+    env.grant_human(
+        &pubkey,
+        &["human_principal.write", "human_principal.read"],
+    );
     assert_ok(
         call_method(
             ch.clone(),
@@ -2222,15 +2197,7 @@ async fn e2e_restart_empties_replay_cache_expired_stays_closed() {
     register_human(ch.clone(), &env, &pubkey, "restart", [0x61; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let expired = signed_with_fields(
-        &env.issuer,
-        &pubkey,
-        test_ip(),
-        now - 600,
-        now - 60,
-        [0x62; 16],
-        None,
-    );
+    let expired = signed_with_fields(&env.issuer, &pubkey, test_ip(), now - 600, now - 60, [0x62; 16], None);
     drop(srv);
     drop(ch);
     let (srv2, env2) = start_server(false).await;

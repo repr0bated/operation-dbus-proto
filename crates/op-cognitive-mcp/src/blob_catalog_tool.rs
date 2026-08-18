@@ -7,45 +7,11 @@
 //! e.g. for UI generation that combines fields/state from unrelated plugins
 //! in ways a fixed per-plugin template never would.
 
-use crate::live_schema;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use serde_json::{json, Value};
 use std::sync::Arc;
-
-/// Where a response's contracts came from. Reported back to the caller so a
-/// model can tell a live mirror from a catalog read without guessing.
-const SOURCE_STREAM: &str = "live_stream";
-const SOURCE_SHM: &str = "shm_catalog";
-
-/// Plugin ids to serve, preferring the push-fed mirror.
-///
-/// An empty mirror means nothing has published into this process — not that
-/// there are no plugins — so it falls through to the sealed catalog rather than
-/// reporting an empty system.
-fn catalog_plugin_ids() -> Result<(Vec<String>, &'static str)> {
-    let live = live_schema::global().plugin_ids();
-    if !live.is_empty() {
-        return Ok((live, SOURCE_STREAM));
-    }
-    let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
-        .context("failed to read plugin blob manifest from SHM catalog")?;
-    Ok((ids, SOURCE_SHM))
-}
-
-/// One plugin's contract as JSON, preferring the push-fed mirror.
-///
-/// The mirror already holds parsed sealed bytes, so the hit path does no
-/// re-serialization; the fallback path serializes the struct `read_plugin_schema_shm`
-/// returns, exactly as this tool always did.
-fn catalog_plugin_schema(plugin_id: &str) -> Option<Value> {
-    if let Some(live) = live_schema::global().get(plugin_id) {
-        return Some(live.schema);
-    }
-    let schema = op_blob::catalog::read_plugin_schema_shm(plugin_id)?;
-    serde_json::to_value(schema).ok()
-}
 
 pub async fn register_blob_catalog_tool(registry: &ToolRegistry) -> Result<()> {
     registry
@@ -128,14 +94,14 @@ impl Tool for BlobCatalogTool {
 
         let category_filter = input.get("category").and_then(|v| v.as_str());
 
-        let (ids, source) = catalog_plugin_ids()?;
+        let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
+            .context("failed to read plugin blob manifest from SHM catalog")?;
 
         // If mode is "list", return just the plugin IDs
         if mode == "list" {
             let result = json!({
                 "plugin_count": ids.len(),
                 "plugin_ids": ids,
-                "source": source,
             });
             return simd_json::serde::to_owned_value(&result)
                 .context("serde_json result -> simd_json");
@@ -159,9 +125,11 @@ impl Tool for BlobCatalogTool {
         };
 
         for id in &ids_to_process {
-            if let Some(schema_value) = catalog_plugin_schema(id) {
+            if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(id) {
                 // Apply category filter if specified
                 if let Some(cat) = category_filter {
+                    let schema_value = serde_json::to_value(schema.clone())
+                        .with_context(|| format!("failed to serialize schema for '{id}'"))?;
                     if let Some(plugin_category) = schema_value.get("category") {
                         if plugin_category.as_str().unwrap_or("") != cat {
                             continue; // Skip plugins not matching category
@@ -171,6 +139,9 @@ impl Tool for BlobCatalogTool {
 
                 if mode == "summary" {
                     // Summary mode: return lightweight metadata only
+                    let schema_value = serde_json::to_value(schema.clone())
+                        .with_context(|| format!("failed to serialize schema for '{id}'"))?;
+
                     let mut summary = serde_json::Map::new();
                     summary.insert(
                         "name".to_string(),
@@ -209,8 +180,10 @@ impl Tool for BlobCatalogTool {
 
                     plugins.insert(id.clone(), Value::Object(summary));
                 } else {
-                    // Full mode: return the complete contract as sealed.
-                    plugins.insert(id.clone(), schema_value);
+                    // Full mode: return complete schema
+                    let value = serde_json::to_value(schema)
+                        .with_context(|| format!("failed to serialize schema for '{id}'"))?;
+                    plugins.insert(id.clone(), value);
                 }
             } else if plugin_ids_filter.is_some() {
                 // Only mark as missing if explicitly requested

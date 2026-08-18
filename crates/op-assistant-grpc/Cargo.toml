@@ -8,12 +8,12 @@ description = "gRPC gateway for Assistant integration with D-Bus first transport
 [dependencies]
 # Cognitive memory (CozoDB-backed)
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
+# Shared Ghostbridge footprint check (IdentitySled in SHM)
+op-identity = { path = "../op-identity" }
 
 # gRPC
 tonic = { workspace = true }
-tonic-prost = { workspace = true }
 tonic-web = { workspace = true }
-tower = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
 prost = { workspace = true }
@@ -48,7 +48,7 @@ chrono = { workspace = true }
 hex = { workspace = true }
 
 [build-dependencies]
-tonic-prost-build = { workspace = true }
+tonic-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

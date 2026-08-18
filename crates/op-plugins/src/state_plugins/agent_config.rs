@@ -64,18 +64,6 @@ impl AgentConfigPlugin {
     pub fn new() -> Self {
         Self
     }
-
-    /// Seed/default agent list for mutation reads when SHM has no projection.
-    pub fn current_state() -> AgentConfigState {
-        AgentConfigState {
-            agents: vec![AgentConfig {
-                name: "factory".to_string(),
-                enabled: true,
-                model: None,
-                tools: vec![],
-            }],
-        }
-    }
 }
 
 #[async_trait]
@@ -138,41 +126,6 @@ impl StatePlugin for AgentConfigPlugin {
             supports_verification: true,
             atomic_operations: false,
         }
-    }
-}
-
-/// Mutation-path dispatch for agent_config UI reads.
-pub fn dispatch_agent_config_method(
-    method: &str,
-    state: &AgentConfigState,
-) -> Result<serde_json::Value> {
-    match method {
-        "get_config" => {
-            let agents: Vec<serde_json::Value> = state
-                .agents
-                .iter()
-                .map(|a| {
-                    serde_json::json!({
-                        "name": a.name,
-                        "model": a.model.clone().unwrap_or_default(),
-                        "status": if a.enabled { "ok" } else { "disabled" },
-                        "tools": a.tools,
-                    })
-                })
-                .collect();
-            Ok(serde_json::json!({ "agents": agents }))
-        }
-        "list_tools" => {
-            let mut tools: Vec<String> =
-                state.agents.iter().flat_map(|a| a.tools.clone()).collect();
-            tools.sort();
-            tools.dedup();
-            Ok(serde_json::json!({ "tools": tools }))
-        }
-        "update_config" | "register_tool" | "reset_config" => Err(anyhow::anyhow!(
-            "agent_config.{method} requires an explicit mutation payload; not implemented as echo"
-        )),
-        other => Err(anyhow::anyhow!("unknown agent_config method: {other}")),
     }
 }
 

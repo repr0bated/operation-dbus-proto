@@ -16,9 +16,6 @@ use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
 use op_agents::agent_registry::AgentRegistry;
-use op_cognitive_mcp::{
-    CognitiveMcpServer, CognitiveMemoryStore, ContextAwarenessEngine, SessionManager,
-};
 use op_grpc_bridge::{GrpcClientPool, RemoteOperationClient};
 use op_llm::chat::ChatManager;
 use op_state_store::{MemoryStore, StateStore};
@@ -84,10 +81,6 @@ pub struct AppState {
     pub broadcast_tx: broadcast::Sender<String>,
     /// SSE event broadcaster
     pub sse_broadcaster: Arc<SseEventBroadcaster>,
-    /// Last contract and state frame per key, replayed to each new SSE
-    /// subscriber so a browser that connects late still renders the whole
-    /// system instead of waiting for the next mutation.
-    pub hydration: Arc<crate::sse::HydrationCache>,
     /// Server start time
     pub start_time: std::time::Instant,
     /// Conversation history — JSON flat file, no SQLite, no drift.
@@ -110,16 +103,7 @@ pub struct AppState {
     pub system_stats: Arc<RwLock<simd_json::OwnedValue>>,
     /// Recent activity feed from projection/D-Bus events
     pub activity_log: Arc<RwLock<Vec<simd_json::OwnedValue>>>,
-    /// In-process cognitive MCP server for context-awareness routes (Phase 2).
-    cognitive_mcp: Option<Arc<CognitiveMcpServer>>,
 }
-
-/// Context-awareness state for `/cognitive/context` SSE routes.
-pub type CognitiveContextState = (
-    Arc<ContextAwarenessEngine>,
-    Arc<CognitiveMemoryStore>,
-    Arc<SessionManager>,
-);
 
 impl AppState {
     /// Create new AppState with an optional shared tool registry
@@ -202,7 +186,6 @@ impl AppState {
 
         // Create SSE broadcaster
         let sse_broadcaster = Arc::new(SseEventBroadcaster::new());
-        let hydration = Arc::new(crate::sse::HydrationCache::default());
 
         // Initialize privacy router components
         // User database in CozoDB — graph-native, no JSON drift.
@@ -263,11 +246,9 @@ impl AppState {
         // Consolidated control plane is op-grpc-bridge on :8090 (not a separate :50051 opdbus).
         let grpc_addr = std::env::var("OP_DBUS_GRPC_ADDR")
             .or_else(|_| std::env::var("OP_DBUS_ADDR"))
-            .unwrap_or_else(|_| "https://localhost:8090".to_string());
+            .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         let grpc_client = Arc::new(RemoteOperationClient::new(pool, &grpc_addr, "op-web"));
-
-        let cognitive_mcp = init_cognitive_mcp_for_context().await;
 
         Ok(Self {
             orchestrator,
@@ -278,7 +259,6 @@ impl AppState {
             provider_name,
             broadcast_tx,
             sse_broadcaster,
-            hydration,
             start_time: std::time::Instant::now(),
             conversations: Arc::new(crate::chat_store::ChatSessionStore::default_store().await?),
             user_store,
@@ -290,18 +270,6 @@ impl AppState {
             grpc_client,
             system_stats: Arc::new(RwLock::new(simd_json::json!(null))),
             activity_log: Arc::new(RwLock::new(Vec::new())),
-            cognitive_mcp,
-        })
-    }
-
-    /// Context engine tuple for `/cognitive/context` when init succeeded.
-    pub fn cognitive_context_state(&self) -> Option<CognitiveContextState> {
-        self.cognitive_mcp.as_ref().map(|server| {
-            (
-                server.context_engine(),
-                server.memory_store(),
-                server.session_manager(),
-            )
         })
     }
 
@@ -354,11 +322,7 @@ impl AppState {
             loop {
                 match state_clone
                     .grpc_client
-                    // Hydrate both contracts and present state on connect. A
-                    // browser attaching mid-life must render the whole system,
-                    // not just whichever plugins happen to mutate while it is
-                    // watching — that was why coverage looked partial.
-                    .subscribe(vec![], vec![], vec![], true, true)
+                    .subscribe(vec![], vec![], vec![])
                     .await
                 {
                     Ok(mut stream) => {
@@ -366,49 +330,18 @@ impl AppState {
                         while let Some(msg_result) = stream.next().await {
                             match msg_result {
                                 Ok(msg) => {
-                                    // The whole frame goes across, not a
-                                    // hand-picked subset: this bridge is a
-                                    // transport hop, and a field dropped here
-                                    // is a field no browser subscriber can
-                                    // ever ask for. Only the SSE event *name*
-                                    // is decided here, so an EventSource
-                                    // listener can route contracts and values
-                                    // separately without parsing first.
-                                    let is_schema = msg.change_type == "schema_migration";
-                                    let event_name = if is_schema {
-                                        "schema_update"
-                                    } else {
-                                        "state_update"
-                                    };
-                                    match simd_json::serde::to_string(&msg) {
-                                        Ok(json_str) => {
-                                            // Keep the frame for replay before
-                                            // broadcasting it. Keepalives are
-                                            // not retained: they describe no
-                                            // subject, so replaying one would
-                                            // tell a late subscriber nothing.
-                                            if is_schema {
-                                                state_clone
-                                                    .hydration
-                                                    .record_schema(&msg.plugin_id, &json_str);
-                                            } else if msg.frame_kind != "heartbeat" {
-                                                let key = format!(
-                                                    "{}|{}|{}",
-                                                    msg.plugin_id,
-                                                    msg.object_path,
-                                                    msg.property_name.as_deref().unwrap_or(""),
-                                                );
-                                                state_clone
-                                                    .hydration
-                                                    .record_state(key, &json_str);
-                                            }
-                                            state_clone
-                                                .sse_broadcaster
-                                                .broadcast(event_name, &json_str);
-                                        }
-                                        Err(e) => {
-                                            warn!("failed to serialize state frame: {}", e);
-                                        }
+                                    let data = simd_json::json!({
+                                        "plugin_id": msg.plugin_id,
+                                        "object_path": msg.object_path,
+                                        "property_name": msg.property_name,
+                                        "new_value": msg.new_value,
+                                        "event_id": msg.event_id,
+                                        "tags": msg.tags_touched,
+                                    });
+                                    if let Ok(json_str) = simd_json::to_string(&data) {
+                                        state_clone
+                                            .sse_broadcaster
+                                            .broadcast("state_update", &json_str);
                                     }
                                 }
                                 Err(e) => {
@@ -441,20 +374,18 @@ impl AppState {
                         while let Some(msg_result) = stream.next().await {
                             match msg_result {
                                 Ok(msg) => {
-                                    // Same rule as the state bridge: forward
-                                    // the frame, do not curate it. The chain
-                                    // frame's hashes are what make an audit
-                                    // record verifiable downstream, and the
-                                    // old projection dropped them.
-                                    match simd_json::serde::to_string(&msg) {
-                                        Ok(json_str) => {
-                                            state_clone
-                                                .sse_broadcaster
-                                                .broadcast("audit_event", &json_str);
-                                        }
-                                        Err(e) => {
-                                            warn!("failed to serialize chain event: {}", e);
-                                        }
+                                    let data = simd_json::json!({
+                                        "event_id": msg.event_id,
+                                        "plugin_id": msg.plugin_id,
+                                        "operation": msg.operation_type,
+                                        "target": msg.target,
+                                        "decision": msg.decision,
+                                        "tags": msg.tags_touched,
+                                    });
+                                    if let Ok(json_str) = simd_json::to_string(&data) {
+                                        state_clone
+                                            .sse_broadcaster
+                                            .broadcast("audit_event", &json_str);
                                     }
                                 }
                                 Err(e) => {
@@ -751,32 +682,4 @@ fn log_tool_summary(tools: &[op_tools::registry::ToolDefinition]) {
         "  OVS: {}, D-Bus: {}, File: {}, Shell: {}, Agents: {}, Other: {}",
         ovs, dbus, file, shell, agent, other
     );
-}
-
-/// Construct the in-process cognitive MCP server for context-awareness routes.
-///
-/// Mirrors `op_grpc_bridge::grpc_server::init_cognitive_mcp` — op-web runs as a
-/// separate process from the bridge, so it owns its own engine instance.
-async fn init_cognitive_mcp_for_context() -> Option<Arc<CognitiveMcpServer>> {
-    if std::env::var("COGNITIVE_MCP_CONTEXT_HTTP_DISABLED").as_deref() == Ok("1") {
-        info!("Cognitive context routes disabled (COGNITIVE_MCP_CONTEXT_HTTP_DISABLED=1)");
-        return None;
-    }
-
-    let db_path = std::env::var("COGNITIVE_MCP_DB_PATH")
-        .unwrap_or_else(|_| "/var/lib/op-cognitive-mcp/memory.db".into());
-
-    match CognitiveMcpServer::new(&db_path).await {
-        Ok(server) => {
-            info!("Cognitive context engine loaded for /cognitive/context routes");
-            Some(Arc::new(server))
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                "CognitiveMcpServer init failed; /cognitive/context routes unavailable"
-            );
-            None
-        }
-    }
 }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tonic::transport::Server;
+use tonic_web::enable as tw_enable;
 use tracing::info;
 
 use super::agent_service::AgentServiceImpl;
@@ -126,30 +127,14 @@ impl GrpcServer {
 
         Server::builder()
             .accept_http1(true)
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                AgentServiceServer::from_arc(self.agent_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                CacheServiceServer::from_arc(self.cache_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                OrchestratorServiceServer::from_arc(self.orchestrator_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                McpServiceServer::from_arc(self.mcp_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                reflection,
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                health_service,
-            ))
+            .add_service(tw_enable(AgentServiceServer::from_arc(self.agent_service)))
+            .add_service(tw_enable(CacheServiceServer::from_arc(self.cache_service)))
+            .add_service(tw_enable(OrchestratorServiceServer::from_arc(
+                self.orchestrator_service,
+            )))
+            .add_service(tw_enable(McpServiceServer::from_arc(self.mcp_service)))
+            .add_service(tw_enable(reflection))
+            .add_service(tw_enable(health_service))
             .serve(addr)
             .await?;
 
@@ -186,30 +171,14 @@ impl GrpcServer {
 
         Server::builder()
             .accept_http1(true)
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                AgentServiceServer::from_arc(self.agent_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                CacheServiceServer::from_arc(self.cache_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                OrchestratorServiceServer::from_arc(self.orchestrator_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                McpServiceServer::from_arc(self.mcp_service),
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                reflection,
-            ))
-            .add_service(tower::Layer::layer(
-                &tonic_web::GrpcWebLayer::new(),
-                health_service,
-            ))
+            .add_service(tw_enable(AgentServiceServer::from_arc(self.agent_service)))
+            .add_service(tw_enable(CacheServiceServer::from_arc(self.cache_service)))
+            .add_service(tw_enable(OrchestratorServiceServer::from_arc(
+                self.orchestrator_service,
+            )))
+            .add_service(tw_enable(McpServiceServer::from_arc(self.mcp_service)))
+            .add_service(tw_enable(reflection))
+            .add_service(tw_enable(health_service))
             .serve_with_shutdown(addr, shutdown)
             .await?;
 

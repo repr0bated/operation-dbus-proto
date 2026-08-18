@@ -6,21 +6,20 @@
 //! - Broadcasts authoritative state changes to gRPC subscribers
 //! - Directly manages authoritative RCP stores (OVSDB, NonNet, SQLite)
 
-use anyhow::Context;
+use anyhow::Context as _;
 use async_trait::async_trait;
-use op_cognitive_mcp::{CognitiveMemoryStore, ContextAwarenessEngine, SessionManager};
-use op_mcp::tool_registry::ToolRegistry;
 use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
+use base64::Engine;
 use op_blockchain::{PluginFootprint, StreamingBlockchain};
-use op_identity::session_genesis::mint_genesis;
+use op_identity::{read_sled, write_sled_full};
+use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::blockchain_plugin::{
     AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
@@ -31,13 +30,6 @@ use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationTyp
 /// audit trail, when `$OPDBUS_BLOCKCHAIN_PATH` is unset. Matches
 /// `blockchain_plugin::DEFAULT_BASE_PATH` so both read the same chain.
 const DEFAULT_BLOCKCHAIN_PATH: &str = "/var/lib/opdbus/blockchain";
-
-/// Context-awareness state extracted from [`CognitiveMcpServer`] for Task 3 routes.
-pub type CognitiveContextState = (
-    Arc<ContextAwarenessEngine>,
-    Arc<CognitiveMemoryStore>,
-    Arc<SessionManager>,
-);
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -75,83 +67,13 @@ pub enum ChangeSource {
     Internal,
 }
 
-/// One plugin's sealed contract, held for stream hydration.
-///
-/// Both fields come out of the same [`op_blob::blobify_plugin_schema`] call that
-/// produced the sealed blob, so `schema_json` is byte-identical to the catalog's
-/// SCHEMA_JSON section and `schema_hash` is the hash covering exactly those
-/// bytes. Nothing here re-serializes or re-hashes the schema.
-#[derive(Debug, Clone)]
-pub struct SchemaSnapshot {
-    pub schema_hash: String,
-    pub schema_json: simd_json::OwnedValue,
-}
-
-/// Actor label for a mutation that arrived with no identity at all.
-///
-/// It names no session, so it anchors none: the mutation is still notarized in
-/// the chain, but its session stamp is empty rather than borrowed from whoever
-/// wrote a shared file last.
-pub const ANONYMOUS_ACTOR: &str = "anonymous";
-
-/// The verified identity of the session a mutation belongs to.
-///
-/// Assembled once, at arrival, by [`MutationEngine::mint_and_store_genesis`]
-/// and read from there by every consumer. Nothing recomputes the genesis: the
-/// interceptor compares this value, the chain stamper embeds it, the UDS
-/// injector presents it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SessionContext {
-    /// Hex blake3 session genesis — the immutable anchor.
-    pub genesis_hex: String,
-    /// Session identifier (container name / derived session id).
-    pub session_id: String,
-    /// WireGuard public key (base64) that owns this session.
-    pub wireguard_pubkey: String,
-}
-
-/// The genesis and the inputs it was minted from, written to the session
-/// record exactly once at arrival.
-///
-/// The inputs are stored because the genesis is irreproducible without them —
-/// `arrival_timestamp` cannot be recovered after the fact — which is what makes
-/// offline re-verification possible (FR-3).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GenesisStamp {
-    pub session_id: String,
-    pub wireguard_pubkey: String,
-    pub genesis_hex: String,
-    pub arrival_timestamp: i64,
-    pub chain_head_at_arrival: String,
-    pub catalog_hash_at_arrival: String,
-    pub head_timestamp_at_arrival: i64,
-}
-
 pub struct MutationEngine {
     /// Authoritative Event Chain
     pub event_chain: Arc<RwLock<EventChain>>,
     /// Real-time change projection channel
     change_tx: broadcast::Sender<StateChange>,
-    /// Real-time audit-chain projection channel.
-    ///
-    /// Fed from the same pipeline that appends to `event_chain`, so the mutation
-    /// door remains the only producer of chain events. Sent after the projection
-    /// write for the same reason `change_tx` is: a subscriber must never learn of
-    /// an event before the state it describes is readable.
-    chain_tx: broadcast::Sender<ChainEvent>,
     /// State cache for instant gRPC retrieval
     state_cache: Arc<RwLock<HashMap<String, simd_json::OwnedValue>>>,
-    /// Sealed plugin contracts, keyed by canonical plugin id.
-    ///
-    /// Populated by [`MutationEngine::seed_missing_plugin_projections`] at
-    /// startup — the same pass that seals the blobs — so a subscriber can be
-    /// handed the running contract at hydration without touching the catalog.
-    /// Ordered so hydration frames arrive in a stable sequence.
-    schema_cache: Arc<RwLock<BTreeMap<String, SchemaSnapshot>>>,
-    /// Identity of the published catalog, read from `op_blob`'s single
-    /// implementation after sealing — never recomputed here. Stamped on every
-    /// outgoing frame so a subscriber can detect drift without being told.
-    catalog_hash: Arc<RwLock<String>>,
     /// System D-Bus connection authority
     pub dbus_connection: Arc<OnceCell<Connection>>,
     /// Session bus connection for projection tree introspection
@@ -173,20 +95,8 @@ pub struct MutationEngine {
     pub ovsdb: Arc<OvsdbDbusClient>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
-    /// Loopback adapter to the real ZeroClaw runtime authority.
-    zeroclaw_runtime: Arc<crate::zeroclaw_runtime::ZeroclawRuntimeClient>,
-    /// In-process cognitive MCP tool registry (Phase 2). `None` when init failed.
-    cognitive_tool_registry: std::sync::RwLock<Option<Arc<ToolRegistry>>>,
-    /// Context engine tuple for Task 3 (context-awareness routes).
-    cognitive_context_engine: std::sync::RwLock<Option<CognitiveContextState>>,
-    /// Verified session identities, keyed by session_id.
-    ///
-    /// Populated at arrival by [`MutationEngine::mint_and_store_genesis`] and
-    /// read (never recomputed) by the chain stamper and the per-session record
-    /// writer. This is a projection of the session records for the mutation
-    /// path, not a second store of the genesis: the record is authoritative and
-    /// every entry here was written from it.
-    sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
+    /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
+    chat_manager: Arc<ChatManager>,
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -232,73 +142,14 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
     }
 }
 
-/// How many of the newest audit records to replay into the in-memory chain at
-/// startup. `OP_EVENT_CHAIN_REPLAY_LIMIT=0` restores the old unbounded rebuild.
-///
-/// The default is a window, not a cap on history: the durable trail on disk is
-/// untouched and complete. It exists because the boot path must not scale with
-/// total recorded history.
-const DEFAULT_REPLAY_LIMIT: usize = 50_000;
-
-fn replay_limit() -> usize {
-    std::env::var("OP_EVENT_CHAIN_REPLAY_LIMIT")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_REPLAY_LIMIT)
-}
-
-/// Extract the block number from a `block-000000000042.json` timing record.
-///
-/// Selecting on the filename is what makes a bounded replay cheap: the newest
-/// records can be chosen without opening, reading, or parsing any of them.
-fn block_number_from_name(path: &std::path::Path) -> Option<u64> {
-    let stem = path.file_stem()?.to_str()?;
-    let digits = stem.strip_prefix("block-")?;
-    digits.parse::<u64>().ok()
-}
-
 impl MutationEngine {
     /// Create a new authoritative Mutation Engine
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
-        Self::new_with_zeroclaw_client(
-            event_chain,
-            ovsdb,
-            crate::zeroclaw_runtime::ZeroclawRuntimeClient::from_env(),
-        )
-    }
-
-    /// Create an engine using an explicit ZeroClaw endpoint.
-    ///
-    /// This is primarily useful for integration tests, where the runtime API is
-    /// provided by an ephemeral local server instead of the host daemon.
-    pub fn new_with_zeroclaw_runtime(
-        event_chain: Arc<RwLock<EventChain>>,
-        ovsdb: Arc<OvsdbDbusClient>,
-        endpoint: String,
-        agent_alias: String,
-        token: Option<String>,
-    ) -> Self {
-        Self::new_with_zeroclaw_client(
-            event_chain,
-            ovsdb,
-            crate::zeroclaw_runtime::ZeroclawRuntimeClient::new(endpoint, agent_alias, token),
-        )
-    }
-
-    fn new_with_zeroclaw_client(
-        event_chain: Arc<RwLock<EventChain>>,
-        ovsdb: Arc<OvsdbDbusClient>,
-        zeroclaw_runtime: crate::zeroclaw_runtime::ZeroclawRuntimeClient,
-    ) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
-        let (chain_tx, _) = broadcast::channel(1024);
         Self {
             event_chain,
             change_tx,
-            chain_tx,
             state_cache: Arc::new(RwLock::new(HashMap::new())),
-            schema_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            catalog_hash: Arc::new(RwLock::new(String::new())),
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
             signal_bus: Arc::new(OnceCell::new()),
@@ -306,32 +157,8 @@ impl MutationEngine {
             audit_sink: Arc::new(OnceCell::new()),
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
-            zeroclaw_runtime: Arc::new(zeroclaw_runtime),
-            cognitive_tool_registry: std::sync::RwLock::new(None),
-            cognitive_context_engine: std::sync::RwLock::new(None),
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            chat_manager: Arc::new(ChatManager::new()),
         }
-    }
-
-    /// Attach the in-process cognitive MCP registry constructed at bridge startup.
-    pub fn attach_cognitive_mcp(
-        &self,
-        registry: Option<Arc<ToolRegistry>>,
-        context: Option<CognitiveContextState>,
-    ) {
-        if let Ok(mut guard) = self.cognitive_tool_registry.write() {
-            *guard = registry;
-        }
-        if let Ok(mut guard) = self.cognitive_context_engine.write() {
-            *guard = context;
-        }
-    }
-
-    fn cognitive_tool_registry(&self) -> Option<Arc<ToolRegistry>> {
-        self.cognitive_tool_registry
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
     }
 
     /// Open the durable audit sink and rebuild the in-memory event chain from it.
@@ -383,13 +210,6 @@ impl MutationEngine {
     /// restored in the original order. Malformed or non-audit files (the
     /// timing directory also holds footprints written by other producers) are
     /// skipped with a `warn!` rather than aborting the rebuild.
-    ///
-    /// Only the newest [`replay_limit`] records are replayed. The boot path
-    /// must not rebuild the entire chain: the trail is append-only and the full
-    /// scan cost minutes of startup and tens of GB of RSS. Records older than
-    /// the window stay on disk and are still served from there, so nothing is
-    /// lost — but a `verify_range` starting at genesis must read the durable
-    /// trail rather than the in-memory chain.
     async fn rebuild_chain_from_disk(&self, timing_dir: &std::path::Path) -> usize {
         {
             let chain = self.event_chain.read().await;
@@ -414,59 +234,15 @@ impl MutationEngine {
             }
         };
 
-        // Select the newest records by filename *before* reading any of them.
-        //
-        // The trail is append-only and grows without bound (over 1.7M records
-        // on the primary host). Reading and parsing all of it held every record
-        // in memory at once — tens of GB — and delayed the listener by minutes
-        // on every boot. Only the tail is needed to answer live queries; the
-        // full trail stays on disk, which remains the authority for
-        // verification from genesis.
-        let limit = replay_limit();
-        let mut newest: std::collections::BinaryHeap<(std::cmp::Reverse<u64>, std::path::PathBuf)> =
-            std::collections::BinaryHeap::new();
-        let mut candidates = 0usize;
+        // (event_id, event_json) — sorted before replay so linkage is exact.
+        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
+        let mut skipped = 0usize;
 
         while let Ok(Some(entry)) = dir.next_entry().await {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let Some(block) = block_number_from_name(&path) else {
-                continue;
-            };
-            candidates += 1;
-            newest.push((std::cmp::Reverse(block), path));
-            if limit > 0 && newest.len() > limit {
-                // Heap is ordered by Reverse(block), so the root is the OLDEST
-                // retained record — exactly the one to drop.
-                newest.pop();
-            }
-        }
-
-        let mut selected: Vec<std::path::PathBuf> = newest
-            .into_sorted_vec()
-            .into_iter()
-            .map(|(_, path)| path)
-            .collect();
-        // `into_sorted_vec` on Reverse(block) yields newest-first; replay must
-        // run oldest-first so `replay_event`'s ordering check passes.
-        selected.reverse();
-
-        if limit > 0 && candidates > selected.len() {
-            tracing::info!(
-                candidates,
-                replaying = selected.len(),
-                limit,
-                "audit trail truncated for replay; older records remain on disk"
-            );
-        }
-
-        // (event_id, event_json) — sorted before replay so linkage is exact.
-        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
-        let mut skipped = 0usize;
-
-        for path in selected {
             let bytes = match tokio::fs::read(&path).await {
                 Ok(bytes) => bytes,
                 Err(error) => {
@@ -538,266 +314,13 @@ impl MutationEngine {
         let Some(sink) = self.audit_sink.get() else {
             return;
         };
-        let session = self.session_context_for_actor(&event.actor_id).await;
-        if let Err(error) = sink
-            .add_footprint(event_to_footprint(event, session.as_ref()))
-            .await
-        {
+        if let Err(error) = sink.add_footprint(event_to_footprint(event)).await {
             tracing::warn!(
                 %error,
                 event_id = event.event_id,
                 "audit durability write failed; event retained in memory only"
             );
         }
-    }
-
-    /// Advance the session's own record to the chain position this mutation
-    /// just took.
-    ///
-    /// The record answers "given this session, which slice of the chain is it,
-    /// and against which contract" — so it has to move for every mutation.
-    ///
-    /// This is the mutation-path writer of FR-6: it owns `mutation_index` and
-    /// `genesis` and touches nothing else, so it can never overwrite the
-    /// stream path's liveness fields. `mutation_index` advances only. A
-    /// mutation that belongs to no known session advances nothing — a chain
-    /// position belongs to a session or to no record at all; it is never
-    /// written to a shared last-write-wins file.
-    async fn advance_session_record(&self, event_id: u64, actor_id: &str) {
-        let Some(session) = self.ensure_session_context(actor_id).await else {
-            return;
-        };
-        if let Err(error) = crate::identity_sled_dispatch::advance_mutation_index(
-            self,
-            &session.session_id,
-            event_id,
-        )
-        .await
-        {
-            tracing::warn!(%error, event_id, "session record advance failed");
-        }
-    }
-
-    /// The verified session identity for `session_id`, if one has arrived.
-    pub async fn session_context(&self, session_id: &str) -> Option<SessionContext> {
-        self.sessions.read().await.get(session_id).cloned()
-    }
-
-    /// Resolve the session a mutation belongs to from its actor.
-    ///
-    /// Accepts whichever handle the caller happens to hold — the session id,
-    /// the WireGuard pubkey, the trace, or the genesis itself — because all of
-    /// them are fields of the same record. Nothing is derived here: the record
-    /// is the author and this is a read of it, warmed into the in-process map
-    /// so the chain stamper does not re-read per event.
-    pub async fn session_context_for_actor(&self, actor_id: &str) -> Option<SessionContext> {
-        if actor_id.is_empty() || actor_id == ANONYMOUS_ACTOR {
-            return None;
-        }
-        {
-            let sessions = self.sessions.read().await;
-            if let Some(found) = sessions.get(actor_id) {
-                return Some(found.clone());
-            }
-            if let Some(found) = sessions
-                .values()
-                .find(|ctx| ctx.wireguard_pubkey == actor_id || ctx.genesis_hex == actor_id)
-            {
-                return Some(found.clone());
-            }
-        }
-        // Restart-warm: after a cold start the map is empty but the records
-        // hydrated from Cozo already carry their anchors.
-        let record =
-            crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
-        let genesis_hex = record.genesis.clone().filter(|g| !g.is_empty())?;
-        let context = SessionContext {
-            genesis_hex,
-            session_id: record.session_id,
-            wireguard_pubkey: record.wireguard_pubkey,
-        };
-        self.register_session_context(context.clone()).await;
-        Some(context)
-    }
-
-    /// The session identity for `actor_id`, minting the anchor when this is the
-    /// session's arrival (FR-1: arrival is mutation one).
-    ///
-    /// A record that exists with no genesis is a session that has not arrived
-    /// yet — either its first mutation is happening now, or the process
-    /// restarted before the mint reached Cozo (§5.2). Both are handled the
-    /// same way: mint inline, once, before the mutation proceeds. An actor with
-    /// no record at all mints nothing; a chain position belongs to a session or
-    /// to no record at all.
-    pub async fn ensure_session_context(&self, actor_id: &str) -> Option<SessionContext> {
-        if actor_id.is_empty() || actor_id == ANONYMOUS_ACTOR {
-            return None;
-        }
-        if let Some(found) = self.session_context_for_actor(actor_id).await {
-            return Some(found);
-        }
-        let record =
-            crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
-        match self
-            .mint_and_store_genesis(&record.session_id, &record.wireguard_pubkey)
-            .await
-        {
-            Ok(_) => self.session_context(&record.session_id).await,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    session_id = %record.session_id,
-                    "session arrival could not be anchored; the mutation is \
-                     recorded without a session stamp"
-                );
-                None
-            }
-        }
-    }
-
-    /// Publish a session identity for the mutation path to stamp.
-    pub async fn register_session_context(&self, context: SessionContext) {
-        self.sessions
-            .write()
-            .await
-            .insert(context.session_id.clone(), context);
-    }
-
-    /// Drop the in-process projection of one session's identity.
-    ///
-    /// The record stays authoritative; this only discards the mutation path's
-    /// warm copy, so the next lookup re-reads the record. Session teardown and
-    /// crash-recovery re-mint both go through here rather than mutating the map
-    /// in place.
-    pub async fn forget_session_context(&self, session_id: &str) {
-        self.sessions.write().await.remove(session_id);
-    }
-
-    /// Mint this session's genesis, store it, and return it (FR-1).
-    ///
-    /// Called once per session, at arrival — the first authenticated mutation.
-    /// A session that already carries a genesis gets that stored value back;
-    /// the formula is never evaluated twice for one session.
-    ///
-    /// The sequence is the durability contract of §5.2: mint, write the record
-    /// (cache + SHM projection + inline Cozo persist), record the arrival event
-    /// in the chain, then return. Arrival is mutation one, so every login is
-    /// durable, auditable, and sliceable like any other mutation.
-    ///
-    /// OSCAL subid: `mut.service.session-genesis.mint@v1`
-    pub async fn mint_and_store_genesis(
-        &self,
-        session_id: &str,
-        wireguard_pubkey: &str,
-    ) -> anyhow::Result<String> {
-        if session_id.is_empty() {
-            anyhow::bail!("session genesis requires a session_id");
-        }
-        // An already-minted session is never re-minted, not even here.
-        if let Some(existing) =
-            crate::identity_sled_dispatch::stored_genesis(self, session_id).await
-        {
-            let context = SessionContext {
-                genesis_hex: existing.clone(),
-                session_id: session_id.to_string(),
-                wireguard_pubkey: wireguard_pubkey.to_string(),
-            };
-            self.register_session_context(context).await;
-            return Ok(existing);
-        }
-
-        let pubkey_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            wireguard_pubkey.trim(),
-        )
-        .ok()
-        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!("session genesis requires a 32-byte base64 WireGuard pubkey")
-        })?;
-
-        let (chain_head_hex, head_timestamp) = {
-            let chain = self.event_chain.read().await;
-            let head_ts = chain
-                .events()
-                .last()
-                .map(|event| event.timestamp.timestamp())
-                .unwrap_or(0);
-            (chain.last_hash().to_string(), head_ts)
-        };
-        let chain_head_bytes = hex::decode(&chain_head_hex)
-            .ok()
-            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-            .unwrap_or([0u8; 32]);
-        let catalog_hash_bytes =
-            op_identity::schema_bridge::schema_catalog_hash().unwrap_or_else(|| {
-                tracing::warn!(
-                    session_id,
-                    "no published catalog hash at arrival; the anchor binds zeros \
-                 and cannot attest which contract this session operated against"
-                );
-                [0u8; 32]
-            });
-        let arrival_timestamp = chrono::Utc::now().timestamp();
-
-        let genesis = mint_genesis(
-            &pubkey_bytes,
-            &chain_head_bytes,
-            head_timestamp,
-            &catalog_hash_bytes,
-            arrival_timestamp,
-        );
-
-        let stamp = GenesisStamp {
-            session_id: session_id.to_string(),
-            wireguard_pubkey: wireguard_pubkey.to_string(),
-            genesis_hex: hex::encode(genesis),
-            arrival_timestamp,
-            chain_head_at_arrival: chain_head_hex,
-            catalog_hash_at_arrival: hex::encode(catalog_hash_bytes),
-            head_timestamp_at_arrival: head_timestamp,
-        };
-
-        // Inline: the record is durable (or logged as not) before the caller is
-        // told the session exists.
-        let stored = crate::identity_sled_dispatch::store_genesis(self, &stamp).await?;
-
-        self.register_session_context(SessionContext {
-            genesis_hex: stored.clone(),
-            session_id: session_id.to_string(),
-            wireguard_pubkey: wireguard_pubkey.to_string(),
-        })
-        .await;
-
-        self.record_session_arrival(session_id).await;
-        Ok(stored)
-    }
-
-    /// Record the session's first chain entry — arrival is mutation one.
-    ///
-    /// The stated consequence of FR-6: every login writes to the chain, so a
-    /// session that only ever reads still has a real first element and a
-    /// bounded span. The genesis is NOT in the event payload; it reaches the
-    /// durable record through `event_to_footprint`'s session stamp, which reads
-    /// the session context this arrival just registered.
-    ///
-    /// OSCAL subid: `evt.service.session-genesis.arrival@v1`
-    async fn record_session_arrival(&self, session_id: &str) {
-        let args = serde_json::json!({ "session_id": session_id }).to_string();
-        let event = {
-            let mut chain = self.event_chain.write().await;
-            chain
-                .record_method_call(
-                    session_id.to_string(),
-                    "identity_sled".to_string(),
-                    "session_arrival".to_string(),
-                    Some("identity_sled.write".to_string()),
-                    &args,
-                )
-                .clone()
-        };
-        self.persist_audit_event(&event).await;
-        let _ = self.chain_tx.send(event);
     }
 
     /// Store the session bus connection used for `Updated` signal emission.
@@ -916,18 +439,11 @@ impl MutationEngine {
                 continue;
             }
 
-            // One blobify call per plugin: it yields both the canonical
-            // SCHEMA_JSON bytes and the hash that covers them. The catalog
-            // write, the hydration cache and the broadcast frame all read from
-            // this single value, so no consumer can see a schema and a hash
-            // that describe different contracts.
-            let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
-            let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
-
             // Auto-generate or refresh the sealed blob when the running
             // schema hash differs from the active SHM catalog.
-            let mut resealed = false;
             if let Some(store) = blob_store.as_mut() {
+                let canonical_id = op_blob::canonical_plugin_id(&plugin_id);
+                let blob = op_blob::blobify_plugin_schema(&plugin_id, schema.clone());
                 let schema_changed = store
                     .manifest(&canonical_id)
                     .map(|manifest| manifest.schema_hash.as_str())
@@ -941,27 +457,12 @@ impl MutationEngine {
                                 "sealed current plugin schema into SHM catalog"
                             );
                             sealed += 1;
-                            resealed = true;
                         }
                         Err(error) => {
                             tracing::warn!(plugin_id = %canonical_id, %error, "failed to seal current plugin schema");
                         }
                     }
                 }
-            }
-
-            // Cache the running contract for stream hydration. This happens
-            // whether or not the blob moved: a subscriber connecting later
-            // needs the contract regardless of when it was last sealed.
-            self.cache_plugin_schema(&canonical_id, &blob).await;
-
-            // A reseal during a live process is the only moment the contract
-            // actually changes under an existing subscriber. At startup there
-            // are none, so this send is a no-op by design — hydration is what
-            // carries schema to the UI. It exists for resealing paths that run
-            // after the bridge is serving.
-            if resealed {
-                self.broadcast_schema_change(&canonical_id).await;
             }
 
             if let Some(mut bytes) = op_core::projection_shm::read_projection_bytes(&plugin_id) {
@@ -990,47 +491,11 @@ impl MutationEngine {
             seeded += 1;
         }
 
-        // Take the catalog identity after all sealing is done, from op_blob's
-        // single implementation. Recomputing it here would be a second
-        // derivation of a value that is only allowed to have one.
-        if blob_store.is_some() {
-            // Read the identity back from the sealed manifest rather than from
-            // `store.catalog_hash()`. Both are "the catalog hash", and they
-            // disagreed: on 2026-08-16 the engine published
-            // 107b1adb916d9cc4… at 19:38:57 while the sealer wrote
-            // 90fcbc8e8a8d38fb… to the manifest two seconds later, and every
-            // genesis bound the manifest's value because `mint_genesis` reads
-            // it through `schema_catalog_hash()`. Frames then advertised a
-            // catalog identity no anchor referred to.
-            //
-            // The manifest is the one that persists and the one A.N.N.A.
-            // compares against, so it is the authority; this is a read of it,
-            // not a second derivation.
-            let hash = op_identity::schema_bridge::schema_catalog_hash()
-                .map(hex::encode)
-                .unwrap_or_default();
-            if hash.is_empty() {
-                tracing::warn!(
-                    "sealed catalog manifest unreadable; StateSync frames will carry no \
-                     catalog identity and genesis minting has nothing to bind"
-                );
-            } else {
-                tracing::info!(catalog_hash = %hash, "published catalog identity (from sealed manifest)");
-            }
-            *self.catalog_hash.write().await = hash;
-        }
-
         tracing::info!(
             projections = seeded,
             blobs = sealed,
             "Seeded missing plugin projections and sealed current plugin schemas"
         );
-        if let Err(error) = self.refresh_zeroclaw_projection().await {
-            tracing::warn!(
-                %error,
-                "ZeroClaw runtime was unavailable during startup projection refresh"
-            );
-        }
         Ok(seeded)
     }
 
@@ -1341,9 +806,6 @@ impl MutationEngine {
         };
 
         let _ = self.change_tx.send(change.clone());
-        // Fan the recorded event out to EventChainService.SubscribeEvents from
-        // the same pipeline that appended it, after the projection write above.
-        let _ = self.chain_tx.send(event);
         Ok(change)
     }
 
@@ -1352,71 +814,62 @@ impl MutationEngine {
     pub async fn start(self: Arc<Self>) -> anyhow::Result<()> {
         let me = self.clone();
 
-        // Subscribe to OVSDB updates (native Idl monitor → process_authoritative_change).
+        // Subscribe to OVSDB updates
         let ovsdb_self = me.clone();
         tokio::spawn(async move {
-            match ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
-                Ok(mut rx) => {
-                    tracing::info!("MutationEngine: OVSDB monitor_db subscribed");
-                    loop {
-                        match rx.recv().await {
-                            Ok(update) => {
-                                let Some(tables) = ovsdb_monitor_tables(&update) else {
-                                    tracing::debug!(
-                                        "OVSDB monitor update had no table map; skipping"
-                                    );
-                                    continue;
-                                };
-                                for (table_name, table_update) in tables.iter() {
-                                    let table_name_owned = table_name.to_string();
-                                    // monitor_db returns serde_json::Value; convert to
-                                    // simd_json::OwnedValue required by process_authoritative_change.
-                                    let simd_val: simd_json::OwnedValue = {
-                                        match serde_json::to_string(table_update).ok().and_then(
-                                            |s| {
-                                                let mut b = s.into_bytes();
-                                                simd_json::to_owned_value(&mut b).ok()
-                                            },
-                                        ) {
-                                            Some(v) => v,
-                                            None => continue,
+            if let Ok(mut rx) = ovsdb_self.ovsdb.monitor_db("Open_vSwitch").await {
+                loop {
+                    match rx.recv().await {
+                        Ok(update) => {
+                            if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
+                                if params.len() >= 3 {
+                                    if let Some(tables) = params[2].as_object() {
+                                        for (table_name, table_update) in tables.iter() {
+                                            let table_name_owned: String = table_name.to_string();
+                                            // monitor_db returns serde_json::Value; convert to
+                                            // simd_json::OwnedValue required by process_authoritative_change.
+                                            let simd_val: simd_json::OwnedValue = {
+                                                match serde_json::to_string(table_update)
+                                                    .ok()
+                                                    .and_then(|s| {
+                                                        let mut b = s.into_bytes();
+                                                        simd_json::to_owned_value(&mut b).ok()
+                                                    }) {
+                                                    Some(v) => v,
+                                                    None => continue,
+                                                }
+                                            };
+                                            let _ = ovsdb_self
+                                                .process_authoritative_change(
+                                                    "net".to_string(),
+                                                    format!(
+                                                        "/org/opdbus/v1/ovsdb/{}",
+                                                        table_name_owned
+                                                    ),
+                                                    ChangeType::PropertySet,
+                                                    Some(table_name_owned),
+                                                    None,
+                                                    simd_val,
+                                                    vec![
+                                                        "ovsdb".to_string(),
+                                                        "network".to_string(),
+                                                    ],
+                                                    "ovsdb-monitor".to_string(),
+                                                    None,
+                                                    ChangeSource::DBus,
+                                                )
+                                                .await;
                                         }
-                                    };
-                                    if let Err(e) = ovsdb_self
-                                        .process_authoritative_change(
-                                            "net".to_string(),
-                                            format!("/org/opdbus/v1/ovsdb/{}", table_name_owned),
-                                            ChangeType::PropertySet,
-                                            Some(table_name_owned),
-                                            None,
-                                            simd_val,
-                                            vec!["ovsdb".to_string(), "network".to_string()],
-                                            "ovsdb-monitor".to_string(),
-                                            None,
-                                            ChangeSource::DBus,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "OVSDB monitor → process_authoritative_change failed"
-                                        );
                                     }
                                 }
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!("OVSDB subscription lagged by {} events", n);
-                                continue;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("OVSDB subscription lagged by {} events", n);
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "MutationEngine: OVSDB monitor_db unavailable; continuing without it"
-                    );
                 }
             }
         });
@@ -1445,13 +898,11 @@ impl MutationEngine {
         // event carries it in tags_touched (VAL-CROSS-020).
         let mut event_tags: Vec<String> = Vec::new();
 
-        // A caller that names no actor is anonymous. This used to read the
-        // global 152-byte sled at `/dev/shm/plugin_schema.dat` and label the
-        // mutation with whatever session wrote that file last — the shared
-        // last-write-wins store FR-6 retires. Identity arrives with the
-        // request or not at all.
+        // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
+        // when the caller omitted it. The Sled carries the WireGuard footprint +
+        // trace_id — that identity is authoritative for every mutation.
         let actor_id = if actor_id.is_empty() {
-            ANONYMOUS_ACTOR.to_string()
+            sled_footprint().unwrap_or_else(|| "anonymous".to_string())
         } else {
             actor_id
         };
@@ -1515,7 +966,7 @@ impl MutationEngine {
             // shared container.sock transport; the transport owner is not
             // replaced during registration.
             if let Some(method) = &member_name {
-                if method == "createunixsocket" || method == "bind" {
+                if method == "createunixsocket" {
                     let (name, ports) = parse_socket_args(&value);
                     let result = self
                         .unix_socket
@@ -1601,20 +1052,6 @@ impl MutationEngine {
                 .await?;
                 caller_result = Some(simd_json::serde::to_owned_value(&result)?);
             }
-        } else if plugin_id == "emqx" && change_type == ChangeType::MethodCall {
-            if let Some(method) = &member_name {
-                let mut args_json = serde_json::to_value(&value)?;
-                if let serde_json::Value::Array(items) = &args_json {
-                    args_json = items
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-                }
-                let result =
-                    op_plugins::state_plugins::emqx::dispatch_emqx_method(method, &args_json)
-                        .await?;
-                caller_result = Some(simd_json::serde::to_owned_value(&result)?);
-            }
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
@@ -1639,16 +1076,32 @@ impl MutationEngine {
                 old_value,
                 authoritative_value.clone(),
                 event_tags, // Empty falls back to compute_tags in process_authoritative_change
-                actor_id.clone(),
+                actor_id,
                 capability_id,
                 ChangeSource::Grpc,
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Advance this session's own record to the new chain position.
-        self.advance_session_record(change.event_id, &actor_id)
-            .await;
+        // Write the Identity Sled with the updated mutation index.
+        {
+            let (existing_pubkey_b64, existing_trace_hex) = if let Ok((ptr, _mmap)) = read_sled() {
+                unsafe {
+                    let sled = &*ptr;
+                    (
+                        base64::engine::general_purpose::STANDARD.encode(sled.wireguard_pubkey),
+                        sled.trace_id_hex(),
+                    )
+                }
+            } else {
+                (String::new(), String::new())
+            };
+            if let Err(e) =
+                write_sled_full(&existing_pubkey_b64, change.event_id, &existing_trace_hex)
+            {
+                tracing::warn!("sled write after mutation failed: {}", e);
+            }
+        }
 
         Ok(MutationResult {
             success: true,
@@ -1770,13 +1223,6 @@ impl MutationEngine {
             source: ChangeSource::DBus,
         };
         let _ = self.change_tx.send(change.clone());
-        // Same fan-out as process_authoritative_change: the event is already in
-        // the chain and durable, so audit subscribers can see it now.
-        let _ = self.chain_tx.send(event_summary.3);
-
-        // Same position record as the property-set path — a method call is a
-        // mutation and occupies a chain position like any other.
-        self.advance_session_record(event_summary.0, actor_id).await;
 
         // Dispatch to appropriate backend based on plugin_id
         let method_result: serde_json::Value = match plugin_id {
@@ -1786,42 +1232,9 @@ impl MutationEngine {
             "ovsdb_bridge" => {
                 dispatch_ovsdb_bridge_method(&self.ovsdb, method, &parsed_value).await?
             }
-            "rtnetlink" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::rtnetlink::dispatch_rtnetlink_method(method, &args)
-                    .await?
-            }
             "xray" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 dispatch_xray_method(method, &args).await?
-            }
-            "unix_socket" if method == "bind" || method == "createunixsocket" => {
-                // The schema router calls dispatch_method_call directly.  Keep
-                // socket registration on this path so bind is not reduced to
-                // the generic echo result and the shared transport metadata is
-                // visible to subsequent readers.
-                let (name, ports) = parse_socket_args(&parsed_value);
-                let applied = self
-                    .unix_socket
-                    .create_unix_socket(name.clone(), ports.clone());
-                if !applied.success {
-                    return Err(anyhow::anyhow!(applied.errors.join("; ")));
-                }
-                let state = unix_socket_state_after_registration(&name, &ports);
-                self.update_state_cache("unix_socket".to_string(), state.clone())
-                    .await;
-                let state_json = serde_json::to_vec(&state)?;
-                op_core::projection_shm::write_projection("unix_socket", &state_json)
-                    .map_err(|e| anyhow::anyhow!("persist unix_socket bind state: {e}"))?;
-                serde_json::json!({
-                    "name": name,
-                    "path": op_plugins::state_plugins::unix_socket::SHARED_CONTAINER_SOCKET,
-                    "ports": ports,
-                    "protocol": parsed_value
-                        .get("protocol")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("grpc"),
-                })
             }
             "identity_sled" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -1860,19 +1273,6 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::openflow::dispatch_openflow_method(method, &args).await?
             }
-            "procfs" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::procfs::dispatch_procfs_method(method, &args).await?
-            }
-            "host_runtime" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::host_runtime::dispatch_host_runtime_method(method, &args)
-                    .await?
-            }
-            "service" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::service::dispatch_service_method(method, &args).await?
-            }
             "privacy_routes" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::privacy_routes::dispatch_privacy_routes_method(
@@ -1880,39 +1280,8 @@ impl MutationEngine {
                 )
                 .await?
             }
-            "btrfs" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::btrfs_plugin::dispatch_btrfs_method(method, &args)
-                    .await?
-            }
-            "mail_server" | "mail" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::mail_server::dispatch_mail_server_method(method, &args)
-                    .await?
-            }
-            "incus" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::incus::dispatch_incus_method(method, &args).await?
-            }
-            "emqx" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::emqx::dispatch_emqx_method(method, &args).await?
-            }
-            "antigravity" => {
-                let state = self
-                    .projected_state::<op_plugins::state_plugins::antigravity::AntigravityState>(
-                        "antigravity",
-                    )
-                    .await
-                    .unwrap_or_else(
-                        op_plugins::state_plugins::antigravity::AntigravityPlugin::current_state,
-                    );
-                op_plugins::state_plugins::antigravity::dispatch_antigravity_method(
-                    method, json_args, &state,
-                )?
-            }
             "tched_router" => {
-                let declared_state = self
+                let state = self
                     .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>(
                         "tched_router",
                     )
@@ -1920,57 +1289,24 @@ impl MutationEngine {
                     .unwrap_or_else(
                         op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state,
                     );
-                let mut state = self
-                    .zeroclaw_runtime
-                    .project_state(declared_state)
-                    .await
-                    .context("ZeroClaw runtime state projection failed")?;
-                self.cache_zeroclaw_state(&state).await?;
-                if let Err(error) = self
-                    .publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
-                    .await
-                {
-                    tracing::warn!(
-                        %error,
-                        "unable to publish refreshed ZeroClaw state projection"
-                    );
-                }
                 if method == "Chat" {
                     let args = serde_json::from_value::<
                         op_plugins::state_plugins::tched_router::ChatInput,
                     >(serde_json::to_value(&parsed_value)?)
-                    .context("invalid zeroclaw.Chat arguments")?;
-                    serde_json::to_value(self.zeroclaw_runtime.chat(&state, args).await?)?
+                    .context("invalid tched_router.Chat arguments")?;
+                    serde_json::to_value(
+                        crate::chat_service::dispatch_schema_chat(
+                            self.chat_manager.as_ref(),
+                            &state,
+                            args,
+                        )
+                        .await?,
+                    )?
                 } else {
                     match op_plugins::state_plugins::tched_router::dispatch_tched_router_method(
                         method, json_args, &state,
                     ) {
                         Ok(outcome) => {
-                            match method {
-                                "SetProvider" => {
-                                    let provider_id = outcome
-                                        .result
-                                        .get("selected_provider")
-                                        .and_then(serde_json::Value::as_str)
-                                        .context("SetProvider returned no selected_provider")?;
-                                    let selection =
-                                        self.zeroclaw_runtime.set_provider(provider_id).await?;
-                                    state.selected_provider = selection.provider;
-                                    state.selected_model = selection.model;
-                                    self.cache_zeroclaw_state(&state).await?;
-                                }
-                                "SetModel" => {
-                                    let model_id = outcome
-                                        .result
-                                        .get("selected_model")
-                                        .and_then(serde_json::Value::as_str)
-                                        .context("SetModel returned no selected_model")?;
-                                    state.selected_model =
-                                        self.zeroclaw_runtime.set_model(model_id).await?;
-                                    self.cache_zeroclaw_state(&state).await?;
-                                }
-                                _ => {}
-                            }
                             if method.starts_with("Set") {
                                 self.persist_zeroclaw_mutation(method, &outcome.result)
                                     .await?;
@@ -1982,7 +1318,7 @@ impl MutationEngine {
                         }
                         Err(e) => {
                             return Err(anyhow::anyhow!(
-                                "zeroclaw dispatch error for '{}': {}",
+                                "tched_router dispatch error for '{}': {}",
                                 method,
                                 e
                             ))
@@ -2002,91 +1338,8 @@ impl MutationEngine {
                 op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
             }
             "cognitive_mcp" => {
-                dispatch_cognitive_mcp_method(&self.cognitive_tool_registry(), method, json_args)
-                    .await?
-            }
-            "large_language_model" => {
                 let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::large_language_model::dispatch_large_language_model_method(
-                    method, &args,
-                )
-                .await?
-            }
-            "json_render" => {
-                let state = self
-                    .projected_state::<op_plugins::state_plugins::json_render::JsonRenderState>(
-                        "json_render",
-                    )
-                    .await
-                    .unwrap_or_else(
-                        op_plugins::state_plugins::json_render::JsonRenderPlugin::current_state,
-                    );
-                op_plugins::state_plugins::json_render::dispatch_json_render_method(method, &state)?
-            }
-            "agent_config" => {
-                let state = self
-                    .projected_state::<op_plugins::state_plugins::agent_config::AgentConfigState>(
-                        "agent_config",
-                    )
-                    .await
-                    .unwrap_or_else(
-                        op_plugins::state_plugins::agent_config::AgentConfigPlugin::current_state,
-                    );
-                op_plugins::state_plugins::agent_config::dispatch_agent_config_method(
-                    method, &state,
-                )?
-            }
-            "wireguard" => {
-                let state = self
-                    .projected_state::<op_plugins::state_plugins::wireguard::WireGuardState>(
-                        "wireguard",
-                    )
-                    .await
-                    .unwrap_or_else(
-                        op_plugins::state_plugins::wireguard::WireGuardPlugin::current_state,
-                    );
-                op_plugins::state_plugins::wireguard::dispatch_wireguard_method(method, &state)?
-            }
-            "qdrant" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                let method_result =
-                    op_plugins::state_plugins::qdrant::dispatch_qdrant_method(method, &args)
-                        .await?;
-                // Publish observed collections into the mutation cache so
-                // StateSync / GetState (json-render $state) see live data.
-                if method == "list_collections" {
-                    if let Some(names) = method_result
-                        .get("collections")
-                        .and_then(serde_json::Value::as_array)
-                    {
-                        let template =
-                            op_plugins::state_plugins::qdrant::QdrantPlugin::exemplar_state();
-                        let template_collection = template.collections.first().cloned();
-                        let mut state = template;
-                        state.collections = names
-                            .iter()
-                            .filter_map(|n| n.as_str())
-                            .filter_map(|name| {
-                                let mut c = template_collection.clone()?;
-                                c.name = name.to_string();
-                                Some(c)
-                            })
-                            .collect();
-                        if let Ok(owned) = simd_json::serde::to_owned_value(&state) {
-                            self.update_state_cache("qdrant".to_string(), owned.clone())
-                                .await;
-                            let bytes = serde_json::to_vec(&owned).unwrap_or_default();
-                            let _ = op_core::projection_shm::write_projection("qdrant", &bytes);
-                        }
-                    }
-                }
-                method_result
-            }
-            // gemma_brain is semi-deprecated for inference; UI uses large_language_model.
-            "gemma_brain" => {
-                return Err(anyhow::anyhow!(
-                    "gemma_brain.{method} is not on the UI mutation path; use large_language_model"
-                ));
+                dispatch_cognitive_mcp_method(method, &args).await?
             }
             // Audit-trail query surface. Deliberately scoped: only the two
             // audit methods are wired. The plugin's seven pre-existing methods
@@ -2101,24 +1354,6 @@ impl MutationEngine {
                 }
                 _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
             },
-            // UI data-plane plugins must never silently echo empty args.
-            ui_plugin
-                if matches!(
-                    ui_plugin,
-                    "large_language_model"
-                        | "json_render"
-                        | "agent_config"
-                        | "wireguard"
-                        | "host_runtime"
-                        | "gemma_brain"
-                        | "s6_systemctl"
-                        | "qdrant"
-                ) =>
-            {
-                return Err(anyhow::anyhow!(
-                    "plugin '{ui_plugin}' method '{method}' has no mutation dispatch arm; refuse echo"
-                ));
-            }
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
 
@@ -2207,26 +1442,6 @@ impl MutationEngine {
             .await
     }
 
-    async fn cache_zeroclaw_state(
-        &self,
-        state: &op_plugins::state_plugins::tched_router::TchedRouterState,
-    ) -> anyhow::Result<()> {
-        let owned = simd_json::serde::to_owned_value(state)?;
-        self.update_state_cache("tched_router".to_string(), owned).await;
-        Ok(())
-    }
-
-    async fn refresh_zeroclaw_projection(&self) -> anyhow::Result<()> {
-        let declared_state = self
-            .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>("tched_router")
-            .await
-            .unwrap_or_else(op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state);
-        let state = self.zeroclaw_runtime.project_state(declared_state).await?;
-        self.cache_zeroclaw_state(&state).await?;
-        self.publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
-            .await
-    }
-
     /// Merge a flat JSON object of changed fields into the authoritative
     /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
     /// selection changes so readers observe the new effective state).
@@ -2291,141 +1506,10 @@ impl MutationEngine {
         cache.get(plugin_id).cloned()
     }
 
-    /// Take one coherent copy of the present-state cache for a new stream
-    /// subscriber. The cache is hydrated from the SHM static tree before the
-    /// server starts accepting requests, so this is not a D-Bus fan-out.
-    pub async fn state_snapshot(&self) -> Vec<(String, simd_json::OwnedValue)> {
-        let cache = self.state_cache.read().await;
-        let mut snapshot: Vec<_> = cache
-            .iter()
-            .map(|(plugin_id, state)| (plugin_id.clone(), state.clone()))
-            .collect();
-        snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-        snapshot
-    }
-
     /// Update the authoritative state cache
     pub async fn update_state_cache(&self, plugin_id: String, state: simd_json::OwnedValue) {
         let mut cache = self.state_cache.write().await;
         cache.insert(plugin_id, state);
-    }
-
-    /// Record one plugin's sealed contract for stream hydration.
-    ///
-    /// Takes the blob rather than a schema so the cached bytes are the sealed
-    /// bytes; parsing is the only transformation applied.
-    async fn cache_plugin_schema(&self, canonical_id: &str, blob: &op_blob::PluginObjectBlob) {
-        let mut bytes = blob.schema_json.clone().into_bytes();
-        let schema_json = match simd_json::to_owned_value(&mut bytes) {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(
-                    plugin_id = %canonical_id,
-                    %error,
-                    "sealed schema JSON did not parse; plugin will hydrate without a contract"
-                );
-                return;
-            }
-        };
-        // Mirror into the in-process catalog the cognitive MCP tools read, so a
-        // model calling `blob_catalog` sees the same contract this engine puts
-        // on the stream instead of independently re-reading SHM. Parsed from
-        // the same sealed string, so the two views cannot describe different
-        // contracts. Startup-only work, once per plugin.
-        match serde_json::from_str::<serde_json::Value>(&blob.schema_json) {
-            Ok(value) => op_cognitive_mcp::live_schema::global().publish(
-                canonical_id,
-                blob.manifest.schema_hash.clone(),
-                value,
-            ),
-            Err(error) => tracing::warn!(
-                plugin_id = %canonical_id,
-                %error,
-                "sealed schema JSON did not parse for the MCP mirror; tools will read SHM"
-            ),
-        }
-
-        self.schema_cache.write().await.insert(
-            canonical_id.to_string(),
-            SchemaSnapshot {
-                schema_hash: blob.manifest.schema_hash.clone(),
-                schema_json,
-            },
-        );
-    }
-
-    /// Take a coherent copy of every known plugin contract, for a new stream
-    /// subscriber. Ordered by canonical plugin id.
-    pub async fn schema_snapshot(&self) -> Vec<(String, SchemaSnapshot)> {
-        self.schema_cache
-            .read()
-            .await
-            .iter()
-            .map(|(plugin_id, snapshot)| (plugin_id.clone(), snapshot.clone()))
-            .collect()
-    }
-
-    /// The contract currently published for one plugin, if any.
-    pub async fn plugin_schema(&self, canonical_id: &str) -> Option<SchemaSnapshot> {
-        self.schema_cache.read().await.get(canonical_id).cloned()
-    }
-
-    /// Hash of the contract one plugin is published under, or empty when the
-    /// plugin has no sealed contract in this process.
-    pub async fn plugin_schema_hash(&self, canonical_id: &str) -> String {
-        self.schema_cache
-            .read()
-            .await
-            .get(canonical_id)
-            .map(|snapshot| snapshot.schema_hash.clone())
-            .unwrap_or_default()
-    }
-
-    /// Identity of the published catalog, read at the moment it is asked for.
-    ///
-    /// This used to return a value cached during the seal pass, and that value
-    /// was always one generation stale: the engine reads the manifest ~2s
-    /// before the sealer commits it (measured 2026-08-16 — engine read
-    /// `107b1adb…` at 21:15:13.271, sealer wrote `90fcbc8e…` at 21:15:15), so
-    /// every StateSync frame advertised the *superseded* catalog while genesis
-    /// anchors bound the current one. Reading here removes the window entirely
-    /// rather than compensating for it; the manifest is a small tmpfs file and
-    /// is the authority both this and `mint_genesis` consult.
-    ///
-    /// Falls back to the cached value only if the manifest is unreadable.
-    pub async fn catalog_hash(&self) -> String {
-        match op_identity::schema_bridge::schema_catalog_hash() {
-            Some(hash) => hex::encode(hash),
-            None => self.catalog_hash.read().await.clone(),
-        }
-    }
-
-    /// Announce a contract change on the state stream.
-    ///
-    /// Carries the sealed schema itself, not a pointer to it: the frame is the
-    /// delivery, so a consumer never has to reach back into the catalog. The
-    /// hash rides in `member_name` so a consumer can tell two contracts apart
-    /// without diffing them.
-    async fn broadcast_schema_change(&self, canonical_id: &str) {
-        let Some(snapshot) = self.plugin_schema(canonical_id).await else {
-            return;
-        };
-        let change = StateChange {
-            change_id: uuid::Uuid::new_v4().to_string(),
-            event_id: 0,
-            plugin_id: canonical_id.to_string(),
-            object_path: format!("/org/opdbus/v1/plugins/{canonical_id}"),
-            change_type: ChangeType::SchemaMigration,
-            member_name: Some(snapshot.schema_hash),
-            old_value: None,
-            new_value: snapshot.schema_json,
-            tags_touched: vec![],
-            event_hash: String::new(),
-            timestamp: chrono::Utc::now(),
-            actor_id: "schema_seal".to_string(),
-            source: ChangeSource::Internal,
-        };
-        let _ = self.change_tx.send(change);
     }
 
     /// Publish the current authoritative cache entry into the plugin's SHM
@@ -2553,14 +1637,6 @@ impl MutationEngine {
     pub fn change_tx(&self) -> broadcast::Sender<StateChange> {
         self.change_tx.clone()
     }
-
-    /// Audit-chain fan-out backing `EventChainService.SubscribeEvents`.
-    ///
-    /// Every event appended to the chain by this engine is published here; there
-    /// is no other producer.
-    pub fn chain_tx(&self) -> broadcast::Sender<ChainEvent> {
-        self.chain_tx.clone()
-    }
 }
 
 /// Result of an authoritative mutation
@@ -2586,6 +1662,23 @@ pub enum ErrorCode {
     ValidationFailed,
     ReadOnly,
     Internal,
+}
+
+/// Read the WireGuard footprint from the Sled (1:1 shared memory identity at
+/// `/dev/shm/plugin_schema.dat`). Returns the hex footprint used as the default
+/// `actor_id` when a caller omits identity.
+fn sled_footprint() -> Option<String> {
+    // SAFETY: read_sled returns a valid pointer to IdentitySled in shared memory
+    // for the lifetime of the process; we copy the footprint out and drop the ptr.
+    let (ptr, _mmap) = read_sled().ok()?;
+    unsafe {
+        let sled = &*ptr;
+        if sled.hashed_footprint != [0u8; 32] {
+            Some(hex::encode(sled.hashed_footprint))
+        } else {
+            None
+        }
+    }
 }
 
 /// Build the authoritative `unix_socket` projection state after a successful
@@ -2659,14 +1752,8 @@ fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
 /// beside it exist for operators and tools grepping the timing directory
 /// directly.
 ///
-/// The session stamp (FR-3) makes the durable chain sliceable by session and
-/// re-verifiable offline: `session_genesis` / `session_id` /
-/// `wireguard_pubkey` are copied from the session context the arrival minted.
-/// A mutation that belongs to no session carries the keys with empty values —
-/// present and honest, never absent.
-///
-/// OSCAL subid: `evt.service.event-chain.persist@v1`, `evt.service.event-chain.session-stamp@v1`
-fn event_to_footprint(event: &ChainEvent, session: Option<&SessionContext>) -> PluginFootprint {
+/// OSCAL subid: `evt.service.event-chain.persist@v1`
+fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
     let mut metadata: HashMap<String, simd_json::OwnedValue> = HashMap::new();
     metadata.insert(
         "actor_id".to_string(),
@@ -2691,21 +1778,6 @@ fn event_to_footprint(event: &ChainEvent, session: Option<&SessionContext>) -> P
     metadata.insert(
         "decision".to_string(),
         simd_json::OwnedValue::from(format!("{:?}", event.decision)),
-    );
-    // Session identity stamp (FR-3).
-    let empty = SessionContext::default();
-    let session = session.unwrap_or(&empty);
-    metadata.insert(
-        "session_genesis".to_string(),
-        simd_json::OwnedValue::from(session.genesis_hex.as_str()),
-    );
-    metadata.insert(
-        "session_id".to_string(),
-        simd_json::OwnedValue::from(session.session_id.as_str()),
-    );
-    metadata.insert(
-        "wireguard_pubkey".to_string(),
-        simd_json::OwnedValue::from(session.wireguard_pubkey.as_str()),
     );
     // Lossless copy for replay. Serialized through serde_json (ChainEvent's
     // derive target) and re-parsed into simd_json for the footprint map.
@@ -2834,106 +1906,12 @@ async fn dispatch_blockchain_verify_chain(
 }
 
 /// Execute rovs_commands methods via OVSDB proxy
-fn parse_rovs_command_input<T: serde::de::DeserializeOwned>(
-    args: &simd_json::OwnedValue,
-) -> anyhow::Result<T> {
-    serde_json::from_value(serde_json::to_value(args)?).map_err(Into::into)
-}
-
 async fn dispatch_rovs_commands_method(
     ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
     method: &str,
     args: &simd_json::OwnedValue,
 ) -> anyhow::Result<serde_json::Value> {
     match method {
-        "create_bridge" => {
-            let input: op_plugins::state_plugins::rovs_commands::CreateBridgeInput =
-                parse_rovs_command_input(args)?;
-            ovsdb.create_bridge(&input.bridge_name).await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::CreateBridgeOutput {
-                    bridge_name: input.bridge_name,
-                },
-            )?)
-        }
-        "delete_bridge" => {
-            let input: op_plugins::state_plugins::rovs_commands::DeleteBridgeInput =
-                parse_rovs_command_input(args)?;
-            ovsdb.delete_bridge(&input.bridge_name).await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::DeleteBridgeOutput {
-                    bridge_name: input.bridge_name,
-                },
-            )?)
-        }
-        "add_port" => {
-            let input: op_plugins::state_plugins::rovs_commands::AddPortInput =
-                parse_rovs_command_input(args)?;
-            ovsdb.add_port(&input.bridge_name, &input.port_name).await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::AddPortOutput {
-                    bridge_name: input.bridge_name,
-                    port_name: input.port_name,
-                },
-            )?)
-        }
-        "remove_port" => {
-            let input: op_plugins::state_plugins::rovs_commands::RemovePortInput =
-                parse_rovs_command_input(args)?;
-            ovsdb
-                .delete_port(&input.bridge_name, &input.port_name)
-                .await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::RemovePortOutput {
-                    bridge_name: input.bridge_name,
-                    port_name: input.port_name,
-                },
-            )?)
-        }
-        "list_bridges" => {
-            let bridges = ovsdb.list_bridges().await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::ListBridgesOutput { bridges },
-            )?)
-        }
-        "list_ports" => {
-            let input: op_plugins::state_plugins::rovs_commands::ListPortsInput =
-                parse_rovs_command_input(args)?;
-            let ports = ovsdb.list_bridge_ports(&input.bridge_name).await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::ListPortsOutput {
-                    bridge_name: input.bridge_name,
-                    ports,
-                },
-            )?)
-        }
-        "list_dbs" => {
-            let databases = ovsdb.list_dbs().await?;
-            Ok(serde_json::to_value(
-                op_plugins::state_plugins::rovs_commands::ListDbsOutput { databases },
-            )?)
-        }
-        _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
-    }
-}
-
-/// Execute the schema-declared OVSDB bridge methods used by canonical
-/// `org.opdbus.v1.plugins` compatibility clients.
-async fn dispatch_ovsdb_bridge_method(
-    ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
-    method: &str,
-    args: &simd_json::OwnedValue,
-) -> anyhow::Result<serde_json::Value> {
-    match method {
-        "list_dbs" => Ok(serde_json::json!(ovsdb.list_dbs().await?)),
-        "get_schema" => Ok(ovsdb.get_schema().await?),
-        "transact" => {
-            let operations = args
-                .get("operations")
-                .ok_or_else(|| anyhow::anyhow!("operations required"))?
-                .clone();
-            Ok(ovsdb.transact_simd(operations).await?)
-        }
         "create_bridge" => {
             let bridge_name = args
                 .get("bridge_name")
@@ -2963,19 +1941,53 @@ async fn dispatch_ovsdb_bridge_method(
             Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
         }
         "remove_port" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
             let port_name = args
-                .get("port")
+                .get("port_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb
-                .delete_port(
-                    args.get("bridge")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default(),
-                    port_name,
-                )
-                .await?;
-            Ok(serde_json::json!({"removed": port_name}))
+            ovsdb.delete_port(bridge_name, port_name).await?;
+            Ok(serde_json::json!({"removed": port_name, "from": bridge_name}))
+        }
+        "list_bridges" => {
+            let bridges = ovsdb.list_bridges().await?;
+            Ok(serde_json::json!(bridges))
+        }
+        "list_ports" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let ports = ovsdb.list_bridge_ports(bridge_name).await?;
+            Ok(serde_json::json!(ports))
+        }
+        "list_dbs" => {
+            let dbs = ovsdb.list_dbs().await?;
+            Ok(serde_json::json!(dbs))
+        }
+        _ => Err(anyhow::anyhow!("unknown rovs_commands method: {}", method)),
+    }
+}
+
+/// Execute the schema-declared OVSDB bridge methods used by canonical
+/// `org.opdbus.v1.plugins` compatibility clients.
+async fn dispatch_ovsdb_bridge_method(
+    ovsdb: &op_network::rovs_proxy::OvsdbDbusClient,
+    method: &str,
+    args: &simd_json::OwnedValue,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "list_dbs" => Ok(serde_json::json!(ovsdb.list_dbs().await?)),
+        "get_schema" => Ok(ovsdb.get_schema().await?),
+        "transact" => {
+            let operations = args
+                .get("operations")
+                .ok_or_else(|| anyhow::anyhow!("operations required"))?
+                .clone();
+            Ok(ovsdb.transact_simd(operations).await?)
         }
         _ => Err(anyhow::anyhow!(
             "ovsdb_bridge.{method} is schema-declared but has no runtime dispatcher"
@@ -3023,16 +2035,16 @@ async fn dispatch_xray_method(
             // own service manager already supervises the process; a config
             // reload is the safe, sanctioned action here (see op-plugins::xray's
             // apply_state, which uses the same pattern). No Command::new
-            // subprocess — signals the real PID directly via /proc + libc::kill.
+            // subprocess — signals the real PID directly via /proc + nix.
             let pids = find_xray_pids();
             if pids.is_empty() {
                 return Err(anyhow::anyhow!("no running xray process found"));
             }
             let mut reloaded = Vec::new();
             for pid in pids {
-                signal_process(pid, libc::SIGHUP)
+                nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP)
                     .with_context(|| format!("sending SIGHUP to xray pid {pid}"))?;
-                reloaded.push(pid);
+                reloaded.push(pid.as_raw());
             }
             Ok(serde_json::json!({ "reloaded_pids": reloaded }))
         }
@@ -3048,7 +2060,7 @@ async fn dispatch_xray_method(
 /// subprocess spawning. Mirrors `op_plugins::state_plugins::xray`'s private
 /// helper of the same shape; kept local since it's a few lines and the two
 /// crates don't otherwise share process-inspection utilities.
-fn find_xray_pids() -> Vec<i32> {
+fn find_xray_pids() -> Vec<nix::unistd::Pid> {
     let mut pids = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return pids;
@@ -3059,110 +2071,59 @@ fn find_xray_pids() -> Vec<i32> {
         };
         if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
             if comm.trim() == "xray" {
-                pids.push(pid);
+                pids.push(nix::unistd::Pid::from_raw(pid));
             }
         }
     }
     pids
 }
 
-fn signal_process(pid: i32, sig: i32) -> Result<(), std::io::Error> {
-    let rc = unsafe { libc::kill(pid, sig) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
 /// Dispatch a `cognitive_mcp` schema method to the cognitive tool registry.
 ///
 /// OSCAL subid: mut.service.cognitive-mcp.dispatch@v1
 ///
-/// Phase 2 transport is an in-process `ToolRegistry::execute` / `list` call. The
+/// Phase 1 transport is an HTTP loopback to `op-cognitive-mcp`'s MCP endpoint. The
 /// bridge remains the only authorization door: the method-existence gate, arg
 /// validation, capability check and event-chain append have all already happened in
 /// `dispatch_method_call` before this function is reached.
+///
+/// Phase 2 replaces the loopback with an in-process `ToolRegistry::execute` call and
+/// retires the `:3003` listener. See
+/// `.kiro/specs/cognitive-mcp-only-door-phase2/`.
 async fn dispatch_cognitive_mcp_method(
-    tool_registry: &Option<Arc<ToolRegistry>>,
     method: &str,
-    json_args: &str,
+    args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    // Plugin-local methods: unchanged from Phase 1
+    // Plugin-local methods answer from published state; no executor hop needed.
     match method {
         "get_config" | "get_health" => {
-            let bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
+            let mut bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
                 .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection not available"))?;
-            let val: serde_json::Value = serde_json::from_slice(&bytes)?;
-            return Ok(val);
+            let value = simd_json::to_owned_value(&mut bytes)
+                .map_err(|e| anyhow::anyhow!("cognitive_mcp projection is not valid JSON: {e}"))?;
+            return Ok(serde_json::to_value(&value)?);
         }
         "set_config" | "restart_service" => {
-            return Ok(serde_json::json!({"acknowledged": true, "method": method}));
+            // These belong to the plugin's own apply_state path, which is reached
+            // through StatePlugin rather than the tool registry. Acknowledge without
+            // fabricating a result so callers can distinguish "accepted" from "done".
+            return Ok(serde_json::json!({
+                "acknowledged": true,
+                "method": method,
+                "note": "handled by cognitive_mcp apply_state; not a tool-registry call",
+            }));
         }
         _ => {}
     }
 
-    let registry = tool_registry
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tool registry unavailable (init failed)"))?;
-
+    // `list_tools` is an MCP *protocol* method (`tools/list`), not an entry in the
+    // tool registry, so it cannot go through `tools/call`.
     if method == "list_tools" {
-        let reg = registry.clone();
-        let timeout = Duration::from_secs(
-            std::env::var("COGNITIVE_TOOL_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(30),
-        );
-        return tokio::time::timeout(timeout, async move {
-            let defs = reg.list(0, usize::MAX, None).await;
-            Ok::<serde_json::Value, anyhow::Error>(serde_json::to_value(defs)?)
-        })
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "tool execution timed out after {}s: list_tools",
-                timeout.as_secs()
-            )
-        })?
-        .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e));
+        return cognitive_tools_list().await;
     }
 
-    let args: serde_json::Value = if json_args.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(json_args)?
-    };
-    let (tool_name, tool_args) = map_schema_method_to_tool(method, &args)?;
-
-    // Execute with timeout on a spawned task to avoid blocking D-Bus loop
-    let reg = registry.clone();
-    let name = tool_name.clone();
-    let timeout = Duration::from_secs(
-        std::env::var("COGNITIVE_TOOL_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(30),
-    );
-
-    let result = tokio::time::timeout(timeout, async move {
-        let mut payload = tool_args.to_string().into_bytes();
-        let tool_input =
-            simd_json::to_owned_value(&mut payload).context("invalid cognitive tool arguments")?;
-        reg.execute(&name, tool_input)
-            .await
-            .map(|v| serde_json::to_value(&v).unwrap_or(serde_json::Value::Null))
-    })
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!(
-            "tool execution timed out after {}s: {}",
-            timeout.as_secs(),
-            tool_name
-        )
-    })?
-    .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e))?;
-
+    let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
+    let result = call_cognitive_tool(&tool_name, &tool_args).await?;
     Ok(result)
 }
 
@@ -3248,6 +2209,201 @@ fn map_schema_method_to_tool(
     }
 }
 
+/// Shared HTTP client for the cognitive MCP loopback.
+///
+/// Built once: a fresh `Client` per call would leak a connection pool and defeat
+/// keep-alive on what is a hot path.
+static COGNITIVE_MCP_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn cognitive_mcp_http() -> &'static reqwest::Client {
+    COGNITIVE_MCP_HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// MCP endpoint of the local cognitive service.
+///
+/// Overridable so the bridge can follow a relocated listener without a rebuild.
+fn cognitive_mcp_endpoint() -> String {
+    std::env::var("COGNITIVE_MCP_MCP_URL")
+        .unwrap_or_else(|_| "http://10.200.0.2:3003/mcp".to_string())
+}
+
+/// Send the MCP `initialize` handshake.
+///
+/// The cognitive MCP server rejects `tools/call` with "Server not initialized" until
+/// this has been sent. Initialization is server-side state, so it survives across
+/// requests but is lost whenever `op-cognitive-mcp` restarts — which is why callers
+/// treat it as a recoverable condition rather than doing it once at startup.
+async fn cognitive_mcp_initialize() -> anyhow::Result<()> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {},
+    });
+
+    let response = cognitive_mcp_http()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("cognitive_mcp initialize POST {endpoint}"))?;
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "cognitive_mcp initialize returned HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
+}
+
+/// Issue one `tools/call` and return the raw JSON-RPC envelope.
+async fn cognitive_tools_call_raw(
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": tool_name, "arguments": tool_args },
+    });
+
+    let response = cognitive_mcp_http()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        // The interceptor on the direct listener expects these; the authoritative
+        // authorization decision was already made by the bridge before dispatch.
+        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("cognitive_mcp loopback POST {endpoint}"))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("reading cognitive_mcp loopback response body")?;
+
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "cognitive_mcp loopback returned HTTP {status}: {body}"
+        ));
+    }
+
+    serde_json::from_str(&body)
+        .with_context(|| format!("cognitive_mcp returned non-JSON body: {body}"))
+}
+
+/// Invoke one tool over the MCP `tools/call` JSON-RPC method and unwrap the result.
+///
+/// Performs the `initialize` handshake lazily: rather than initializing once at bridge
+/// startup (which would break the first call after any `op-cognitive-mcp` restart), a
+/// "not initialized" error triggers one initialize and a single retry.
+async fn call_cognitive_tool(
+    tool_name: &str,
+    tool_args: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let mut envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
+
+    if mcp_needs_initialize(&envelope) {
+        cognitive_mcp_initialize().await?;
+        envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
+    }
+
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown MCP error");
+        return Err(anyhow::anyhow!("tool '{tool_name}' failed: {message}"));
+    }
+
+    envelope.get("result").cloned().ok_or_else(|| {
+        anyhow::anyhow!("cognitive_mcp response had neither 'result' nor 'error': {envelope}")
+    })
+}
+
+/// Enumerate the live tool registry via the MCP `tools/list` protocol method.
+///
+/// Distinct from `call_cognitive_tool`: `tools/list` is a protocol method rather than a
+/// registry entry, so routing the `list_tools` schema method through `tools/call` would
+/// (and did) fail with "Tool not found: list_tools".
+async fn cognitive_tools_list() -> anyhow::Result<serde_json::Value> {
+    let endpoint = cognitive_mcp_endpoint();
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {},
+    });
+
+    let post = || async {
+        let response = cognitive_mcp_http()
+            .post(&endpoint)
+            .header("Content-Type", "application/json")
+            .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
+            .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
+            .json(&request)
+            .send()
+            .await
+            .with_context(|| format!("cognitive_mcp tools/list POST {endpoint}"))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .context("reading cognitive_mcp tools/list response body")?;
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "cognitive_mcp tools/list returned HTTP {status}: {body}"
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&body)
+            .with_context(|| format!("cognitive_mcp tools/list returned non-JSON body: {body}"))
+    };
+
+    let mut envelope = post().await?;
+    if mcp_needs_initialize(&envelope) {
+        cognitive_mcp_initialize().await?;
+        envelope = post().await?;
+    }
+
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown MCP error");
+        return Err(anyhow::anyhow!("tools/list failed: {message}"));
+    }
+
+    envelope
+        .get("result")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tools/list response had no 'result'"))
+}
+
+/// True when the envelope is the server's "call initialize first" rejection.
+fn mcp_needs_initialize(envelope: &serde_json::Value) -> bool {
+    envelope
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .is_some_and(|m| m.contains("not initialized"))
+}
+
 /// Parse createunixsocket arguments. Accepts either a JSON array
 /// `[name, [ports...]]` or an object `{ "name": "...", "ports": [...] }`.
 /// `ports` may be a JSON array of numbers or a CSV string ("6334" / "6334,8080").
@@ -3314,505 +2470,4 @@ fn parse_port_number(value: &simd_json::OwnedValue) -> Option<u64> {
                 (n.is_finite() && n >= 0.0 && n <= u16::MAX as f64).then_some(n as u64)
             })
         })
-}
-
-/// Extract the table-update map from an OVSDB monitor notification.
-///
-/// Accepts:
-/// - IDL snapshots from `OvsdbDbusClient::monitor_db`: `{ "Bridge": [...], ... }`
-/// - RFC 7047 JSON-RPC updates: `{ "params": [<monitor-id>, <table-updates>] }`
-/// - Legacy 3-param drafts: `{ "params": [?, ?, <table-updates>] }`
-pub(crate) fn ovsdb_monitor_tables(
-    update: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    if let Some(params) = update.get("params").and_then(|p| p.as_array()) {
-        if let Some(obj) = params.get(1).and_then(|v| v.as_object()) {
-            return Some(obj);
-        }
-        if let Some(obj) = params.get(2).and_then(|v| v.as_object()) {
-            return Some(obj);
-        }
-        return None;
-    }
-    update.as_object()
-}
-
-#[cfg(test)]
-mod replay_window_tests {
-    use super::{block_number_from_name, DEFAULT_REPLAY_LIMIT};
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn block_number_is_read_from_the_filename() {
-        assert_eq!(
-            block_number_from_name(Path::new("/t/block-000000000042.json")),
-            Some(42)
-        );
-        assert_eq!(
-            block_number_from_name(Path::new("/t/block-001709617.json")),
-            Some(1_709_617)
-        );
-        // Non-block records share the timing directory and must be ignored.
-        assert_eq!(block_number_from_name(Path::new("/t/vec-000001.bin")), None);
-        assert_eq!(block_number_from_name(Path::new("/t/unrelated.json")), None);
-        assert_eq!(block_number_from_name(Path::new("/t/block-abc.json")), None);
-    }
-
-    /// The bounded selection must keep the *newest* records and hand them back
-    /// oldest-first — replay rejects out-of-order events, so a reversed window
-    /// would drop everything after the first record.
-    #[test]
-    fn window_keeps_newest_and_replays_oldest_first() {
-        let limit = 3usize;
-        let mut newest: BinaryHeap<(Reverse<u64>, PathBuf)> = BinaryHeap::new();
-
-        for block in [10u64, 1, 7, 4, 9, 2] {
-            newest.push((
-                Reverse(block),
-                PathBuf::from(format!("/t/block-{block:012}.json")),
-            ));
-            if newest.len() > limit {
-                newest.pop();
-            }
-        }
-
-        let mut selected: Vec<PathBuf> = newest
-            .into_sorted_vec()
-            .into_iter()
-            .map(|(_, p)| p)
-            .collect();
-        selected.reverse();
-
-        let blocks: Vec<u64> = selected
-            .iter()
-            .map(|p| block_number_from_name(p).unwrap())
-            .collect();
-        assert_eq!(blocks, vec![7, 9, 10], "newest three, ascending");
-    }
-
-    #[test]
-    fn default_limit_is_bounded() {
-        assert!(
-            DEFAULT_REPLAY_LIMIT > 0,
-            "an unbounded default would restore the full-history rebuild this replaces"
-        );
-    }
-}
-
-#[cfg(test)]
-mod ovsdb_monitor_tables_tests {
-    use super::{ovsdb_monitor_tables, parse_rovs_command_input};
-    use serde_json::json;
-
-    #[test]
-    fn idl_snapshot_tables() {
-        let update = json!({
-            "Bridge": [{"name": "br0"}],
-            "Port": []
-        });
-        let tables = ovsdb_monitor_tables(&update).expect("tables");
-        assert_eq!(tables["Bridge"][0]["name"], "br0");
-    }
-
-    #[test]
-    fn rfc7047_params_tables() {
-        let update = json!({
-            "params": ["mon", {"Interface": {"u": {"new": {"name": "eth0"}}}}]
-        });
-        let tables = ovsdb_monitor_tables(&update).expect("tables");
-        assert!(tables.contains_key("Interface"));
-    }
-
-    #[test]
-    fn legacy_three_param_tables() {
-        let update = json!({
-            "params": [null, "mon", {"Bridge": {"u": {"old": {}, "new": {"name": "br1"}}}}]
-        });
-        let tables = ovsdb_monitor_tables(&update).expect("tables");
-        assert!(tables.contains_key("Bridge"));
-    }
-
-    #[test]
-    fn rovs_add_port_input_is_bound_to_the_typed_plugin_contract() {
-        let args = simd_json::json!({
-            "bridge_name": "ovsbr0",
-            "port_name": "netmaker"
-        });
-        let input: op_plugins::state_plugins::rovs_commands::AddPortInput =
-            parse_rovs_command_input(&args).expect("typed rovs add_port input");
-        assert_eq!(input.bridge_name, "ovsbr0");
-        assert_eq!(input.port_name, "netmaker");
-    }
-}
-
-#[cfg(test)]
-mod session_genesis_tests {
-    use super::*;
-    use crate::human_principal_dispatch::tests::pk;
-    use crate::identity_sled_dispatch::tests::{sled_engine, write_identity};
-    use op_state_store::ChainConfig;
-
-    /// One real chain event per actor, appended to a throwaway chain so the
-    /// event carries genuine `prev_hash` linkage rather than hand-built fields.
-    fn chain_events(actors: &[&str]) -> Vec<ChainEvent> {
-        let mut chain = EventChain::new(ChainConfig::default());
-        actors
-            .iter()
-            .map(|actor| {
-                chain
-                    .record_method_call(
-                        actor.to_string(),
-                        "identity_sled".to_string(),
-                        "write_identity".to_string(),
-                        Some("identity_sled.write".to_string()),
-                        "{}",
-                    )
-                    .clone()
-            })
-            .collect()
-    }
-
-    fn chain_event(actor_id: &str) -> ChainEvent {
-        chain_events(&[actor_id]).remove(0)
-    }
-
-    fn metadata_str(footprint: &PluginFootprint, key: &str) -> String {
-        footprint
-            .metadata
-            .get(key)
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_else(|| panic!("footprint metadata missing '{key}'"))
-    }
-
-    /// VAL-GENESIS-010 (`mint_and_store_genesis`): the first call mints, every
-    /// call after it returns the stored value — the formula is never evaluated
-    /// twice for one session.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn mint_and_store_genesis_mints_exactly_once() {
-        let (engine, _shm) = sled_engine();
-        let pubkey = pk(0x60);
-        let session_id = op_identity::session::derive_session_id(&pubkey);
-
-        let first = engine
-            .mint_and_store_genesis(&session_id, &pubkey)
-            .await
-            .expect("mint");
-        assert_eq!(first.len(), 64);
-        assert_ne!(first, "0".repeat(64));
-
-        let second = engine
-            .mint_and_store_genesis(&session_id, &pubkey)
-            .await
-            .expect("second call reads the stored anchor");
-        assert_eq!(first, second, "genesis must never be re-minted");
-
-        let context = engine.session_context(&session_id).await.expect("context");
-        assert_eq!(context.genesis_hex, first);
-        assert_eq!(context.wireguard_pubkey, pubkey);
-    }
-
-    /// VAL-GENESIS-011: minting needs a session id and a real 32-byte pubkey;
-    /// neither is invented on the caller's behalf.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn mint_and_store_genesis_refuses_incomplete_input() {
-        let (engine, _shm) = sled_engine();
-        assert!(engine.mint_and_store_genesis("", &pk(0x61)).await.is_err());
-        assert!(engine
-            .mint_and_store_genesis("session-no-key", "not-base64!!")
-            .await
-            .is_err());
-    }
-
-    /// VAL-GENESIS-012 (`genesis_not_reminted`): a session's second mutation
-    /// reads the stored anchor rather than minting a fresh one.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn second_mutation_reads_stored_genesis() {
-        let (engine, _shm) = sled_engine();
-        let pubkey = pk(0x62);
-        let identity = write_identity(engine.as_ref(), &pubkey)
-            .await
-            .expect("write");
-        let minted = identity.genesis.clone().expect("genesis");
-
-        // Both handles the mutation path may hold resolve the same anchor.
-        for handle in [identity.session_id.as_str(), pubkey.as_str()] {
-            let context = engine
-                .ensure_session_context(handle)
-                .await
-                .unwrap_or_else(|| panic!("handle '{handle}' resolves a session"));
-            assert_eq!(context.genesis_hex, minted, "stored anchor reused");
-        }
-    }
-
-    /// VAL-GENESIS-013 (`genesis_none_triggers_remint`): a record hydrated with
-    /// no anchor (crash between mint and persist, §5.2) is treated as an
-    /// arrival — the next request mints a fresh genesis inline.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn genesis_none_triggers_remint() {
-        let (engine, _shm) = sled_engine();
-        let pubkey = pk(0x63);
-        let identity = write_identity(engine.as_ref(), &pubkey)
-            .await
-            .expect("write");
-        let session_id = identity.session_id.clone();
-        let original = identity.genesis.clone().expect("genesis");
-
-        crate::identity_sled_dispatch::tests::clear_genesis(engine.as_ref(), &session_id).await;
-        engine.forget_session_context(&session_id).await;
-        assert!(
-            engine
-                .session_context_for_actor(&session_id)
-                .await
-                .is_none(),
-            "a record with no anchor must not resolve a session context"
-        );
-
-        let context = engine
-            .ensure_session_context(&session_id)
-            .await
-            .expect("arrival re-mints");
-        assert_eq!(context.genesis_hex.len(), 64);
-        assert_ne!(
-            context.genesis_hex, original,
-            "a re-mint is a new arrival: new chain head, new arrival timestamp"
-        );
-    }
-
-    /// VAL-GENESIS-014: an actor that names no session anchors nothing — the
-    /// mutation is still notarized, it just carries no session stamp.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn anonymous_actor_anchors_nothing() {
-        let (engine, _shm) = sled_engine();
-        assert!(engine
-            .ensure_session_context(ANONYMOUS_ACTOR)
-            .await
-            .is_none());
-        assert!(engine.ensure_session_context("").await.is_none());
-        assert!(engine.ensure_session_context("who-dis").await.is_none());
-    }
-
-    /// VAL-GENESIS-020 (`chain_carries_session_identity`): the durable
-    /// footprint carries all three session fields (FR-3).
-    #[test]
-    fn chain_carries_session_identity() {
-        let session = SessionContext {
-            genesis_hex: "ab".repeat(32),
-            session_id: "session-one".to_string(),
-            wireguard_pubkey: "cGs=".to_string(),
-        };
-        let footprint = event_to_footprint(&chain_event("session-one"), Some(&session));
-        assert_eq!(
-            metadata_str(&footprint, "session_genesis"),
-            session.genesis_hex
-        );
-        assert_eq!(metadata_str(&footprint, "session_id"), session.session_id);
-        assert_eq!(
-            metadata_str(&footprint, "wireguard_pubkey"),
-            session.wireguard_pubkey
-        );
-    }
-
-    /// VAL-GENESIS-021: an unanchored event carries the stamp keys with empty
-    /// values — present and honest, never absent, so a slicing query cannot
-    /// mistake "no session" for "field not written yet".
-    #[test]
-    fn event_to_footprint_stamps_empty_session_when_unanchored() {
-        let footprint = event_to_footprint(&chain_event(ANONYMOUS_ACTOR), None);
-        for key in ["session_genesis", "session_id", "wireguard_pubkey"] {
-            assert_eq!(metadata_str(&footprint, key), "", "{key} must be present");
-        }
-    }
-
-    /// VAL-GENESIS-022 (`chain_sliceable_by_session`): two sessions' events
-    /// interleaved in one chain are recovered by filtering on session_genesis.
-    #[test]
-    fn chain_sliceable_by_session() {
-        let one = SessionContext {
-            genesis_hex: "11".repeat(32),
-            session_id: "session-one".to_string(),
-            wireguard_pubkey: "b25l".to_string(),
-        };
-        let two = SessionContext {
-            genesis_hex: "22".repeat(32),
-            session_id: "session-two".to_string(),
-            wireguard_pubkey: "dHdv".to_string(),
-        };
-
-        let actors: Vec<&str> = (0..6)
-            .map(|i| {
-                if i % 2 == 0 {
-                    one.session_id.as_str()
-                } else {
-                    two.session_id.as_str()
-                }
-            })
-            .collect();
-        let chain: Vec<PluginFootprint> = chain_events(&actors)
-            .iter()
-            .map(|event| {
-                let session = if event.actor_id == one.session_id {
-                    &one
-                } else {
-                    &two
-                };
-                event_to_footprint(event, Some(session))
-            })
-            .collect();
-
-        for session in [&one, &two] {
-            let slice: Vec<&PluginFootprint> = chain
-                .iter()
-                .filter(|fp| {
-                    fp.metadata
-                        .get("session_genesis")
-                        .and_then(|v| v.as_str())
-                        .map(|g| g == session.genesis_hex)
-                        .unwrap_or(false)
-                })
-                .collect();
-            assert_eq!(slice.len(), 3, "each session recovers its own segment");
-            for fp in slice {
-                assert_eq!(metadata_str(fp, "session_id"), session.session_id);
-            }
-        }
-    }
-
-    /// VAL-GENESIS-030 (`offline_reverification`): stored mint inputs are
-    /// sufficient to re-derive each session anchor after extracting
-    /// interleaved events. The first session deliberately arrives one event
-    /// after its recorded chain head, exercising the ancestor-not-parent rule.
-    #[test]
-    fn offline_reverification() {
-        fn hash32(value: &str) -> [u8; 32] {
-            hex::decode(value)
-                .ok()
-                .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
-                .unwrap_or([0; 32])
-        }
-
-        fn is_ancestor(events: &[ChainEvent], ancestor: &str, descendant: &str) -> bool {
-            let by_hash: HashMap<&str, &ChainEvent> = events
-                .iter()
-                .map(|event| (event.event_hash.as_str(), event))
-                .collect();
-            let mut cursor = descendant;
-            while cursor != ancestor {
-                let Some(event) = by_hash.get(cursor) else {
-                    return false;
-                };
-                if event.prev_hash == cursor {
-                    return false;
-                }
-                cursor = &event.prev_hash;
-            }
-            true
-        }
-
-        let events = chain_events(&[
-            "bootstrap",
-            "session-two-gap",
-            "session-one",
-            "session-two",
-            "session-one",
-            "session-two",
-        ]);
-        let head = &events[0];
-        let catalog = [0x77; 32];
-        let one_key = [0x11; 32];
-        let two_key = [0x22; 32];
-        let head_hash = hash32(&head.event_hash);
-        let head_timestamp = head.timestamp.timestamp();
-
-        let one_stamp = GenesisStamp {
-            session_id: "session-one".into(),
-            wireguard_pubkey: base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                one_key,
-            ),
-            genesis_hex: hex::encode(mint_genesis(
-                &one_key,
-                &head_hash,
-                head_timestamp,
-                &catalog,
-                1_700_000_101,
-            )),
-            arrival_timestamp: 1_700_000_101,
-            chain_head_at_arrival: head.event_hash.clone(),
-            catalog_hash_at_arrival: hex::encode(catalog),
-            head_timestamp_at_arrival: head_timestamp,
-        };
-        let two_stamp = GenesisStamp {
-            session_id: "session-two".into(),
-            wireguard_pubkey: base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                two_key,
-            ),
-            genesis_hex: hex::encode(mint_genesis(
-                &two_key,
-                &head_hash,
-                head_timestamp,
-                &catalog,
-                1_700_000_102,
-            )),
-            arrival_timestamp: 1_700_000_102,
-            chain_head_at_arrival: head.event_hash.clone(),
-            catalog_hash_at_arrival: hex::encode(catalog),
-            head_timestamp_at_arrival: head_timestamp,
-        };
-        let one = SessionContext {
-            genesis_hex: one_stamp.genesis_hex.clone(),
-            session_id: one_stamp.session_id.clone(),
-            wireguard_pubkey: one_stamp.wireguard_pubkey.clone(),
-        };
-        let two = SessionContext {
-            genesis_hex: two_stamp.genesis_hex.clone(),
-            session_id: two_stamp.session_id.clone(),
-            wireguard_pubkey: two_stamp.wireguard_pubkey.clone(),
-        };
-
-        let footprints: Vec<_> = events[1..]
-            .iter()
-            .map(|event| {
-                let session = if event.actor_id.contains("one") {
-                    &one
-                } else {
-                    &two
-                };
-                event_to_footprint(event, Some(session))
-            })
-            .collect();
-
-        for (stamp, key) in [(&one_stamp, one_key), (&two_stamp, two_key)] {
-            let recomputed = mint_genesis(
-                &key,
-                &hash32(&stamp.chain_head_at_arrival),
-                stamp.head_timestamp_at_arrival,
-                &hash32(&stamp.catalog_hash_at_arrival),
-                stamp.arrival_timestamp,
-            );
-            assert_eq!(hex::encode(recomputed), stamp.genesis_hex);
-
-            let slice: Vec<_> = footprints
-                .iter()
-                .filter(|fp| metadata_str(fp, "session_genesis") == stamp.genesis_hex)
-                .collect();
-            assert!(!slice.is_empty());
-            let first_hash = slice[0].content_hash.as_str();
-            assert!(is_ancestor(
-                &events,
-                &stamp.chain_head_at_arrival,
-                first_hash
-            ));
-        }
-
-        for pair in events.windows(2) {
-            assert_eq!(pair[1].prev_hash, pair[0].event_hash);
-        }
-        assert_ne!(
-            events[2].prev_hash, one_stamp.chain_head_at_arrival,
-            "session-one arrival includes a deliberate intervening mutation"
-        );
-    }
 }

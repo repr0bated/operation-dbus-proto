@@ -8,8 +8,8 @@
 //! ## BYOM Integration
 //!
 //! The factory plugin discovers external model sources (BYOM) via D-Bus projection.
-//! It reads from the zeroclaw plugin's `model_routes` projection at
-//! `/opdbus/v1/plugins/zeroclaw` and surfaces them as `byom_sources`.
+//! It reads from the tched_router plugin's `model_routes` at
+//! `/opdbus/v1/plugins/tched_router` and surfaces them as `byom_sources`.
 
 use super::plugin_scaffold_helpers::field_from_value;
 use anyhow::Result;
@@ -36,7 +36,7 @@ pub struct FactoryState {
     pub config_schema: Value,
     pub ui_surfaces: Value,
     /// BYOM (Bring Your Own Model) sources discovered from external providers
-    /// via D-Bus projection (e.g., zeroclaw's model_routes)
+    /// via D-Bus projection (e.g., tched_router's model_routes)
     pub byom_sources: Value,
 }
 
@@ -54,15 +54,20 @@ mod projection {
     use simd_json::prelude::*;
     use simd_json::OwnedValue as Value;
 
-    /// Read zeroclaw's model_routes from D-Bus projection cache
+    /// Read tched_router model_routes from D-Bus projection cache
     pub fn read_zeroclaw_model_routes() -> Option<Value> {
-        // The sealed blob IS the plugin: zeroclaw exists iff its blob is in
-        // the SHM catalog.
-        op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
+        // The sealed blob IS the plugin: tched_router exists iff its blob is in
+        // the SHM catalog. Accept the pre-rebrand id until the host reseals.
+        op_blob::catalog::read_plugin_schema_shm("tched_router")
+            .or_else(|| op_blob::catalog::read_plugin_schema_shm("zeroclaw"))?;
 
-        // Read zeroclaw projection from D-Bus via /dev/shm projection cache
+        // Read router projection from D-Bus via /dev/shm projection cache
         // The actual projection is written by op-dbus at /dev/shm/plugin-{name}.json
-        let projection_path = "/dev/shm/plugin-zeroclaw.json";
+        let projection_path = if std::path::Path::new("/dev/shm/plugin-tched_router.json").exists() {
+            "/dev/shm/plugin-tched_router.json"
+        } else {
+            "/dev/shm/plugin-zeroclaw.json"
+        };
         let proj_bytes = std::fs::read(projection_path).ok()?;
         let mut proj_bytes = proj_bytes;
         let zeroclaw_proj: Value = simd_json::to_owned_value(&mut proj_bytes).ok()?;
@@ -108,7 +113,7 @@ mod projection {
                     "available": available,
                     "transport": transport,
                     "status_reason": status_reason,
-                    "source": "zeroclaw",
+                    "source": "tched_router",
                     "byom": true
                 }))
             })
@@ -283,12 +288,12 @@ impl FactoryPlugin {
                     "configured": openrouter_configured
                 },
                 {
-                    "id": "zeroclaw", "route": "zeroclaw", "kind": "byom_router",
-                    "aliases": ["byom", "local", "openrouter", "ollama"],
-                    "endpoint": "/opdbus/v1/plugins/zeroclaw", "auth": "dbus_projection",
-                    "description": "BYOM source - discovers models from zeroclaw D-Bus projection",
-                    "discovery_plugin": "zeroclaw",
-                    "discovery_path": "/opdbus/v1/plugins/zeroclaw"
+                    "id": "tched_router", "route": "tched_router", "kind": "byom_router",
+                    "aliases": ["byom", "local", "openrouter", "ollama", "zeroclaw"],
+                    "endpoint": "/opdbus/v1/plugins/tched_router", "auth": "dbus_projection",
+                    "description": "BYOM source - discovers models from tched_router D-Bus projection",
+                    "discovery_plugin": "tched_router",
+                    "discovery_path": "/opdbus/v1/plugins/tched_router"
                 }
             ]),
             tools: json!([
@@ -382,7 +387,7 @@ pub(crate) fn factory_schema() -> PluginSchema {
         .description("Factory Droid agent platform — computers, sessions, models, autonomy controls, BYOM discovery");
 
     // Add BYOM dependency on zeroclaw for model discovery via D-Bus projection
-    builder = builder.dependency("zeroclaw");
+    builder = builder.dependency("tched_router");
 
     // Add fields from live state
     if let Some(obj) = state.as_object() {
@@ -480,7 +485,8 @@ pub(crate) fn factory_schema() -> PluginSchema {
         "factory.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "factory.read".to_string(),
-            description: "Grants: list_computers, get_session, list_sessions, list_models.".to_string(),
+            description: "Grants: list_computers, get_session, list_sessions, list_models."
+                .to_string(),
         },
     );
     schema.capabilities.insert(

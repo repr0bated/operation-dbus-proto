@@ -1,37 +1,23 @@
 {
-  "version": 2,
-  "description": "NIC-less identity CT template \u2014 shared host UDS, no Incus proxy, no eth0. Container name = session_id derived from WG pubkey.",
+  "version": 1,
+  "description": "NIC-less identity CT template — shared host UDS, no Incus proxy, no eth0. Container name = session_id derived from WG pubkey.",
   "image": {
-    "fingerprint_prefix": "6ebb6cb794d4",
-    "description": "Ubuntu noble amd64 (seed / RO rootfs) \u2014 alias 'noble'/'raccoon'",
-    "fallback_alias": "images:ubuntu/noble",
-    "local_alias": "raccoon",
-    "notes": "Prefer the local alias: fingerprints change whenever the image is re-imported. 3a639373bb7a was the pre-migration seed and no longer exists on this host."
+    "fingerprint_prefix": "3a639373bb7a",
+    "description": "Ubuntu noble amd64 (seed / RO rootfs)",
+    "fallback_alias": "images:ubuntu/noble"
   },
   "storage": {
-    "pool": "3tched-storage",
+    "pool": "default",
     "driver": "btrfs",
-    "notes": "Seed rootfs on btrfs pool; per-identity fstorage.img attached via btrfs device add (not overlay) Pool was 'default' before the 2026-07 provider move; the live pool is '3tched-storage'."
+    "notes": "Seed rootfs on btrfs pool; per-identity fstorage.img attached via btrfs device add (not overlay)"
   },
-  "profiles": [
-    "identity"
-  ],
-  "packages": {
-    "required": [
-      "btrfs-progs"
-    ],
-    "install": "host-network rootfs chroot during provisioning",
-    "notes": "Identity containers are NIC-less. btrfs-progs must be installed before fstorage is attached so btrfs device remove is always available during reprovision and teardown. wireguard-tools is not part of this template."
-  },
-  "forbidden_devices": [
-    "nic",
-    "proxy"
-  ],
+  "profiles": ["identity"],
+  "forbidden_devices": ["nic", "proxy"],
   "devices": {
     "root": {
       "type": "disk",
       "path": "/",
-      "pool": "3tched-storage"
+      "pool": "default"
     },
     "ghostbridge-socket": {
       "type": "disk",
@@ -50,7 +36,7 @@
     "shared_container": {
       "host_path": "/run/ghostbridge/container.sock",
       "env": "GHOSTBRIDGE_SOCKET_PATH",
-      "registration": "createunixsocket / shared_unix_socket \u2014 name=session_id, ports metadata only"
+      "registration": "createunixsocket / shared_unix_socket — name=session_id, ports metadata only"
     },
     "host_grpc": {
       "host_path": "/run/opdbus/grpc.sock",

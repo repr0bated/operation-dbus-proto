@@ -53,4 +53,8 @@ pub fn validate_subid(subid: &str) -> Result<(), String> {
 }
 
 /// Known `x-*` extension keys the render contract recognizes.
-pub const KNOWN_X_KEYS: &[&str] = &["x-oscal-subid", "x-oscal-category", "x-immutable-paths"];
+pub const KNOWN_X_KEYS: &[&str] = &[
+    "x-oscal-subid",
+    "x-oscal-category",
+    "x-immutable-paths",
+];

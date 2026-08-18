@@ -207,14 +207,7 @@ fn run_version(binary: &Path, ssh: Option<&str>) -> Option<String> {
     let output = if let Some(host) = ssh {
         let remote = format!("{} --version", shell_escape(&binary.display().to_string()));
         Command::new("ssh")
-            .args([
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                host,
-                &remote,
-            ])
+            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, &remote])
             .output()
             .ok()?
     } else {
@@ -320,7 +313,10 @@ fn parse_options(help: &str) -> Vec<CliFlag> {
 
     for line in help.lines() {
         let trimmed = line.trim();
-        if trimmed == "Options:" || trimmed == "Global Options:" || trimmed == "Flags:" {
+        if trimmed == "Options:"
+            || trimmed == "Global Options:"
+            || trimmed == "Flags:"
+        {
             in_section = true;
             continue;
         }
@@ -529,19 +525,12 @@ Available subcommands:
     #[test]
     fn parses_antigravity_go_style_root_help() {
         let node = parse_help(&[], AGY_ROOT);
-        assert!(
-            node.commands.contains(&"plugin".into()),
-            "cmds={:?}",
-            node.commands
-        );
+        assert!(node.commands.contains(&"plugin".into()), "cmds={:?}", node.commands);
         assert!(node.commands.contains(&"models".into()));
         assert!(!node.commands.contains(&"help".into()));
         let names: Vec<_> = node.flags.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"--model"), "flags={names:?}");
         assert!(names.contains(&"--add-dir"), "flags={names:?}");
-        assert!(
-            names.contains(&"-c") || names.iter().any(|n| n.ends_with("continue")),
-            "flags={names:?}"
-        );
+        assert!(names.contains(&"-c") || names.iter().any(|n| n.ends_with("continue")), "flags={names:?}");
     }
 }

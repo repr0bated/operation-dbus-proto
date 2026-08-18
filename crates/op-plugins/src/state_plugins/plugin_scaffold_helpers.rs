@@ -12,12 +12,12 @@
 pub(crate) use super::adc::adc_schema as adc_plugin_schema;
 pub(crate) use super::agent_config::agent_config_schema as agent_config_plugin_schema;
 pub(crate) use super::antigravity::antigravity_schema as antigravity_plugin_schema;
+pub(crate) use super::antigravity_chat::antigravity_chat_schema as antigravity_chat_plugin_schema;
 pub(crate) use super::btrfs_plugin::btrfs_schema as btrfs_plugin_schema;
 pub(crate) use super::cognitive_mcp::cognitive_mcp_schema as cognitive_mcp_plugin_schema;
 pub(crate) use super::compact_mcp::compact_mcp_schema as compact_mcp_plugin_schema;
 pub(crate) use super::cron::cron_schema as cron_plugin_schema;
 pub(crate) use super::ctl_plane_chatbot::ctl_plane_chatbot_schema as ctl_plane_chatbot_plugin_schema;
-pub(crate) use super::emqx::emqx_schema as emqx_plugin_schema;
 pub(crate) use super::endpoint::endpoint_schema as endpoint_plugin_schema;
 pub(crate) use super::factory::factory_schema as factory_plugin_schema;
 pub(crate) use super::fail2ban::fail2ban_schema as fail2ban_plugin_schema;
@@ -43,6 +43,7 @@ pub(crate) use super::schema_renderer::schema_renderer_schema as schema_renderer
 pub(crate) use super::service::service_schema as service_plugin_schema;
 pub(crate) use super::sessdecl::sess_decl_schema as sess_decl_plugin_schema;
 pub(crate) use super::software::software_schema as software_plugin_schema;
+pub(crate) use super::tched_router::tched_router_plugin_schema;
 pub(crate) use super::unix_socket::unix_socket_schema_derived as unix_socket_plugin_schema;
 pub(crate) use super::users::users_schema as users_plugin_schema;
 pub(crate) use super::web_ui::web_ui_schema as web_ui_plugin_schema;
@@ -51,7 +52,6 @@ pub(crate) use super::wgcf::wgcf_schema as wgcf_plugin_schema;
 pub(crate) use super::wireguard::wireguard_schema as wireguard_plugin_schema;
 pub(crate) use super::workflows_plugin::workflows_schema as workflows_plugin_schema;
 pub(crate) use super::xray::xray_schema as xray_plugin_schema;
-pub(crate) use super::tched_router::tched_router_plugin_schema;
 
 // Added missing schema re-exports
 pub(crate) use super::blockchain_plugin::blockchain_schema as blockchain_plugin_schema;

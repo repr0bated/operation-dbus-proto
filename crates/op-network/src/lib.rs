@@ -23,13 +23,9 @@ pub mod plugin;
 pub mod proxmox;
 pub mod rovs_proxy;
 pub mod rtnetlink;
-pub mod unixctl;
 
 pub use controller::{OpenFlowController, OpenFlowControllerHandle};
-pub use datapath_safe::{
-    attach_controller_safe, del_controller, ensure_fallback_normal, get_datapath_health,
-    set_controller, set_fail_mode, DatapathHealth, FALLBACK_COOKIE, MANAGED_COOKIE,
-};
+pub use datapath_safe::{FALLBACK_COOKIE, MANAGED_COOKIE, attach_controller_safe, del_controller, ensure_fallback_normal, get_datapath_health, set_controller, set_fail_mode, DatapathHealth};
 pub use openflow::{FlowAction, FlowEntry, FlowMatch, OpenFlowClient, OpenFlowVersion};
 pub use ovs_capabilities::{counter_excuses, excuses_to_llm_context, OvsCapabilities};
 pub use ovs_error::OvsError;
@@ -38,9 +34,6 @@ pub use ovsdb::OvsdbClient;
 pub use plugin::{NetworkInterface, NetworkPlugin, OpenFlowConfig, OvsBridge, OvsdbConfig};
 pub use proxmox::{
     ContainerStatus, CreateContainerRequest, LxcContainer, ProxmoxClient, ProxmoxToken,
-};
-pub use unixctl::{
-    appctl, ensure_static_fdb, ensure_static_fdb_entries, static_fdb_from_env, StaticFdbEntry,
 };
 
 /// Prelude for convenient imports

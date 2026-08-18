@@ -473,3 +473,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
 
     schema
 }
+
+inventory::submit! {
+    crate::default_registry::PluginReg::new("cozo", |_ctx| std::sync::Arc::new(CozoPlugin::new()))
+}

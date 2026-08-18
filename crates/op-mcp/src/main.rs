@@ -18,7 +18,7 @@
 use anyhow::Result;
 use clap::Parser;
 use op_core::BusType;
-use op_identity::WireGuardIdentity;
+use op_identity::{write_sled_from_wg, WireGuardIdentity};
 #[cfg(feature = "grpc")]
 use op_mcp::grpc::{GrpcConfig, GrpcTransport};
 use op_mcp::{
@@ -103,11 +103,32 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // ── WireGuard identity ────────────────────────────────────────────────────
-    // Detect local WG IP for bind address resolution. The session-genesis
-    // model mints its own anchor at arrival, so we no longer project the
-    // 152-byte `/dev/shm/plugin_schema.dat` sled here.
+    // 1. Detect local WG IP for bind address resolution.
+    // 2. Write canonical IdentitySled to /dev/shm for Ghostbridge auth.
     let wg_id = WireGuardIdentity::with_interface(&cli.wg_interface);
     let wg_ip: Option<String> = wg_id.get_local_ip();
+
+    match wg_id.get_local_pubkey() {
+        Ok(pubkey) => {
+            if let Err(e) = write_sled_from_wg(&pubkey) {
+                tracing::warn!(error = %e, "Failed to write WG identity sled to /dev/shm");
+            } else {
+                info!(
+                    interface = %cli.wg_interface,
+                    pubkey = %pubkey,
+                    wg_ip = ?wg_ip,
+                    "WG identity sled written"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                interface = %cli.wg_interface,
+                error = %e,
+                "Could not read WG public key — identity sled not written; set WG_PUBKEY env var to override"
+            );
+        }
+    }
 
     // Check for gRPC modes
     if cli.mode == "grpc" || cli.mode == "grpc-agents" {

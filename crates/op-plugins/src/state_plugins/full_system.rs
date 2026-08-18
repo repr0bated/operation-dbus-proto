@@ -775,7 +775,6 @@ impl StatePlugin for FullSystemPlugin {
                 "mut.system.plugin.full-system.hostname.set@v1",
             ),
         );
-
         schema.capabilities.insert(
             "full_system.read".to_string(),
             op_state_store::CapabilityDecl {

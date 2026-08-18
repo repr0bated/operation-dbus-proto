@@ -51,40 +51,16 @@ Build gotchas:
 
 **Transport & identity (zero-trust) — intent vs current live state.** The intended/documented model (see `unix_socket.rs`'s `SHARED_CONTAINER_SOCKET`) is: gRPC (tonic, TLS mandatory) over one shared Unix domain socket per container (`/run/ghostbridge/container.sock`, bind-mounted into the container as a disk device), with the tonic-web bridge demuxing by gRPC service/method via reflection — no per-service TCP ports, no NIC. Identity = WireGuard pubkey → Argon2(PSK, salt=pubkey) sessionid; a container's name IS its sessionid. The xray router injects identity headers (`X-Ghostbridge-Footprint`/`X-WireGuard-Pubkey`) — that header is meant to be the only gate; IP ACLs/ports are theater in this model. SESSION bus = the WG-identity-gated plugin surface; SYSTEM bus = local agents/mirror.
 
-**The fabric — this is the live model, verified 2026-08-16.** Earlier revisions of this file described per-container `incus proxy` devices and a NIC on `xray`. **Both are gone and have been for some time.** There are now *zero* proxy devices on any container, and no container has a NIC: `incus config device show <name>` returns disk mounts only. Do not reason about, or add, proxy devices.
+**Live reality after the 2026-07-20/21 provider migration diverges from this** — verified directly against `incus config device show <container>` on the current host (188.68.58.237), not assumed from docs:
+- Only `assistant` follows the pure shared-socket model: no TCP proxy devices at all, just `/run/ghostbridge` bind-mounted in.
+- `xray` is the **sole container with a real NIC** (`eth0`, bridged onto `ovsbr0`) — it has to be, since it terminates public TLS/SNI traffic; it also gets `/run/opdbus` bind-mounted in for the shared gRPC/D-Bus sockets.
+- `qdrant` is a hybrid: has the `/run/ghostbridge` bind-mount *and* two per-port `incus proxy` (TCP-to-TCP) devices exposing its raw ports (6333/6334) on the internal `svc0` bridge address (`10.200.0.2`).
+- `mail-3tched`, `cozo`, and `netmaker` do **not** use the shared-socket model at all — no `ghostbridge-socket` mount on any of them. Each instead has individually-configured `incus config device add <name> proxy listen=tcp:<host-addr>:<port> connect=tcp:127.0.0.1:<port>` mappings, one per exposed port (e.g. mail-3tched: 25/143/465/587/993/80, each its own device; netmaker: 8081/8083, each with both a `10.200.0.2` and a `127.0.0.1` variant). None of these three are netns-isolated behind a shared UDS — they're plain per-container TCP port-forwards, config'd by hand rather than through `unix_socket`'s `createunixsocket` path.
+- Before trusting "all container I/O is UDS" for any specific container, check its actual device list first (`sudo incus config device show <name>`) — don't assume the documented model applies uniformly. This split is recent (post-migration) and may still be settling; re-verify if it's been more than a few days.
 
-Two layers, and they are not the same thing:
+**MCP gateways (settled — do not redesign).** `op-cognitive-mcp` is the universal gateway for ALL external clients (tonic-web gRPC :50052 + server reflection for tool discovery). `compact-mcp` is loopback-only for the chatbot. Never create new shims or point external clients at `op-assistant-grpc`.
 
-- **L2/L3 fabric** — one OVS bridge `ovsbr0`. The physical `eth0` is enslaved and *unaddressed*; all host L3 lives on internal ports:
-
-  | Port | Address | Role |
-  |---|---|---|
-  | `pub0` | `188.68.58.237/22` | public uplink, default route |
-  | `3tched` | `10.0.0.2/24` + `10.200.0.2/24` | incoming identity (both addresses on one port) |
-  | `svc0` | `10.0.0.3/24` | tonic `:8090` publication |
-  | `ovsbr0` (LOCAL) | `10.200.0.1/24` | fabric address, OpenFlow controller `:6653` |
-  | `netmaker` (WG) | `100.69.0.1/24` | mesh — **is an `ovsbr0` port** |
-
-- **Service attachment** — containers are nic-less. They get `/run/ghostbridge` (and for some, `/run/opdbus`) bind-mounted in as a disk device, and the service inside binds a UDS there. Host-side relays then join fabric addresses to those sockets: `op-uds-relay` (Rust, `--tcp-to-unix` / `--unix-to-tcp`) and the older `socket-relay` (Python), run by the `fwd-*` / `uds-*` / `xsock-*` services. Full per-service inventory with argv: `deploy/runit/libexec-3tched/PYTHON-EDGE-INVENTORY.md`.
-
-**The mesh is part of the fabric, not something bolted beside it.** The WireGuard `netmaker` interface is deliberately enslaved into `ovsbr0` by `netmaker-ovs-attach` — that membership is what connects mesh clients to `3tched` and `svc0`. Never `del-port` it. It is a layer-3, `NOARP`, MAC-less port, so plain `NORMAL` L2 forwarding cannot carry it; companion L3→`encap(ethernet)` OpenFlow flows supply the Ethernet header. Symptom of losing those flows: link-up and healthy WG handshakes while every L2-dependent path fails. Elevated TX errors on `netmaker` are the expected cost of L2 flood attempts against an L3 port — not a fault.
-
-Consequence worth holding onto: mesh traffic **does** traverse OVS, so OpenFlow is in that path; host→container hops do **not**, because they are UDS with no packets to steer.
-
-Verify before trusting any of this:
-
-```bash
-ip -br addr; sudo ovs-vsctl show
-sudo incus list -c ns; for c in $(sudo incus list -c n --format csv); do sudo incus config device show "$c"; done
-sudo ss -lntp | grep -E '10\.(0|200)\.|100\.69\.|188\.68'
-ls -R /run/ghostbridge/
-```
-
-Fuller map: `docs/src/operations/host-socket-topology-live.md` (its §5 table still says "UDS + Incus proxy" — that half is stale; the live check above wins).
-
-**MCP gateways (settled — do not redesign).** One TCP door: tonic-web on `:8090` demuxes HTTP and native gRPC for every client (laptop, mesh, UI, xray). The same routes live on `/run/opdbus/grpc.sock` and `/run/ghostbridge/container.sock` with auth at connect. Cognitive tools are in-process on that surface. `op-cognitive-mcp` is stdio-only / normally down — not a network door. `:50051` and `:50052` are not control-plane entries. Never create new shims or point external clients at `op-assistant-grpc`.
-
-**Host tooling.** As of the 2026-07-20/21 server move, the host runs **runit**, not s6 — `service6`/`s6d`/`s6-*` no longer exist on this box and any doc or memory saying otherwise is stale. Service definitions live under `/etc/runit/sv/<name>/`, enabled by symlinking into `/etc/runit/runsvdir/default/`; manage them with the standard `sv start|stop|restart|status|check <name>` (see `3tched-artix-runit-install.sh` for the canonical patterns, e.g. `sv start "$d"` / `until sv check "$d"; do sleep 1; done`). No wrapper/gate script exists for runit the way `service6` was for s6 — `sv` is used directly. Still be conservative with service-affecting commands (start/stop/restart) regardless of supervisor — read state before acting, don't chain speculative changes. OVS is driven natively over OVSDB JSON-RPC via the rovs plugins (`op-openvswitch-daemon` was the deprecated D-Bus-passthrough predecessor to this — it has been removed from the tree; don't recreate it). Containers are Incus and are nic-less: expose a service by giving it a UDS under the bind-mounted `/run/ghostbridge` and attaching it to a fabric address with `zbusctl createsocket` (or an `op-uds-relay` mapping in a `fwd-*` / `uds-*` / `xsock-*` service). **Never add an `incus proxy` device** — none exist on this host and reintroducing one puts a service outside the fabric. See the fabric section above.
+**Host tooling.** As of the 2026-07-20/21 server move, the host runs **runit**, not s6 — `service6`/`s6d`/`s6-*` no longer exist on this box and any doc or memory saying otherwise is stale. Service definitions live under `/etc/runit/sv/<name>/`, enabled by symlinking into `/etc/runit/runsvdir/default/`; manage them with the standard `sv start|stop|restart|status|check <name>` (see `3tched-artix-runit-install.sh` for the canonical patterns, e.g. `sv start "$d"` / `until sv check "$d"; do sleep 1; done`). No wrapper/gate script exists for runit the way `service6` was for s6 — `sv` is used directly. Still be conservative with service-affecting commands (start/stop/restart) regardless of supervisor — read state before acting, don't chain speculative changes. OVS is driven natively over OVSDB JSON-RPC via the rovs plugins (`op-openvswitch-daemon` was the deprecated D-Bus-passthrough predecessor to this — it has been removed from the tree; don't recreate it). Containers are Incus; expose sockets via `zbusctl createsocket`, not raw incus proxy devices — that guidance still holds going forward even though current live containers (`assistant`, `cozo`, `mail-3tched`, `netmaker`, `qdrant`, `xray`) mix the intended shared-UDS model with hand-configured per-port `incus proxy` devices set up during the rushed post-migration demo push. See the Transport & identity note above before assuming either pattern for a given container; don't treat the raw-proxy-device pattern as newly sanctioned just because it's common right now.
 
 ## Crate map (the ones you'll actually touch)
 
