@@ -18,6 +18,8 @@ use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY
 use op_grpc_bridge::mutation_engine::MutationEngine;
 use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidator, DecoyTrustStore};
 use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
+use op_grpc_bridge::proto::plugin_methods::human_principal_plugin_methods_client::HumanPrincipalPluginMethodsClient;
+use op_grpc_bridge::proto::plugin_methods::HumanPrincipalResolveKeyRequest;
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
 use op_grpc_bridge::proto::{
     CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest, SetPropertyRequest,
@@ -669,6 +671,32 @@ async fn happy_path_registered_human_gated_call_over_tls() {
     )
     .await;
     assert_unauthenticated(no_meta, "Missing Ghostbridge Identity Sled");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_plugin_route_authenticates_registered_human() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(65);
+    register_human(ch.clone(), &env, &pubkey, "typed-route-user", [0x65; 16]).await;
+    env.grant_human(&pubkey, &["human_principal.read"]);
+
+    let mut client = HumanPrincipalPluginMethodsClient::new(ch);
+    let mut request = Request::new(HumanPrincipalResolveKeyRequest {
+        human_pubkey: pubkey.clone(),
+    });
+    attach_capability(request.metadata_mut(), "human_principal.read");
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x66; 16]).to_wire(),
+    );
+
+    let response = client
+        .resolve_key(request)
+        .await
+        .expect("generated route should authenticate the assertion")
+        .into_inner();
+    assert!(response.principal.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]

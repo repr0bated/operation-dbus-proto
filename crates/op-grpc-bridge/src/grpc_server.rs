@@ -811,7 +811,7 @@ pub fn build_operation_routes_with_validator(
     // legacy RPCs without per-method capability declarations, so widening
     // their interceptor to human assertions would turn authentication into
     // authorization (for example, OvsdbMirror.Transact).
-    let assertion_intercept = interceptor::make_ghostbridge_interceptor(validator);
+    let assertion_intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
     let legacy_intercept = interceptor::GhostbridgeInterceptor;
 
     let routes = tonic::service::Routes::new(crate::grpc_web::enable(
@@ -861,7 +861,7 @@ pub fn build_operation_routes_with_validator(
         ),
     );
 
-    let routes = add_routes(routes, server.clone());
+    let routes = add_routes(routes, server.clone(), validator);
     routes.add_service(crate::grpc_web::enable(reflection_v1))
 }
 
