@@ -672,7 +672,9 @@ impl OperationGrpcServer {
         request_dynamic
             .serialize_with_options(
                 &mut serde_json::Serializer::new(&mut json_args),
-                &SerializeOptions::new().use_proto_field_name(true),
+                &SerializeOptions::new()
+                    .use_proto_field_name(true)
+                    .stringify_64_bit_integers(false),
             )
             .map_err(|error| {
                 Status::internal(format!(
