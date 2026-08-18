@@ -1,0 +1,25 @@
+```json
+[
+  {
+    "path": "crates/op-plugins/src/bin/tched_router_config_surface.dispatch.inc",
+    "line": 31,
+    "priority": "P0",
+    "title": "Direct file I/O in plugin dispatch logic",
+    "why": "The `config_path` and `load_upstream_value` functions perform direct file system reads (`std::fs::read_to_string`) within the D-Bus dispatch path. This violates the project invariant that plugins must not perform direct file reads for live state; state must be managed via the D-Bus control plane or provided through the plugin's state object."
+  },
+  {
+    "path": "crates/op-plugins/src/bin/tched_router_config_surface.dispatch.inc",
+    "line": 114,
+    "priority": "P0",
+    "title": "Direct file I/O in configuration mutation",
+    "why": "The `patch_config` function performs direct file system writes (`std::fs::write`) to a configuration file. This bypasses the D-Bus control plane for state mutations and violates the project invariant that plugins must not use direct file writes for live state/configuration."
+  },
+  {
+    "path": "crates/op-plugins/src/bin/tched_router_config_surface.dispatch.inc",
+    "line": 145,
+    "priority": "P1",
+    "title": "Insecure fallback to root directory",
+    "why": "The `config_path` function falls back to `/root/.zeroclaw/config.toml` if the home directory cannot be determined. This is a security risk and a violation of deployment best practices, as the service may attempt to access or create files in a sensitive system directory."
+  }
+]
+```

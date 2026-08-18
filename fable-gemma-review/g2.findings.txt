@@ -1,0 +1,18 @@
+```json
+[
+  {
+    "path": "crates/op-plugins/src/state_plugins/factory.rs",
+    "line": 63,
+    "priority": "P1",
+    "title": "Potential runtime error in projection path resolution",
+    "why": "The code uses `std::fs::read(projection_path)` on a path constructed via `std::path::Path::new(...).exists()`. If the file is deleted between the `exists()` check and the `read()` call (a TOCTOU race condition), the function returns `None` via `ok()?`. While not a crash, it causes silent failure of BYOM discovery in the factory plugin."
+  },
+  {
+    "path": "crates/op-plugins/src/state_plugins/factory.rs",
+    "line": 113,
+    "priority": "P2",
+    "title": "Inconsistent source field during migration",
+    "why": "The `source` field in the JSON projection is hardcoded to `tched_router`. If the system is in a transitional state where `zeroclaw` is still the active provider but the factory has been updated to look for `tched_router` files, the `source` metadata will be incorrect, breaking downstream consumers that rely on the `source` field for routing logic."
+  }
+]
+```
