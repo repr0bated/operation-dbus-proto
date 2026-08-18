@@ -356,6 +356,37 @@ ip rule  # fwmark 0x51821 lookup 51820
 
 Prom/graf were installed in-rootfs under systemd **inside** the CT. Topology understanding is a prerequisite before adding host proxies or SNI routes.
 
+### Break-glass Netmaker ACL recovery
+
+`deploy/netmaker/reenable-all-nodes-acl.sh` restores the default
+`3tched.all-nodes` ACL through the host-loopback API. This is an emergency
+direct-REST helper, not the normal D-Bus control path. It sends a `PUT` for a
+wildcard source-to-destination, all-protocol policy and marks it enabled and
+default. Use it only after confirming that broad all-node connectivity is the
+intended recovery state.
+
+Preconditions and constraints:
+
+- Run from the host and first confirm that `127.0.0.1:8081` still maps to the
+  Netmaker API; re-verify the Incus devices because this topology is dated.
+- Supply `NETMAKER_MASTER_KEY` (or `MASTER_KEY`) through a protected
+  environment. Do not paste or log the key.
+- `NETMAKER_API_BASE` overrides the default `http://127.0.0.1:8081`.
+- The script's automatic key lookup currently names the container `NetMaker`,
+  while the live inventory in this document uses `netmaker`. Do not rely on
+  that fallback until the name is verified or the helper is corrected.
+- The helper prints the API response but performs no read-back verification or
+  rollback. Inspect the response and independently confirm the resulting ACL.
+
+With those preconditions satisfied:
+
+```bash
+./deploy/netmaker/reenable-all-nodes-acl.sh
+```
+
+Do not copy this direct API/master-key pattern into routine automation. Add
+future ACL lifecycle support to the schema-driven `netmaker` plugin instead.
+
 ---
 
 ## 11. Intent vs live (checklist)

@@ -201,6 +201,12 @@ File in / file out — no paste UX. Primary mode: read a plugin `.rs` and emit a
 with args/returns, audit findings). With `--introspect`, also include upstream
 gap findings (what introspection found that the plugin does not have).
 
+| `--format` | Output | Intended use |
+|---|---|---|
+| `complete` (default) | Contract-shaped plugin plus audit and optional introspection gaps | Review the surface a renderer or model would receive |
+| `md` | Audit findings only, Markdown | Human review |
+| `json` | Audit findings only, JSON | CI and other automation |
+
 ```bash
 # Complete plugin document (default --format complete)
 cargo run -p op-plugin-lint -- \
@@ -220,6 +226,28 @@ cargo run -p op-plugin-lint -- \
 cargo run -p op-plugin-lint -- \
   --input path/to/plugin.rs --output /tmp/plugin.lint.md --format md
 ```
+
+In `complete` mode, an output name ending in `.md` selects Markdown; every other
+extension produces JSON. The `md` and `json` formats always contain findings
+only, regardless of the output extension.
+
+### Batch audit
+
+Use paired `--input-dir` / `--output-dir` arguments to audit the immediate `.rs`
+files in a plugin directory:
+
+```bash
+cargo run -p op-plugin-lint -- \
+  --input-dir crates/op-plugins/src/state_plugins \
+  --output-dir /tmp/plugin-lint \
+  --format json
+```
+
+The scan is non-recursive and skips `mod.rs`, `lib.rs`,
+`plugin_scaffold_helpers.rs`, and `schemars_adapter.rs`. It writes one report
+per input plus `SUMMARY.md`. Complete-mode batch files are JSON named
+`<source>.complete.json`; batch mode does not select Markdown from a filename.
+Do not combine the directory arguments with `--input` or `--output`.
 
 ### `--introspect` (external discovery — prefer Repomix)
 
@@ -272,12 +300,37 @@ cargo run -p op-plugin-lint -- \
   --surface-out /tmp/zeroclaw.cli.surface.json
 ```
 
+Only catalog-producing targets—Repomix packs, saved binary-surface JSON, and
+local or remote CLI binaries—support `--introspect` with no plugin input. That
+surface-capture mode requires either `--surface-out` or `--output`. With a
+plugin input, `--surface-out` is likewise written only for those target types.
+The `gcloud` and plugin-id resolvers produce comparison coverage but no binary
+surface: they require a plugin input and do not write `--surface-out`.
+
 `--surface-out` writes the discovery catalog. Path vocabularies differ from
 schemars fields (`struct.zeroclaw_config.V1Config.default_model` vs
 `selected_model`) — unmapped external paths are WARN until an explicit mapping
 layer exists. Use the surface JSON as the authoritative catalog.
 
-Exit code `0` = no FAIL findings (WARN/HINT allowed); `1` = at least one FAIL.
+### Result interpretation and constraints
+
+- Exit `0`: no FAIL findings (WARN/HINT allowed). Exit `1`: at least one FAIL
+  in a single report or batch. Exit `2`: invocation, read, parse, introspection,
+  or write error.
+- This is a static source audit. It parses Rust syntax and source patterns; it
+  does not compile the plugin, execute `schema()`, or prove what is currently
+  sealed in SHM.
+- Struct and field `x-oscal-subid` values are format-checked. Method and other
+  string literals are checked only when they already begin with a recognized
+  category and meet the linter's minimum dotted shape, so malformed method
+  subids can escape this audit. Canonical registry membership and cross-plugin
+  uniqueness are also not checked. The currently accepted `--registry`
+  argument is not read; keep the registry tests/CI checks in the verification
+  path.
+- Introspection coverage is approximate name/path matching. Treat gaps as
+  review leads, not proof of semantic equivalence. The complete report caps its
+  missing-path sample at 500; for targets that produce one, `--surface-out`
+  retains the full catalog.
 
 ## Cross-plugin model catalogs (Antigravity)
 

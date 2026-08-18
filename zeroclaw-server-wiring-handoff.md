@@ -1,6 +1,6 @@
 # ZeroClaw Bridge Wiring — Handoff
 
-_Updated 2026-07-29._
+_Updated 2026-08-08._
 
 ## Resolved architecture
 
@@ -49,6 +49,22 @@ All retain Ghostbridge identity/capability enforcement and use the same
 audited method dispatcher. The compatibility OpenAPI document is generated
 locally from the sealed `Chat` and `ListModels` Schemars contracts; there is no
 external Antigravity documentation or routing dependency.
+
+### OpenAI-compatible usage values
+
+The three HTTP chat routes normalize `usage.prompt_tokens`,
+`usage.completion_tokens`, and `usage.total_tokens` to non-negative integers.
+Integer values pass through, signed values are clamped at zero, floats are
+rounded, and unparseable values become zero. Other `usage` keys are preserved.
+A missing or non-object `usage` value is returned as `null`.
+
+This normalization happens only in the `op-web` HTTP adapter after
+`zeroclaw.Chat` returns. It does not affect
+`op_chat.chat.ChatService.Send`. It also cannot recover precision already lost
+inside a provider: `op-llm`'s current Salad parser reads token counts with
+`as_u64()`, so upstream float counts can become zero before the HTTP adapter
+sees them. If a Salad response has zero usage, inspect the provider parsing
+path rather than treating the HTTP coercion as an accounting fix.
 
 ## Canonical D-Bus contract
 
