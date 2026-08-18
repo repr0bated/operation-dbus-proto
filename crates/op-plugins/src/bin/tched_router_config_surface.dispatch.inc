@@ -154,6 +154,7 @@ fn write_config_atomically(
     serialized: &str,
 ) -> std::result::Result<(), TchedRouterError> {
     use std::io::Write;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
 
     // Follow an operator-supplied symlink exactly as the previous in-place
@@ -176,7 +177,7 @@ fn write_config_atomically(
             reason: format!("stage config beside {}: {e}", resolved.display()),
         })?;
     nix::unistd::fchown(
-        staged.as_file(),
+        staged.as_file().as_raw_fd(),
         Some(nix::unistd::Uid::from_raw(metadata.uid())),
         Some(nix::unistd::Gid::from_raw(metadata.gid())),
     )
