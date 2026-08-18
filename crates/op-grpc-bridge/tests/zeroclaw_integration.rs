@@ -142,7 +142,7 @@ async fn should_stream_reload_on_sighup() {
 }
 
 #[tokio::test]
-async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
+async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
@@ -151,17 +151,17 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
 
     let result = engine
         .dispatch_method_call(
-            "zeroclaw",
+            "tched_router",
             "ListModels",
             r#"{"provider":"salad"}"#,
-            Some("cap.software.zeroclaw.models.read@v1"),
+            Some("cap.software.3tched-router.models.read@v1"),
             "integration-test-actor",
         )
         .await
         .unwrap();
 
     assert_eq!(result["success"], true);
-    assert_eq!(result["plugin_id"], "zeroclaw");
+    assert_eq!(result["plugin_id"], "tched_router");
     assert_eq!(result["method"], "ListModels");
     let routes = result["result"]["model_routes"].as_array().unwrap();
     assert!(!routes.is_empty());
@@ -171,11 +171,11 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();
-    assert_eq!(event.plugin_id, "zeroclaw");
+    assert_eq!(event.plugin_id, "tched_router");
     assert_eq!(event.method_name.as_deref(), Some("ListModels"));
     assert_eq!(
         event.capability_id.as_deref(),
-        Some("cap.software.zeroclaw.models.read@v1")
+        Some("cap.software.3tched-router.models.read@v1")
     );
     assert_eq!(event.actor_id, "integration-test-actor");
     assert!(event.json_args_footprint.is_some());

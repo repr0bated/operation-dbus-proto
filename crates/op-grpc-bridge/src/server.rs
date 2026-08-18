@@ -36,6 +36,7 @@ use crate::proto::zeroclaw::{
 const DEFAULT_UNIX_SOCKET: &str = "/run/opdbus/grpc.sock";
 /// Shared container socket — bind-mounted into NIC-less CTs as `/run/ghostbridge`.
 const DEFAULT_SHARED_SOCKET: &str = crate::shared_socket::DEFAULT_SOCKET_PATH;
+const DEFAULT_SCHEMA_PLUGIN_ID: &str = "tched_router";
 // NOTE: 50052 deliberately excluded — already owned by op-cognitive-mcp
 // (COGNITIVE_MCP_GRPC_BIND=10.200.0.2:50052; 0.0.0.0:50052 here would
 // collide with that, since 0.0.0.0 covers every interface including
@@ -67,7 +68,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            plugin_id: "tched_router".to_string(),
+            plugin_id: DEFAULT_SCHEMA_PLUGIN_ID.to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
@@ -82,9 +83,7 @@ impl ServerConfig {
     /// Load configuration from environment variables, falling back to defaults.
     pub fn from_env() -> Self {
         Self {
-            plugin_id: std::env::var("OP_DBUS_SCHEMA_PLUGIN_ID")
-                .or_else(|_| std::env::var("ZEROCLAW_PLUGIN_ID"))
-                .unwrap_or_else(|_| "tched_router".to_string()),
+            plugin_id: configured_schema_plugin_id(|key| std::env::var(key).ok()),
             schema_path: PathBuf::from(
                 std::env::var("ZEROCLAW_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
@@ -98,13 +97,9 @@ impl ServerConfig {
                     .unwrap_or_else(|_| DEFAULT_SHARED_SOCKET.to_string()),
             ),
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| std::env::var("GRPC_BIND").ok().filter(|s| !s.trim().is_empty()))
-                .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string()),
-            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
+                .or_else(|_| std::env::var("GRPC_BIND"))
+                .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
+            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR").ok(),
             tls_identity: Self::load_tls_identity(),
         }
     }
@@ -137,6 +132,12 @@ impl ServerConfig {
             }
         }
     }
+}
+
+fn configured_schema_plugin_id(getenv: impl Fn(&str) -> Option<String>) -> String {
+    getenv("OP_DBUS_SCHEMA_PLUGIN_ID")
+        .or_else(|| getenv("ZEROCLAW_PLUGIN_ID"))
+        .unwrap_or_else(|| DEFAULT_SCHEMA_PLUGIN_ID.to_string())
 }
 
 /// Shared state for the gRPC service handlers.
@@ -442,12 +443,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     });
 
     // TCP listeners for gRPC + gRPC-Web. REST is served by op-web on :8080.
-    let bind_addrs: Vec<&str> = config
-        .bind_addr
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
+    let bind_addrs: Vec<&str> = config.bind_addr.split(',').collect();
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
@@ -456,7 +452,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::from_std(listener)?;
         info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
         let app = build_axum_app(loader.clone(), operation_server.clone());
-        let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>());
+        let server = axum::serve(listener, app.into_make_service());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 
@@ -555,4 +551,19 @@ async fn bind_unix_listener(
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777));
     }
     Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_server_loads_the_canonical_router_blob() {
+        assert_eq!(ServerConfig::default().plugin_id, "tched_router");
+    }
+
+    #[test]
+    fn env_free_server_startup_loads_the_canonical_router_blob() {
+        assert_eq!(configured_schema_plugin_id(|_| None), "tched_router");
+    }
 }
