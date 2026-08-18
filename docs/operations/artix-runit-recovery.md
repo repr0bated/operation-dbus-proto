@@ -59,21 +59,24 @@ again. Fix the `run` script to keep the binary in the foreground (`-N`, `-f`,
 `--foreground`, or `--nodaemon`, depending on the program) and ensure it ends
 with `exec`.
 
-### A stuck `supervise/` directory
+### A service does not respond to `sv`
 
-If a service will not respond to `sv` after an unclean shutdown, the supervise
-state can be stale. Stop supervision, clear the runtime view, and let `runsvdir`
-re-create it:
+First confirm that the active runlevel contains a valid service symlink and
+that the definition is executable:
 
 ```sh
-sudo sv down <service>
-sudo rm -f /run/runit/service/<service>          # runtime symlink only
-# runsvdir re-creates it from /etc/runit/runsvdir/default within ~5s
 sudo sv status <service>
+ls -l /etc/runit/runsvdir/current
+ls -l /etc/runit/runsvdir/default/<service>
+test -x /etc/runit/sv/<service>/run
+sudo sh -n /etc/runit/sv/<service>/run
 ```
 
-Never delete `/etc/runit/sv/<service>` to fix a runtime problem — that is the
-definition, not the state.
+Do not edit `/run/runit/service`, delete `/etc/runit/sv/<service>`, or launch
+`runsv`/`runsvdir` manually. The first path is the supervisor's runtime view and
+the second is the authoritative definition. If `runsvdir` itself is unhealthy,
+recover it from the console rather than attempting a routine remote service
+restart.
 
 ### Recovering into single-user
 
@@ -101,10 +104,13 @@ Network-critical services are reported rather than restarted.
 
 ## Third-party installers that expect systemd
 
-A `systemctl` shim is installed at `/usr/local/bin/systemctl`. It maps systemd
-verbs onto `sv`, and converts a `.service` unit into `/etc/runit/sv/<name>/run`
-using `/usr/local/sbin/systemd-unit-to-runit`. A pacman hook converts units that
+A `systemctl` compatibility shim is installed at `/usr/local/bin/systemctl` for
+third-party package installers. It maps systemd verbs onto `sv`, and converts a
+`.service` unit into `/etc/runit/sv/<name>/run` using
+`/usr/local/sbin/systemd-unit-to-runit`. A pacman hook converts units that
 packages drop, without enabling them — enabling stays an operator decision.
+Operators and agents must still use `sudo sv` for service lifecycle operations,
+not the compatibility shim.
 
 To convert a unit by hand and inspect the result first:
 
