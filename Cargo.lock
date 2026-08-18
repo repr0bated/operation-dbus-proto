@@ -5990,6 +5990,7 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+ "xattr",
  "zbus 5.18.0",
  "zeroclawlabs",
 ]

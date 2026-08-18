@@ -154,34 +154,83 @@ fn write_config_atomically(
     serialized: &str,
 ) -> std::result::Result<(), TchedRouterError> {
     use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
 
-    let parent = path
+    // Follow an operator-supplied symlink exactly as the previous in-place
+    // write did, while still staging on the target's filesystem.
+    let resolved =
+        std::fs::canonicalize(path).map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("resolve config path {}: {e}", path.display()),
+        })?;
+    let metadata =
+        std::fs::metadata(&resolved).map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("read config metadata {}: {e}", resolved.display()),
+        })?;
+    let parent = resolved
         .parent()
         .ok_or_else(|| TchedRouterError::ExecutionDenied {
-            reason: format!("config path has no parent: {}", path.display()),
+            reason: format!("config path has no parent: {}", resolved.display()),
         })?;
     let mut staged =
         tempfile::NamedTempFile::new_in(parent).map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("stage config beside {}: {e}", path.display()),
+            reason: format!("stage config beside {}: {e}", resolved.display()),
         })?;
-    if let Ok(metadata) = std::fs::metadata(path) {
-        staged
-            .as_file()
-            .set_permissions(metadata.permissions())
+    nix::unistd::fchown(
+        staged.as_file(),
+        Some(nix::unistd::Uid::from_raw(metadata.uid())),
+        Some(nix::unistd::Gid::from_raw(metadata.gid())),
+    )
+    .map_err(|e| TchedRouterError::ExecutionDenied {
+        reason: format!("preserve config ownership for {}: {e}", resolved.display()),
+    })?;
+    staged
+        .as_file()
+        .set_permissions(metadata.permissions())
+        .map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("preserve config permissions for {}: {e}", resolved.display()),
+        })?;
+    for name in xattr::list(&resolved).map_err(|e| TchedRouterError::ExecutionDenied {
+        reason: format!("list config attributes for {}: {e}", resolved.display()),
+    })? {
+        let value = xattr::get(&resolved, &name)
             .map_err(|e| TchedRouterError::ExecutionDenied {
-                reason: format!("set staged config permissions for {}: {e}", path.display()),
+                reason: format!(
+                    "read config attribute {:?} for {}: {e}",
+                    name,
+                    resolved.display()
+                ),
+            })?
+            .ok_or_else(|| TchedRouterError::ExecutionDenied {
+                reason: format!(
+                    "config attribute {:?} disappeared from {}",
+                    name,
+                    resolved.display()
+                ),
             })?;
+        xattr::set(staged.path(), &name, &value).map_err(|e| {
+            TchedRouterError::ExecutionDenied {
+                reason: format!(
+                    "preserve config attribute {:?} for {}: {e}",
+                    name,
+                    resolved.display()
+                ),
+            }
+        })?;
     }
     staged
         .write_all(serialized.as_bytes())
         .and_then(|_| staged.as_file_mut().sync_all())
         .map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("write staged config for {}: {e}", path.display()),
+            reason: format!("write staged config for {}: {e}", resolved.display()),
         })?;
     staged
-        .persist(path)
+        .persist(&resolved)
         .map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("replace {} with staged config: {}", path.display(), e.error),
+            reason: format!(
+                "replace {} with staged config: {}",
+                resolved.display(),
+                e.error
+            ),
         })?;
     std::fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
@@ -228,35 +277,67 @@ fn contains_masked_placeholder(value: &JsonValue) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     #[test]
     fn patch_config_preserves_live_file_when_atomic_staging_fails() {
         let dir = tempfile::tempdir().expect("temp config directory");
         let path = dir.path().join("config.toml");
-        let original = "[gateway]\nhost = \"127.0.0.1\"\ntoken = \"keep-me\"\n";
-        std::fs::write(&path, original).expect("write original config");
-
-        let previous_path = std::env::var_os("TCHED_ROUTER_CONFIG_PATH");
-        std::env::set_var("TCHED_ROUTER_CONFIG_PATH", &path);
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
-            .expect("make config directory read-only");
-
-        let result = patch_config(r#"{"section":"gateway","value":{"host":"127.0.0.2"}}"#);
-        let contents = std::fs::read_to_string(&path).expect("read config after failed patch");
-
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
-            .expect("restore config directory permissions");
-        if let Some(value) = previous_path {
-            std::env::set_var("TCHED_ROUTER_CONFIG_PATH", value);
-        } else {
-            std::env::remove_var("TCHED_ROUTER_CONFIG_PATH");
-        }
+        symlink("/proc/version", &path).expect("link to deterministic read-only target");
+        let original = std::fs::read_to_string(&path).expect("read original target");
 
         assert!(
-            result.is_err(),
-            "patch must fail before touching the live file"
+            write_config_atomically(&path, "destroyed").is_err_and(
+                |error| error.to_string().contains("stage config beside /proc/version")
+            ),
+            "patch must fail specifically while staging"
         );
-        assert_eq!(contents, original, "failed patch must preserve live config");
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "failed patch must preserve the configured symlink"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read target after failed patch"),
+            original,
+            "failed patch must preserve live config"
+        );
+    }
+
+    #[test]
+    fn atomic_config_write_follows_symlink_and_preserves_metadata() {
+        let dir = tempfile::tempdir().expect("temp config directory");
+        let target = dir.path().join("config-target.toml");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&target, "old").expect("write original config");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640))
+            .expect("set original permissions");
+        xattr::set(&target, "user.opdbus-test", b"preserve").expect("set original xattr");
+        let original_metadata = std::fs::metadata(&target).expect("original metadata");
+        symlink(&target, &path).expect("create config symlink");
+
+        write_config_atomically(&path, "new").expect("replace config atomically");
+
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "atomic replacement must not replace the configured symlink"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read replaced target"),
+            "new"
+        );
+        let replaced_metadata = std::fs::metadata(&target).expect("replaced metadata");
+        assert_eq!(replaced_metadata.uid(), original_metadata.uid());
+        assert_eq!(replaced_metadata.gid(), original_metadata.gid());
+        assert_eq!(replaced_metadata.mode() & 0o7777, 0o640);
+        assert_eq!(
+            xattr::get(&target, "user.opdbus-test").expect("read replaced xattr"),
+            Some(b"preserve".to_vec())
+        );
     }
 }
