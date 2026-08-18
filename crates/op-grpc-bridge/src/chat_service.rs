@@ -539,6 +539,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_send_requires_ghostbridge_identity() {
+        let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+            op_state_store::ChainConfig::default(),
+        )));
+        let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+        let service = ChatServiceImpl::new(Arc::new(MutationEngine::new(event_chain, ovsdb)));
+
+        let status = service
+            .send(Request::new(SendRequest::default()))
+            .await
+            .err()
+            .expect("request without identity must be rejected");
+
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
     async fn chat_dispatch_reaches_the_tched_router_backend() {
         let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
             op_state_store::ChainConfig::default(),
