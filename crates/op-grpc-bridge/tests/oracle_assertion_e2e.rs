@@ -17,8 +17,16 @@ use op_grpc_bridge::grpc_server::{
 use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY};
 use op_grpc_bridge::mutation_engine::MutationEngine;
 use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidator, DecoyTrustStore};
+use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
+use op_grpc_bridge::proto::plugin_methods::blockchain_plugin_methods_client::BlockchainPluginMethodsClient;
+use op_grpc_bridge::proto::plugin_methods::human_principal_plugin_methods_client::HumanPrincipalPluginMethodsClient;
+use op_grpc_bridge::proto::plugin_methods::{
+    BlockchainQueryEventsRequest, HumanPrincipalResolveKeyRequest,
+};
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
-use op_grpc_bridge::proto::{CallMethodRequest, ErrorCode as ProtoErrorCode};
+use op_grpc_bridge::proto::{
+    CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest, SetPropertyRequest,
+};
 use op_identity::oracle_assertion::{
     verify_signature, DecoyIssuer, OracleIdentityAssertion, SignedAssertion,
 };
@@ -666,6 +674,114 @@ async fn happy_path_registered_human_gated_call_over_tls() {
     )
     .await;
     assert_unauthenticated(no_meta, "Missing Ghostbridge Identity Sled");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_plugin_route_authenticates_registered_human() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(65);
+    register_human(ch.clone(), &env, &pubkey, "typed-route-user", [0x65; 16]).await;
+    env.grant_human(&pubkey, &["human_principal.read"]);
+
+    let mut client = HumanPrincipalPluginMethodsClient::new(ch);
+    let mut request = Request::new(HumanPrincipalResolveKeyRequest {
+        human_pubkey: pubkey.clone(),
+    });
+    attach_capability(request.metadata_mut(), "human_principal.read");
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x66; 16]).to_wire(),
+    );
+
+    let response = client
+        .resolve_key(request)
+        .await
+        .expect("generated route should authenticate the assertion")
+        .into_inner();
+    assert!(response.principal.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_plugin_route_preserves_integer_arguments() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(67);
+    register_human(ch.clone(), &env, &pubkey, "typed-number-user", [0x67; 16]).await;
+    env.grant_human(&pubkey, &["blockchain.read"]);
+
+    let mut client = BlockchainPluginMethodsClient::new(ch);
+    let mut request = Request::new(BlockchainQueryEventsRequest {
+        decision: String::new(),
+        from_event_id: 0,
+        limit: 1,
+        plugin_id: String::new(),
+        to_event_id: 0,
+    });
+    attach_capability(request.metadata_mut(), "blockchain.read");
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x68; 16]).to_wire(),
+    );
+
+    let response = client
+        .query_events(request)
+        .await
+        .expect("generated route should preserve numeric JSON values")
+        .into_inner();
+    assert_eq!(response.events.len(), 1);
+    assert!(response.has_more);
+    assert_eq!(response.total_in_chain, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oracle_assertion_cannot_authenticate_unguarded_ovsdb_transact() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(61);
+    register_human(ch.clone(), &env, &pubkey, "ovsdb-attacker", [0x61; 16]).await;
+
+    let mut client = OvsdbMirrorClient::new(ch);
+    let mut request = Request::new(OvsdbTransactRequest {
+        database: "Open_vSwitch".to_string(),
+        operations_json: "[]".to_string(),
+        actor_id: "ungranted-human".to_string(),
+    });
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x62; 16]).to_wire(),
+    );
+
+    let status = client.transact(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::Unauthenticated);
+    assert!(status.message().contains("Missing Ghostbridge Identity Sled"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oracle_assertion_cannot_bypass_capabilities_via_set_property() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(63);
+    register_human(ch.clone(), &env, &pubkey, "property-attacker", [0x63; 16]).await;
+
+    let mut client = PluginServiceClient::new(ch);
+    let mut request = Request::new(SetPropertyRequest {
+        plugin_id: "human_principal".to_string(),
+        object_path: "/org/opdbus/v1/plugins/human_principal".to_string(),
+        interface_name: "org.opdbus.v1.PluginV1".to_string(),
+        property_name: "principals".to_string(),
+        value: Some(prost_str("corrupt")),
+        actor_id: "ungranted-human".to_string(),
+        capability_id: String::new(),
+    });
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x64; 16]).to_wire(),
+    );
+
+    let status = client.set_property(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::PermissionDenied);
+    assert!(status.message().contains("capability-gated plugin methods"));
 }
 
 // ?? VAL-E2E-002 ?????????????????????????????????????????????????????????????

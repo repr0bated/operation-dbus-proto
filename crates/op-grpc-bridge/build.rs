@@ -219,7 +219,10 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
             writeln!(
                 rust,
                 "            self.call_generated_plugin_method_typed({:?}, {:?}, {:?}, {:?}, request).await",
-                set.plugin_id, method.schema_name, method.input_name, method.output_name
+                set.plugin_id,
+                method.schema_name,
+                format!("operation.plugin.v1.{}", method.input_name),
+                format!("operation.plugin.v1.{}", method.output_name)
             )
             .unwrap();
             writeln!(rust, "        }}").unwrap();
@@ -230,13 +233,13 @@ fn generate_plugin_method_routes(sets: &[PluginMethodSet]) -> String {
 
     writeln!(
         rust,
-        "    pub(crate) fn add_routes(mut routes: tonic::service::Routes, server: OperationGrpcServer) -> tonic::service::Routes {{"
+        "    pub(crate) fn add_routes(mut routes: tonic::service::Routes, server: OperationGrpcServer, validator: std::sync::Arc<crate::oracle_assertion::AssertionValidator>) -> tonic::service::Routes {{"
     )
     .unwrap();
     for set in sets {
         writeln!(
             rust,
-            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::new(server.clone())));",
+            "        routes = routes.add_service(tonic_web::enable(crate::proto::plugin_methods::{}::{}::with_interceptor(server.clone(), crate::interceptor::make_ghostbridge_interceptor(validator.clone()))));",
             set.server_module, set.server_type
         )
         .unwrap();
