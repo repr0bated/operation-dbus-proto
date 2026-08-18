@@ -420,6 +420,13 @@ mod tests {
         HashMap::from([("uplink".to_string(), 9)])
     }
 
+    fn flow_json_without_cookie() -> String {
+        let mut flow: serde_json::Value =
+            serde_json::from_str(&flow_json(serde_json::json!(42))).unwrap();
+        flow.as_object_mut().unwrap().remove("cookie");
+        flow.to_string()
+    }
+
     #[test]
     fn add_uses_the_declared_table() {
         let flow = json_flow_to_add(&flow_json(serde_json::json!(42)), &ports()).unwrap();
@@ -440,9 +447,20 @@ mod tests {
 
     #[test]
     fn delete_scopes_an_unspecified_cookie_to_zero() {
-        let flow = json_flow_to_delete(&flow_json(serde_json::Value::Null), &ports()).unwrap();
+        let flow = json_flow_to_delete(&flow_json_without_cookie(), &ports()).unwrap();
 
         assert_eq!(flow.cookie, 0);
         assert_eq!(flow.cookie_mask, u64::MAX);
+    }
+
+    #[test]
+    fn rejects_the_reserved_all_tables_sentinel() {
+        let mut entry: serde_json::Value =
+            serde_json::from_str(&flow_json(serde_json::json!(42))).unwrap();
+        entry["table"] = serde_json::json!(u8::MAX);
+        let entry = entry.to_string();
+
+        assert!(json_flow_to_add(&entry, &ports()).is_err());
+        assert!(json_flow_to_delete(&entry, &ports()).is_err());
     }
 }
