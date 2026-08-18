@@ -2103,3 +2103,36 @@ fn contains_masked_placeholder(value: &JsonValue) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn patch_config_preserves_live_file_when_atomic_staging_fails() {
+        let dir = tempfile::tempdir().expect("temp config directory");
+        let path = dir.path().join("config.toml");
+        let original = "[gateway]\nhost = \"127.0.0.1\"\ntoken = \"keep-me\"\n";
+        std::fs::write(&path, original).expect("write original config");
+
+        let previous_path = std::env::var_os("TCHED_ROUTER_CONFIG_PATH");
+        std::env::set_var("TCHED_ROUTER_CONFIG_PATH", &path);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
+            .expect("make config directory read-only");
+
+        let result = patch_config(r#"{"section":"gateway","value":{"host":"127.0.0.2"}}"#);
+        let contents = std::fs::read_to_string(&path).expect("read config after failed patch");
+
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("restore config directory permissions");
+        if let Some(value) = previous_path {
+            std::env::set_var("TCHED_ROUTER_CONFIG_PATH", value);
+        } else {
+            std::env::remove_var("TCHED_ROUTER_CONFIG_PATH");
+        }
+
+        assert!(result.is_err(), "patch must fail before touching the live file");
+        assert_eq!(contents, original, "failed patch must preserve live config");
+    }
+}
