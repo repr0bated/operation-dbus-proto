@@ -18,8 +18,11 @@ use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY
 use op_grpc_bridge::mutation_engine::MutationEngine;
 use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidator, DecoyTrustStore};
 use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
+use op_grpc_bridge::proto::plugin_methods::blockchain_plugin_methods_client::BlockchainPluginMethodsClient;
 use op_grpc_bridge::proto::plugin_methods::human_principal_plugin_methods_client::HumanPrincipalPluginMethodsClient;
-use op_grpc_bridge::proto::plugin_methods::HumanPrincipalResolveKeyRequest;
+use op_grpc_bridge::proto::plugin_methods::{
+    BlockchainQueryEventsRequest, HumanPrincipalResolveKeyRequest,
+};
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
 use op_grpc_bridge::proto::{
     CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest, SetPropertyRequest,
@@ -697,6 +700,38 @@ async fn generated_plugin_route_authenticates_registered_human() {
         .expect("generated route should authenticate the assertion")
         .into_inner();
     assert!(response.principal.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_plugin_route_preserves_integer_arguments() {
+    let (srv, env) = start_server(false).await;
+    let ch = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(67);
+    register_human(ch.clone(), &env, &pubkey, "typed-number-user", [0x67; 16]).await;
+    env.grant_human(&pubkey, &["blockchain.read"]);
+
+    let mut client = BlockchainPluginMethodsClient::new(ch);
+    let mut request = Request::new(BlockchainQueryEventsRequest {
+        decision: String::new(),
+        from_event_id: 0,
+        limit: 1,
+        plugin_id: String::new(),
+        to_event_id: 0,
+    });
+    attach_capability(request.metadata_mut(), "blockchain.read");
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x68; 16]).to_wire(),
+    );
+
+    let response = client
+        .query_events(request)
+        .await
+        .expect("generated route should preserve numeric JSON values")
+        .into_inner();
+    assert_eq!(response.events.len(), 1);
+    assert!(response.has_more);
+    assert_eq!(response.total_in_chain, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
