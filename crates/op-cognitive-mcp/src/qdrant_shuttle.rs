@@ -85,9 +85,12 @@ impl QdrantSemanticShuttle {
             .build()
             .with_context(|| format!("failed to build Qdrant client for {qdrant_url}"))?;
 
-        client.health_check().await.with_context(|| {
-            format!("failed to reach Qdrant gRPC health endpoint at {qdrant_url}")
-        })?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), client.health_check())
+            .await
+            .with_context(|| format!("Qdrant health check timed out after 5s at {qdrant_url}"))?
+            .with_context(|| {
+                format!("failed to reach Qdrant gRPC health endpoint at {qdrant_url}")
+            })?;
 
         tracing::info!(
             qdrant_url,
