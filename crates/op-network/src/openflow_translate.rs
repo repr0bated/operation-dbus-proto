@@ -10,7 +10,7 @@
 //! must not install a flow that is looser than what was requested.
 
 use anyhow::{bail, Context, Result};
-use rovs_openflow::{nxm, ActionList, Flow, Match, OutputPort};
+use rovs_openflow::{nxm, ActionList, Flow, FlowCommand, Match, OutputPort};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
@@ -368,6 +368,7 @@ pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Res
     let actions = build_actions(&entry.actions, port_map, ip_proto)?;
 
     let mut flow = Flow::add()
+        .table(entry.table)
         .priority(entry.priority)
         .match_fields(m)
         .actions(actions)
@@ -384,13 +385,19 @@ pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Res
 pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
     let m = parse_match(&entry.match_fields, port_map)?;
-    Ok(Flow::delete().match_fields(m))
+    let mut flow = Flow::delete()
+        .table(entry.table)
+        .priority(entry.priority)
+        .cookie(entry.cookie.unwrap_or_default())
+        .match_fields(m);
+    flow.command = FlowCommand::DeleteStrict;
+    flow.cookie_mask = u64::MAX;
+    Ok(flow)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rovs_openflow::FlowCommand;
 
     fn flow_json(cookie: serde_json::Value) -> String {
         serde_json::json!({
