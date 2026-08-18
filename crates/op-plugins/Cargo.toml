@@ -9,7 +9,7 @@ description = "Plugin system with state management, domain plugins, and blockcha
 [dependencies]
 # Plugin schemas are derived from Rust state structs via schemars.
 schemars = "1"
-nix = { version = "0.28", features = ["signal"] }
+nix = { version = "0.28", features = ["fs", "signal", "user"] }
 # Distributed plugin self-registration: each plugin module submits its
 # name+constructor via inventory::submit!; the registry iterates them. This is
 # the single source of the plugin catalog — no central dispatch list.
@@ -47,9 +47,8 @@ uuid = { workspace = true }
 dirs = "5.0"
 toml = { workspace = true }
 parking_lot = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }
+xattr = "1.6.1"
 
 [[bin]]
 name = "opblob"
