@@ -714,7 +714,8 @@ impl OperationGrpcServer {
                 ))
             })?;
 
-        let result_json = serde_json::to_string(&result).map_err(|error| {
+        let method_result = result.get("result").unwrap_or(&result);
+        let result_json = serde_json::to_string(method_result).map_err(|error| {
             Status::internal(format!(
                 "failed to serialize method result for {plugin_id}.{method_name}: {error}"
             ))
