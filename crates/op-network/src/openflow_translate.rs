@@ -10,7 +10,7 @@
 //! must not install a flow that is looser than what was requested.
 
 use anyhow::{bail, Context, Result};
-use rovs_openflow::{nxm, ActionList, Flow, Match, OutputPort};
+use rovs_openflow::{nxm, ActionList, Flow, FlowCommand, Match, OutputPort};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
@@ -82,6 +82,13 @@ fn ip_to_u32(ip: Ipv4Addr) -> u32 {
 fn parse_ipv4(s: &str) -> Result<Ipv4Addr> {
     s.parse::<Ipv4Addr>()
         .with_context(|| format!("invalid IPv4 address '{s}'"))
+}
+
+fn validate_table(table: u8) -> Result<()> {
+    if table == u8::MAX {
+        bail!("OpenFlow table 255 is reserved as the all-tables sentinel");
+    }
+    Ok(())
 }
 
 /// Parse `a.b.c.d` or `a.b.c.d/n` into (address, prefix_len). Bare addresses
@@ -363,11 +370,13 @@ fn build_actions(
 /// `port_map` (as discovered from the switch's own PortDesc reply).
 pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
+    validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
     let ip_proto = m.ip_proto;
     let actions = build_actions(&entry.actions, port_map, ip_proto)?;
 
     let mut flow = Flow::add()
+        .table(entry.table)
         .priority(entry.priority)
         .match_fields(m)
         .actions(actions)
@@ -383,6 +392,86 @@ pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Res
 /// (matches on the same fields, no actions needed).
 pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
+    validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
-    Ok(Flow::delete().match_fields(m))
+    let mut flow = Flow::delete()
+        .table(entry.table)
+        .priority(entry.priority)
+        .match_fields(m);
+    flow.command = FlowCommand::DeleteStrict;
+    if let Some(cookie) = entry.cookie {
+        flow.cookie = cookie;
+        flow.cookie_mask = u64::MAX;
+    }
+    Ok(flow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flow_json(cookie: serde_json::Value) -> String {
+        serde_json::json!({
+            "table": 7,
+            "priority": 321,
+            "match_fields": {
+                "in_port": "uplink",
+                "ip": "",
+                "nw_dst": "10.20.0.0/16"
+            },
+            "actions": [{"type": "normal"}],
+            "cookie": cookie,
+            "idle_timeout": 0,
+            "hard_timeout": 0
+        })
+        .to_string()
+    }
+
+    fn ports() -> HashMap<String, u32> {
+        HashMap::from([("uplink".to_string(), 9)])
+    }
+
+    fn flow_json_without_cookie() -> String {
+        let mut flow: serde_json::Value =
+            serde_json::from_str(&flow_json(serde_json::json!(42))).unwrap();
+        flow.as_object_mut().unwrap().remove("cookie");
+        flow.to_string()
+    }
+
+    #[test]
+    fn add_uses_the_declared_table() {
+        let flow = json_flow_to_add(&flow_json(serde_json::json!(42)), &ports()).unwrap();
+
+        assert_eq!(flow.table_id, 7);
+    }
+
+    #[test]
+    fn delete_is_strict_and_scoped_to_the_exact_flow() {
+        let flow = json_flow_to_delete(&flow_json(serde_json::json!(42)), &ports()).unwrap();
+
+        assert_eq!(flow.command, FlowCommand::DeleteStrict);
+        assert_eq!(flow.table_id, 7);
+        assert_eq!(flow.priority, 321);
+        assert_eq!(flow.cookie, 42);
+        assert_eq!(flow.cookie_mask, u64::MAX);
+    }
+
+    #[test]
+    fn delete_without_cookie_does_not_filter_by_cookie() {
+        let flow = json_flow_to_delete(&flow_json_without_cookie(), &ports()).unwrap();
+
+        assert_eq!(flow.cookie, 0);
+        assert_eq!(flow.cookie_mask, 0);
+    }
+
+    #[test]
+    fn rejects_the_reserved_all_tables_sentinel() {
+        let mut entry: serde_json::Value =
+            serde_json::from_str(&flow_json(serde_json::json!(42))).unwrap();
+        entry["table"] = serde_json::json!(u8::MAX);
+        let entry = entry.to_string();
+
+        assert!(json_flow_to_add(&entry, &ports()).is_err());
+        assert!(json_flow_to_delete(&entry, &ports()).is_err());
+    }
 }
