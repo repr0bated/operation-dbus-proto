@@ -37,7 +37,8 @@ To enable a new host service after reviewing its definition:
 
 ```sh
 sudo test -x /etc/runit/sv/<service>/run
-sudo ln -sf /etc/runit/sv/<service> /etc/runit/runsvdir/default/
+sudo ln -sfn /etc/runit/sv/<service> /etc/runit/runsvdir/default/<service>
+sudo rm -f /etc/runit/sv/<service>/down
 sudo sv start <service>
 sudo sv status <service>
 ```
@@ -90,5 +91,5 @@ uplink-dhcp op-session-bus opdbus-rundirs dbus
 The script reports held-back services. Restart them deliberately from the
 console, in a reviewed order, so the deploy cannot cut remote access or reparent
 the control plane. Use `--no-restart` when installation and activation must be
-separate; services continue running the previous binaries until explicitly
-restarted.
+separate; it suppresses deploy-triggered restarts. A service that exits or is
+started later will load the newly installed binary.
