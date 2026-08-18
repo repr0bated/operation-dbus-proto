@@ -176,6 +176,13 @@ fn write_config_atomically(
         tempfile::NamedTempFile::new_in(parent).map_err(|e| TchedRouterError::ExecutionDenied {
             reason: format!("stage config beside {}: {e}", resolved.display()),
         })?;
+    staged
+        .write_all(serialized.as_bytes())
+        .map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("write staged config for {}: {e}", resolved.display()),
+        })?;
+    // Writing can clear set-id mode bits and security attributes. Restore all
+    // inherited metadata only after the staged contents are final.
     nix::unistd::fchown(
         staged.as_file().as_raw_fd(),
         Some(nix::unistd::Uid::from_raw(metadata.uid())),
@@ -219,10 +226,10 @@ fn write_config_atomically(
         })?;
     }
     staged
-        .write_all(serialized.as_bytes())
-        .and_then(|_| staged.as_file_mut().sync_all())
+        .as_file_mut()
+        .sync_all()
         .map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("write staged config for {}: {e}", resolved.display()),
+            reason: format!("sync staged config for {}: {e}", resolved.display()),
         })?;
     staged
         .persist(&resolved)
