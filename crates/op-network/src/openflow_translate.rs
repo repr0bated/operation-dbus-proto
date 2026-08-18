@@ -397,10 +397,12 @@ pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> 
     let mut flow = Flow::delete()
         .table(entry.table)
         .priority(entry.priority)
-        .cookie(entry.cookie.unwrap_or_default())
         .match_fields(m);
     flow.command = FlowCommand::DeleteStrict;
-    flow.cookie_mask = u64::MAX;
+    if let Some(cookie) = entry.cookie {
+        flow.cookie = cookie;
+        flow.cookie_mask = u64::MAX;
+    }
     Ok(flow)
 }
 
@@ -455,11 +457,11 @@ mod tests {
     }
 
     #[test]
-    fn delete_scopes_an_unspecified_cookie_to_zero() {
+    fn delete_without_cookie_does_not_filter_by_cookie() {
         let flow = json_flow_to_delete(&flow_json_without_cookie(), &ports()).unwrap();
 
         assert_eq!(flow.cookie, 0);
-        assert_eq!(flow.cookie_mask, u64::MAX);
+        assert_eq!(flow.cookie_mask, 0);
     }
 
     #[test]
