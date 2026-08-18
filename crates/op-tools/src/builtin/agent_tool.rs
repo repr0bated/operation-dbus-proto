@@ -360,9 +360,7 @@ impl AgentDbusService {
                     "data": result.data,
                     "metadata": result.metadata,
                 }))
-                .unwrap_or_else(|e| {
-                    json!({"success": false, "error": e.to_string()}).to_string()
-                }),
+                .unwrap_or_else(|e| json!({"success": false, "error": e.to_string()}).to_string()),
                 Err(e) => json!({
                     "success": false,
                     "agent": self.agent_type,

@@ -23,6 +23,7 @@ pub(crate) use super::factory::factory_schema as factory_plugin_schema;
 pub(crate) use super::fail2ban::fail2ban_schema as fail2ban_plugin_schema;
 pub(crate) use super::gcloud_adc::gcloud_adc_schema as gcloud_adc_plugin_schema;
 pub(crate) use super::hardware::hardware_schema as hardware_plugin_schema;
+pub(crate) use super::human_principal::human_principal_schema as human_principal_plugin_schema;
 pub(crate) use super::identity_sled::identity_sled_schema as identity_sled_plugin_schema;
 pub(crate) use super::incus::incus_schema as incus_plugin_schema;
 pub(crate) use super::json_render::json_render_schema as json_render_plugin_schema;

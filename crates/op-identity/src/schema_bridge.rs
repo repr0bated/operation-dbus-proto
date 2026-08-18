@@ -991,7 +991,7 @@ fn route_to_outbound(_footprint: &str, _trace_id: &str, route: &XrayRoute) -> Op
         "sockopt": {{ "tcpNoDelay": true, "mark": 255 }},
         "xhttpSettings": {{
           "host": "{host}",
-          "path": "{path}",
+          "path": "/{tag}",
           "mode": "auto"
         }}
       }}
@@ -999,7 +999,6 @@ fn route_to_outbound(_footprint: &str, _trace_id: &str, route: &XrayRoute) -> Op
             tag = tag,
             host = GRPC_BRIDGE_HOST,
             port = GRPC_BRIDGE_PORT,
-            path = format!("/{tag}"),
         )),
         GemmaBackend::Dns { host, port } => Some(format!(
             r#",

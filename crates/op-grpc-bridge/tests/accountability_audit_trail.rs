@@ -115,7 +115,11 @@ async fn query_events_filters_and_clamps_limit() {
         .await
         .expect("dispatch");
     assert!(
-        clamped["result"]["events"].as_array().map(Vec::len).unwrap() <= 100,
+        clamped["result"]["events"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap()
+            <= 100,
         "limit was not clamped to 100"
     );
 
@@ -295,7 +299,11 @@ async fn audit_trail_persists_and_survives_a_restart() {
             .await
             .expect("dispatch must succeed even without a durable sink");
         assert!(
-            live["result"]["events"].as_array().map(Vec::len).unwrap_or(0) >= 3,
+            live["result"]["events"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0)
+                >= 3,
             "in-memory chain must still hold the events"
         );
         eprintln!(

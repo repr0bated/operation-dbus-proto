@@ -19,13 +19,13 @@
 //! 13. get_source_content   14. generate_data_table  15. get_health
 //! 16. doctor
 
+use crate::cognitive_tools::field;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
-use crate::cognitive_tools::field;
 
 use crate::memory_store::CognitiveMemoryStore;
 use crate::quota::QuotaManager;

@@ -25,7 +25,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::interceptor::{self, GhostbridgeIdentity};
+use crate::interceptor::{self, load_capability_grants, GhostbridgeIdentity};
+use crate::oracle_assertion::{AssertionValidator, DecoyTrustStore};
 
 use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
 use crate::mutation_engine::{ChangeType, MutationEngine};
@@ -45,7 +46,11 @@ use crate::proto::{
     MutationError as ProtoMutationError, NumaNode as ProtoNumaNode,
     OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
     OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
-    OvsdbGetBridgeStateResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
+    OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest, OvsdbGetDatapathHealthResponse,
+    OvsdbAttachControllerSafeRequest, OvsdbAttachControllerSafeResponse,
+    OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
+    OvsdbDelControllerRequest, OvsdbDelControllerResponse,
+    OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
     OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse, OvsdbMonitorRequest,
     OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse, OvsdbUpdate,
     PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
@@ -81,7 +86,21 @@ struct SchemaMethodCapability {
 }
 
 fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
-    let schema = op_blob::catalog::read_plugin_schema_shm(plugin_id)?;
+    if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(plugin_id) {
+        return serde_json::to_value(&schema).ok();
+    }
+    inventory_plugin_schema_json(plugin_id)
+}
+
+fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
+    use op_state::StatePlugin;
+    let schema = match plugin_id {
+        "human_principal" => op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
+            .schema()?,
+        "identity_sled" => op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
+            .schema()?,
+        _ => return None,
+    };
     serde_json::to_value(&schema).ok()
 }
 
@@ -127,6 +146,9 @@ fn method_capability_from_schema(
                 .and_then(JsonValue::as_array)
                 .is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some(capability)));
         }
+    } else if let Some(footprint) = footprint {
+        grants_declared = true;
+        granted_by_footprint = load_capability_grants(footprint).contains(capability);
     }
 
     Some(SchemaMethodCapability {
@@ -136,23 +158,36 @@ fn method_capability_from_schema(
     })
 }
 
-fn method_capability_for_plugin(
-    plugin_id: &str,
-    method_name: &str,
-    footprint: Option<&str>,
-) -> Option<SchemaMethodCapability> {
-    let schema = read_plugin_schema_json(plugin_id)?;
-    method_capability_from_schema(&schema, method_name, footprint)
-}
-
 fn enforce_bridge_capability(
     plugin_id: &str,
     method_name: &str,
     capability_id: Option<&str>,
     identity: Option<&GhostbridgeIdentity>,
 ) -> Result<(), ProtoMutationError> {
+    let schema = read_plugin_schema_json(plugin_id);
+    enforce_bridge_capability_with_schema(
+        schema.as_ref(),
+        plugin_id,
+        method_name,
+        capability_id,
+        identity,
+    )
+}
+
+/// The decision half of [`enforce_bridge_capability`], split out so tests can
+/// drive the gate against an explicit schema document; the production half
+/// reads the sealed schema from the SHM blob catalog. Behavior is identical:
+/// `None` schema means the plugin is not sealed and the gate stays open.
+pub(crate) fn enforce_bridge_capability_with_schema(
+    schema: Option<&JsonValue>,
+    plugin_id: &str,
+    method_name: &str,
+    capability_id: Option<&str>,
+    identity: Option<&GhostbridgeIdentity>,
+) -> Result<(), ProtoMutationError> {
     let footprint = identity.map(|ctx| ctx.footprint.as_str());
-    let Some(method_capability) = method_capability_for_plugin(plugin_id, method_name, footprint)
+    let Some(method_capability) =
+        schema.and_then(|schema| method_capability_from_schema(schema, method_name, footprint))
     else {
         return Ok(());
     };
@@ -186,6 +221,10 @@ fn enforce_bridge_capability(
     }
 }
 
+// tonic::Status is 176 bytes; Boxing the error would ripple through the
+// shared bridge surface for zero runtime benefit, so the large Err is the
+// deliberate disposition.
+#[allow(clippy::result_large_err)]
 pub(crate) fn authorize_schema_method(
     plugin_id: &str,
     method_name: &str,
@@ -194,6 +233,52 @@ pub(crate) fn authorize_schema_method(
 ) -> Result<(), Status> {
     enforce_bridge_capability(plugin_id, method_name, capability_id, identity)
         .map_err(|error| Status::permission_denied(error.message))
+}
+
+fn enforce_human_principal_self_service(
+    plugin_id: &str,
+    method_name: &str,
+    args: &JsonValue,
+    identity: Option<&crate::oracle_assertion::HumanPrincipalIdentity>,
+) -> Result<(), ProtoMutationError> {
+    if plugin_id != "human_principal" {
+        return Ok(());
+    }
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    let args = args
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(args);
+    let authorized = match method_name {
+        "register_key" | "revoke_key" => args
+            .get("human_pubkey")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|pubkey| pubkey == identity.human_pubkey),
+        "set_alias" => args
+            .get("principal_id")
+            .and_then(JsonValue::as_str)
+            .is_none_or(|principal_id| principal_id == identity.principal_id),
+        _ => true,
+    };
+    if authorized {
+        return Ok(());
+    }
+    Err(ProtoMutationError {
+        code: ProtoErrorCode::PermissionDenied as i32,
+        message: format!(
+            "AccessDenied: human assertion may only mutate its own principal via \
+             human_principal.{method_name}"
+        ),
+        deny_reason: Some(ProtoDenyReason {
+            reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
+                ProtoCapabilityMissing {
+                    capability: "human_principal.write:self".to_string(),
+                },
+            )),
+        }),
+    })
 }
 
 fn plugin_id_from_dbus_path(path: &str) -> Option<String> {
@@ -532,7 +617,11 @@ impl OperationGrpcServer {
         Req: prost::Message + Default,
         Res: prost::Message + Default,
     {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
 
         // The caller declares which capability it is exercising, and the bridge
         // verifies that declaration against the method's `required_capability`.
@@ -584,6 +673,18 @@ impl OperationGrpcServer {
                 "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
             ))
         })?;
+        let args_value: JsonValue = serde_json::from_str(&json_args).map_err(|error| {
+            Status::internal(format!(
+                "failed to inspect typed request for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
+        enforce_human_principal_self_service(
+            plugin_id,
+            method_name,
+            &args_value,
+            human_identity.as_ref(),
+        )
+        .map_err(|error| Status::permission_denied(error.message))?;
 
         let result = self
             .mutation_engine
@@ -674,6 +775,14 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 /// Adding a new domain service: add one `.add_service(...)` here and it appears on
 /// BOTH endpoints at once.
 pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Routes {
+    let validator = Arc::new(AssertionValidator::new(DecoyTrustStore::load()));
+    build_operation_routes_with_validator(server, validator)
+}
+
+pub fn build_operation_routes_with_validator(
+    server: OperationGrpcServer,
+    validator: Arc<AssertionValidator>,
+) -> tonic::service::Routes {
     use crate::proto::dbus_passthrough_server::DbusPassthroughServer;
     use crate::proto::event_chain_service_server::EventChainServiceServer;
     use crate::proto::mail::mail_service_server::MailServiceServer;
@@ -697,40 +806,41 @@ pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Ro
 
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
 
-    let intercept = interceptor::ghostbridge_interceptor;
+    let intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
+    let registration_intercept = interceptor::make_registration_interceptor(validator);
 
     let routes = tonic::service::Routes::new(crate::grpc_web::enable(
-        StateSyncServer::with_interceptor(server.clone(), intercept),
+        StateSyncServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PluginServiceServer::with_interceptor(server.clone(), intercept),
+        PluginServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        EventChainServiceServer::with_interceptor(server.clone(), intercept),
+        EventChainServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        OvsdbMirrorServer::with_interceptor(server.clone(), intercept),
+        OvsdbMirrorServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        RuntimeMirrorServer::with_interceptor(server.clone(), intercept),
+        RuntimeMirrorServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        ComponentRegistryServer::with_interceptor(server.clone(), intercept),
+        ComponentRegistryServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        MailServiceServer::with_interceptor(server.clone(), intercept),
+        MailServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept),
+        PrivacyNetworkServiceServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         RegistrationServiceServer::with_interceptor(
             server.clone(),
-            interceptor::registration_interceptor,
+            registration_intercept,
         ),
     ))
     .add_service(crate::grpc_web::enable(
-        DbusPassthroughServer::with_interceptor(server.clone(), intercept),
+        DbusPassthroughServer::with_interceptor(server.clone(), intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
         crate::proto::chat::chat_service_server::ChatServiceServer::with_interceptor(
@@ -921,7 +1031,11 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
         let change_type = match req.operation {
@@ -937,7 +1051,7 @@ impl StateSync for OperationGrpcServer {
         };
 
         if change_type == ChangeType::MethodCall {
-            if let Some(method_name) = req.member_name.strip_prefix("method:").or_else(|| {
+            if let Some(method_name) = req.member_name.strip_prefix("method:").or({
                 if req.member_name.is_empty() {
                     None
                 } else {
@@ -959,6 +1073,25 @@ impl StateSync for OperationGrpcServer {
                         effective_hash: String::new(),
                     }));
                 }
+            }
+            let args_value = serde_json::to_value(&value)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if let Err(error) = enforce_human_principal_self_service(
+                &req.plugin_id,
+                req.member_name
+                    .strip_prefix("method:")
+                    .unwrap_or(&req.member_name),
+                &args_value,
+                human_identity.as_ref(),
+            ) {
+                return Ok(Response::new(MutateResponse {
+                    success: false,
+                    event_id: 0,
+                    event_hash: String::new(),
+                    result: None,
+                    error: Some(error),
+                    effective_hash: String::new(),
+                }));
             }
         }
 
@@ -1090,7 +1223,11 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<CallMethodRequest>,
     ) -> Result<Response<CallMethodResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let human_identity = request
+            .extensions()
+            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
+            .cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         let capability_id = if req.capability_id.is_empty() {
             None
@@ -1124,6 +1261,22 @@ impl PluginService for OperationGrpcServer {
 
         let json_args = simd_json::to_string(&args)
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let args_value: JsonValue = serde_json::from_str(&json_args)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        if let Err(error) = enforce_human_principal_self_service(
+            &req.plugin_id,
+            &req.method_name,
+            &args_value,
+            human_identity.as_ref(),
+        ) {
+            return Ok(Response::new(CallMethodResponse {
+                success: false,
+                result: None,
+                event_id: 0,
+                event_hash: String::new(),
+                error: Some(error),
+            }));
+        }
 
         // Route through the same schema dispatcher as PluginV1.Call. That
         // dispatcher records the method event before returning its audited
@@ -2006,6 +2159,113 @@ impl OvsdbMirror for OperationGrpcServer {
 
         Ok(Response::new(OvsdbGetBridgeStateResponse { bridges }))
     }
+
+    async fn get_datapath_health(
+        &self,
+        request: Request<OvsdbGetDatapathHealthRequest>,
+    ) -> Result<Response<OvsdbGetDatapathHealthResponse>, Status> {
+        let bridge = request.into_inner().bridge_name;
+        let bridge = if bridge.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            bridge
+        };
+        let h = op_network::get_datapath_health(&bridge)
+            .await
+            .map_err(|e| Status::internal(format!("get_datapath_health: {e:#}")))?;
+        let detail_json = serde_json::to_string(&h).unwrap_or_default();
+        Ok(Response::new(OvsdbGetDatapathHealthResponse {
+            bridge: h.bridge,
+            fail_mode: h.fail_mode,
+            controllers: h.controllers,
+            fallback_normal: h.fallback_normal,
+            fallback_priority: h.fallback_priority as u32,
+            detail_json,
+        }))
+    }
+
+    async fn attach_controller_safe(
+        &self,
+        request: Request<OvsdbAttachControllerSafeRequest>,
+    ) -> Result<Response<OvsdbAttachControllerSafeResponse>, Status> {
+        let req = request.into_inner();
+        let bridge = if req.bridge_name.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            req.bridge_name
+        };
+        let endpoint = if req.endpoint.is_empty() {
+            "tcp:10.200.0.1:6653".to_string()
+        } else {
+            req.endpoint
+        };
+        match op_network::attach_controller_safe(&bridge, &endpoint).await {
+            Ok(h) => {
+                let detail_json = serde_json::to_string(&h).unwrap_or_default();
+                Ok(Response::new(OvsdbAttachControllerSafeResponse {
+                    ok: true,
+                    message: format!("AttachControllerSafe ok bridge={bridge}"),
+                    health: Some(OvsdbGetDatapathHealthResponse {
+                        bridge: h.bridge,
+                        fail_mode: h.fail_mode,
+                        controllers: h.controllers,
+                        fallback_normal: h.fallback_normal,
+                        fallback_priority: h.fallback_priority as u32,
+                        detail_json,
+                    }),
+                }))
+            }
+            Err(e) => Ok(Response::new(OvsdbAttachControllerSafeResponse {
+                ok: false,
+                message: format!("{e:#}"),
+                health: None,
+            })),
+        }
+    }
+
+    async fn ensure_fallback_normal(
+        &self,
+        request: Request<OvsdbEnsureFallbackNormalRequest>,
+    ) -> Result<Response<OvsdbEnsureFallbackNormalResponse>, Status> {
+        let bridge = request.into_inner().bridge_name;
+        let bridge = if bridge.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            bridge
+        };
+        match op_network::ensure_fallback_normal(&bridge).await {
+            Ok(()) => Ok(Response::new(OvsdbEnsureFallbackNormalResponse {
+                ok: true,
+                message: format!("EnsureFallbackNormal ok bridge={bridge}"),
+            })),
+            Err(e) => Ok(Response::new(OvsdbEnsureFallbackNormalResponse {
+                ok: false,
+                message: format!("{e:#}"),
+            })),
+        }
+    }
+
+    async fn del_controller(
+        &self,
+        request: Request<OvsdbDelControllerRequest>,
+    ) -> Result<Response<OvsdbDelControllerResponse>, Status> {
+        let bridge = request.into_inner().bridge_name;
+        let bridge = if bridge.is_empty() {
+            "ovsbr0".to_string()
+        } else {
+            bridge
+        };
+        match op_network::del_controller(&bridge).await {
+            Ok(()) => Ok(Response::new(OvsdbDelControllerResponse {
+                ok: true,
+                message: format!("DelController ok bridge={bridge}"),
+            })),
+            Err(e) => Ok(Response::new(OvsdbDelControllerResponse {
+                ok: false,
+                message: format!("{e:#}"),
+            })),
+        }
+    }
 }
 
 impl OperationGrpcServer {
@@ -2173,6 +2433,8 @@ impl OperationGrpcServer {
                 mcast_snooping_enable,
                 other_config: self.extract_map(row.get("other_config")),
                 ports,
+                fallback_normal: false,
+                controllers: vec![],
             });
         }
 
@@ -4985,7 +5247,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusCallRequest>,
     ) -> Result<Response<crate::proto::DbusCallResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
             if let Err(error) =
@@ -5074,7 +5336,7 @@ impl crate::proto::dbus_passthrough_server::DbusPassthrough for OperationGrpcSer
         &self,
         request: Request<crate::proto::DbusSetPropertyRequest>,
     ) -> Result<Response<crate::proto::DbusSetPropertyResponse>, Status> {
-        let identity = request.extensions().get::<GhostbridgeIdentity>().cloned();
+        let identity = interceptor::bridge_capability_identity(request.extensions());
         let req = request.into_inner();
         if let Some(plugin_id) = plugin_id_from_dbus_path(&req.path) {
             let setter = format!("set_{}", req.property);

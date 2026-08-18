@@ -5,8 +5,8 @@
 
 use anyhow::{Context, Result};
 use op_core::types::{
-    ArgDirection, ArgInfo, BusType, InterfaceInfo, MethodInfo, PropertyAccess,
-    PropertyInfo, SignalInfo,
+    ArgDirection, ArgInfo, BusType, InterfaceInfo, MethodInfo, PropertyAccess, PropertyInfo,
+    SignalInfo,
 };
 use op_introspection::IntrospectionService;
 use serde::{Deserialize, Serialize};
@@ -143,7 +143,9 @@ impl PluginTreeAdapter {
             .await
             .context("Cannot reach org.opdbus.v1.plugins on session bus")?;
 
-        let xml = proxy.introspect().await
+        let xml = proxy
+            .introspect()
+            .await
             .context("Failed to introspect /org/opdbus/v1/plugins")?;
 
         let children = parse_child_nodes(&xml);
@@ -334,7 +336,9 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
                             match attr.key.as_ref() {
                                 b"name" => name = String::from_utf8_lossy(&attr.value).to_string(),
                                 b"type" => sig = String::from_utf8_lossy(&attr.value).to_string(),
-                                b"access" => access = String::from_utf8_lossy(&attr.value).to_string(),
+                                b"access" => {
+                                    access = String::from_utf8_lossy(&attr.value).to_string()
+                                }
                                 _ => {}
                             }
                         }
@@ -359,18 +363,28 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
                             match attr.key.as_ref() {
                                 b"name" => name = String::from_utf8_lossy(&attr.value).to_string(),
                                 b"type" => sig = String::from_utf8_lossy(&attr.value).to_string(),
-                                b"direction" => dir = String::from_utf8_lossy(&attr.value).to_string(),
+                                b"direction" => {
+                                    dir = String::from_utf8_lossy(&attr.value).to_string()
+                                }
                                 _ => {}
                             }
                         }
                         let arg = ArgInfo {
                             name: if name.is_empty() { None } else { Some(name) },
                             signature: sig,
-                            direction: if dir == "out" { ArgDirection::Out } else { ArgDirection::In },
+                            direction: if dir == "out" {
+                                ArgDirection::Out
+                            } else {
+                                ArgDirection::In
+                            },
                         };
                         if in_method {
                             if let Some(ref mut m) = current_method {
-                                if dir == "out" { m.out_args.push(arg); } else { m.in_args.push(arg); }
+                                if dir == "out" {
+                                    m.out_args.push(arg);
+                                } else {
+                                    m.in_args.push(arg);
+                                }
                             }
                         } else if in_signal {
                             if let Some(ref mut s) = current_signal {
@@ -393,7 +407,9 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
                             match attr.key.as_ref() {
                                 b"name" => name = String::from_utf8_lossy(&attr.value).to_string(),
                                 b"type" => sig = String::from_utf8_lossy(&attr.value).to_string(),
-                                b"access" => access = String::from_utf8_lossy(&attr.value).to_string(),
+                                b"access" => {
+                                    access = String::from_utf8_lossy(&attr.value).to_string()
+                                }
                                 _ => {}
                             }
                         }
@@ -418,18 +434,28 @@ fn parse_interfaces(xml: &str) -> Vec<InterfaceInfo> {
                             match attr.key.as_ref() {
                                 b"name" => name = String::from_utf8_lossy(&attr.value).to_string(),
                                 b"type" => sig = String::from_utf8_lossy(&attr.value).to_string(),
-                                b"direction" => dir = String::from_utf8_lossy(&attr.value).to_string(),
+                                b"direction" => {
+                                    dir = String::from_utf8_lossy(&attr.value).to_string()
+                                }
                                 _ => {}
                             }
                         }
                         let arg = ArgInfo {
                             name: if name.is_empty() { None } else { Some(name) },
                             signature: sig,
-                            direction: if dir == "out" { ArgDirection::Out } else { ArgDirection::In },
+                            direction: if dir == "out" {
+                                ArgDirection::Out
+                            } else {
+                                ArgDirection::In
+                            },
                         };
                         if in_method {
                             if let Some(ref mut m) = current_method {
-                                if dir == "out" { m.out_args.push(arg); } else { m.in_args.push(arg); }
+                                if dir == "out" {
+                                    m.out_args.push(arg);
+                                } else {
+                                    m.in_args.push(arg);
+                                }
                             }
                         } else if in_signal {
                             if let Some(ref mut s) = current_signal {
@@ -494,22 +520,45 @@ fn convert_interface(iface: &InterfaceInfo) -> InterfaceDetail {
 }
 
 fn convert_method(method: &MethodInfo) -> MethodDetail {
-    let in_args: Vec<ArgDetail> = method.in_args.iter().map(|a| convert_arg(a, "in")).collect();
-    let out_args: Vec<ArgDetail> = method.out_args.iter().map(|a| convert_arg(a, "out")).collect();
+    let in_args: Vec<ArgDetail> = method
+        .in_args
+        .iter()
+        .map(|a| convert_arg(a, "in"))
+        .collect();
+    let out_args: Vec<ArgDetail> = method
+        .out_args
+        .iter()
+        .map(|a| convert_arg(a, "out"))
+        .collect();
 
     let in_sig: String = in_args
         .iter()
-        .map(|a| if a.name.is_empty() { a.type_display.clone() } else { format!("{}: {}", a.name, a.type_display) })
+        .map(|a| {
+            if a.name.is_empty() {
+                a.type_display.clone()
+            } else {
+                format!("{}: {}", a.name, a.type_display)
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    let out_sig: String = out_args.iter().map(|a| a.type_display.clone()).collect::<Vec<_>>().join(", ");
+    let out_sig: String = out_args
+        .iter()
+        .map(|a| a.type_display.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
     let signature_display = if out_sig.is_empty() {
         format!("({}) → ()", in_sig)
     } else {
         format!("({}) → ({})", in_sig, out_sig)
     };
 
-    MethodDetail { name: method.name.clone(), in_args, out_args, signature_display }
+    MethodDetail {
+        name: method.name.clone(),
+        in_args,
+        out_args,
+        signature_display,
+    }
 }
 
 fn convert_property(prop: &PropertyInfo) -> PropertyDetail {
@@ -528,10 +577,17 @@ fn convert_property(prop: &PropertyInfo) -> PropertyDetail {
 fn convert_signal(signal: &SignalInfo) -> SignalDetail {
     SignalDetail {
         name: signal.name.clone(),
-        args: signal.args.iter().map(|a| {
-            let dir = match a.direction { ArgDirection::Out => "out", _ => "in" };
-            convert_arg(a, dir)
-        }).collect(),
+        args: signal
+            .args
+            .iter()
+            .map(|a| {
+                let dir = match a.direction {
+                    ArgDirection::Out => "out",
+                    _ => "in",
+                };
+                convert_arg(a, dir)
+            })
+            .collect(),
     }
 }
 
@@ -565,7 +621,11 @@ pub fn dbus_signature_to_human(sig: &str) -> String {
         _ if sig.starts_with("a{") && sig.ends_with('}') => {
             let inner = &sig[2..sig.len() - 1];
             if inner.len() >= 2 {
-                format!("Dict<{}, {}>", dbus_signature_to_human(&inner[..1]), dbus_signature_to_human(&inner[1..]))
+                format!(
+                    "Dict<{}, {}>",
+                    dbus_signature_to_human(&inner[..1]),
+                    dbus_signature_to_human(&inner[1..])
+                )
             } else {
                 format!("Dict<{}>", inner)
             }

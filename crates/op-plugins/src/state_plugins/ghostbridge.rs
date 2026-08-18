@@ -461,7 +461,7 @@ mod tests {
         collect_subids(&raw, &mut subids);
         assert!(!subids.is_empty(), "expected at least one x-oscal-subid");
         for subid in subids {
-            validate_subid(&subid).expect(&format!("invalid subid: {subid}"));
+            validate_subid(&subid).unwrap_or_else(|_| panic!("invalid subid: {subid}"));
         }
     }
 

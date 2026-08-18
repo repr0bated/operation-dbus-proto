@@ -12,7 +12,6 @@ use tracing::info;
 
 /// The single active-schema catalog in shared memory. Every plugin reads its
 /// own slice by name from this one file (zero-copy, 1:1).
-
 /// THE one shared container socket. Every container connects to this single
 /// host-side UDS; xray/the bridge demuxes per connection by identity + the
 /// registered (name, ports). There is exactly one shared socket — never a

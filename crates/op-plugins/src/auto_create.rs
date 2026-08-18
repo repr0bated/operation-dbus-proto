@@ -14,9 +14,9 @@ use op_state_store::PluginSchema;
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::path::Path;
 
 /// Auto-creator for systemd-based plugins
 pub struct SystemdAutoCreator;

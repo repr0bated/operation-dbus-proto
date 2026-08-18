@@ -426,26 +426,25 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     // Read zeroclaw state directly from the SHM state tree. Fall back to the
     // sealed PluginSchema blob so the schema surface still renders when no
     // mutation has populated SHM yet.
-    let (zeroclaw, zeroclaw_schema) =
-        match crate::zeroclaw_routes::read_router_plugin() {
-            Some(v) => {
-                info!("Using tched_router from SHM state tree (live provider/model catalog)");
-                (v, read_zeroclaw_schema_shm())
+    let (zeroclaw, zeroclaw_schema) = match crate::zeroclaw_routes::read_router_plugin() {
+        Some(v) => {
+            info!("Using tched_router from SHM state tree (live provider/model catalog)");
+            (v, read_zeroclaw_schema_shm())
+        }
+        None => match read_zeroclaw_schema_shm() {
+            Some(schema) => {
+                warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
+                (schema.clone(), Some(schema))
             }
-            None => match read_zeroclaw_schema_shm() {
-                Some(schema) => {
-                    warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
-                    (schema.clone(), Some(schema))
-                }
-                None => {
-                    error!("Zeroclaw not available from SHM state tree or PluginSchema");
-                    return json_error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "Zeroclaw projection not available",
-                    );
-                }
-            },
-        };
+            None => {
+                error!("Zeroclaw not available from SHM state tree or PluginSchema");
+                return json_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Zeroclaw projection not available",
+                );
+            }
+        },
+    };
 
     // Providers + model_routes live under `projection` in the live state.
     let projection = zeroclaw.get("projection").and_then(|v| v.as_object());

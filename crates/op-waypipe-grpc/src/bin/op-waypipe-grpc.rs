@@ -9,7 +9,10 @@ use tracing::info;
 use op_waypipe_grpc::{launch, serve, LaunchOpts, ServeOpts, TunnelConfig};
 
 #[derive(Parser, Debug)]
-#[command(name = "op-waypipe-grpc", about = "Waypipe over gRPC (SHM identity sled auth)")]
+#[command(
+    name = "op-waypipe-grpc",
+    about = "Waypipe over gRPC (SHM identity sled auth)"
+)]
 struct Cli {
     /// Optional JSON config. If omitted: `$OP_WAYPIPE_GRPC_CONFIG`,
     /// `~/.config/op-waypipe-grpc/config.json`, then embedded defaults.

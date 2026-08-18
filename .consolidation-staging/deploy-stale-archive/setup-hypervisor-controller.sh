@@ -39,6 +39,6 @@ fi
 
 # 4. Configure OVS to use local controller
 echo "Setting ovsbr0 controller to tcp:127.0.0.1:6653..."
-ovs-vsctl set-controller ovsbr0 tcp:127.0.0.1:6653 || true
+/usr/local/libexec/3tched/attach-controller-safe ovsbr0 tcp:127.0.0.1:6653 || true
 
 echo "=== Controller Hypervisor Installation Complete ==="

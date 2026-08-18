@@ -683,4 +683,44 @@ impl OvsdbDbusClient {
         self.transact_many(converted.as_array().cloned().unwrap_or_default())
             .await
     }
+
+    // ── Datapath-safe controller attach (OVS async flow contract) ─────────────
+
+    /// See [`crate::datapath_safe::ensure_fallback_normal`].
+    pub async fn ensure_fallback_normal(&self, bridge: &str) -> Result<()> {
+        crate::datapath_safe::ensure_fallback_normal(bridge).await
+    }
+
+    /// See [`crate::datapath_safe::set_fail_mode`].
+    pub async fn set_fail_mode(&self, bridge: &str, mode: &str) -> Result<()> {
+        crate::datapath_safe::set_fail_mode(bridge, mode).await
+    }
+
+    /// See [`crate::datapath_safe::del_controller`].
+    pub async fn del_controller(&self, bridge: &str) -> Result<()> {
+        crate::datapath_safe::del_controller(bridge).await
+    }
+
+    /// See [`crate::datapath_safe::set_controller`].
+    pub async fn set_controller(&self, bridge: &str, endpoint: &str) -> Result<()> {
+        crate::datapath_safe::set_controller(bridge, endpoint).await
+    }
+
+    /// See [`crate::datapath_safe::get_datapath_health`].
+    pub async fn get_datapath_health(
+        &self,
+        bridge: &str,
+    ) -> Result<crate::datapath_safe::DatapathHealth> {
+        crate::datapath_safe::get_datapath_health(bridge).await
+    }
+
+    /// See [`crate::datapath_safe::attach_controller_safe`].
+    pub async fn attach_controller_safe(
+        &self,
+        bridge: &str,
+        endpoint: &str,
+    ) -> Result<crate::datapath_safe::DatapathHealth> {
+        crate::datapath_safe::attach_controller_safe(bridge, endpoint).await
+    }
 }
+

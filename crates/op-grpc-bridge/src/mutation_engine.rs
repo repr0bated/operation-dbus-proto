@@ -293,7 +293,11 @@ impl MutationEngine {
         }
 
         if replayed > 0 || skipped > 0 {
-            tracing::info!(replayed, skipped, "event chain rebuilt from durable audit trail");
+            tracing::info!(
+                replayed,
+                skipped,
+                "event chain rebuilt from durable audit trail"
+            );
         }
         replayed
     }
@@ -356,7 +360,10 @@ impl MutationEngine {
         let conn = match self.signal_bus.get() {
             Some(c) => c,
             None => {
-                tracing::debug!(plugin_id, "signal_bus not yet available; skipping Updated signal");
+                tracing::debug!(
+                    plugin_id,
+                    "signal_bus not yet available; skipping Updated signal"
+                );
                 return;
             }
         };
@@ -368,7 +375,10 @@ impl MutationEngine {
         {
             Ok(r) => r,
             Err(_) => {
-                tracing::debug!(plugin_id, "PluginV1 interface not registered at path; skipping signal");
+                tracing::debug!(
+                    plugin_id,
+                    "PluginV1 interface not registered at path; skipping signal"
+                );
                 return;
             }
         };
@@ -883,6 +893,10 @@ impl MutationEngine {
         let mut old_value = None;
         let mut authoritative_value = value.clone();
         let mut caller_result = None;
+        // Empty falls back to compute_tags in process_authoritative_change;
+        // the human_principal arm sets this to the method's subid so the
+        // event carries it in tags_touched (VAL-CROSS-020).
+        let mut event_tags: Vec<String> = Vec::new();
 
         // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
         // when the caller omitted it. The Sled carries the WireGuard footprint +
@@ -984,6 +998,31 @@ impl MutationEngine {
                 }
                 caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
             }
+        } else if plugin_id == "human_principal" && change_type == ChangeType::MethodCall {
+            // PluginService.CallMethod wraps object arguments in a one-element
+            // array (identity_sled convention above). The dispatcher owns Cozo
+            // durability and registry policy; the authoritative present state
+            // is re-read from Cozo after the mutation, and the event carries
+            // the method's subid in tags_touched (VAL-CROSS-020).
+            if let Some(method) = &member_name {
+                let mut args_json = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let domain = crate::human_principal_dispatch::dispatch_human_principal_method(
+                    method, &args_json,
+                )
+                .await?;
+                let state = crate::human_principal_dispatch::current_state().await;
+                authoritative_value = simd_json::serde::to_owned_value(&state)?;
+                caller_result = Some(simd_json::serde::to_owned_value(&domain)?);
+                event_tags = crate::human_principal_dispatch::method_subid(method)
+                    .into_iter()
+                    .collect();
+            }
         } else if plugin_id == "xray" && change_type == ChangeType::MethodCall {
             // PluginService.CallMethod wraps object arguments in a
             // one-element array, matching identity_sled's convention above.
@@ -1036,7 +1075,7 @@ impl MutationEngine {
                 member_name,
                 old_value,
                 authoritative_value.clone(),
-                vec![], // Automatically computed in process_authoritative_change
+                event_tags, // Empty falls back to compute_tags in process_authoritative_change
                 actor_id,
                 capability_id,
                 ChangeSource::Grpc,
@@ -1202,6 +1241,11 @@ impl MutationEngine {
                 crate::identity_sled_dispatch::dispatch_identity_sled_method(self, method, &args)
                     .await?
             }
+            "human_principal" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                crate::human_principal_dispatch::dispatch_human_principal_method(method, &args)
+                    .await?
+            }
             "persona" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::persona::dispatch_persona_method(method, &args).await?
@@ -1218,14 +1262,16 @@ impl MutationEngine {
             }
             "full_system" => {
                 let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::full_system::dispatch_full_system_method(
-                    method, &args,
-                )
-                .await?
+                op_plugins::state_plugins::full_system::dispatch_full_system_method(method, &args)
+                    .await?
             }
             "keyring" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::keyring::dispatch_keyring_method(method, &args).await?
+            }
+            "openflow" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::openflow::dispatch_openflow_method(method, &args).await?
             }
             "privacy_routes" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2100,7 +2146,10 @@ fn map_schema_method_to_tool(
     let with_field = |key: &str, value: &str| -> serde_json::Value {
         let mut v = base.clone();
         if let Some(obj) = v.as_object_mut() {
-            obj.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+            obj.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
         }
         v
     };
@@ -2113,10 +2162,7 @@ fn map_schema_method_to_tool(
             "cognitive_memory".into(),
             with_field("operation", "retrieve"),
         )),
-        "memory_delete" => Ok((
-            "cognitive_memory".into(),
-            with_field("operation", "delete"),
-        )),
+        "memory_delete" => Ok(("cognitive_memory".into(), with_field("operation", "delete"))),
         "memory_list_namespaces" => Ok((
             "cognitive_memory".into(),
             with_field("operation", "list_namespaces"),
@@ -2147,7 +2193,9 @@ fn map_schema_method_to_tool(
                 .ok_or_else(|| anyhow::anyhow!("invoke_tool: missing required field 'tool_name'"))?
                 .to_string();
             if tool_name.is_empty() {
-                return Err(anyhow::anyhow!("invoke_tool: 'tool_name' must not be empty"));
+                return Err(anyhow::anyhow!(
+                    "invoke_tool: 'tool_name' must not be empty"
+                ));
             }
             let tool_args = args
                 .get("arguments")

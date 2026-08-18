@@ -98,9 +98,13 @@ impl ServerConfig {
                     .unwrap_or_else(|_| DEFAULT_SHARED_SOCKET.to_string()),
             ),
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
-                .or_else(|_| std::env::var("GRPC_BIND"))
-                .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
-            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR").ok(),
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| std::env::var("GRPC_BIND").ok().filter(|s| !s.trim().is_empty()))
+                .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string()),
+            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
             tls_identity: Self::load_tls_identity(),
         }
     }
@@ -438,7 +442,12 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     });
 
     // TCP listeners for gRPC + gRPC-Web. REST is served by op-web on :8080.
-    let bind_addrs: Vec<&str> = config.bind_addr.split(',').collect();
+    let bind_addrs: Vec<&str> = config
+        .bind_addr
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
@@ -447,7 +456,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::from_std(listener)?;
         info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
         let app = build_axum_app(loader.clone(), operation_server.clone());
-        let server = axum::serve(listener, app.into_make_service());
+        let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>());
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 

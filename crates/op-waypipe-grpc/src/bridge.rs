@@ -25,7 +25,11 @@ pub async fn bridge_unix_to_channels(
                 debug!("unix peer closed (EOF)");
                 break;
             }
-            if to_grpc.send(Bytes::copy_from_slice(&buf[..n])).await.is_err() {
+            if to_grpc
+                .send(Bytes::copy_from_slice(&buf[..n]))
+                .await
+                .is_err()
+            {
                 debug!("gRPC upload channel closed");
                 break;
             }
@@ -85,7 +89,9 @@ mod tests {
         let (tx_down, rx_down) = mpsc::channel::<Bytes>(8);
 
         let bridge = tokio::spawn(async move {
-            bridge_unix_to_channels(stream, rx_down, tx_up).await.unwrap();
+            bridge_unix_to_channels(stream, rx_down, tx_up)
+                .await
+                .unwrap();
         });
 
         tx_down.send(Bytes::from_static(b"ping")).await.unwrap();

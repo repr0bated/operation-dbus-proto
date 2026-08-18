@@ -672,7 +672,8 @@ impl EventChain {
 
         let mut expected_prev = self.genesis_hash.clone();
         for event in &self.events {
-            let in_range = (from == 0 || event.event_id >= from) && (to == 0 || event.event_id <= to);
+            let in_range =
+                (from == 0 || event.event_id >= from) && (to == 0 || event.event_id <= to);
 
             if in_range {
                 if event.prev_hash != expected_prev {
@@ -1156,7 +1157,11 @@ mod tests {
         assert_eq!(rebuilt.events().len(), 3);
         // Hash linkage survives the round trip, so the rebuilt chain verifies.
         let result = rebuilt.verify_range(0, 0);
-        assert!(result.valid, "rebuilt chain must verify: {:?}", result.errors);
+        assert!(
+            result.valid,
+            "rebuilt chain must verify: {:?}",
+            result.errors
+        );
         // The next event continues the chain rather than restarting at 1.
         assert_eq!(rebuilt.next_event_id(), 4);
         assert_eq!(rebuilt.last_hash(), original.last_hash());

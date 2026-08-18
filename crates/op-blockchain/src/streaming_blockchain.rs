@@ -199,7 +199,10 @@ impl StreamingBlockchain {
                     Some(client)
                 }
                 Err(e) => {
-                    warn!("Failed to build Qdrant client ({}): {}; vector streaming disabled", url, e);
+                    warn!(
+                        "Failed to build Qdrant client ({}): {}; vector streaming disabled",
+                        url, e
+                    );
                     None
                 }
             },
@@ -294,7 +297,10 @@ impl StreamingBlockchain {
             .push_vector_to_qdrant(&event, &footprint.plugin_id, &footprint.data_hash)
             .await
         {
-            warn!("Failed to stream vector to Qdrant for block {}: {}", event.hash, e);
+            warn!(
+                "Failed to stream vector to Qdrant for block {}: {}",
+                event.hash, e
+            );
         }
 
         // Only create snapshot if interval requires it
@@ -334,7 +340,10 @@ impl StreamingBlockchain {
 
         let point = PointStruct::new(point_id.to_string(), event.vector.clone(), payload);
         qdrant
-            .upsert_points(UpsertPointsBuilder::new(&self.qdrant_collection, vec![point]))
+            .upsert_points(UpsertPointsBuilder::new(
+                &self.qdrant_collection,
+                vec![point],
+            ))
             .await
             .context("Qdrant upsert failed for blockchain vector")?;
 
@@ -936,10 +945,10 @@ impl StreamingBlockchain {
 
 fn is_qdrant_already_exists(err: &QdrantError) -> bool {
     match err {
-        QdrantError::ResponseError { status } | QdrantError::ResourceExhaustedError { status, .. } => {
+        QdrantError::ResponseError { status }
+        | QdrantError::ResourceExhaustedError { status, .. } => {
             // tonic::Code::AlreadyExists = 6 (avoid hard dep on tonic path in some builds)
-            status.code() as i32 == 6
-                || format!("{:?}", status.code()).contains("AlreadyExists")
+            status.code() as i32 == 6 || format!("{:?}", status.code()).contains("AlreadyExists")
         }
         _ => false,
     }

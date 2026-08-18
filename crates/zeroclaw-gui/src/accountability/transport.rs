@@ -125,10 +125,7 @@ pub fn proto_to_audit_event(event: ChainEvent) -> AuditEvent {
         event_id: event.event_id,
         prev_hash: event.prev_hash,
         event_hash: event.event_hash,
-        timestamp: event
-            .timestamp
-            .map(|ts| ts.to_string())
-            .unwrap_or_default(),
+        timestamp: event.timestamp.map(|ts| ts.to_string()).unwrap_or_default(),
         actor_id: event.actor_id,
         capability_id: event.capability_id,
         plugin_id: event.plugin_id,

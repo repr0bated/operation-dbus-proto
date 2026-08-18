@@ -1,8 +1,8 @@
 //! Architecture Expert Agents
 
-use super::base::PersonaAgent;
 use super::super::agent_trait::AgentCapability;
-use super::super::prompts::architecture::{BACKEND_ARCHITECT, SECURITY_AUDITOR, CODE_REVIEWER};
+use super::super::prompts::architecture::{BACKEND_ARCHITECT, CODE_REVIEWER, SECURITY_AUDITOR};
+use super::base::PersonaAgent;
 
 pub struct BackendArchitect(PersonaAgent);
 

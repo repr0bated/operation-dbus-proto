@@ -120,9 +120,7 @@ pub fn routes() -> Option<Vec<ZeroclawRoute>> {
 }
 
 pub fn route_for_model(model: &str) -> Option<ZeroclawRoute> {
-    routes()?
-        .into_iter()
-        .find(|route| route.model == model)
+    routes()?.into_iter().find(|route| route.model == model)
 }
 
 pub fn ensure_model_available(model: &str) -> Result<()> {

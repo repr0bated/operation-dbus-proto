@@ -8,13 +8,13 @@
 //! - `dbus-plugin-cli <plugin> get <property>` — read a property
 //! - `dbus-plugin-cli completions <shell>` — generate shell completions
 
-mod introspect;
 mod identity;
+mod introspect;
 mod socket;
 
 use anyhow::{bail, Context, Result};
-use introspect::PluginTreeAdapter;
 use identity::CliIdentity;
+use introspect::PluginTreeAdapter;
 use std::process::ExitCode;
 use tracing::info;
 
@@ -120,10 +120,7 @@ async fn cmd_tree(filter: Option<&str>) -> Result<()> {
             if !iface.properties.is_empty() {
                 println!("│    Properties:");
                 for p in &iface.properties {
-                    println!(
-                        "│      .{} : {} [{}]",
-                        p.name, p.type_display, p.access
-                    );
+                    println!("│      .{} : {} [{}]", p.name, p.type_display, p.access);
                 }
             }
 
@@ -185,10 +182,7 @@ async fn cmd_list() -> Result<()> {
 
     for (name, plugin) in &tree.plugins {
         let method_count: usize = plugin.interfaces.iter().map(|i| i.methods.len()).sum();
-        println!(
-            "{:<24} {:<50} {}",
-            name, plugin.service_name, method_count
-        );
+        println!("{:<24} {:<50} {}", name, plugin.service_name, method_count);
     }
 
     Ok(())
@@ -209,10 +203,7 @@ async fn cmd_plugin_help(plugin_name: &str) -> Result<()> {
     let plugin = match plugin {
         Some(p) => p,
         None => {
-            eprintln!(
-                "Error: Plugin '{}' not found on D-Bus.\n",
-                plugin_name
-            );
+            eprintln!("Error: Plugin '{}' not found on D-Bus.\n", plugin_name);
             eprintln!("Available plugins:");
             for name in tree.plugins.keys() {
                 eprintln!("  {}", name);
@@ -278,10 +269,7 @@ async fn cmd_plugin_help(plugin_name: &str) -> Result<()> {
         "  dbus-plugin-cli {} <method> [--arg VALUE ...]",
         plugin_name
     );
-    println!(
-        "  dbus-plugin-cli {} get <property>",
-        plugin_name
-    );
+    println!("  dbus-plugin-cli {} get <property>", plugin_name);
 
     Ok(())
 }
@@ -329,9 +317,7 @@ async fn cmd_call(plugin_name: &str, method_name: &str, args: &[String]) -> Resu
 
     for iface in &plugin.interfaces {
         for m in &iface.methods {
-            if m.name == method_name
-                || m.name.to_lowercase() == method_normalized.to_lowercase()
-            {
+            if m.name == method_name || m.name.to_lowercase() == method_normalized.to_lowercase() {
                 target_interface = Some(iface.name.clone());
                 target_method = Some(m.clone());
                 break;
@@ -368,11 +354,23 @@ async fn cmd_call(plugin_name: &str, method_name: &str, args: &[String]) -> Resu
             "Error: Missing required argument(s) for '{}'.\n",
             method.name
         );
-        eprintln!("Usage: dbus-plugin-cli {} {} {}", plugin_name, method.name,
-            method.in_args.iter().map(|a| {
-                let label = if a.name.is_empty() { "ARG".to_string() } else { a.name.to_uppercase() };
-                format!("<{}>", label)
-            }).collect::<Vec<_>>().join(" ")
+        eprintln!(
+            "Usage: dbus-plugin-cli {} {} {}",
+            plugin_name,
+            method.name,
+            method
+                .in_args
+                .iter()
+                .map(|a| {
+                    let label = if a.name.is_empty() {
+                        "ARG".to_string()
+                    } else {
+                        a.name.to_uppercase()
+                    };
+                    format!("<{}>", label)
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
         );
         eprintln!();
         eprintln!("Arguments:");
@@ -384,7 +382,11 @@ async fn cmd_call(plugin_name: &str, method_name: &str, args: &[String]) -> Resu
     }
 
     // Build the D-Bus method call
-    let in_signature: String = method.in_args.iter().map(|a| a.signature.as_str()).collect();
+    let in_signature: String = method
+        .in_args
+        .iter()
+        .map(|a| a.signature.as_str())
+        .collect();
 
     info!(
         "Calling {}.{} on {} at {} with signature '{}'",
@@ -590,8 +592,7 @@ async fn print_top_level_help() -> Result<()> {
         Ok(tree) if !tree.plugins.is_empty() => {
             println!("AVAILABLE PLUGINS:");
             for (name, plugin) in &tree.plugins {
-                let method_count: usize =
-                    plugin.interfaces.iter().map(|i| i.methods.len()).sum();
+                let method_count: usize = plugin.interfaces.iter().map(|i| i.methods.len()).sum();
                 println!("  {:<24} ({} methods)", name, method_count);
             }
             println!();
@@ -613,7 +614,8 @@ async fn print_top_level_help() -> Result<()> {
 
 /// Generate bash completion script
 async fn print_bash_completions() -> Result<()> {
-    println!(r#"# Bash completion for dbus-plugin-cli
+    println!(
+        r#"# Bash completion for dbus-plugin-cli
 # Source this file or add to /etc/bash_completion.d/
 
 _dbus_plugin_cli() {{
@@ -652,7 +654,8 @@ _dbus_plugin_cli() {{
 }}
 
 complete -F _dbus_plugin_cli dbus-plugin-cli
-"#);
+"#
+    );
     Ok(())
 }
 

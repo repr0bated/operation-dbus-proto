@@ -313,14 +313,20 @@ impl ReflectionIndex {
         }
     }
 
+    // tonic::Status is 176 bytes; Boxing the error would ripple through the
+    // shared reflection surface for zero runtime benefit, so the large Err is
+    // the deliberate disposition on these three lookup helpers.
+    #[allow(clippy::result_large_err)]
     fn symbol_by_name(&self, symbol: &str) -> Result<Vec<u8>, Status> {
         self.encode_file(symbol, self.symbols.get(symbol), "symbol")
     }
 
+    #[allow(clippy::result_large_err)]
     fn file_by_filename(&self, filename: &str) -> Result<Vec<u8>, Status> {
         self.encode_file(filename, self.files.get(filename), "file")
     }
 
+    #[allow(clippy::result_large_err)]
     fn encode_file(
         &self,
         name: &str,

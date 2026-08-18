@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::super::agent_trait::{
-    UnifiedAgent, AgentCategory, AgentCapability, AgentRequest, AgentResponse
+    AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,
 };
 use super::super::registry::UnifiedAgentRegistry;
 use crate::security::SecurityProfile;
@@ -33,12 +33,7 @@ pub struct OrchestrationAgent {
 }
 
 impl OrchestrationAgent {
-    pub fn new(
-        id: &str,
-        name: &str,
-        description: &str,
-        allowed_agents: Vec<&str>,
-    ) -> Self {
+    pub fn new(id: &str, name: &str, description: &str, allowed_agents: Vec<&str>) -> Self {
         Self {
             id: id.to_string(),
             name: name.to_string(),
@@ -79,10 +74,7 @@ impl OrchestrationAgent {
             let agent = match registry.get(&step.agent_id) {
                 Some(a) => a,
                 None => {
-                    return AgentResponse::failure(format!(
-                        "Agent '{}' not found",
-                        step.agent_id
-                    ));
+                    return AgentResponse::failure(format!("Agent '{}' not found", step.agent_id));
                 }
             };
 
@@ -107,7 +99,8 @@ impl OrchestrationAgent {
                 return AgentResponse::failure(format!(
                     "Workflow failed at step '{}': {}",
                     step.name, response.message
-                )).with_suggestions(vec![
+                ))
+                .with_suggestions(vec![
                     format!("Check {} agent configuration", step.agent_id),
                     "Review step arguments".to_string(),
                 ]);
@@ -125,7 +118,7 @@ impl OrchestrationAgent {
                 "steps_completed": results.len(),
                 "results": results,
             }),
-            "Workflow completed successfully"
+            "Workflow completed successfully",
         )
     }
 }
@@ -172,30 +165,29 @@ impl UnifiedAgent for OrchestrationAgent {
     async fn execute(&self, request: AgentRequest) -> AgentResponse {
         match request.operation.as_str() {
             "list_steps" => {
-                let steps: Vec<_> = self.workflow_steps.iter()
-                    .map(|s| json!({
-                        "name": s.name,
-                        "agent": s.agent_id,
-                        "operation": s.operation,
-                    }))
+                let steps: Vec<_> = self
+                    .workflow_steps
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "name": s.name,
+                            "agent": s.agent_id,
+                            "operation": s.operation,
+                        })
+                    })
                     .collect();
                 AgentResponse::success(
                     json!({ "steps": steps }),
-                    format!("Workflow has {} steps", steps.len())
+                    format!("Workflow has {} steps", steps.len()),
                 )
             }
             "validate" => {
                 // Would validate workflow configuration
-                AgentResponse::success(
-                    json!({ "valid": true }),
-                    "Workflow configuration is valid"
-                )
+                AgentResponse::success(json!({ "valid": true }), "Workflow configuration is valid")
             }
-            _ => {
-                AgentResponse::failure(
-                    "run_workflow requires a registry - use execute_workflow() directly"
-                )
-            }
+            _ => AgentResponse::failure(
+                "run_workflow requires a registry - use execute_workflow() directly",
+            ),
         }
     }
 }

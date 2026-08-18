@@ -153,7 +153,6 @@ impl ProjectionEngine {
                                 service_tools += 1;
                             }
                         }
-
                     }
                 }
             }
