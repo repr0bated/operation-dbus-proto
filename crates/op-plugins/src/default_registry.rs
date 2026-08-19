@@ -340,7 +340,7 @@ mod tests {
         let plugins = registry.load_default_plugins().await.unwrap();
         assert!(!plugins.is_empty());
         assert!(plugins.iter().any(|plugin| plugin.name() == "mail_server"));
-        assert!(plugins.iter().any(|plugin| plugin.name() == "zeroclaw"));
+        assert!(plugins.iter().any(|plugin| plugin.name() == "tched_router"));
     }
 
     #[tokio::test]

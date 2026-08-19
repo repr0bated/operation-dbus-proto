@@ -113,7 +113,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("zeroclaw.json"), br#"{"selected_model":"qwen"}"#).unwrap();
+        fs::write(dir.join("tched_router.json"), br#"{"selected_model":"qwen"}"#).unwrap();
         fs::write(dir.join("system.memory.json"), br#"{"rss":1}"#).unwrap();
         fs::write(dir.join(".manifest.json"), br#"{"generation":3}"#).unwrap();
         fs::write(dir.join("notes.txt"), b"ignore").unwrap();
@@ -122,7 +122,7 @@ mod tests {
         // Drop the temp dir before asserting so a failure does not leak it.
         let _ = fs::remove_dir_all(&dir);
 
-        assert!(tree.contains_key("zeroclaw"));
+        assert!(tree.contains_key("tched_router"));
         assert!(tree.contains_key("system.memory"));
         assert!(!tree.contains_key(".manifest"));
         assert_eq!(tree.len(), 2);

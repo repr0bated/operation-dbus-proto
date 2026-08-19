@@ -36,7 +36,7 @@ use tokio::sync::{broadcast, RwLock};
 /// gRPC service generated and frozen. This ensures stable API contracts for
 /// clients - each method is independently versioned and typed.
 pub struct PerMethodGrpcServices {
-    /// method_path -> ServiceRegistry (e.g., "zeroclaw.RegisterAgent")
+    /// method_path -> ServiceRegistry (e.g., "tched_router.RegisterAgent")
     services: Arc<RwLock<HashMap<String, MethodServiceRegistry>>>,
     /// Broadcast channel for service lifecycle events
     lifecycle_tx: broadcast::Sender<MethodServiceLifecycleEvent>,
@@ -49,7 +49,7 @@ pub struct PerMethodGrpcServices {
 pub struct MethodServiceRegistry {
     /// Full method path: "plugin_id.method_name"
     pub method_path: String,
-    /// Plugin ID (e.g., "zeroclaw")
+    /// Plugin ID (e.g., "tched_router")
     pub plugin_id: String,
     /// Method name (e.g., "RegisterAgent")
     pub method_name: String,
@@ -629,10 +629,10 @@ mod tests {
             side_effect: op_state_store::SideEffect::Mutation,
             idempotent: false,
             required_capability: Some("register".to_string()),
-            subid: "exp.service.zeroclaw.register-agent@v1".to_string(),
+            subid: "exp.service.tched_router.register-agent@v1".to_string(),
         };
 
-        let proto = generate_method_proto("zeroclaw", "RegisterAgent", &method_decl);
+        let proto = generate_method_proto("tched_router", "RegisterAgent", &method_decl);
 
         assert!(proto.contains("service RegisterAgentService {"));
         assert!(proto.contains("rpc RegisterAgent"));
@@ -641,10 +641,10 @@ mod tests {
         assert!(proto.contains("string agent_id = 1;"));
         assert!(proto.contains("int64 priority = 2;"));
         assert!(proto.contains("bool success = 1;"));
-        assert!(proto.contains("subid: exp.service.zeroclaw.register-agent@v1"));
+        assert!(proto.contains("subid: exp.service.tched_router.register-agent@v1"));
         assert!(proto.contains("capability: register"));
 
-        let descriptor = generate_method_file_descriptor("zeroclaw", "RegisterAgent", &method_decl);
+        let descriptor = generate_method_file_descriptor("tched_router", "RegisterAgent", &method_decl);
         assert!(!descriptor.is_empty(), "expected encoded FileDescriptorSet");
     }
 

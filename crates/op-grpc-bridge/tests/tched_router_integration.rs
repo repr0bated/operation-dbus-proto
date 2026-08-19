@@ -1,7 +1,7 @@
-// Integration tests for the zeroclaw Axum HTTP/gRPC-Web host.
+// Integration tests for the tched_router Axum HTTP/gRPC-Web host.
 //
 // These tests spin up the TCP side of the server on an ephemeral port and
-// exercise the generated ZeroclawService through a native tonic client. The
+// exercise the generated TchedRouterService through a native tonic client. The
 // server is configured with `tonic_web::enable`, so the same listener also
 // accepts gRPC-Web/HTTP/1.1 clients.
 
@@ -13,8 +13,8 @@ use std::time::Duration;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::{Json, Router};
-use op_grpc_bridge::proto::zeroclaw::{
-    zeroclaw_service_client::ZeroclawServiceClient, GetSchemaRequest, WatchSchemaRequest,
+use op_grpc_bridge::proto::tched_router::{
+    tched_router_service_client::TchedRouterServiceClient, GetSchemaRequest, WatchSchemaRequest,
 };
 use op_grpc_bridge::schema_loader::SchemaLoader;
 use op_grpc_bridge::server::{build_axum_app, build_axum_app_with_mqtt_socket};
@@ -38,17 +38,17 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("live-schema.json");
     let schema = json!({
-        "name": "zeroclaw",
+        "name": "tched_router",
         "version": "1.0.0",
         "kind": "llm",
         "description": "test schema"
     });
-    write_schema(&path, &json!({ "zeroclaw": [schema] }));
+    write_schema(&path, &json!({ "tched_router": [schema] }));
 
     let loader = Arc::new(SchemaLoader::new(&path).unwrap());
 
-    // Build the intercepted plugin service exactly as `run_zeroclaw_server`
-    // does, so the Axum app mounts both the zeroclaw service and the plugin
+    // Build the intercepted plugin service exactly as `run_tched_router_server`
+    // does, so the Axum app mounts both the tched_router service and the plugin
     // service behind the Ghostbridge interceptor.
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
@@ -71,7 +71,7 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     (addr, loader, path)
 }
 
-async fn start_zeroclaw_runtime() -> SocketAddr {
+async fn start_tched_router_runtime() -> SocketAddr {
     async fn health() -> Json<serde_json::Value> {
         Json(json!({ "status": "ok" }))
     }
@@ -126,7 +126,7 @@ async fn should_serve_schema_over_grpc_web() {
     let (addr, _loader, _path) = start_test_server().await;
 
     let endpoint = format!("http://{}", addr);
-    let mut client = ZeroclawServiceClient::connect(endpoint).await.unwrap();
+    let mut client = TchedRouterServiceClient::connect(endpoint).await.unwrap();
 
     let mut request = tonic::Request::new(GetSchemaRequest {});
     request.metadata_mut().insert(
@@ -142,7 +142,7 @@ async fn should_serve_schema_over_grpc_web() {
     let inner = response.into_inner();
 
     let parsed: serde_json::Value = serde_json::from_str(&inner.schema_json).unwrap();
-    assert_eq!(parsed["name"], "zeroclaw");
+    assert_eq!(parsed["name"], "tched_router");
     assert_eq!(parsed["version"], "1.0.0");
     assert_eq!(inner.trace_id, "integration-test-trace");
     assert_eq!(inner.footprint, "integration-test-footprint");
@@ -156,8 +156,8 @@ async fn mqtt_path_upgrades_through_the_broker_unix_socket() {
     write_schema(
         &schema_path,
         &json!({
-            "zeroclaw": [{
-                "name": "zeroclaw",
+            "tched_router": [{
+                "name": "tched_router",
                 "version": "1.0.0",
                 "kind": "llm",
                 "description": "test schema"
@@ -254,7 +254,7 @@ async fn should_stream_reload_on_sighup() {
     let (addr, loader, path) = start_test_server().await;
 
     let endpoint = format!("http://{}", addr);
-    let mut client = ZeroclawServiceClient::connect(endpoint).await.unwrap();
+    let mut client = TchedRouterServiceClient::connect(endpoint).await.unwrap();
 
     let mut stream = client
         .watch_schema(tonic::Request::new(WatchSchemaRequest {}))
@@ -273,7 +273,7 @@ async fn should_stream_reload_on_sighup() {
     // the event through the loader's channel. Tests do not send real SIGHUP to
     // the process to avoid interfering with other tests.
     let updated = json!({
-        "name": "zeroclaw",
+        "name": "tched_router",
         "version": "2.0.0",
         "kind": "llm",
         "description": "reloaded schema"
@@ -298,13 +298,13 @@ async fn should_stream_reload_on_sighup() {
 }
 
 #[tokio::test]
-async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
-    let runtime_addr = start_zeroclaw_runtime().await;
+async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
+    let runtime_addr = start_tched_router_runtime().await;
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-    let engine = op_grpc_bridge::MutationEngine::new_with_zeroclaw_runtime(
+    let engine = op_grpc_bridge::MutationEngine::new_with_tched_router_runtime(
         event_chain.clone(),
         ovsdb,
         format!("http://{runtime_addr}"),
@@ -314,17 +314,17 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
 
     let result = engine
         .dispatch_method_call(
-            "zeroclaw",
+            "tched_router",
             "ListModels",
             r#"{"provider":"opencode"}"#,
-            Some("cap.software.zeroclaw.models.read@v1"),
+            Some("cap.software.tched_router.models.read@v1"),
             "integration-test-actor",
         )
         .await
         .unwrap();
 
     assert_eq!(result["success"], true);
-    assert_eq!(result["plugin_id"], "zeroclaw");
+    assert_eq!(result["plugin_id"], "tched_router");
     assert_eq!(result["method"], "ListModels");
     let routes = result["result"]["model_routes"].as_array().unwrap();
     assert!(!routes.is_empty());
@@ -337,11 +337,11 @@ async fn list_models_uses_the_audited_zeroclaw_method_dispatcher() {
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();
-    assert_eq!(event.plugin_id, "zeroclaw");
+    assert_eq!(event.plugin_id, "tched_router");
     assert_eq!(event.method_name.as_deref(), Some("ListModels"));
     assert_eq!(
         event.capability_id.as_deref(),
-        Some("cap.software.zeroclaw.models.read@v1")
+        Some("cap.software.tched_router.models.read@v1")
     );
     assert_eq!(event.actor_id, "integration-test-actor");
     assert!(event.json_args_footprint.is_some());

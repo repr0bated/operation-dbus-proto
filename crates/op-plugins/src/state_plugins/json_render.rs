@@ -477,6 +477,212 @@ pub struct PromptSurfaceOutput {
     pub actions: Vec<String>,
 }
 
+// =============================================================================
+// CHILD COLLECTION TYPES — for json-render `repeat` binding
+// =============================================================================
+//
+// These types support the `repeat` primitive in json-render specs. Each plugin
+// that manages child objects (mutations, sessions, events, devices) projects
+// them as a `BoundedChildren` collection. The LLM generates specs that bind
+// to these collections, and each item carries its own `actions` array so the
+// UI adapts per-item without regeneration.
+//
+// Key insight from Builder.io: "actions are data too" — the available actions
+// for each datum are part of the data model, not hardcoded in the UI.
+
+/// Status of a child object for UI rendering.
+///
+/// Maps to json-render StatusPill component colors and the `repeat` item
+/// conditional styling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(extend("x-oscal-subid" = "sch.service.child-status.enum@v1"))]
+pub enum ChildStatus {
+    /// Operation completed successfully.
+    Ok,
+    /// Operation completed with warnings.
+    Warn,
+    /// Operation failed.
+    Err,
+    /// Operation is in progress or queued.
+    Pending,
+    /// Status cannot be determined.
+    Unknown,
+}
+
+impl Default for ChildStatus {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl std::fmt::Display for ChildStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ok => write!(f, "ok"),
+            Self::Warn => write!(f, "warn"),
+            Self::Err => write!(f, "err"),
+            Self::Pending => write!(f, "pending"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+/// Summary of a child object for json-render `repeat` binding.
+///
+/// This is the render-oriented index that lands in the collection payload.
+/// Each item carries its own `actions` array — the UI adapts per-item without
+/// spec regeneration.
+///
+/// The `data` field holds arbitrary plugin-specific payload for custom rendering.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.child-summary.schema@v1"))]
+pub struct ChildSummary {
+    /// Unique identifier for this child (UUID or plugin-specific ID).
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.id@v1"))]
+    pub id: String,
+
+    /// D-Bus object path for direct addressing (e.g., `/org/odbus/mutations/019...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.dbus-path@v1"))]
+    pub dbus_path: Option<String>,
+
+    /// Operation or type label (e.g., "configure", "restart", "session").
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.operation@v1"))]
+    pub operation: String,
+
+    /// Current status for UI display.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.status@v1"))]
+    pub status: ChildStatus,
+
+    /// When this item was created or last updated (ISO 8601).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.occurred-at@v1"))]
+    pub occurred_at: Option<String>,
+
+    /// Available actions for this item — the UI renders buttons for each.
+    /// Example: `["view", "retry", "rollback"]`
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.actions@v1"))]
+    pub actions: Vec<String>,
+
+    /// Plugin-specific payload for custom rendering.
+    /// The LLM binds to fields within this object via `$state` expressions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.service.child-summary.data@v1"))]
+    pub data: Option<serde_json::Value>,
+}
+
+impl Default for ChildSummary {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            dbus_path: None,
+            operation: String::new(),
+            status: ChildStatus::Unknown,
+            occurred_at: None,
+            actions: Vec::new(),
+            data: None,
+        }
+    }
+}
+
+/// Bounded collection of child summaries for json-render `repeat` binding.
+///
+/// Supports windowed pagination with cursor-based navigation. The `repeat`
+/// primitive walks `items`; the UI shows `total` and provides navigation
+/// when `next_cursor` is present.
+///
+/// Items are ordered newest-first by default (LIFO for recent activity).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.service.bounded-children.schema@v1"))]
+pub struct BoundedChildren {
+    /// Child summaries in the current window (newest first).
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.bounded-children.items@v1"))]
+    pub items: Vec<ChildSummary>,
+
+    /// Cursor for fetching the next page, if more items exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-oscal-subid" = "sch.service.bounded-children.next-cursor@v1"))]
+    pub next_cursor: Option<String>,
+
+    /// Total number of items across all pages.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.bounded-children.total@v1"))]
+    pub total: usize,
+
+    /// Maximum items per window (for UI to show "5 of 42").
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "sch.service.bounded-children.window-size@v1"))]
+    pub window_size: usize,
+}
+
+impl Default for BoundedChildren {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
+impl BoundedChildren {
+    /// Create a new bounded collection with the given window size.
+    pub fn new(window_size: usize) -> Self {
+        Self {
+            items: Vec::new(),
+            next_cursor: None,
+            total: 0,
+            window_size,
+        }
+    }
+
+    /// Push a new child to the front (newest first), maintaining the window bound.
+    ///
+    /// If the collection exceeds `window_size`, the oldest item is removed and
+    /// `next_cursor` is set to enable pagination.
+    pub fn push(&mut self, child: ChildSummary) {
+        self.items.insert(0, child);
+        self.total += 1;
+
+        if self.items.len() > self.window_size {
+            if let Some(removed) = self.items.pop() {
+                // Set cursor to the removed item's ID for pagination
+                self.next_cursor = Some(removed.id);
+            }
+        }
+    }
+
+    /// Upsert a child by ID — update if exists, insert at front if new.
+    pub fn upsert(&mut self, child: ChildSummary) {
+        if let Some(pos) = self.items.iter().position(|c| c.id == child.id) {
+            self.items[pos] = child;
+        } else {
+            self.push(child);
+        }
+    }
+
+    /// Remove a child by ID.
+    pub fn remove(&mut self, id: &str) -> Option<ChildSummary> {
+        if let Some(pos) = self.items.iter().position(|c| c.id == id) {
+            self.total = self.total.saturating_sub(1);
+            Some(self.items.remove(pos))
+        } else {
+            None
+        }
+    }
+
+    /// Get a child by ID.
+    pub fn get(&self, id: &str) -> Option<&ChildSummary> {
+        self.items.iter().find(|c| c.id == id)
+    }
+
+    /// Check if the collection has more items beyond the current window.
+    pub fn has_more(&self) -> bool {
+        self.next_cursor.is_some()
+    }
+}
+
 impl Default for JsonRenderState {
     fn default() -> Self {
         Self {

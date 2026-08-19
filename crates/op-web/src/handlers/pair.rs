@@ -3,7 +3,7 @@
 //! - `POST /admin/paircode/new` — mint a short-lived pairing code (mesh/localhost only)
 //! - `POST /pair` with `X-Pairing-Code` — exchange code for bearer token + sled identity
 //!
-//! Response shape matches zeroclaw-gui `AuthState::pair`:
+//! Response shape matches tched_router-gui `AuthState::pair`:
 //! `{ "token": "...", "hashed_footprint": "...", "trace_id": "..." }`
 
 use axum::{

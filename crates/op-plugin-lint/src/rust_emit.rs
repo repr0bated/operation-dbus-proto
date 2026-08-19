@@ -428,10 +428,10 @@ mod tests {
     #[test]
     fn camel_case_colliding_candidates_are_emitted_once() {
         let paths = vec![
-            "enum.zeroclaw_config.AliasSource".into(),
-            "struct.zeroclaw_config.ConfigFieldEntry.alias_source".into(),
-            "struct.zeroclaw_config.Runtime.model_providers".into(),
-            "enum.zeroclaw_config.ModelProviders".into(),
+            "enum.tched_router_config.AliasSource".into(),
+            "struct.tched_router_config.ConfigFieldEntry.alias_source".into(),
+            "struct.tched_router_config.Runtime.model_providers".into(),
+            "enum.tched_router_config.ModelProviders".into(),
         ];
         let got = candidate_fields(&paths, &[]);
         let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
@@ -449,7 +449,7 @@ mod tests {
         let paths = vec![
             "cmd.plugin.install".into(),
             "cmd.models.list".into(),
-            "enum.zeroclaw.PluginCommands.Remove".into(),
+            "enum.tched_router.PluginCommands.Remove".into(),
             "flag.root.disable_gpu".into(),
             "flag.root.install_extension".into(),
         ];

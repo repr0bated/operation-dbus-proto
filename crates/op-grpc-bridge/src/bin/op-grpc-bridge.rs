@@ -1,10 +1,10 @@
 //! Consolidated Operation gRPC bridge.
 //!
-//! The former `op-grpc-bridge-zeroclaw` entry point is folded into this main
-//! service. It exposes the complete Operation route set plus the Zeroclaw
+//! The former `op-grpc-bridge-tched_router` entry point is folded into this main
+//! service. It exposes the complete Operation route set plus the TchedRouter
 //! schema API on TCP port 8090 and the plugin Unix socket.
 
-use op_grpc_bridge::server::{run_zeroclaw_server, ServerConfig};
+use op_grpc_bridge::server::{run_tched_router_server, ServerConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -32,5 +32,5 @@ async fn main() -> anyhow::Result<()> {
         tls_enabled = config.tls_identity.is_some(),
         "Consolidated Operation gRPC bridge starting"
     );
-    run_zeroclaw_server(config).await
+    run_tched_router_server(config).await
 }

@@ -905,8 +905,8 @@ message DbusSignalEvent {
 }
 
 // =============================================================================
-// Zeroclaw projection (read-only gRPC view of the plugin's route/provider tree)
-// subid: exp.service.zeroclaw-bridge.grpc-stream@v1
+// TchedRouter projection (read-only gRPC view of the plugin's route/provider tree)
+// subid: exp.service.tched_router-bridge.grpc-stream@v1
 // =============================================================================
 
 message ModelRouteProto {
@@ -925,7 +925,7 @@ message ProviderProto {
   string kind = 3;
 }
 
-message ZeroclawProjection {
+message TchedRouterProjection {
   string schema_json = 1;
   repeated ModelRouteProto model_routes = 2;
   repeated ProviderProto providers = 3;

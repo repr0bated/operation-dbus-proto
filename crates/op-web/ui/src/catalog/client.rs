@@ -22,7 +22,7 @@
 //! ```
 //!
 //! The actual decoding uses `grpc::decode_to_json` + serde, so a proto change
-//! that stays additive does not require a `zeroclaw-gui` rebuild.
+//! that stays additive does not require a `tched_router-gui` rebuild.
 
 use anyhow::Result;
 use serde_json::Value;

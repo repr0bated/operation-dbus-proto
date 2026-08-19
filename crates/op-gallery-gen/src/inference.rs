@@ -139,7 +139,7 @@ impl InferenceLoop {
 
             // Call ZeroClaw
             let response = self
-                .call_zeroclaw(&messages, &tool_defs)
+                .call_tched_router(&messages, &tool_defs)
                 .await
                 .context("ZeroClaw inference call failed")?;
 
@@ -188,8 +188,8 @@ impl InferenceLoop {
         anyhow::bail!("Max turns reached without generating a valid spec")
     }
 
-    /// Call OpenAI-compatible chat completions (op-web → zeroclaw.Chat).
-    async fn call_zeroclaw(
+    /// Call OpenAI-compatible chat completions (op-web → tched_router.Chat).
+    async fn call_tched_router(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],

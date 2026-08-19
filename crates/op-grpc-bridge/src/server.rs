@@ -1,4 +1,4 @@
-//! Axum gRPC/gRPC-Web host for the zeroclaw plugin schema.
+//! Axum gRPC/gRPC-Web host for the tched_router plugin schema.
 //!
 //! Serves the plugin-owned schema JSON on:
 //!   - host native gRPC over Unix socket `/run/opdbus/grpc.sock`
@@ -36,8 +36,8 @@ use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 use crate::grpc_server::{
     attach_cognitive_tool_service, build_operation_routes, init_cognitive_mcp,
 };
-use crate::proto::zeroclaw::{
-    zeroclaw_service_server::{ZeroclawService, ZeroclawServiceServer},
+use crate::proto::tched_router::{
+    tched_router_service_server::{TchedRouterService, TchedRouterServiceServer},
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
 };
 
@@ -61,7 +61,7 @@ const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8090";
 /// plugin-owned schema files.
 const DEFAULT_SCHEMA_PATH: &str = op_blob::catalog::DEFAULT_SHM_DIR;
 
-/// Runtime configuration for the zeroclaw Axum host.
+/// Runtime configuration for the tched_router Axum host.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub plugin_id: String,
@@ -81,7 +81,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            plugin_id: "zeroclaw".to_string(),
+            plugin_id: "tched_router".to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
@@ -98,7 +98,7 @@ impl ServerConfig {
         Self {
             plugin_id: std::env::var("OP_DBUS_SCHEMA_PLUGIN_ID")
                 .or_else(|_| std::env::var("ZEROCLAW_PLUGIN_ID"))
-                .unwrap_or_else(|_| "zeroclaw".to_string()),
+                .unwrap_or_else(|_| "tched_router".to_string()),
             schema_path: PathBuf::from(
                 std::env::var("ZEROCLAW_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
@@ -196,12 +196,12 @@ impl ServerConfig {
 
 /// Shared state for the gRPC service handlers.
 #[derive(Clone)]
-struct ZeroclawGrpcService {
+struct TchedRouterGrpcService {
     loader: Arc<SchemaLoader>,
 }
 
 #[tonic::async_trait]
-impl ZeroclawService for ZeroclawGrpcService {
+impl TchedRouterService for TchedRouterGrpcService {
     type WatchSchemaStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<SchemaEvent, Status>> + Send>>;
 
@@ -267,14 +267,14 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
     }
 }
 
-/// Assemble the gRPC service set for the zeroclaw bridge.
+/// Assemble the gRPC service set for the tched_router bridge.
 ///
 /// The full backplane surface (StateSync, PluginService, DbusPassthrough,
 /// OvsdbMirror, RuntimeMirror, EventChainService, ComponentRegistry, Mail,
 /// Privacy, Registration, McpService, ChatService, reflection) comes from the
 /// shared [`build_operation_routes`] — identical to what `run_grpc_server` mounts
 /// on op-dbus :50051, so reflection never advertises an unmounted service. On top
-/// of that the zeroclaw bridge adds its endpoint-specific `ZeroclawService`
+/// of that the tched_router bridge adds its endpoint-specific `TchedRouterService`
 /// (plugin-owned schema get/watch).
 ///
 /// Every container shares this one surface over `container.sock`; the assistant
@@ -282,9 +282,9 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
 /// unix-socket plugin's createsocket through PluginService, not a raw Incus proxy
 /// device).
 fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic::service::Routes {
-    let zeroclaw_svc =
-        crate::grpc_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
-    build_operation_routes(server).add_service(zeroclaw_svc)
+    let tched_router_svc =
+        crate::grpc_web::enable(TchedRouterServiceServer::new(TchedRouterGrpcService { loader }));
+    build_operation_routes(server).add_service(tched_router_svc)
 }
 
 #[derive(Clone)]
@@ -428,11 +428,11 @@ fn build_tonic_routes(
     build_routes(loader, server)
 }
 
-/// Run the zeroclaw Axum host.
+/// Run the tched_router Axum host.
 ///
 /// Returns only when both listeners exit (which should not happen under normal
 /// operation).
-pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
+pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()> {
     let loader = Arc::new(SchemaLoader::new_for_plugin(
         &config.schema_path,
         config.plugin_id.clone(),
@@ -488,7 +488,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // Must run before `build_axum_app` below: tonic-reflection is immutable once
     // mounted, so a service activated after route construction can never be served.
     // `run_grpc_server` already did this; omitting it here meant the
-    // zeroclaw bridge advertised sealed plugins while serving none of their typed
+    // tched_router bridge advertised sealed plugins while serving none of their typed
     // per-method services.
     operation_server.freeze_plugin_method_reflection().await;
 
@@ -562,14 +562,14 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     };
     match serde_json::from_value::<op_state_store::PluginSchema>(loader.get().await) {
         Ok(schema) => {
-            let blob = crate::zeroclaw_object_blob::from_schema(schema.clone());
+            let blob = crate::tched_router_object_blob::from_schema(schema.clone());
             tracing::info!(
                 plugin_id = %blob.manifest.plugin_id,
                 schema_hash = %blob.manifest.schema_hash,
                 methods = blob.manifest.methods.len(),
                 dbus_path = %blob.manifest.dbus.object_path,
                 grpc_service = ?blob.manifest.grpc.services,
-                "zeroclaw D-Bus/gRPC object blob frozen"
+                "tched_router D-Bus/gRPC object blob frozen"
             );
             if let Err(error) = operation_server
                 .register_plugin_methods(config.plugin_id.clone(), &schema)
@@ -578,7 +578,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
                 tracing::warn!(
                     plugin_id = %config.plugin_id,
                     %error,
-                    "failed to freeze zeroclaw method descriptors for gRPC reflection"
+                    "failed to freeze tched_router method descriptors for gRPC reflection"
                 );
             }
         }
@@ -586,7 +586,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             tracing::warn!(
                 plugin_id = %config.plugin_id,
                 %error,
-                "zeroclaw schema could not be parsed for gRPC reflection"
+                "tched_router schema could not be parsed for gRPC reflection"
             );
         }
     }
@@ -594,7 +594,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // Host-local Unix socket (operators / host clients).
     let unix_socket = config.unix_socket.clone();
     let unix_incoming = bind_unix_listener(&unix_socket).await?;
-    info!(path = %unix_socket.display(), "zeroclaw native gRPC listening on Unix socket");
+    info!(path = %unix_socket.display(), "tched_router native gRPC listening on Unix socket");
 
     // Shared container socket — same gRPC surface, path bind-mounted into CTs.
     // Skip a second bind when env points both knobs at the same path.
@@ -652,7 +652,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
-        info!(addr = %bind_addr, "zeroclaw MQTT/gRPC/gRPC-Web TLS demux listening on TCP");
+        info!(addr = %bind_addr, "tched_router MQTT/gRPC/gRPC-Web TLS demux listening on TCP");
         let app = build_axum_app_with_mqtt_socket(
             loader.clone(),
             operation_server.clone(),

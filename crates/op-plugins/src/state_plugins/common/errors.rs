@@ -1,20 +1,20 @@
-//! Zeroclaw error taxonomy (spec §14).
+//! TchedRouter error taxonomy (spec §14).
 //!
-//! `ZeroclawError` is a schema-contract type: it derives `schemars::JsonSchema`
+//! `TchedRouterError` is a schema-contract type: it derives `schemars::JsonSchema`
 //! so the error shape is surfaced in MCP tool responses and D-Bus method error
-//! payloads. subid: `sch.software.zeroclaw-error.schema@v1`.
+//! payloads. subid: `sch.software.tched-router-error.schema@v1`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Failure modes for Zeroclaw route resolution, model selection, and execution
+/// Failure modes for TchedRouter route resolution, model selection, and execution
 /// authorization. Every variant maps to a deterministic, schema-derived denial
 /// reason — nothing here reflects a runtime network error (those live in the
 /// Provider Adapter Layer).
 #[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ZeroclawError {
+pub enum TchedRouterError {
     #[error("route not declared: {hint}")]
     RouteNotDeclared { hint: String },
 

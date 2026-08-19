@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use op_plugins::state_plugins::common::llm_projection::{ModelRoute, Provider};
-use op_plugins::state_plugins::zeroclaw::{ChatInput, ChatOutput, ZeroclawState};
+use op_plugins::state_plugins::tched_router::{ChatInput, ChatOutput, TchedRouterState};
 use reqwest::{RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -19,7 +19,7 @@ const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8082";
 const DEFAULT_AGENT_ALIAS: &str = "dashboard";
 
 #[derive(Clone, Debug)]
-pub(crate) struct ZeroclawRuntimeClient {
+pub(crate) struct TchedRouterRuntimeClient {
     http: reqwest::Client,
     endpoint: String,
     agent_alias: String,
@@ -69,7 +69,7 @@ struct ModelCatalogResponse {
     live: bool,
 }
 
-impl ZeroclawRuntimeClient {
+impl TchedRouterRuntimeClient {
     pub(crate) fn from_env() -> Self {
         let endpoint = std::env::var("ZEROCLAW_RUNTIME_ENDPOINT")
             .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
@@ -222,8 +222,8 @@ impl ZeroclawRuntimeClient {
 
     pub(crate) async fn project_state(
         &self,
-        mut state: ZeroclawState,
-    ) -> anyhow::Result<ZeroclawState> {
+        mut state: TchedRouterState,
+    ) -> anyhow::Result<TchedRouterState> {
         self.health().await?;
         let configured = self.configured_providers().await?;
         let selected_ref = self
@@ -241,9 +241,9 @@ impl ZeroclawRuntimeClient {
             providers.push(Provider {
                 id: provider.family.clone(),
                 route: provider.reference.clone(),
-                kind: "zeroclaw-runtime".to_string(),
+                kind: "tched_router-runtime".to_string(),
                 aliases: vec![provider.reference.clone()],
-                sdk: "zeroclaw".to_string(),
+                sdk: "tched_router".to_string(),
                 description: format!(
                     "Configured ZeroClaw provider alias '{}'.",
                     provider.reference
@@ -255,7 +255,7 @@ impl ZeroclawRuntimeClient {
                     hint: "runtime".to_string(),
                     provider: provider.family.clone(),
                     upstream_provider: provider.family.clone(),
-                    transport: "zeroclaw-loopback".to_string(),
+                    transport: "tched_router-loopback".to_string(),
                     model,
                     kind: "chat".to_string(),
                     status: if catalog.live {
@@ -284,7 +284,7 @@ impl ZeroclawRuntimeClient {
         state.projection.router.provider = selected.family.clone();
         state.projection.router.model = selected.selected_model.clone();
         state.projection.router.endpoint = self.endpoint.clone();
-        state.projection.router.role = "zeroclaw-runtime-authority".to_string();
+        state.projection.router.role = "tched_router-runtime-authority".to_string();
         Ok(state)
     }
 
@@ -332,7 +332,7 @@ impl ZeroclawRuntimeClient {
 
     pub(crate) async fn chat(
         &self,
-        state: &ZeroclawState,
+        state: &TchedRouterState,
         input: ChatInput,
     ) -> anyhow::Result<ChatOutput> {
         self.health().await?;
@@ -426,7 +426,7 @@ fn parse_configured_providers(entries: Vec<ConfigListEntry>) -> Vec<ConfiguredPr
 fn conversation_prompt(input: &ChatInput) -> anyhow::Result<String> {
     if input.messages.is_empty() {
         if input.message.trim().is_empty() {
-            return Err(anyhow!("zeroclaw.Chat requires message or messages"));
+            return Err(anyhow!("tched_router.Chat requires message or messages"));
         }
         return Ok(input.message.clone());
     }
@@ -478,7 +478,7 @@ fn truncate_error(detail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_plugins::state_plugins::zeroclaw::ZeroclawChatMessage;
+    use op_plugins::state_plugins::tched_router::TchedRouterChatMessage;
 
     #[test]
     fn configured_provider_catalog_is_derived_from_runtime_paths() {
@@ -506,11 +506,11 @@ mod tests {
     fn conversation_history_is_forwarded_in_order() {
         let input = ChatInput {
             messages: vec![
-                ZeroclawChatMessage {
+                TchedRouterChatMessage {
                     role: "user".to_string(),
                     content: "first".to_string(),
                 },
-                ZeroclawChatMessage {
+                TchedRouterChatMessage {
                     role: "assistant".to_string(),
                     content: "second".to_string(),
                 },

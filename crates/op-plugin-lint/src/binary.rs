@@ -483,7 +483,7 @@ mod tests {
 
     const SAMPLE: &str = r#"Manage provider model catalogs
 
-Usage: zeroclaw models [OPTIONS] <COMMAND>
+Usage: tched_router models [OPTIONS] <COMMAND>
 
 Commands:
   refresh  Refresh and cache provider models

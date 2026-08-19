@@ -20,4 +20,4 @@ pub mod tools;
 pub mod ui_model;
 pub mod users;
 pub mod vpn;
-pub mod zeroclaw;
+pub mod tched_router;

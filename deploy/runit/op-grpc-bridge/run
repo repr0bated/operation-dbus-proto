@@ -48,6 +48,8 @@ export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-sv
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
 export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
 [ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"
+export COGNITIVE_MCP_DB_PATH=/var/lib/op-cognitive-mcp/memory.db
+[ -r /etc/op-dbus/secrets/notebooklm-cookie ] && export NOTEBOOKLM_COOKIE="$(cat /etc/op-dbus/secrets/notebooklm-cookie)"
 # Phase 2: tool dispatch is in-process ToolRegistry — no HTTP MCP loopback URL.
 
 /usr/local/libexec/3tched/runit-ready-signal op-grpc-bridge

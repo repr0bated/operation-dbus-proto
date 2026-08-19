@@ -123,10 +123,10 @@ mod tests {
     #[test]
     fn plugin_ids_come_back_sorted() {
         let catalog = LiveSchemaCatalog::new();
-        catalog.publish("zeroclaw", "1".into(), json!({}));
+        catalog.publish("tched_router", "1".into(), json!({}));
         catalog.publish("adc", "2".into(), json!({}));
         catalog.publish("network", "3".into(), json!({}));
 
-        assert_eq!(catalog.plugin_ids(), vec!["adc", "network", "zeroclaw"]);
+        assert_eq!(catalog.plugin_ids(), vec!["adc", "network", "tched_router"]);
     }
 }

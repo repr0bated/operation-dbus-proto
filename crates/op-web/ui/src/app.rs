@@ -167,7 +167,7 @@ impl ZeroClawApp {
                     ui.add_space(6.0);
                     ui.label(RichText::new("Resources").size(11.0).color(MUTED));
                     if ui.add(egui::Button::new(RichText::new("📄  Docs").color(MUTED).size(13.0)).frame(false)).clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab("https://docs.zeroclaw.dev"));
+                        ctx.open_url(egui::OpenUrl::new_tab("https://docs.tched_router.dev"));
                     }
                 });
             });

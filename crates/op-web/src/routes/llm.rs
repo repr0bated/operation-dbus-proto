@@ -55,13 +55,13 @@ pub struct ModelsQuery {
 /// GET /api/llm/status - Get current LLM status
 pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl IntoResponse {
     let _ = state;
-    let selection = crate::zeroclaw_routes::selection();
+    let selection = crate::tched_router_routes::selection();
 
     Json(LlmStatusResponse {
         provider: selection
             .as_ref()
             .map(|value| value.provider.clone())
-            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
+            .unwrap_or_else(|| "tched_router-unavailable".to_string()),
         model: selection
             .as_ref()
             .map(|value| value.model.clone())
@@ -71,13 +71,13 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
     })
 }
 
-/// Build the model list from the zeroclaw plugin projection (`model_routes`).
+/// Build the model list from the tched_router plugin projection (`model_routes`).
 ///
-/// The zeroclaw plugin is the single source of truth: its live state
-/// is projected verbatim at `/org/opdbus/v1/plugins/zeroclaw`. We read it from
+/// The tched_router plugin is the single source of truth: its live state
+/// is projected verbatim at `/org/opdbus/v1/plugins/tched_router`. We read it from
 /// the SHM state tree and surface each route as a selectable model.
-async fn models_from_zeroclaw(_state: &AppState) -> Option<Vec<ModelInfo>> {
-    let routes = crate::zeroclaw_routes::routes()?;
+async fn models_from_tched_router(_state: &AppState) -> Option<Vec<ModelInfo>> {
+    let routes = crate::tched_router_routes::routes()?;
 
     let models: Vec<ModelInfo> = routes
         .iter()
@@ -120,10 +120,10 @@ pub async fn get_models(
     Query(query): Query<ModelsQuery>,
 ) -> impl IntoResponse {
     let Some(ref provider_str) = query.provider else {
-        // The zeroclaw plugin projection is the default source of truth for the combined model list.
-        if let Some(models) = models_from_zeroclaw(&state).await {
+        // The tched_router plugin projection is the default source of truth for the combined model list.
+        if let Some(models) = models_from_tched_router(&state).await {
             return Json(ModelsResponse {
-                provider: "zeroclaw".to_string(),
+                provider: "tched_router".to_string(),
                 models,
             })
             .into_response();
@@ -132,18 +132,18 @@ pub async fn get_models(
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(simd_json::json!({
-                "error": "Zeroclaw model route projection is unavailable",
-                "provider": "zeroclaw",
+                "error": "TchedRouter model route projection is unavailable",
+                "provider": "tched_router",
                 "models": []
             })),
         )
             .into_response();
     };
 
-    if provider_str == "zeroclaw" {
-        if let Some(models) = models_from_zeroclaw(&state).await {
+    if provider_str == "tched_router" {
+        if let Some(models) = models_from_tched_router(&state).await {
             return Json(ModelsResponse {
-                provider: "zeroclaw".to_string(),
+                provider: "tched_router".to_string(),
                 models,
             })
             .into_response();

@@ -1,4 +1,4 @@
-//! Zeroclaw route helpers backed by the SHM state tree.
+//! TchedRouter route helpers backed by the SHM state tree.
 
 use anyhow::{bail, Result};
 use simd_json::prelude::*;
@@ -6,7 +6,7 @@ use simd_json::prelude::*;
 use crate::state_tree;
 
 #[derive(Debug, Clone)]
-pub struct ZeroclawSelection {
+pub struct TchedRouterSelection {
     pub provider: String,
     pub model: String,
     pub providers: Vec<String>,
@@ -14,7 +14,7 @@ pub struct ZeroclawSelection {
 }
 
 #[derive(Debug, Clone)]
-pub struct ZeroclawRoute {
+pub struct TchedRouterRoute {
     pub provider: String,
     pub upstream_provider: String,
     pub transport: Option<String>,
@@ -27,13 +27,13 @@ pub struct ZeroclawRoute {
     pub source: Option<String>,
 }
 
-impl ZeroclawRoute {
+impl TchedRouterRoute {
     fn from_value(value: &simd_json::OwnedValue) -> Option<Self> {
         let model = value.get("model")?.as_str()?.to_string();
         let provider = value
             .get("provider")
             .and_then(|v| v.as_str())
-            .unwrap_or("zeroclaw")
+            .unwrap_or("tched_router")
             .to_string();
         let upstream_provider = value
             .get("upstream_provider")
@@ -80,22 +80,22 @@ impl ZeroclawRoute {
     }
 }
 
-pub fn routes() -> Option<Vec<ZeroclawRoute>> {
-    let zeroclaw = state_tree::read_plugin("zeroclaw")?;
-    let route_values = zeroclaw.get("model_routes")?.as_array()?;
+pub fn routes() -> Option<Vec<TchedRouterRoute>> {
+    let tched_router = state_tree::read_plugin("tched_router")?;
+    let route_values = tched_router.get("model_routes")?.as_array()?;
     Some(
         route_values
             .iter()
-            .filter_map(ZeroclawRoute::from_value)
+            .filter_map(TchedRouterRoute::from_value)
             .collect(),
     )
 }
 
-pub fn selection() -> Option<ZeroclawSelection> {
-    let zeroclaw = state_tree::read_plugin("zeroclaw")?;
-    let provider = zeroclaw.get("selected_provider")?.as_str()?.to_string();
-    let model = zeroclaw.get("selected_model")?.as_str()?.to_string();
-    let mut providers = zeroclaw
+pub fn selection() -> Option<TchedRouterSelection> {
+    let tched_router = state_tree::read_plugin("tched_router")?;
+    let provider = tched_router.get("selected_provider")?.as_str()?.to_string();
+    let model = tched_router.get("selected_model")?.as_str()?.to_string();
+    let mut providers = tched_router
         .get("providers")
         .and_then(|value| value.as_array())
         .map(|values| {
@@ -108,7 +108,7 @@ pub fn selection() -> Option<ZeroclawSelection> {
         .unwrap_or_default();
     providers.sort();
     providers.dedup();
-    let available = zeroclaw
+    let available = tched_router
         .get("model_routes")
         .and_then(|value| value.as_array())
         .map(|routes| {
@@ -121,7 +121,7 @@ pub fn selection() -> Option<ZeroclawSelection> {
             })
         })
         .unwrap_or(false);
-    Some(ZeroclawSelection {
+    Some(TchedRouterSelection {
         provider,
         model,
         providers,
@@ -129,7 +129,7 @@ pub fn selection() -> Option<ZeroclawSelection> {
     })
 }
 
-pub fn route_for_model(model: &str) -> Option<ZeroclawRoute> {
+pub fn route_for_model(model: &str) -> Option<TchedRouterRoute> {
     routes()?.into_iter().find(|route| route.model == model)
 }
 
@@ -140,7 +140,7 @@ pub fn ensure_model_available(model: &str) -> Result<()> {
                 .status_reason
                 .unwrap_or_else(|| "route is not available".to_string());
             bail!(
-                "Zeroclaw route '{}' is {} but not available: {}",
+                "TchedRouter route '{}' is {} but not available: {}",
                 model,
                 route.status,
                 reason

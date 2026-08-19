@@ -14,7 +14,7 @@
 //! # Model Agnosticism
 //!
 //! No model-specific code. Any model exposed through ZeroClaw can be used. Model selection
-//! is ZeroClaw's responsibility via the zeroclaw plugin's `selected_provider` and
+//! is ZeroClaw's responsibility via the tched_router plugin's `selected_provider` and
 //! `selected_model` fields.
 
 pub mod admission;
@@ -81,7 +81,7 @@ pub struct GalleryGenConfig {
 
     /// OpenAI-compatible chat endpoint (op-web owns this on :8080;
     /// ZeroClaw's daemon :8082 serves A2A, not `/v1/chat/completions`).
-    pub zeroclaw_endpoint: String,
+    pub tched_router_endpoint: String,
 
     /// Enable MCP tool layer for cross-blob discovery
     pub enable_mcp: bool,
@@ -106,7 +106,7 @@ impl Default for GalleryGenConfig {
         Self {
             target_count: 200,
             stable_core_max: 40,
-            zeroclaw_endpoint: "http://127.0.0.1:8080".to_string(),
+            tched_router_endpoint: "http://127.0.0.1:8080".to_string(),
             enable_mcp: false,
             enable_qdrant: false,
             max_turns: 10,

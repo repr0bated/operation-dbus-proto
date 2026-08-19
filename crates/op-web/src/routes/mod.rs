@@ -84,16 +84,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/chat", post(handlers::chat::chat_handler))
         .route("/chat/stream", post(handlers::chat::chat_stream_handler))
         .route(
-            "/zeroclaw/chat",
-            post(handlers::zeroclaw::zeroclaw_chat_handler),
+            "/tched_router/chat",
+            post(handlers::tched_router::tched_router_chat_handler),
         )
         .route(
-            "/zeroclaw/chat/stream",
-            post(handlers::zeroclaw::zeroclaw_chat_stream_handler),
+            "/tched_router/chat/stream",
+            post(handlers::tched_router::tched_router_chat_stream_handler),
         )
         .route(
-            "/zeroclaw/schema",
-            get(handlers::zeroclaw::zeroclaw_schema_handler),
+            "/tched_router/schema",
+            get(handlers::tched_router::tched_router_schema_handler),
         )
         // Plugin identity endpoints — model-agnostic, sealed SHM blob catalog
         // (`/dev/shm/opdbus/`) is the single source of truth for both.
@@ -216,7 +216,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
         )
-        .route("/llm/chat", post(handlers::zeroclaw::zeroclaw_chat_handler))
+        .route("/llm/chat", post(handlers::tched_router::tched_router_chat_handler))
         // OpenClaw endpoints (internal/base layer)
         .route(
             "/openclaw/status",
@@ -324,12 +324,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/api", api_routes)
         // Ordinary HTTP compatibility lives on op-web :8080. Each handler is
         // an adapter to a schema-declared bridge method on gRPC :8090.
-        .route("/v1/models", get(handlers::zeroclaw::openai_models_handler))
+        .route("/v1/models", get(handlers::tched_router::openai_models_handler))
         .route(
             "/v1/chat/completions",
-            post(handlers::zeroclaw::zeroclaw_chat_handler),
+            post(handlers::tched_router::tched_router_chat_handler),
         )
-        // Device pairing (egui / dashboard) — top-level paths match zeroclaw-gui AuthState
+        // Device pairing (egui / dashboard) — top-level paths match tched_router-gui AuthState
         .route("/pair", post(handlers::pair::pair_handler))
         // Human-facing privacy verification flow (magic-link target)
         .route("/privacy/verify", get(handlers::privacy::verify_redirect))

@@ -315,15 +315,15 @@ mod tests {
             enabled: true,
             command: "npx".to_string(),
             args: vec!["-y".to_string(), "notebooklm-mcp@latest".to_string()],
-            server_name: "zeroclaw-model-transcripts".to_string(),
+            server_name: "tched_router-model-transcripts".to_string(),
             profile: "model-transcripts".to_string(),
-            tool_prefix: Some("zeroclaw_model_transcript".to_string()),
+            tool_prefix: Some("tched_router_model_transcript".to_string()),
             disabled_tools: None,
         };
 
         assert_eq!(
             config.published_tool_name("notebooklm:ask-question"),
-            "zeroclaw_model_transcript_ask_question"
+            "tched_router_model_transcript_ask_question"
         );
     }
 }

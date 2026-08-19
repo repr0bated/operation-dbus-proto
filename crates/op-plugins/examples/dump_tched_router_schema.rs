@@ -1,7 +1,7 @@
 //! Dump the full ZeroClaw PluginSchema (state fields + typed methods).
 //!
 //! ```bash
-//! cargo run -p op-plugins --example dump_zeroclaw_schema -- /tmp/zeroclaw.full.schema.json
+//! cargo run -p op-plugins --example dump_tched_router_schema -- /tmp/tched_router.full.schema.json
 //! ```
 
 use std::env;
@@ -13,9 +13,9 @@ fn main() -> ExitCode {
     let out = env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp/zeroclaw.full.schema.json"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/tched_router.full.schema.json"));
 
-    let schema = op_plugins::state_plugins::zeroclaw::zeroclaw_plugin_schema();
+    let schema = op_plugins::state_plugins::tched_router::tched_router_plugin_schema();
     let json = match serde_json::to_string_pretty(&schema) {
         Ok(j) => j,
         Err(e) => {

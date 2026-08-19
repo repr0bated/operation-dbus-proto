@@ -51,7 +51,7 @@ pub(crate) use super::wgcf::wgcf_schema as wgcf_plugin_schema;
 pub(crate) use super::wireguard::wireguard_schema as wireguard_plugin_schema;
 pub(crate) use super::workflows_plugin::workflows_schema as workflows_plugin_schema;
 pub(crate) use super::xray::xray_schema as xray_plugin_schema;
-pub(crate) use super::zeroclaw::zeroclaw_schema as zeroclaw_plugin_schema;
+pub(crate) use super::tched_router::tched_router_schema as tched_router_plugin_schema;
 
 // Added missing schema re-exports
 pub(crate) use super::blockchain_plugin::blockchain_schema as blockchain_plugin_schema;

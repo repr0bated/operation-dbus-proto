@@ -976,7 +976,7 @@ fn crate_hint_from_path(file_path: &str) -> Option<String> {
         }
     }
     if parts.first() == Some(&"src") {
-        return Some("zeroclaw".to_string());
+        return Some("tched_router".to_string());
     }
     None
 }
@@ -1081,7 +1081,7 @@ mod tests {
     fn extracts_struct_fields_from_repomix_xml() {
         let xml = r#"
 <file_summary>Repomix pack</file_summary>
-<file path="crates/zeroclaw-config/src/schema/v1.rs">
+<file path="crates/tched_router-config/src/schema/v1.rs">
 pub struct V1Config {
     pub default_model: Option<String>,
     pub default_provider: Option<String>,
@@ -1093,7 +1093,7 @@ pub struct V1Config {
         assert!(surface
             .element_paths
             .iter()
-            .any(|p| p == "struct.zeroclaw_config.V1Config.default_model"));
+            .any(|p| p == "struct.tched_router_config.V1Config.default_model"));
     }
 
     #[test]

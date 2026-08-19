@@ -124,13 +124,13 @@ fn install(ui: &mut egui::Ui) {
     ui.add_space(16.0);
     for (title, body) in [
         ("1. Prerequisites", "rustc 1.78+, cargo, runit (sv), wireguard-tools, qdrant, btrfs-progs."),
-        ("2. Fetch",         "git clone https://git.zeroclaw.dev/zeroclaw.git && cd zeroclaw"),
+        ("2. Fetch",         "git clone https://git.tched_router.dev/tched_router.git && cd tched_router"),
         ("3. Build",         "cargo build --release --workspace"),
-        ("4. Services",      "sudo cp -r dist/runit/sv/* /etc/runit/sv/ && sudo ln -sfn /etc/runit/sv/zeroclaw /etc/runit/runsvdir/default/zeroclaw && sudo sv start zeroclaw"),
+        ("4. Services",      "sudo cp -r dist/runit/sv/* /etc/runit/sv/ && sudo ln -sfn /etc/runit/sv/tched_router /etc/runit/runsvdir/default/tched_router && sudo sv start tched_router"),
 
-        ("5. Privacy Mesh",  "sudo wg-quick up zeroclaw0 && verify peer handshake"),
-        ("6. Data Stores",   "btrfs subvol create /var/zeroclaw/{state,logs,vec}"),
-        ("7. Verify",        "zeroclawctl health  →  expect all green"),
+        ("5. Privacy Mesh",  "sudo wg-quick up tched_router0 && verify peer handshake"),
+        ("6. Data Stores",   "btrfs subvol create /var/tched_router/{state,logs,vec}"),
+        ("7. Verify",        "tched_routerctl health  →  expect all green"),
     ] {
         card(ui, |ui| {
             ui.label(RichText::new(title).size(13.0).strong().color(FG));

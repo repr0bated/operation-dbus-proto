@@ -30,12 +30,12 @@ pub struct LlmProvidersResponse {
 pub async fn llm_status_handler(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<LlmStatusResponse> {
-    let selection = crate::zeroclaw_routes::selection();
+    let selection = crate::tched_router_routes::selection();
     Json(LlmStatusResponse {
         provider: selection
             .as_ref()
             .map(|value| value.provider.clone())
-            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
+            .unwrap_or_else(|| "tched_router-unavailable".to_string()),
         model: selection
             .as_ref()
             .map(|value| value.model.clone())
@@ -49,7 +49,7 @@ pub async fn llm_status_handler(
 pub async fn list_providers_handler(
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Json<LlmProvidersResponse> {
-    let selection = crate::zeroclaw_routes::selection();
+    let selection = crate::tched_router_routes::selection();
     Json(LlmProvidersResponse {
         providers: selection
             .as_ref()
@@ -57,7 +57,7 @@ pub async fn list_providers_handler(
             .unwrap_or_default(),
         current: selection
             .map(|value| value.provider)
-            .unwrap_or_else(|| "zeroclaw-unavailable".to_string()),
+            .unwrap_or_else(|| "tched_router-unavailable".to_string()),
     })
 }
 

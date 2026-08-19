@@ -70,12 +70,12 @@ pub async fn chat_message(
         Some(model) => model,
         None => state.chat_manager.current_model().await,
     };
-    if let Err(e) = crate::zeroclaw_routes::ensure_model_available(&selected_model) {
+    if let Err(e) = crate::tched_router_routes::ensure_model_available(&selected_model) {
         return (
             StatusCode::CONFLICT,
             Json(ChatResponse {
                 content: String::new(),
-                provider: req.provider.unwrap_or_else(|| "zeroclaw".to_string()),
+                provider: req.provider.unwrap_or_else(|| "tched_router".to_string()),
                 model: selected_model,
                 tools_used: None,
                 error: Some(e.to_string()),
@@ -102,15 +102,15 @@ pub async fn chat_message(
             .chat_with(pt, &selected_model, messages)
             .await
     } else if req.model.is_some() {
-        let Some(route) = crate::zeroclaw_routes::route_for_model(&selected_model) else {
+        let Some(route) = crate::tched_router_routes::route_for_model(&selected_model) else {
             return (
                 StatusCode::CONFLICT,
                 Json(ChatResponse {
                     content: String::new(),
-                    provider: "zeroclaw".to_string(),
+                    provider: "tched_router".to_string(),
                     model: selected_model,
                     tools_used: None,
-                    error: Some("Model is not routed by Zeroclaw".to_string()),
+                    error: Some("Model is not routed by TchedRouter".to_string()),
                 }),
             );
         };

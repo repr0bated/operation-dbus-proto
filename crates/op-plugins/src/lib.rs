@@ -103,7 +103,7 @@ pub mod prelude {
         OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
         RovsCommandsPlugin, RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
         SoftwarePlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgOpdbusPlugin,
-        WireGuardPlugin, WorkflowsPlugin, ZeroclawPlugin,
+        WireGuardPlugin, WorkflowsPlugin, TchedRouterPlugin,
     };
 }
 pub mod state_publisher;

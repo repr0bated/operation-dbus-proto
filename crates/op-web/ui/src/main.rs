@@ -28,18 +28,18 @@ fn main() -> eframe::Result<()> {
         let endpoint_clone = endpoint.clone();
         rt.spawn(async move {
             if let Err(e) = grpc::bootstrap(&endpoint_clone, registry).await {
-                eprintln!("[zeroclaw] reflection bootstrap failed: {e:#}");
+                eprintln!("[tched_router] reflection bootstrap failed: {e:#}");
             }
         });
 
         // Connect the ChatService transport to the same endpoint.
         match rt.block_on(crate::chat::ChatTransport::connect(&endpoint)) {
             Ok(transport) => {
-                eprintln!("[zeroclaw] ChatService transport connected to {endpoint}");
+                eprintln!("[tched_router] ChatService transport connected to {endpoint}");
                 Some(std::sync::Arc::new(transport))
             }
             Err(e) => {
-                eprintln!("[zeroclaw] ChatService transport connect failed: {e:#}");
+                eprintln!("[tched_router] ChatService transport connect failed: {e:#}");
                 None
             }
         }

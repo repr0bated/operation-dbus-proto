@@ -48,7 +48,7 @@ pub mod state_tree;
 pub mod users;
 pub mod websocket;
 pub mod wireguard;
-pub mod zeroclaw_routes;
+pub mod tched_router_routes;
 
 pub use orchestrator::UnifiedOrchestrator;
 pub use state::AppState;

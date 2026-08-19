@@ -3,7 +3,7 @@
 //! Publishes Antigravity product surface (OAuth/Vertex auth, project, safety,
 //! generation defaults, endpoints, usage) through PluginSchema. Gemini model
 //! catalog ownership lives on the delegated `llm_plugin` (default
-//! `zeroclaw`) — this plugin only holds `llm_plugin` /
+//! `tched_router`) — this plugin only holds `llm_plugin` /
 //! `provider_route` / `selected_model` references.
 
 use super::common::llm_projection::{
@@ -601,7 +601,7 @@ pub struct Endpoints {
 }
 
 fn default_llm_plugin() -> String {
-    "zeroclaw".to_string()
+    "tched_router".to_string()
 }
 
 fn default_provider_route() -> String {
@@ -629,11 +629,11 @@ pub struct AntigravityState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.project@v1"))]
     pub project: Project,
-    /// Plugin that owns model routing (default zeroclaw).
+    /// Plugin that owns model routing (default tched_router).
     #[serde(default = "default_llm_plugin")]
     #[schemars(
-        description = "Router plugin Antigravity delegates to for provider/model selection (default zeroclaw).",
-        example = &"zeroclaw",
+        description = "Router plugin Antigravity delegates to for provider/model selection (default tched_router).",
+        example = &"tched_router",
         extend("x-oscal-subid" = "mut.software.antigravity.llm-plugin@v1")
     )]
     pub llm_plugin: String,
@@ -788,14 +788,14 @@ impl AntigravityPlugin {
                         auth: "oauth".to_string(),
                         sdk: "google.antigravity".to_string(),
                         oscal_source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
-                        description: "Antigravity OAuth/SDK front-door; model routing via zeroclaw/antigravity".to_string(),
+                        description: "Antigravity OAuth/SDK front-door; model routing via tched_router/antigravity".to_string(),
                         ..Default::default()
                     },
                 ],
                 // Model catalog + routes owned by llm_plugin/provider_route.
                 model_routes: vec![],
                 router: Router {
-                    provider: "zeroclaw".to_string(),
+                    provider: "tched_router".to_string(),
                     model: String::new(),
                     endpoint: String::new(),
                     scope: "delegated".to_string(),
@@ -805,10 +805,10 @@ impl AntigravityPlugin {
                         "provider_route".to_string(),
                         "selected_model".to_string(),
                     ],
-                    oscal_source: "/opdbus/v1/plugins/zeroclaw".to_string(),
+                    oscal_source: "/opdbus/v1/plugins/tched_router".to_string(),
                     classification_rules: serde_json::json!({
                         "catalog": {
-                            "llm_plugin": "zeroclaw",
+                            "llm_plugin": "tched_router",
                             "provider_route": "antigravity",
                             "methods": ["ListProviders", "ListModels", "GetModelRoutes", "Chat"]
                         }
@@ -1248,7 +1248,7 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity",
         "1.1.0",
-        "Google Antigravity SDK — OAuth/Vertex auth, safety, generation defaults; model routing via zeroclaw/antigravity",
+        "Google Antigravity SDK — OAuth/Vertex auth, safety, generation defaults; model routing via tched_router/antigravity",
         &root,
     );
     if let Ok(state) = simd_json::serde::to_owned_value(AntigravityPlugin::current_state()) {
@@ -1295,7 +1295,7 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     }
 
     // NOTE: no `chat` / `list_models` here by design — catalog and chat live on
-    // llm_plugin (default zeroclaw) via provider_route antigravity.
+    // llm_plugin (default tched_router) via provider_route antigravity.
     schema.methods.insert(
         "get_auth_status".to_string(),
         method_decl_from_schemars_with_output::<

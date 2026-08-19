@@ -2,10 +2,10 @@
 //!
 //! Implements the `op_chat.chat.ChatService` trait from `chat.proto`.
 //! Served on the op-grpc-bridge alongside StateSync, PluginService, etc.
-//! so zeroclaw-gui discovers it via a single reflection endpoint.
+//! so tched_router-gui discovers it via a single reflection endpoint.
 //!
 //! Architecture:
-//! - zeroclaw owns provider/model routing (OD-28) — SendRequest carries them.
+//! - tched_router owns provider/model routing (OD-28) — SendRequest carries them.
 //! - gemma_brain routes to the selected model and applies compliance tags.
 //! - The chatbot is a DELEGATOR — forced tool calling is mandatory; even user
 //!   responses are emitted as tool calls (respond_to_user).
@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use op_plugins::state_plugins::zeroclaw::{ChatInput, ChatOutput, ZeroclawChatMessage};
+use op_plugins::state_plugins::tched_router::{ChatInput, ChatOutput, TchedRouterChatMessage};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
@@ -66,9 +66,9 @@ impl ChatService for ChatServiceImpl {
             .cloned()
             .ok_or_else(|| Status::unauthenticated("Ghostbridge identity is required"))?;
         crate::grpc_server::authorize_schema_method(
-            "zeroclaw",
+            "tched_router",
             "Chat",
-            Some("cap.software.zeroclaw.chat@v1"),
+            Some("cap.software.tched_router.chat@v1"),
             Some(&identity),
         )?;
         let req = request.into_inner();
@@ -90,7 +90,7 @@ impl ChatService for ChatServiceImpl {
             message: String::new(),
             messages: ui_messages
                 .iter()
-                .map(|message| ZeroclawChatMessage {
+                .map(|message| TchedRouterChatMessage {
                     role: message
                         .get("role")
                         .and_then(serde_json::Value::as_str)
@@ -140,18 +140,18 @@ impl ChatService for ChatServiceImpl {
 
             let completion = tokio::select! {
                 result = engine.dispatch_method_call(
-                    "zeroclaw",
+                    "tched_router",
                     "Chat",
                     &chat_args,
-                    Some("cap.software.zeroclaw.chat@v1"),
+                    Some("cap.software.tched_router.chat@v1"),
                     &actor_id,
                 ) => result.and_then(|result| {
                     let payload = result
                         .get("result")
                         .cloned()
-                        .ok_or_else(|| anyhow!("zeroclaw.Chat returned no result payload"))?;
+                        .ok_or_else(|| anyhow!("tched_router.Chat returned no result payload"))?;
                     serde_json::from_value::<ChatOutput>(payload)
-                        .context("invalid zeroclaw.Chat result")
+                        .context("invalid tched_router.Chat result")
                 }),
                 changed = cancel_rx.changed() => {
                     match changed {

@@ -379,7 +379,7 @@ pub(crate) fn gemma_brain_schema() -> PluginSchema {
 }
 
 /// Mutation-path dispatch for UI/control-plane reads. Domain results are shaped
-/// for zeroclaw-gui page binds (not a silent echo of empty args).
+/// for tched_router-gui page binds (not a silent echo of empty args).
 pub fn dispatch_gemma_brain_method(
     method: &str,
     state: &GemmaBrainState,

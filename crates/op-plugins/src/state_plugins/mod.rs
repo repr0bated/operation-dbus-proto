@@ -84,7 +84,7 @@ pub mod wireguard;
 pub mod workflows_plugin;
 pub mod xray;
 pub mod xray_config_types;
-pub mod zeroclaw;
+pub mod tched_router;
 
 // ---------------------------------------------------------------------------
 // Public type re-exports (consumed by `crate::prelude` and other crates).
@@ -112,6 +112,7 @@ pub use gcloud_adc::GcloudAdcPlugin;
 pub use hardware::HardwarePlugin;
 pub use incus::IncusPlugin;
 pub use json_render::JsonRenderPlugin;
+pub use json_render::{BoundedChildren, ChildStatus, ChildSummary};
 pub use keypair::KeypairPlugin;
 pub use keyring::KeyringPlugin;
 pub use login1::Login1Plugin;
@@ -142,4 +143,4 @@ pub use web_ui::WebUiPlugin;
 pub use wg_opdbus::WgOpdbusPlugin;
 pub use wireguard::WireGuardPlugin;
 pub use workflows_plugin::WorkflowsPlugin;
-pub use zeroclaw::ZeroclawPlugin;
+pub use tched_router::TchedRouterPlugin;

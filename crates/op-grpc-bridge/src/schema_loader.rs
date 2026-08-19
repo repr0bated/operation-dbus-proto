@@ -11,7 +11,7 @@ use std::time::Instant;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-const ZEROCLAW_PLUGIN_ID: &str = "zeroclaw";
+const ZEROCLAW_PLUGIN_ID: &str = "tched_router";
 
 /// Event emitted to `WatchSchema` subscribers after a successful reload.
 #[derive(Clone, Debug)]
@@ -19,7 +19,7 @@ pub struct SchemaReloadEvent {
     pub event_type: String,
 }
 
-/// Shared loader state for the zeroclaw Axum host.
+/// Shared loader state for the tched_router Axum host.
 #[derive(Clone)]
 pub struct SchemaLoader {
     path: Arc<RwLock<PathBuf>>,
@@ -300,8 +300,8 @@ mod tests {
     async fn should_load_schema_from_live_catalog() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live-schema.json");
-        let value = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
-        write_json(&path, &serde_json::json!({ "zeroclaw": [value.clone()] }));
+        let value = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
+        write_json(&path, &serde_json::json!({ "tched_router": [value.clone()] }));
 
         let loader = SchemaLoader::new(&path).unwrap();
         let loaded = loader.get().await;
@@ -312,8 +312,8 @@ mod tests {
     #[tokio::test]
     async fn should_load_direct_plugin_schema_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeroclaw.json");
-        let value = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
+        let path = dir.path().join("tched_router.json");
+        let value = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
         write_json(&path, &value);
 
         let loader = SchemaLoader::new(&path).unwrap();
@@ -327,7 +327,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live-schema.json");
         let value = serde_json::json!({
-            "zeroclaw": [{"name": "zeroclaw", "version": "1.0.0"}],
+            "tched_router": [{"name": "tched_router", "version": "1.0.0"}],
             "gemma_brain": [{"name": "gemma_brain", "version": "2.0.0"}]
         });
         write_json(&path, &value);
@@ -345,9 +345,9 @@ mod tests {
     async fn should_reload_schema_on_sighup() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live-schema.json");
-        let initial = serde_json::json!({"name": "zeroclaw", "version": "1.0.0"});
-        let updated = serde_json::json!({"name": "zeroclaw", "version": "2.0.0"});
-        write_json(&path, &serde_json::json!({ "zeroclaw": [initial.clone()] }));
+        let initial = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
+        let updated = serde_json::json!({"name": "tched_router", "version": "2.0.0"});
+        write_json(&path, &serde_json::json!({ "tched_router": [initial.clone()] }));
 
         let loader = Arc::new(SchemaLoader::new(&path).unwrap());
         let mut rx = loader.reload_tx().subscribe();
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(loader.get().await, initial);
 
         // Update the file and reload again.
-        write_json(&path, &serde_json::json!({ "zeroclaw": [updated.clone()] }));
+        write_json(&path, &serde_json::json!({ "tched_router": [updated.clone()] }));
         loader.load().unwrap();
         let _ = loader.reload_tx.send(SchemaReloadEvent {
             event_type: "reload".to_string(),

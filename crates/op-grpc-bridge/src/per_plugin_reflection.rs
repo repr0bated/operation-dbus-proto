@@ -46,7 +46,7 @@ pub struct PerMethodReflectionRegistry {
 pub struct MethodReflectionMeta {
     /// Full method path: "plugin_id.method_name"
     pub method_path: String,
-    /// Plugin ID (e.g., "zeroclaw")
+    /// Plugin ID (e.g., "tched_router")
     pub plugin_id: String,
     /// Method name (e.g., "RegisterAgent")
     pub method_name: String,
@@ -236,18 +236,18 @@ mod tests {
 
         let meta = registry
             .register(
-                "zeroclaw".to_string(),
+                "tched_router".to_string(),
                 "RegisterAgent".to_string(),
-                "exp.service.zeroclaw.register-agent@v1".to_string(),
+                "exp.service.tched_router.register-agent@v1".to_string(),
                 Some("register".to_string()),
                 "1.0.0".to_string(),
             )
             .await;
 
-        assert_eq!(meta.plugin_id, "zeroclaw");
+        assert_eq!(meta.plugin_id, "tched_router");
         assert_eq!(meta.method_name, "RegisterAgent");
         assert_eq!(meta.service_name, "RegisterAgentService");
-        assert_eq!(meta.method_path, "zeroclaw.RegisterAgent");
+        assert_eq!(meta.method_path, "tched_router.RegisterAgent");
         assert_eq!(meta.schema_version, "1.0.0");
 
         let list = registry.list().await;
@@ -261,7 +261,7 @@ mod tests {
 
         registry
             .register(
-                "zeroclaw".to_string(),
+                "tched_router".to_string(),
                 "RegisterAgent".to_string(),
                 "exp.1".to_string(),
                 None,
@@ -271,7 +271,7 @@ mod tests {
 
         registry
             .register(
-                "zeroclaw".to_string(),
+                "tched_router".to_string(),
                 "ReportStatus".to_string(),
                 "exp.2".to_string(),
                 None,
@@ -279,7 +279,7 @@ mod tests {
             )
             .await;
 
-        let methods = registry.get_for_plugin("zeroclaw").await;
+        let methods = registry.get_for_plugin("tched_router").await;
         assert_eq!(methods.len(), 2);
     }
 
@@ -289,7 +289,7 @@ mod tests {
 
         registry
             .register(
-                "zeroclaw".to_string(),
+                "tched_router".to_string(),
                 "RegisterAgent".to_string(),
                 "exp.1".to_string(),
                 None,
@@ -299,7 +299,7 @@ mod tests {
 
         registry
             .register(
-                "zeroclaw".to_string(),
+                "tched_router".to_string(),
                 "ReportStatus".to_string(),
                 "exp.2".to_string(),
                 None,
@@ -307,10 +307,10 @@ mod tests {
             )
             .await;
 
-        let removed = registry.unregister_plugin("zeroclaw").await;
+        let removed = registry.unregister_plugin("tched_router").await;
         assert_eq!(removed, 2);
 
-        let meta = registry.get("zeroclaw.RegisterAgent").await;
+        let meta = registry.get("tched_router.RegisterAgent").await;
         assert!(meta.is_none());
     }
 
@@ -320,7 +320,7 @@ mod tests {
 
         registry
             .register(
-                "zeroclaw".to_string(),
+                "tched_router".to_string(),
                 "RegisterAgent".to_string(),
                 "exp.1".to_string(),
                 None,
@@ -340,7 +340,7 @@ mod tests {
 
         let plugins = registry.list_plugins().await;
         assert_eq!(plugins.len(), 2);
-        assert!(plugins.contains(&"zeroclaw".to_string()));
+        assert!(plugins.contains(&"tched_router".to_string()));
         assert!(plugins.contains(&"unix_socket".to_string()));
     }
 }

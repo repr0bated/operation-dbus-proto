@@ -95,7 +95,7 @@ async fn run_generation(
 
     let config = GalleryGenConfig {
         target_count: target,
-        zeroclaw_endpoint: endpoint.clone(),
+        tched_router_endpoint: endpoint.clone(),
         enable_mcp: mcp,
         enable_qdrant: qdrant,
         ..Default::default()

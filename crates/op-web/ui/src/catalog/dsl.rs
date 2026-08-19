@@ -38,7 +38,7 @@ pub enum Tier {
 
 /// One catalog element. The `spec` field is the json-render.dev DSL payload
 /// the interpreter walks. We keep it as `serde_json::Value` so the DSL can
-/// evolve without forcing a `zeroclaw-gui` rebuild — the interpreter handles
+/// evolve without forcing a `tched_router-gui` rebuild — the interpreter handles
 /// unknown nodes by surfacing a `RenderError`, never by guessing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Element {

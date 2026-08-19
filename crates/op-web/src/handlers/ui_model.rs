@@ -431,7 +431,7 @@ pub async fn start_generation(
     let run_config = op_gallery_gen::GalleryGenConfig {
         target_count: config.target_count,
         stable_core_max: 40,
-        zeroclaw_endpoint: "http://127.0.0.1:8080".to_string(),
+        tched_router_endpoint: "http://127.0.0.1:8080".to_string(),
         enable_mcp: config.enable_mcp,
         enable_qdrant: config.enable_qdrant,
         max_turns: 10,
@@ -556,11 +556,11 @@ mod tests {
     #[test]
     fn catalog_state_body_lists_shm_state_plugins_not_projections() {
         let mut tree = HashMap::new();
-        tree.insert("zeroclaw".into(), json!({ "selected_model": "qwen" }));
+        tree.insert("tched_router".into(), json!({ "selected_model": "qwen" }));
         tree.insert("system.memory".into(), json!({ "rss": 1 }));
         let body = catalog_state_body(tree);
-        assert_eq!(body["plugins"], json!(["system.memory", "zeroclaw"]));
-        assert_eq!(body["state"]["zeroclaw"]["selected_model"], "qwen");
+        assert_eq!(body["plugins"], json!(["system.memory", "tched_router"]));
+        assert_eq!(body["state"]["tched_router"]["selected_model"], "qwen");
         assert!(body.get("projections").is_none());
     }
 

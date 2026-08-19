@@ -1,7 +1,7 @@
 //! ZeroClaw daemon authentication — simple blocking HTTP calls.
 //!
 //! Pair: POST /pair with X-Pairing-Code header → get bearer token.
-//! Token persisted to ~/.config/zeroclaw-gui/token.json.
+//! Token persisted to ~/.config/tched_router-gui/token.json.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ impl Default for AuthState {
         Self {
             gateway: DEFAULT_GATEWAY.to_string(),
             token: None,
-            device_name: "zeroclaw-gui".to_string(),
+            device_name: "tched_router-gui".to_string(),
         }
     }
 }
@@ -30,7 +30,7 @@ impl AuthState {
     fn token_path() -> PathBuf {
         dirs_next::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("zeroclaw-gui")
+            .join("tched_router-gui")
             .join("token.json")
     }
 

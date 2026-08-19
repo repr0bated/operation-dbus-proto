@@ -95,7 +95,7 @@ pub fn gaps_from_surface_json_for_plugin(
     let missing_config: Vec<String> = missing
         .iter()
         .filter(|p| {
-            p.contains("zeroclaw_config")
+            p.contains("tched_router_config")
                 || p.contains(".config.")
                 || (p.starts_with("ts.") && p.contains(".field."))
                 || is_python_class_field(p)
@@ -257,7 +257,7 @@ fn is_signal(p: &str) -> bool {
         || p.starts_with("go.")
         || (p.starts_with("json.") && p.contains(".ovsschema."))
         || p.starts_with("xml.")
-        || p.contains("zeroclaw_config")
+        || p.contains("tched_router_config")
         || p.contains("antigravity")
         || p.contains("Commands.")
 }
@@ -269,8 +269,8 @@ fn group_of(p: &str) -> String {
         "cli_flags".into()
     } else if p.contains("Commands.") || p.contains(".Commands.") {
         "cli_commands".into()
-    } else if p.contains("zeroclaw_config") {
-        "zeroclaw_config".into()
+    } else if p.contains("tched_router_config") {
+        "tched_router_config".into()
     } else if p.starts_with("py.") {
         "python".into()
     } else if p.starts_with("ts.") {

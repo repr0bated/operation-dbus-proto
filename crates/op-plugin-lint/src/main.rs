@@ -5,11 +5,11 @@
 //! ```text
 //! cd /path/to/upstream && repomix
 //! op-plugin-lint \
-//!   --input crates/op-plugins/src/state_plugins/zeroclaw.rs \
-//!   --output /tmp/zeroclaw.complete.json \
+//!   --input crates/op-plugins/src/state_plugins/tched_router.rs \
+//!   --output /tmp/tched_router.complete.json \
 //!   --format complete \
 //!   --introspect /path/to/upstream/repomix-output.xml \
-//!   --surface-out /tmp/zeroclaw.surface.json
+//!   --surface-out /tmp/tched_router.surface.json
 //! ```
 
 use anyhow::{bail, Context, Result};
@@ -101,9 +101,9 @@ fn run() -> Result<bool> {
             bail!(
                 "need --input FILE --output FILE [--introspect REPOMIX]\n\
                  example:\n\
-                   --input crates/op-plugins/src/state_plugins/zeroclaw.rs \\\n\
-                   --output /tmp/zeroclaw.complete.json --format complete \\\n\
-                   --introspect /home/jeremy/zeroclaw/repomix-output.xml"
+                   --input crates/op-plugins/src/state_plugins/tched_router.rs \\\n\
+                   --output /tmp/tched_router.complete.json --format complete \\\n\
+                   --introspect /home/jeremy/tched_router/repomix-output.xml"
             );
         };
         let cov = resolve_introspect_target_with(target, None, &iopts)?;

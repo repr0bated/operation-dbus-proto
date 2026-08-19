@@ -52,7 +52,7 @@ fn ghostbridge_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, 
     })
 }
 
-async fn call_zeroclaw_method(
+async fn call_tched_router_method(
     headers: &HeaderMap,
     method: &str,
     capability: &str,
@@ -64,7 +64,7 @@ async fn call_zeroclaw_method(
     let arguments = simd_json::to_owned_value(&mut bytes)
         .map_err(|error| json_error_response(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let envelope = crate::state_manager_client::call_plugin_method(
-        "zeroclaw", method, arguments, capability, &identity,
+        "tched_router", method, arguments, capability, &identity,
     )
     .await
     .map_err(|error| {
@@ -99,7 +99,7 @@ pub struct OpenAiChatMessage {
 
 /// Accept both OpenAI `messages` and the legacy single `message` form.
 #[derive(Debug, Deserialize)]
-pub struct ZeroclawChatRequest {
+pub struct TchedRouterChatRequest {
     #[serde(default)]
     pub message: String,
     #[serde(default)]
@@ -115,10 +115,10 @@ pub struct ZeroclawChatRequest {
 }
 
 /// OpenAI-compatible chat adapter. The bridge remains the sole router.
-pub async fn zeroclaw_chat_handler(
+pub async fn tched_router_chat_handler(
     headers: HeaderMap,
     Extension(_state): Extension<Arc<AppState>>,
-    Json(req): Json<ZeroclawChatRequest>,
+    Json(req): Json<TchedRouterChatRequest>,
 ) -> Response {
     if req.stream {
         return json_error_response(
@@ -142,10 +142,10 @@ pub async fn zeroclaw_chat_handler(
             })
             .collect()
     };
-    let result = match call_zeroclaw_method(
+    let result = match call_tched_router_method(
         &headers,
         "Chat",
-        "cap.software.zeroclaw.chat@v1",
+        "cap.software.tched_router.chat@v1",
         serde_json::json!({
             "messages": messages,
             "provider": req.provider.unwrap_or_default(),
@@ -221,9 +221,9 @@ fn normalize_openai_usage(usage: Option<&serde_json::Value>) -> serde_json::Valu
 
 /// Streaming belongs to the bridge's gRPC ChatService, not a second HTTP
 /// provider path.
-pub async fn zeroclaw_chat_stream_handler(
+pub async fn tched_router_chat_stream_handler(
     Extension(_state): Extension<Arc<AppState>>,
-    Json(_req): Json<ZeroclawChatRequest>,
+    Json(_req): Json<TchedRouterChatRequest>,
 ) -> Response {
     json_error_response(
         StatusCode::BAD_REQUEST,
@@ -231,15 +231,15 @@ pub async fn zeroclaw_chat_stream_handler(
     )
 }
 
-/// OpenAI-compatible model catalog backed by `zeroclaw.ListModels`.
+/// OpenAI-compatible model catalog backed by `tched_router.ListModels`.
 pub async fn openai_models_handler(
     headers: HeaderMap,
     Extension(_state): Extension<Arc<AppState>>,
 ) -> Response {
-    let result = match call_zeroclaw_method(
+    let result = match call_tched_router_method(
         &headers,
         "ListModels",
-        "cap.software.zeroclaw.models.read@v1",
+        "cap.software.tched_router.models.read@v1",
         serde_json::json!({}),
     )
     .await
@@ -308,12 +308,12 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
         })
 }
 
-/// Read the zeroclaw `PluginSchema` directly from the sealed blob catalog
+/// Read the tched_router `PluginSchema` directly from the sealed blob catalog
 /// (Absolute Base). Per AGENTS.md the sealed blob IS the plugin; the monolithic
 /// `/dev/shm/live-schema.json` is gone. Live projection values take precedence,
 /// while schema field defaults provide the boot-safe provider/model catalog.
-fn read_zeroclaw_schema_shm() -> Option<Value> {
-    let schema = op_blob::catalog::read_plugin_schema_shm("zeroclaw")?;
+fn read_tched_router_schema_shm() -> Option<Value> {
+    let schema = op_blob::catalog::read_plugin_schema_shm("tched_router")?;
     // `PluginSchema` serializes to { name, version, fields, methods, … }.
     let mut v: Value = simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?;
     // Stamp the catalog_hash so consumers can verify lineage.
@@ -357,7 +357,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
         "paths": {
             "/v1/models": {
                 "get": {
-                    "operationId": "zeroclaw.ListModels",
+                    "operationId": "tched_router.ListModels",
                     "x-opdbus-method-contract": list_models,
                     "responses": {
                         "200": {
@@ -368,7 +368,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
             },
             "/v1/chat/completions": {
                 "post": {
-                    "operationId": "zeroclaw.Chat",
+                    "operationId": "tched_router.Chat",
                     "x-opdbus-method-contract": chat,
                     "requestBody": {
                         "required": true,
@@ -385,9 +385,9 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
                     }
                 }
             },
-            "/api/zeroclaw/chat": {
+            "/api/tched_router/chat": {
                 "post": {
-                    "operationId": "zeroclaw.Chat",
+                    "operationId": "tched_router.Chat",
                     "responses": {
                         "200": {
                             "description": "ZeroClaw chat completion"
@@ -397,7 +397,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
             },
             "/api/llm/chat": {
                 "post": {
-                    "operationId": "zeroclaw.Chat",
+                    "operationId": "tched_router.Chat",
                     "responses": {
                         "200": {
                             "description": "ZeroClaw chat completion"
@@ -414,42 +414,42 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
 /// Combines the locally-derived HTTP adapter document with the ZeroClaw plugin
 /// projection (providers, model_routes, tools, structured_output) so the
 /// frontend can render the entire chat interface from a single schema.
-/// GET /api/zeroclaw/schema
-pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    // Read zeroclaw state directly from the SHM state tree. Fall back to the
+/// GET /api/tched_router/schema
+pub async fn tched_router_schema_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
+    // Read tched_router state directly from the SHM state tree. Fall back to the
     // sealed PluginSchema blob so the schema surface still renders when no
     // mutation has populated SHM yet.
-    let (zeroclaw, zeroclaw_schema) = match crate::state_tree::read_plugin("zeroclaw") {
+    let (tched_router, tched_router_schema) = match crate::state_tree::read_plugin("tched_router") {
         Some(v) => {
-            info!("Using zeroclaw from SHM state tree (live provider/model catalog)");
-            (v, read_zeroclaw_schema_shm())
+            info!("Using tched_router from SHM state tree (live provider/model catalog)");
+            (v, read_tched_router_schema_shm())
         }
-        None => match read_zeroclaw_schema_shm() {
+        None => match read_tched_router_schema_shm() {
             Some(schema) => {
-                warn!("Zeroclaw SHM state unavailable; using PluginSchema only");
+                warn!("TchedRouter SHM state unavailable; using PluginSchema only");
                 (schema.clone(), Some(schema))
             }
             None => {
-                error!("Zeroclaw not available from SHM state tree or PluginSchema");
+                error!("TchedRouter not available from SHM state tree or PluginSchema");
                 return json_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "Zeroclaw projection not available",
+                    "TchedRouter projection not available",
                 );
             }
         },
     };
 
     // Providers + model_routes live under `projection` in the live state.
-    let projection = zeroclaw.get("projection").and_then(|v| v.as_object());
+    let projection = tched_router.get("projection").and_then(|v| v.as_object());
 
-    // Build a JSON Schema for the chat form from zeroclaw providers + model_routes
+    // Build a JSON Schema for the chat form from tched_router providers + model_routes
     let providers = projection
         .and_then(|p| p.get("providers"))
         .and_then(|v| v.as_array())
-        .or_else(|| zeroclaw.get("providers").and_then(|v| v.as_array()))
-        .or_else(|| schema_field_default(&zeroclaw, "providers").and_then(|v| v.as_array()))
+        .or_else(|| tched_router.get("providers").and_then(|v| v.as_array()))
+        .or_else(|| schema_field_default(&tched_router, "providers").and_then(|v| v.as_array()))
         .or_else(|| {
-            zeroclaw_schema
+            tched_router_schema
                 .as_ref()
                 .and_then(|schema| schema_field_default(schema, "providers"))
                 .and_then(|v| v.as_array())
@@ -464,10 +464,10 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     let model_routes = projection
         .and_then(|p| p.get("model_routes"))
         .and_then(|v| v.as_array())
-        .or_else(|| zeroclaw.get("model_routes").and_then(|v| v.as_array()))
-        .or_else(|| schema_field_default(&zeroclaw, "model_routes").and_then(|v| v.as_array()))
+        .or_else(|| tched_router.get("model_routes").and_then(|v| v.as_array()))
+        .or_else(|| schema_field_default(&tched_router, "model_routes").and_then(|v| v.as_array()))
         .or_else(|| {
-            zeroclaw_schema
+            tched_router_schema
                 .as_ref()
                 .and_then(|schema| schema_field_default(schema, "model_routes"))
                 .and_then(|v| v.as_array())
@@ -504,7 +504,7 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     let chat_schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
-        "title": "Zeroclaw Chat",
+        "title": "TchedRouter Chat",
         "properties": {
             "provider": {
                 "type": "string",
@@ -528,10 +528,10 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     let structured_output = projection
         .and_then(|p| p.get("structured_output"))
         .cloned()
-        .or_else(|| zeroclaw.get("structured_output").cloned())
-        .or_else(|| schema_field_default(&zeroclaw, "structured_output").cloned())
+        .or_else(|| tched_router.get("structured_output").cloned())
+        .or_else(|| schema_field_default(&tched_router, "structured_output").cloned())
         .or_else(|| {
-            zeroclaw_schema
+            tched_router_schema
                 .as_ref()
                 .and_then(|schema| schema_field_default(schema, "structured_output"))
                 .cloned()
@@ -540,22 +540,22 @@ pub async fn zeroclaw_schema_handler(Extension(_state): Extension<Arc<AppState>>
     let tools = projection
         .and_then(|p| p.get("tools"))
         .cloned()
-        .or_else(|| zeroclaw.get("tools").cloned())
-        .or_else(|| schema_field_default(&zeroclaw, "tools").cloned())
+        .or_else(|| tched_router.get("tools").cloned())
+        .or_else(|| schema_field_default(&tched_router, "tools").cloned())
         .or_else(|| {
-            zeroclaw_schema
+            tched_router_schema
                 .as_ref()
                 .and_then(|schema| schema_field_default(schema, "tools"))
                 .cloned()
         })
         .unwrap_or(json!([]));
 
-    let openapi = compatibility_openapi(zeroclaw_schema.as_ref());
+    let openapi = compatibility_openapi(tched_router_schema.as_ref());
     let schema = json!({
         "openapi": openapi,
-        "zeroclaw": {
-            "plugin_state": zeroclaw,
-            "schema": zeroclaw_schema,
+        "tched_router": {
+            "plugin_state": tched_router,
+            "schema": tched_router_schema,
             "chat_form_schema": chat_schema,
             "structured_output": structured_output,
             "tools": tools,

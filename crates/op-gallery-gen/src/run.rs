@@ -97,7 +97,7 @@ pub async fn run_gallery_fill(
     progress: Arc<RunProgress>,
 ) -> Result<usize> {
     let inference = Arc::new(InferenceLoop::new(
-        config.zeroclaw_endpoint.clone(),
+        config.tched_router_endpoint.clone(),
         config.max_turns,
     ));
     let validator = SpecValidator::with_catalog(config.load_catalog()?);
@@ -118,7 +118,7 @@ pub async fn run_gallery_fill(
          blob_catalog={}, component_catalog={}, gallery={}/{} ({} stable core)",
         target,
         MAX_CONCURRENCY,
-        config.zeroclaw_endpoint,
+        config.tched_router_endpoint,
         config.enable_mcp,
         config.enable_qdrant,
         &ctx.catalog_hash[..ctx.catalog_hash.len().min(12)],

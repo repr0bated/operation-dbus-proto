@@ -117,7 +117,7 @@ fn resolve_target(target: &str, opts: &IntrospectOpts) -> Result<CoverageInputs>
         other => bail!(
             "unknown --introspect target `{other}`\n\
              examples:\n\
-               --introspect /fast/zeroclaw/bin/zeroclaw --ssh root@192.168.1.1\n\
+               --introspect /fast/tched_router/bin/tched_router --ssh root@192.168.1.1\n\
                --introspect binary:/usr/bin/gemini\n\
                --introspect ./external-sdk-dump.json\n\
                --introspect /path/to/repomix-output.xml"
@@ -263,7 +263,7 @@ fn resolve_plugin_object(plugin_id: &str) -> Result<CoverageInputs> {
 
     bail!(
         "could not resolve `{plugin_id}` — for discovery use a binary path, e.g.\n\
-         --introspect /fast/zeroclaw/bin/zeroclaw --ssh root@192.168.1.1"
+         --introspect /fast/tched_router/bin/tched_router --ssh root@192.168.1.1"
     )
 }
 

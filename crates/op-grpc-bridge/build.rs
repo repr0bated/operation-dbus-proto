@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/registry.proto",
                 "proto/emqx_exhook_v2.proto",
                 "../op-chat/proto/chat.proto",
-                "src/grpc/zeroclaw.proto",
+                "src/grpc/tched_router.proto",
                 generated_proto
                     .to_str()
                     .ok_or("generated plugin proto path is not valid UTF-8")?,
@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/registry.proto");
     println!("cargo:rerun-if-changed=proto/emqx_exhook_v2.proto");
     println!("cargo:rerun-if-changed=../op-chat/proto/chat.proto");
-    println!("cargo:rerun-if-changed=src/grpc/zeroclaw.proto");
+    println!("cargo:rerun-if-changed=src/grpc/tched_router.proto");
     println!("cargo:rerun-if-changed=../op-plugins/src/state_plugins");
     println!("cargo:rerun-if-changed=build.rs");
 

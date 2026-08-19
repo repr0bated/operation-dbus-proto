@@ -1212,7 +1212,7 @@ pub(crate) fn netmaker_schema() -> PluginSchema {
 }
 
 /// Real dispatch for every method declared in `netmaker_schema()`. Mirrors
-/// `zeroclaw::dispatch_zeroclaw_method`'s role — the plugin crate owns its
+/// `tched_router::dispatch_tched_router_method`'s role — the plugin crate owns its
 /// own dispatch, the gRPC bridge just calls this one function.
 pub async fn dispatch_netmaker_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
     let plugin = NetmakerPlugin::new(NetmakerConfig::default());

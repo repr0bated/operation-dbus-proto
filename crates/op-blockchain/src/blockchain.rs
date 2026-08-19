@@ -1426,10 +1426,10 @@ mod tests {
 
     const TIMING_RECORD: &[u8] = br#"{
       "timestamp": 1786156636821,
-      "category": "zeroclaw",
+      "category": "tched_router",
       "action": "Chat",
       "data": {
-        "plugin_id": "zeroclaw",
+        "plugin_id": "tched_router",
         "operation": "Chat",
         "data_hash": "027ef6db",
         "metadata": { "event_hash": "97aadd58", "decision": "Allow", "event_id": 89 }
@@ -1467,7 +1467,7 @@ mod tests {
         let block = ChainBlockRef::from_timing_bytes(42, TIMING_RECORD.to_vec(), false).unwrap();
 
         assert_eq!(block.block_num, 42);
-        assert_eq!(block.category, "zeroclaw");
+        assert_eq!(block.category, "tched_router");
         assert_eq!(block.action, "Chat");
         assert_eq!(block.timestamp, 1786156636821);
         assert_eq!(block.field("data.metadata.event_hash"), Some("97aadd58"));
@@ -1491,7 +1491,7 @@ mod tests {
         assert_eq!(keys, sorted, "flattened fields must be key-sorted");
         assert!(first
             .embedding_text()
-            .starts_with("block: 42\nplugin: zeroclaw"));
+            .starts_with("block: 42\nplugin: tched_router"));
     }
 
     #[test]

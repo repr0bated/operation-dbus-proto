@@ -136,7 +136,7 @@ pub async fn chat_handler(
     };
 
     if requested_provider.is_none() {
-        if let Err(e) = crate::zeroclaw_routes::ensure_model_available(&selected_model) {
+        if let Err(e) = crate::tched_router_routes::ensure_model_available(&selected_model) {
             return Json(ChatResponse {
                 success: false,
                 message: String::new(),
@@ -148,7 +148,7 @@ pub async fn chat_handler(
                 tools_executed: vec![],
                 session_id,
                 model: selected_model,
-                provider: "zeroclaw".to_string(),
+                provider: "tched_router".to_string(),
                 container_id,
             });
         }
@@ -181,7 +181,7 @@ pub async fn chat_handler(
             )),
             Err(_) => Err(anyhow::anyhow!("Unknown provider: {}", provider)),
         },
-        (None, Some(model)) => match crate::zeroclaw_routes::route_for_model(model) {
+        (None, Some(model)) => match crate::tched_router_routes::route_for_model(model) {
             Some(route) => match ProviderType::from_str(&route.upstream_provider) {
                 Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
                     state
@@ -198,7 +198,7 @@ pub async fn chat_handler(
                     route.upstream_provider
                 )),
             },
-            None => Err(anyhow::anyhow!("Model is not routed by Zeroclaw")),
+            None => Err(anyhow::anyhow!("Model is not routed by TchedRouter")),
         },
         _ => state.chat_manager.chat(messages).await,
     };

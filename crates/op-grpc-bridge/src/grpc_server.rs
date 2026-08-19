@@ -783,7 +783,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 ///
 /// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
 /// semantic shuttle already attached) and adds endpoint-specific extras
-/// afterward (e.g. the zeroclaw bridge adds `ZeroclawService`; `run_grpc_server`
+/// afterward (e.g. the tched_router bridge adds `TchedRouterService`; `run_grpc_server`
 /// adds the gRPC health service).
 ///
 /// Adding a new domain service: add one `.add_service(...)` here and it appears on
@@ -2029,7 +2029,7 @@ mod state_sync_frame_tests {
 
     #[test]
     fn generated_plugin_descriptors_resolve_short_names() {
-        assert!(plugin_message_descriptor("ZeroclawListProvidersRequest").is_some());
+        assert!(plugin_message_descriptor("TchedRouterListProvidersRequest").is_some());
         assert!(plugin_message_descriptor("GemmaBrainGetUiSpecResponse").is_some());
     }
 
