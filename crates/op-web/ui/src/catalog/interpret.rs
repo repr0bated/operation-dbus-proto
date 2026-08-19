@@ -101,8 +101,24 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
             Ok(())
         }
 
+"repeat" => {
+            let bind = spec
+                .get("bind")
+                .and_then(Value::as_str)
+                .ok_or(RenderError::MalformedSpec)?;
+            let child = spec.get("child").ok_or(RenderError::MalformedSpec)?;
+            let items = json_pointer(value, bind)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for item in &items {
+                walk(ui, child, item)?;
+            }
+            Ok(())
+        }
+
         other => Err(RenderError::UnknownKind(other.to_string())),
-    }
+}
 }
 
 /// Minimal `/foo/bar/0` JSON pointer lookup used by `bind`.
