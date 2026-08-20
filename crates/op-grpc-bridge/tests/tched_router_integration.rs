@@ -76,22 +76,28 @@ async fn start_tched_router_runtime() -> SocketAddr {
         Json(json!({ "status": "ok" }))
     }
 
-    async fn config_prop(
-        Query(query): Query<std::collections::HashMap<String, String>>,
-    ) -> Json<serde_json::Value> {
-        assert_eq!(
-            query.get("path").map(String::as_str),
-            Some("agents.dashboard.model_provider")
-        );
-        Json(json!({ "value": "opencode.go" }))
-    }
-
+    // One entries list serves both prefixes the client asks for
+    // (`providers.models` and `agents`); each parser filters by path itself.
     async fn config_list() -> Json<serde_json::Value> {
         Json(json!({
-            "entries": [{
-                "path": "providers.models.opencode.go.model",
-                "value": "deepseek-v4-flash-free"
-            }]
+            "entries": [
+                {
+                    "path": "providers.models.opencode.go.model",
+                    "value": "deepseek-v4-flash-free"
+                },
+                {
+                    "path": "agents.dashboard.enabled",
+                    "value": "true"
+                },
+                {
+                    "path": "agents.dashboard.model_provider",
+                    "value": "opencode.go"
+                },
+                {
+                    "path": "agents.dashboard.skill_bundles",
+                    "value": "[\"default\"]"
+                }
+            ]
         }))
     }
 
@@ -110,7 +116,6 @@ async fn start_tched_router_runtime() -> SocketAddr {
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/api/config/prop", get(config_prop))
         .route("/api/config/list", get(config_list))
         .route("/api/config/catalog/models", get(model_catalog));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -331,9 +336,24 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
     assert!(routes
         .iter()
         .all(|route| { route["provider"] == "opencode" }));
+
+    // A route is only real if some agent can serve it. The A2A surface is
+    // addressed as `/a2a/{alias}` and carries no model field, so an agent
+    // answers with whatever model its `model_provider` pins. The mock catalog
+    // also offers `runtime-discovered-test-model`, which no agent pins, so it
+    // must NOT be advertised: doing so previously promised a model that Chat
+    // could only deliver by rewriting shared daemon config out from under
+    // concurrent callers. Reaching another model means configuring another
+    // agent, which is what makes agents task-specialized.
     assert!(routes
         .iter()
-        .any(|route| route["model"] == "runtime-discovered-test-model"));
+        .any(|route| route["model"] == "deepseek-v4-flash-free"));
+    assert!(
+        !routes
+            .iter()
+            .any(|route| route["model"] == "runtime-discovered-test-model"),
+        "advertised a model no configured agent can serve: {routes:#?}"
+    );
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();

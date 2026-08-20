@@ -14,6 +14,7 @@ members = [
     "crates/op-blob",
     "crates/op-jsonrpc",
     "crates/op-llm",
+    "crates/op-llm-probe",
     "crates/op-network",
     "crates/op-uds-relay",
     "crates/op-inspector",
@@ -59,6 +60,7 @@ op-chat = { path = "crates/op-chat" }
 op-http = { path = "crates/op-http" }
 op-state = { path = "crates/op-state" }
 op-llm = { path = "crates/op-llm" }
+op-llm-probe = { path = "crates/op-llm-probe" }
 op-network = { path = "crates/op-network" }
 op-agents = { path = "crates/op-agents" }
 op-cache = { path = "crates/op-cache" }

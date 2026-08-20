@@ -225,17 +225,28 @@ pub struct UiSurface {
 ///
 /// Both `antigravity` and `tched-router` flatten the shared [`LlmProjection`] struct,
 /// so without this rewrite the top-level projection subids collide. The rewrite
-/// replaces the subject token `llm-projection` with `{plugin_name}-llm-projection` in
-/// every top-level subid carried by the schema (nested `$defs` subids are not
-/// stored in `PluginSchema.subids` and therefore are not touched here).
+/// namespaces the *subject* token of every shared `llm-*` subid with the plugin,
+/// turning `exp.software.llm-provider.id@v1` into
+/// `exp.software.tched-router-llm-provider.id@v1`.
+///
+/// This covers the whole shared family, not just `llm-projection`: the flattened
+/// struct pulls in `llm-provider`, `llm-model-route`, `llm-router`,
+/// `llm-ui-surface`, `llm-structured-output`, `llm-config-schema`, and
+/// `llm-tool`, and each of those collides between the two plugins exactly the
+/// same way. Only `llm-projection` was rewritten before, which was invisible
+/// while nested `$defs` subids were not harvested into `PluginSchema.subids`.
+///
+/// `plugin_name` is normalized to hyphens first: callers pass a plugin *id*
+/// (`tched_router`) while subid subjects are hyphen-delimited, so interpolating
+/// the id verbatim produced `tched_router-llm-projection`, which fails the subid
+/// pattern gate in `default_registry`.
+///
+/// Idempotent, so applying it twice to one schema cannot double-prefix.
 pub fn rewrite_projection_subids_for_plugin(
     schema: &mut op_state_store::PluginSchema,
     plugin_name: &str,
 ) {
-    let replacement = format!("{plugin_name}-llm-projection");
-    for subid in schema.subids.values_mut() {
-        *subid = subid.replace("llm-projection", &replacement);
-    }
+    super::oscal::namespace_shared_subids(schema, plugin_name, "llm-");
 }
 
 /// Structured output configuration.

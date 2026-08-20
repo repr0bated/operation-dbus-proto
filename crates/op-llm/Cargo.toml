@@ -10,6 +10,7 @@ description = "LLM provider integration with dynamic model discovery for Hugging
 # Single schema source: the Zeroclaw plugin owns the LLM schema; op-llm embeds
 # it (see src/schema.rs) instead of defining a divergent copy.
 op-plugins = { path = "../op-plugins" }
+op-llm-probe = { path = "../op-llm-probe" }
 op-state-store = { path = "../op-state-store" }
 op-identity = { workspace = true }
 tokio = { workspace = true }

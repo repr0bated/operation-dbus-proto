@@ -99,8 +99,8 @@ tempfile = { workspace = true }
 serde_json = { workspace = true }
 
 [[test]]
-name = "zeroclaw_integration"
-path = "tests/zeroclaw_integration.rs"
+name = "tched_router_integration"
+path = "tests/tched_router_integration.rs"
 
 [[test]]
 name = "tonic_tls_reflection"

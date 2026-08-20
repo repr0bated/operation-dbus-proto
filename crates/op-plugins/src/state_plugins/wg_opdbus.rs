@@ -138,7 +138,13 @@ impl StatePlugin for WgOpdbusPlugin {
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        Some(wg_opdbus_schema())
+        let mut schema = wg_opdbus_schema();
+        // `WireGuardInterface`/`WireGuardPeer` are defined by the `wireguard`
+        // plugin and flattened in here, so their subids arrive identical. The
+        // owner keeps the bare `wireguard` subject; this mirror takes a
+        // namespaced one.
+        super::common::oscal::namespace_shared_subids(&mut schema, PLUGIN_NAME, "wireguard");
+        Some(schema)
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {

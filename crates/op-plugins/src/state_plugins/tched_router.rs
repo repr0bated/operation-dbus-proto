@@ -38,14 +38,6 @@ pub struct LlmTransport {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.tched-router-transport.grpc-target@v1"))]
     pub grpc_target: String,
-    /// Incus / WireGuard container target for xray routing. Kept as a
-    /// published-schema field for backward compatibility, but tched-router's LLM
-    /// transport now runs on the host (xray through its runit-managed service and
-    /// the gRPC-bridge via `op-grpc-bridge-tched-router`); there is no per-service
-    /// incus container. Defaults to the `"host"` sentinel.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.tched-router-transport.incus-container@v1"))]
-    pub incus_container: String,
     /// Browser-facing surface description.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "exp.service.tched-router-transport.browser-surface@v1"))]
@@ -612,6 +604,10 @@ impl TchedRouterPlugin {
     const DBUS_OBJECT: &'static str = "/org/opdbus/v1/plugins/tched-router";
     const OSCAL_SUBID_REGISTRY_OBJECT: &'static str = "/org/opdbus/v1/plugins/oscal_subid_registry";
     const DEFAULT_CHAT_MODEL: &'static str = "deepseek-v4-flash-free";
+    const DEFAULT_CHAT_PROVIDER: &'static str = "opencode";
+    /// Loopback runtime the bridge talks to (the dedicated `tched-router`
+    /// zeroclaw instance). Not `:50051`, which is not a control-plane entry.
+    const DEFAULT_RUNTIME_ENDPOINT: &'static str = "http://127.0.0.1:8084";
 
     pub fn new() -> Self {
         Self
@@ -621,13 +617,20 @@ impl TchedRouterPlugin {
         std::env::var(key).unwrap_or_else(|_| fallback.to_string())
     }
 
+    /// Declared (pre-runtime) state.
+    ///
+    /// Deliberately environment-independent: this feeds the sealed blob, and a
+    /// blob whose contents depend on the sealer's shell would hash differently
+    /// per seal, moving `schema_hash16` for reasons unrelated to the contract.
+    /// Live values for `selected_provider`, `selected_model`, and
+    /// `transport.grpc_target` are supplied by the runtime projection in
+    /// `op-grpc-bridge`, which reads them from the daemon.
     pub fn current_state() -> TchedRouterState {
-        let selected_provider = Self::env_or("LLM_PROVIDER", "opencode");
-        let selected_model = Self::env_or("LLM_MODEL", Self::DEFAULT_CHAT_MODEL);
+        let selected_provider = Self::DEFAULT_CHAT_PROVIDER.to_string();
+        let selected_model = Self::DEFAULT_CHAT_MODEL.to_string();
         let chat_model = selected_model.clone();
-        let router_endpoint = Self::env_or("TCHED_ROUTER_ROUTER_ENDPOINT", "http://localhost:11434");
-        let grpc_target = Self::env_or("TCHED_ROUTER_GRPC_TARGET", "http://10.200.0.2:50051");
-        let grpc_target_for_provider = grpc_target.clone();
+        let router_endpoint = Self::DEFAULT_RUNTIME_ENDPOINT.to_string();
+        let grpc_target_for_provider = Self::DEFAULT_RUNTIME_ENDPOINT.to_string();
 
         TchedRouterState {
             status: "declared".to_string(),
@@ -643,7 +646,6 @@ impl TchedRouterPlugin {
             transport: LlmTransport {
                 dbus_object: Self::DBUS_OBJECT.to_string(),
                 grpc_target: grpc_target_for_provider,
-                incus_container: "host".to_string(),
                 browser_surface: "gRPC-Web through op-web".to_string(),
                 rest_aliases: vec![
                     "/api/tched-router/chat".to_string(),
@@ -792,7 +794,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Declared route; backend availability must be projected before execution.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -805,7 +807,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Declared route; backend availability must be projected before execution.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -820,7 +822,7 @@ impl TchedRouterPlugin {
                         status_reason: format!(
                             "{chat_model} is the declared OpenCode chat model; availability is projected by the ZeroClaw runtime."
                         ),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -833,7 +835,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: true,
                         status_reason: "Factory auto-router available - selects best provider based on query classification.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -846,7 +848,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Factory code route -> openrouter/claude; requires backend projection.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -859,7 +861,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Factory fast route -> gemini/flash; requires backend projection.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -874,7 +876,7 @@ impl TchedRouterPlugin {
                         status_reason: format!(
                             "Factory local route -> opencode/{chat_model}; requires backend projection."
                         ),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -887,7 +889,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Factory reasoning route; Gemma dynamically allocates thinking budget.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -901,7 +903,7 @@ impl TchedRouterPlugin {
                         available: false,
                         status_reason: "OSCAL policy provider is declared; unavailable until oscal_subid_registry is projected.".to_string(),
                         source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -914,7 +916,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Salad qwen3.6-35b-a3b; requires SALAD_API_KEY and backend projection.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -927,7 +929,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Salad qwen3.6-27b; requires SALAD_API_KEY and backend projection.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                     ModelRoute {
@@ -940,7 +942,7 @@ impl TchedRouterPlugin {
                         status: "declared".to_string(),
                         available: false,
                         status_reason: "Salad qwen3.5-9b; requires SALAD_API_KEY and backend projection.".to_string(),
-                        api_key: Some(JsonValue::Null),
+                        api_key: None,
                         ..Default::default()
                     },
                 ],
@@ -1020,53 +1022,15 @@ impl TchedRouterPlugin {
     /// unparsable — this is a best-effort present-state probe, never a hard
     /// dependency for schema construction.
     ///
-    /// Implemented independently of `op_llm::salad::SaladProvider`: `op-llm`
-    /// already depends on `op-plugins`, so the reverse dependency isn't
-    /// available without introducing a cycle. The request shape mirrors
-    /// `SaladProvider::list_models`.
+    /// Delegates to `op_llm_probe::list_models`, the shared leaf crate that
+    /// both this plugin and `op-llm::salad::SaladProvider` call, so the probe
+    /// logic exists in exactly one place.
     async fn probe_salad_models() -> Vec<String> {
         let Ok(api_key) = std::env::var("SALAD_API_KEY") else {
             return Vec::new();
         };
         let base_url = Self::env_or("SALAD_BASE_URL", "https://ai.salad.cloud/v1");
-        let url = format!("{}/models", base_url.trim_end_matches('/'));
-
-        let Ok(client) = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-        else {
-            return Vec::new();
-        };
-
-        let response = match client.get(&url).bearer_auth(&api_key).send().await {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
-                tracing::warn!("Salad models probe failed ({}): {}", r.status(), url);
-                return Vec::new();
-            }
-            Err(e) => {
-                tracing::warn!("Salad models probe unreachable: {}", e);
-                return Vec::new();
-            }
-        };
-
-        let Ok(body) = response.text().await else {
-            return Vec::new();
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) else {
-            return Vec::new();
-        };
-
-        parsed
-            .get("data")
-            .and_then(|d| d.as_array())
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|e| e.get("id").and_then(|v| v.as_str()).map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default()
+        op_llm_probe::list_models(&base_url, &api_key).await
     }
 
     /// Send a minimal real chat-completion request to confirm a specific
@@ -1077,45 +1041,10 @@ impl TchedRouterPlugin {
     /// observed to 503 for minutes with no warm replica while smaller models
     /// answer in seconds, so presence in `/v1/models` alone overstates
     /// availability.
+    ///
+    /// Delegates to `op_llm_probe::is_model_reachable`.
     async fn probe_salad_model_reachable(model: &str, api_key: &str, base_url: &str) -> bool {
-        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-        let Ok(client) = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .build()
-        else {
-            return false;
-        };
-        let body = serde_json::json!({
-            "model": model,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 4,
-            "stream": false
-        });
-        match client
-            .post(&url)
-            .bearer_auth(api_key)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(r) if r.status().is_success() => true,
-            Ok(r) => {
-                tracing::warn!(
-                    "Salad reachability probe for {} failed ({})",
-                    model,
-                    r.status()
-                );
-                false
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Salad reachability probe for {} unreachable/timed out: {}",
-                    model,
-                    e
-                );
-                false
-            }
-        }
+        op_llm_probe::is_model_reachable(base_url, api_key, model).await
     }
 
     /// Live variant of [`current_state`](Self::current_state): folds real
@@ -1213,7 +1142,7 @@ impl TchedRouterPlugin {
                         "{model}; discovered via Salad GET /v1/models but did not answer a live test request (not statically declared)."
                     )
                 },
-                api_key: Some(JsonValue::Null),
+                api_key: None,
                 ..Default::default()
             });
         }
@@ -2119,12 +2048,13 @@ pub fn dispatch_tched_router_method(
         "SetVectorizationModel" => set_role_model_handler(json_args, state, "vectorization"),
         "SetQdrantRetrievalModel" => set_role_model_handler(json_args, state, "qdrant_retrieval"),
         "SetCozoRetrievalModel" => set_role_model_handler(json_args, state, "cozo_retrieval"),
-        other
-            if inspector_gadget_generated::METHOD_CANDIDATES
-                .iter()
-                .any(|candidate| candidate.name == other) =>
-        {
-            dispatch_generated_cli_method(other, json_args).map(DispatchOutcome::plain)
+        other if RUNTIME_EXECUTED_METHODS.contains(&other) => {
+            Err(TchedRouterError::ExecutionDenied {
+                reason: format!(
+                    "'{other}' is executed by the op-grpc-bridge runtime, not by this \
+                     synchronous plugin surface"
+                ),
+            })
         }
         other => Err(TchedRouterError::ExecutionDenied {
             reason: format!("undeclared method: {other}"),
@@ -2132,119 +2062,60 @@ pub fn dispatch_tched_router_method(
     }
 }
 
-fn dispatch_generated_cli_method(
-    method: &str,
-    json_args: &str,
-) -> std::result::Result<JsonValue, TchedRouterError> {
-    let candidate = inspector_gadget_generated::METHOD_CANDIDATES
-        .iter()
-        .find(|candidate| candidate.name == method)
-        .ok_or_else(|| TchedRouterError::ExecutionDenied {
-            reason: format!("undeclared method: {method}"),
-        })?;
-    let command = generated_cli_tokens(candidate.repomix_path);
-    if command.is_empty() {
-        return Err(TchedRouterError::ExecutionDenied {
-            reason: format!("generated method {method} has no CLI mapping"),
-        });
-    }
-    let parsed: JsonValue =
-        serde_json::from_str(json_args).map_err(|error| TchedRouterError::ExecutionDenied {
-            reason: format!("invalid {method} arguments: {error}"),
-        })?;
-    let options = parsed
-        .get("options")
-        .and_then(JsonValue::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let binary = std::env::var("TCHED_ROUTER_CLI")
-        .unwrap_or_else(|_| "/home/admin/.cargo/bin/tched-router".to_string());
-    let mut process = std::process::Command::new(&binary);
-    process.args(&command);
-    append_cli_options(&mut process, options)
-        .map_err(|reason| TchedRouterError::ExecutionDenied { reason })?;
-    let output = process
-        .output()
-        .map_err(|error| TchedRouterError::ExecutionDenied {
-            reason: format!("failed to execute {binary}: {error}"),
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !output.status.success() {
-        return Err(TchedRouterError::ExecutionDenied {
-            reason: format!("{method} exited with {}: {}", output.status, stderr),
-        });
-    }
-    Ok(serde_json::json!({
-        "message": if stdout.is_empty() { stderr } else { stdout },
-        "changed": candidate.side_effect == "mutation"
-    }))
-}
+/// Declared methods that `op-grpc-bridge` executes against the ZeroClaw daemon.
+///
+/// The plugin is a synchronous D-Bus surface and must not perform I/O, so any
+/// method whose implementation is an HTTP call to the daemon is executed by the
+/// bridge's runtime client. Naming them once keeps this dispatcher, the
+/// executability test, and the bridge's router from disagreeing about which
+/// methods live where.
+///
+/// Every entry maps to a route verified against the daemon's own OpenAPI
+/// document. A capability the daemon exposes no route for is not declared at
+/// all, rather than declared and left to fail at call time.
+pub const RUNTIME_EXECUTED_METHODS: &[&str] = &[
+    "Chat",
+    "agents_create",
+    "agents_delete",
+    "agents_list",
+    "agents_rename",
+    "channel_list",
+    "channels_list",
+    "config_get",
+    "config_init",
+    "config_list",
+    "config_migrate",
+    "config_patch",
+    "config_set",
+    "cron_list",
+    "memory_list",
+    "model_list",
+    "providers_create",
+    "providers_delete",
+    "providers_rename",
+];
 
-fn generated_cli_tokens(path: &str) -> Vec<String> {
-    if let Some(command) = path.strip_prefix("cmd.") {
-        return command.split('.').map(cli_token).collect();
-    }
-    if let Some(flag) = path
-        .strip_prefix("flag.")
-        .and_then(|value| value.rsplit('.').next())
-    {
-        return vec![format!("--{}", flag.replace('_', "-"))];
-    }
-    let Some(path) = path.strip_prefix("enum.") else {
-        return Vec::new();
-    };
-    let Some((owner, variant)) = path.rsplit_once('.') else {
-        return Vec::new();
-    };
-    let owner = owner
-        .rsplit('.')
-        .next()
-        .unwrap_or(owner)
-        .trim_end_matches("Commands")
-        .trim_end_matches("commands");
-    vec![cli_token(owner), cli_token(variant)]
-}
-
-fn cli_token(raw: &str) -> String {
-    let mut token = String::new();
-    for (index, ch) in raw.chars().enumerate() {
-        if ch.is_ascii_uppercase() && index > 0 {
-            token.push('-');
-        }
-        token.push(ch.to_ascii_lowercase());
-    }
-    token.replace('_', "-")
-}
-
-fn append_cli_options(
-    process: &mut std::process::Command,
-    options: serde_json::Map<String, JsonValue>,
-) -> std::result::Result<(), String> {
-    for (key, value) in options {
-        if key == "value" || key == "argument" {
-            let value = value
-                .as_str()
-                .ok_or_else(|| format!("{key} must be a string"))?;
-            process.arg(value);
-            continue;
-        }
-        if key.is_empty()
-            || !key
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-        {
-            return Err(format!("invalid CLI option name: {key}"));
-        }
-        let value = value
-            .as_str()
-            .ok_or_else(|| format!("{key} must be a string"))?;
-        process.arg(format!("--{}", key.replace('_', "-")));
-        if !value.is_empty() {
-            process.arg(value);
-        }
-    }
-    Ok(())
+/// Whether a declared method mutates, taken from the schema's own `SideEffect`
+/// rather than guessed from the method name.
+pub fn tched_router_method_mutates(method: &str) -> bool {
+    static EFFECTS: std::sync::OnceLock<std::collections::HashMap<String, bool>> =
+        std::sync::OnceLock::new();
+    EFFECTS
+        .get_or_init(|| {
+            tched_router_plugin_schema()
+                .methods
+                .into_iter()
+                .map(|(name, decl)| {
+                    (
+                        name,
+                        matches!(decl.side_effect, op_state_store::SideEffect::Mutation),
+                    )
+                })
+                .collect()
+        })
+        .get(method)
+        .copied()
+        .unwrap_or(false)
 }
 
 fn list_models(
@@ -2479,26 +2350,9 @@ mod tests {
         let state = TchedRouterPlugin::current_state();
 
         for method in schema.methods.keys() {
-            if method == "Chat" {
-                // Chat is declared here but executed by the bridge runtime,
-                // which owns provider credentials and the event chain.
-                continue;
-            }
-            if inspector_gadget_generated::METHOD_CANDIDATES
-                .iter()
-                .any(|candidate| candidate.name == method)
-            {
-                assert!(
-                    !generated_cli_tokens(
-                        inspector_gadget_generated::METHOD_CANDIDATES
-                            .iter()
-                            .find(|candidate| candidate.name == method)
-                            .unwrap()
-                            .repomix_path
-                    )
-                    .is_empty(),
-                    "{method} has no CLI mapping"
-                );
+            if RUNTIME_EXECUTED_METHODS.contains(&method.as_str()) {
+                // Declared here but executed by the bridge runtime, which owns
+                // the daemon session, provider credentials, and the event chain.
                 continue;
             }
             let args = match method.as_str() {
@@ -2518,8 +2372,9 @@ mod tests {
 
     #[test]
     fn undeclared_method_is_rejected() {
-        let error = dispatch_tched_router_method("NotDeclared", "{}", &TchedRouterPlugin::current_state())
-            .unwrap_err();
+        let error =
+            dispatch_tched_router_method("NotDeclared", "{}", &TchedRouterPlugin::current_state())
+                .unwrap_err();
         assert!(error.to_string().contains("undeclared method"));
     }
 }
@@ -3061,21 +2916,6 @@ pub mod inspector_gadget_generated {
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.writeonlyrootnotinparent@v1"))]
         pub writeonlyrootnotinparent: Option<String>,
-
-        /// Discovered from Repomix path `enum.tched_router_config.GeneratePairingCodeError`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.generatepairingcodeerror@v1"))]
-        pub generatepairingcodeerror: Option<String>,
-
-        /// Discovered from Repomix path `enum.tched_router_config.GeneratePairingCodeError.PairingDisabled`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.pairingdisabled@v1"))]
-        pub pairingdisabled: Option<bool>,
-
-        /// Discovered from Repomix path `enum.tched_router_config.GeneratePairingCodeError.Pending`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.pending@v1"))]
-        pub pending: Option<String>,
 
         /// Discovered from Repomix path `enum.tched_router_config.MapKeyKind`. Review before promotion.
         #[serde(default)]
@@ -4586,31 +4426,6 @@ pub mod inspector_gadget_generated {
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.strength@v1"))]
         pub strength: Option<String>,
-
-        /// Discovered from Repomix path `struct.tched_router_config.PairingGuard`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.pairingguard@v1"))]
-        pub pairingguard: Option<String>,
-
-        /// Discovered from Repomix path `struct.tched_router_config.PairingGuard.failed_attempts`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.failed-attempts@v1"))]
-        pub failed_attempts: Option<String>,
-
-        /// Discovered from Repomix path `struct.tched_router_config.PairingGuard.paired_tokens`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.paired-tokens@v1"))]
-        pub paired_tokens: Option<String>,
-
-        /// Discovered from Repomix path `struct.tched_router_config.PairingGuard.pairing_code`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.pairing-code@v1"))]
-        pub pairing_code: Option<String>,
-
-        /// Discovered from Repomix path `struct.tched_router_config.PairingGuard.require_pairing`. Review before promotion.
-        #[serde(default)]
-        #[schemars(extend("x-oscal-subid" = "obs.software.tched-router.require-pairing@v1"))]
-        pub require_pairing: Option<String>,
 
         /// Discovered from Repomix path `struct.tched_router_config.PeerGroupConfig`. Review before promotion.
         #[serde(default)]
@@ -7596,120 +7411,6 @@ pub mod inspector_gadget_generated {
             ),
         );
         schema.methods.insert(
-            "auth_emaillogin".to_string(),
-            method_decl_from_schemars_with_output::<AuthEmailloginInput, AuthEmailloginOutput>(
-                "auth_emaillogin",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-emaillogin@v1",
-            ),
-        );
-        schema.methods.insert(
-            "auth_list".to_string(),
-            method_decl_from_schemars_with_output::<AuthListInput, AuthListOutput>(
-                "auth_list",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.auth-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "auth_login".to_string(),
-            method_decl_from_schemars_with_output::<AuthLoginInput, AuthLoginOutput>(
-                "auth_login",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-login@v1",
-            ),
-        );
-        schema.methods.insert(
-            "auth_logout".to_string(),
-            method_decl_from_schemars_with_output::<AuthLogoutInput, AuthLogoutOutput>(
-                "auth_logout",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-logout@v1",
-            ),
-        );
-        schema.methods.insert("auth_pasteredirect".to_string(), method_decl_from_schemars_with_output::<AuthPasteredirectInput, AuthPasteredirectOutput>("auth_pasteredirect", op_state_store::SideEffect::Mutation, false, "tched-router.write", "mut.software.tched-router.auth-pasteredirect@v1"));
-        schema.methods.insert(
-            "auth_pastetoken".to_string(),
-            method_decl_from_schemars_with_output::<AuthPastetokenInput, AuthPastetokenOutput>(
-                "auth_pastetoken",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-pastetoken@v1",
-            ),
-        );
-        schema.methods.insert(
-            "auth_refresh".to_string(),
-            method_decl_from_schemars_with_output::<AuthRefreshInput, AuthRefreshOutput>(
-                "auth_refresh",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-refresh@v1",
-            ),
-        );
-        schema.methods.insert(
-            "auth_setuptoken".to_string(),
-            method_decl_from_schemars_with_output::<AuthSetuptokenInput, AuthSetuptokenOutput>(
-                "auth_setuptoken",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-setuptoken@v1",
-            ),
-        );
-        schema.methods.insert(
-            "auth_use".to_string(),
-            method_decl_from_schemars_with_output::<AuthUseInput, AuthUseOutput>(
-                "auth_use",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.auth-use@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channel_add".to_string(),
-            method_decl_from_schemars_with_output::<ChannelAddInput, ChannelAddOutput>(
-                "channel_add",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channel-add@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channel_bindtelegram".to_string(),
-            method_decl_from_schemars_with_output::<
-                ChannelBindtelegramInput,
-                ChannelBindtelegramOutput,
-            >(
-                "channel_bindtelegram",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channel-bindtelegram@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channel_doctor".to_string(),
-            method_decl_from_schemars_with_output::<ChannelDoctorInput, ChannelDoctorOutput>(
-                "channel_doctor",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channel-doctor@v1",
-            ),
-        );
-        schema.methods.insert(
             "channel_list".to_string(),
             method_decl_from_schemars_with_output::<ChannelListInput, ChannelListOutput>(
                 "channel_list",
@@ -7720,56 +7421,6 @@ pub mod inspector_gadget_generated {
             ),
         );
         schema.methods.insert(
-            "channel_remove".to_string(),
-            method_decl_from_schemars_with_output::<ChannelRemoveInput, ChannelRemoveOutput>(
-                "channel_remove",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channel-remove@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channel_send".to_string(),
-            method_decl_from_schemars_with_output::<ChannelSendInput, ChannelSendOutput>(
-                "channel_send",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channel-send@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channel_start".to_string(),
-            method_decl_from_schemars_with_output::<ChannelStartInput, ChannelStartOutput>(
-                "channel_start",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channel-start@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channels_create".to_string(),
-            method_decl_from_schemars_with_output::<ChannelsCreateInput, ChannelsCreateOutput>(
-                "channels_create",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channels-create@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channels_delete".to_string(),
-            method_decl_from_schemars_with_output::<ChannelsDeleteInput, ChannelsDeleteOutput>(
-                "channels_delete",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channels-delete@v1",
-            ),
-        );
-        schema.methods.insert(
             "channels_list".to_string(),
             method_decl_from_schemars_with_output::<ChannelsListInput, ChannelsListOutput>(
                 "channels_list",
@@ -7777,46 +7428,6 @@ pub mod inspector_gadget_generated {
                 true,
                 "tched-router.read",
                 "obs.software.tched-router.channels-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "channels_rename".to_string(),
-            method_decl_from_schemars_with_output::<ChannelsRenameInput, ChannelsRenameOutput>(
-                "channels_rename",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.channels-rename@v1",
-            ),
-        );
-        schema.methods.insert(
-            "config_complete".to_string(),
-            method_decl_from_schemars_with_output::<ConfigCompleteInput, ConfigCompleteOutput>(
-                "config_complete",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.config-complete@v1",
-            ),
-        );
-        schema.methods.insert(
-            "config_docs".to_string(),
-            method_decl_from_schemars_with_output::<ConfigDocsInput, ConfigDocsOutput>(
-                "config_docs",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.config-docs@v1",
-            ),
-        );
-        schema.methods.insert(
-            "config_generate".to_string(),
-            method_decl_from_schemars_with_output::<ConfigGenerateInput, ConfigGenerateOutput>(
-                "config_generate",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.config-generate@v1",
             ),
         );
         schema.methods.insert(
@@ -7880,36 +7491,6 @@ pub mod inspector_gadget_generated {
             ),
         );
         schema.methods.insert(
-            "cron_add".to_string(),
-            method_decl_from_schemars_with_output::<CronAddInput, CronAddOutput>(
-                "cron_add",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-add@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_addat".to_string(),
-            method_decl_from_schemars_with_output::<CronAddatInput, CronAddatOutput>(
-                "cron_addat",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-addat@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_addevery".to_string(),
-            method_decl_from_schemars_with_output::<CronAddeveryInput, CronAddeveryOutput>(
-                "cron_addevery",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-addevery@v1",
-            ),
-        );
-        schema.methods.insert(
             "cron_list".to_string(),
             method_decl_from_schemars_with_output::<CronListInput, CronListOutput>(
                 "cron_list",
@@ -7917,208 +7498,6 @@ pub mod inspector_gadget_generated {
                 true,
                 "tched-router.read",
                 "obs.software.tched-router.cron-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_once".to_string(),
-            method_decl_from_schemars_with_output::<CronOnceInput, CronOnceOutput>(
-                "cron_once",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-once@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_pause".to_string(),
-            method_decl_from_schemars_with_output::<CronPauseInput, CronPauseOutput>(
-                "cron_pause",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-pause@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_remove".to_string(),
-            method_decl_from_schemars_with_output::<CronRemoveInput, CronRemoveOutput>(
-                "cron_remove",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-remove@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_resume".to_string(),
-            method_decl_from_schemars_with_output::<CronResumeInput, CronResumeOutput>(
-                "cron_resume",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-resume@v1",
-            ),
-        );
-        schema.methods.insert(
-            "cron_update".to_string(),
-            method_decl_from_schemars_with_output::<CronUpdateInput, CronUpdateOutput>(
-                "cron_update",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.cron-update@v1",
-            ),
-        );
-        schema.methods.insert(
-            "deprecatedprops_any".to_string(),
-            method_decl_from_schemars_with_output::<
-                DeprecatedpropsAnyInput,
-                DeprecatedpropsAnyOutput,
-            >(
-                "deprecatedprops_any",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.deprecatedprops-any@v1",
-            ),
-        );
-        schema.methods.insert(
-            "doctor_models".to_string(),
-            method_decl_from_schemars_with_output::<DoctorModelsInput, DoctorModelsOutput>(
-                "doctor_models",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.doctor-models@v1",
-            ),
-        );
-        schema.methods.insert(
-            "doctor_traces".to_string(),
-            method_decl_from_schemars_with_output::<DoctorTracesInput, DoctorTracesOutput>(
-                "doctor_traces",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.doctor-traces@v1",
-            ),
-        );
-        schema.methods.insert(
-            "doctor_updatecontextwindows".to_string(),
-            method_decl_from_schemars_with_output::<
-                DoctorUpdatecontextwindowsInput,
-                DoctorUpdatecontextwindowsOutput,
-            >(
-                "doctor_updatecontextwindows",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.doctor-updatecontextwindows@v1",
-            ),
-        );
-        schema.methods.insert(
-            "eval_run".to_string(),
-            method_decl_from_schemars_with_output::<EvalRunInput, EvalRunOutput>(
-                "eval_run",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.eval-run@v1",
-            ),
-        );
-        schema.methods.insert(
-            "gateway_getpaircode".to_string(),
-            method_decl_from_schemars_with_output::<
-                GatewayGetpaircodeInput,
-                GatewayGetpaircodeOutput,
-            >(
-                "gateway_getpaircode",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.gateway-getpaircode@v1",
-            ),
-        );
-        schema.methods.insert(
-            "gateway_restart".to_string(),
-            method_decl_from_schemars_with_output::<GatewayRestartInput, GatewayRestartOutput>(
-                "gateway_restart",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.gateway-restart@v1",
-            ),
-        );
-        schema.methods.insert(
-            "gateway_start".to_string(),
-            method_decl_from_schemars_with_output::<GatewayStartInput, GatewayStartOutput>(
-                "gateway_start",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.gateway-start@v1",
-            ),
-        );
-        schema.methods.insert(
-            "hardware_discover".to_string(),
-            method_decl_from_schemars_with_output::<HardwareDiscoverInput, HardwareDiscoverOutput>(
-                "hardware_discover",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.hardware-discover@v1",
-            ),
-        );
-        schema.methods.insert(
-            "hardware_info".to_string(),
-            method_decl_from_schemars_with_output::<HardwareInfoInput, HardwareInfoOutput>(
-                "hardware_info",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.hardware-info@v1",
-            ),
-        );
-        schema.methods.insert(
-            "hardware_introspect".to_string(),
-            method_decl_from_schemars_with_output::<
-                HardwareIntrospectInput,
-                HardwareIntrospectOutput,
-            >(
-                "hardware_introspect",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.hardware-introspect@v1",
-            ),
-        );
-        schema.methods.insert(
-            "integration_info".to_string(),
-            method_decl_from_schemars_with_output::<IntegrationInfoInput, IntegrationInfoOutput>(
-                "integration_info",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.integration-info@v1",
-            ),
-        );
-        schema.methods.insert(
-            "memory_clear".to_string(),
-            method_decl_from_schemars_with_output::<MemoryClearInput, MemoryClearOutput>(
-                "memory_clear",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.memory-clear@v1",
-            ),
-        );
-        schema.methods.insert(
-            "memory_get".to_string(),
-            method_decl_from_schemars_with_output::<MemoryGetInput, MemoryGetOutput>(
-                "memory_get",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.memory-get@v1",
             ),
         );
         schema.methods.insert(
@@ -8132,36 +7511,6 @@ pub mod inspector_gadget_generated {
             ),
         );
         schema.methods.insert(
-            "memory_reindex".to_string(),
-            method_decl_from_schemars_with_output::<MemoryReindexInput, MemoryReindexOutput>(
-                "memory_reindex",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.memory-reindex@v1",
-            ),
-        );
-        schema.methods.insert(
-            "memory_stats".to_string(),
-            method_decl_from_schemars_with_output::<MemoryStatsInput, MemoryStatsOutput>(
-                "memory_stats",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.memory-stats@v1",
-            ),
-        );
-        schema.methods.insert(
-            "migrate_openclaw".to_string(),
-            method_decl_from_schemars_with_output::<MigrateOpenclawInput, MigrateOpenclawOutput>(
-                "migrate_openclaw",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.migrate-openclaw@v1",
-            ),
-        );
-        schema.methods.insert(
             "model_list".to_string(),
             method_decl_from_schemars_with_output::<ModelListInput, ModelListOutput>(
                 "model_list",
@@ -8169,132 +7518,6 @@ pub mod inspector_gadget_generated {
                 true,
                 "tched-router.read",
                 "obs.software.tched-router.model-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "model_refresh".to_string(),
-            method_decl_from_schemars_with_output::<ModelRefreshInput, ModelRefreshOutput>(
-                "model_refresh",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.model-refresh@v1",
-            ),
-        );
-        schema.methods.insert(
-            "peripheral_add".to_string(),
-            method_decl_from_schemars_with_output::<PeripheralAddInput, PeripheralAddOutput>(
-                "peripheral_add",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.peripheral-add@v1",
-            ),
-        );
-        schema.methods.insert(
-            "peripheral_flash".to_string(),
-            method_decl_from_schemars_with_output::<PeripheralFlashInput, PeripheralFlashOutput>(
-                "peripheral_flash",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.peripheral-flash@v1",
-            ),
-        );
-        schema.methods.insert(
-            "peripheral_flashnucleo".to_string(),
-            method_decl_from_schemars_with_output::<
-                PeripheralFlashnucleoInput,
-                PeripheralFlashnucleoOutput,
-            >(
-                "peripheral_flashnucleo",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.peripheral-flashnucleo@v1",
-            ),
-        );
-        schema.methods.insert(
-            "peripheral_list".to_string(),
-            method_decl_from_schemars_with_output::<PeripheralListInput, PeripheralListOutput>(
-                "peripheral_list",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.peripheral-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "peripheral_setupunoq".to_string(),
-            method_decl_from_schemars_with_output::<
-                PeripheralSetupunoqInput,
-                PeripheralSetupunoqOutput,
-            >(
-                "peripheral_setupunoq",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.peripheral-setupunoq@v1",
-            ),
-        );
-        schema.methods.insert(
-            "plugin_info".to_string(),
-            method_decl_from_schemars_with_output::<PluginInfoInput, PluginInfoOutput>(
-                "plugin_info",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.plugin-info@v1",
-            ),
-        );
-        schema.methods.insert(
-            "plugin_install".to_string(),
-            method_decl_from_schemars_with_output::<PluginInstallInput, PluginInstallOutput>(
-                "plugin_install",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.plugin-install@v1",
-            ),
-        );
-        schema.methods.insert(
-            "plugin_list".to_string(),
-            method_decl_from_schemars_with_output::<PluginListInput, PluginListOutput>(
-                "plugin_list",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.plugin-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "plugin_migrate".to_string(),
-            method_decl_from_schemars_with_output::<PluginMigrateInput, PluginMigrateOutput>(
-                "plugin_migrate",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.plugin-migrate@v1",
-            ),
-        );
-        schema.methods.insert(
-            "plugin_remove".to_string(),
-            method_decl_from_schemars_with_output::<PluginRemoveInput, PluginRemoveOutput>(
-                "plugin_remove",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.plugin-remove@v1",
-            ),
-        );
-        schema.methods.insert(
-            "plugin_search".to_string(),
-            method_decl_from_schemars_with_output::<PluginSearchInput, PluginSearchOutput>(
-                "plugin_search",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.plugin-search@v1",
             ),
         );
         schema.methods.insert(
@@ -8325,258 +7548,6 @@ pub mod inspector_gadget_generated {
                 false,
                 "tched-router.write",
                 "mut.software.tched-router.providers-rename@v1",
-            ),
-        );
-        schema.methods.insert(
-            "service_install".to_string(),
-            method_decl_from_schemars_with_output::<ServiceInstallInput, ServiceInstallOutput>(
-                "service_install",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.service-install@v1",
-            ),
-        );
-        schema.methods.insert(
-            "service_logs".to_string(),
-            method_decl_from_schemars_with_output::<ServiceLogsInput, ServiceLogsOutput>(
-                "service_logs",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.service-logs@v1",
-            ),
-        );
-        schema.methods.insert(
-            "service_restart".to_string(),
-            method_decl_from_schemars_with_output::<ServiceRestartInput, ServiceRestartOutput>(
-                "service_restart",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.service-restart@v1",
-            ),
-        );
-        schema.methods.insert(
-            "service_start".to_string(),
-            method_decl_from_schemars_with_output::<ServiceStartInput, ServiceStartOutput>(
-                "service_start",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.service-start@v1",
-            ),
-        );
-        schema.methods.insert(
-            "service_stop".to_string(),
-            method_decl_from_schemars_with_output::<ServiceStopInput, ServiceStopOutput>(
-                "service_stop",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.service-stop@v1",
-            ),
-        );
-        schema.methods.insert(
-            "service_uninstall".to_string(),
-            method_decl_from_schemars_with_output::<ServiceUninstallInput, ServiceUninstallOutput>(
-                "service_uninstall",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.service-uninstall@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skillbundle_add".to_string(),
-            method_decl_from_schemars_with_output::<SkillbundleAddInput, SkillbundleAddOutput>(
-                "skillbundle_add",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skillbundle-add@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skillbundle_list".to_string(),
-            method_decl_from_schemars_with_output::<SkillbundleListInput, SkillbundleListOutput>(
-                "skillbundle_list",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.skillbundle-list@v1",
-            ),
-        );
-        schema.methods.insert("skillbundle_remove".to_string(), method_decl_from_schemars_with_output::<SkillbundleRemoveInput, SkillbundleRemoveOutput>("skillbundle_remove", op_state_store::SideEffect::Mutation, false, "tched-router.write", "mut.software.tched-router.skillbundle-remove@v1"));
-        schema.methods.insert("skillbundle_rename".to_string(), method_decl_from_schemars_with_output::<SkillbundleRenameInput, SkillbundleRenameOutput>("skillbundle_rename", op_state_store::SideEffect::Mutation, false, "tched-router.write", "mut.software.tched-router.skillbundle-rename@v1"));
-        schema.methods.insert(
-            "skillbundle_show".to_string(),
-            method_decl_from_schemars_with_output::<SkillbundleShowInput, SkillbundleShowOutput>(
-                "skillbundle_show",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.skillbundle-show@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_add".to_string(),
-            method_decl_from_schemars_with_output::<SkillAddInput, SkillAddOutput>(
-                "skill_add",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-add@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_audit".to_string(),
-            method_decl_from_schemars_with_output::<SkillAuditInput, SkillAuditOutput>(
-                "skill_audit",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-audit@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_bundle".to_string(),
-            method_decl_from_schemars_with_output::<SkillBundleInput, SkillBundleOutput>(
-                "skill_bundle",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-bundle@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_edit".to_string(),
-            method_decl_from_schemars_with_output::<SkillEditInput, SkillEditOutput>(
-                "skill_edit",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-edit@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_install".to_string(),
-            method_decl_from_schemars_with_output::<SkillInstallInput, SkillInstallOutput>(
-                "skill_install",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-install@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_list".to_string(),
-            method_decl_from_schemars_with_output::<SkillListInput, SkillListOutput>(
-                "skill_list",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.skill-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_remove".to_string(),
-            method_decl_from_schemars_with_output::<SkillRemoveInput, SkillRemoveOutput>(
-                "skill_remove",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-remove@v1",
-            ),
-        );
-        schema.methods.insert(
-            "skill_test".to_string(),
-            method_decl_from_schemars_with_output::<SkillTestInput, SkillTestOutput>(
-                "skill_test",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.skill-test@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_approve".to_string(),
-            method_decl_from_schemars_with_output::<SopApproveInput, SopApproveOutput>(
-                "sop_approve",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.sop-approve@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_delete".to_string(),
-            method_decl_from_schemars_with_output::<SopDeleteInput, SopDeleteOutput>(
-                "sop_delete",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.sop-delete@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_deny".to_string(),
-            method_decl_from_schemars_with_output::<SopDenyInput, SopDenyOutput>(
-                "sop_deny",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.sop-deny@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_graph".to_string(),
-            method_decl_from_schemars_with_output::<SopGraphInput, SopGraphOutput>(
-                "sop_graph",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.sop-graph@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_list".to_string(),
-            method_decl_from_schemars_with_output::<SopListInput, SopListOutput>(
-                "sop_list",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.sop-list@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_pending".to_string(),
-            method_decl_from_schemars_with_output::<SopPendingInput, SopPendingOutput>(
-                "sop_pending",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.sop-pending@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_show".to_string(),
-            method_decl_from_schemars_with_output::<SopShowInput, SopShowOutput>(
-                "sop_show",
-                op_state_store::SideEffect::Read,
-                true,
-                "tched-router.read",
-                "obs.software.tched-router.sop-show@v1",
-            ),
-        );
-        schema.methods.insert(
-            "sop_validate".to_string(),
-            method_decl_from_schemars_with_output::<SopValidateInput, SopValidateOutput>(
-                "sop_validate",
-                op_state_store::SideEffect::Mutation,
-                false,
-                "tched-router.write",
-                "mut.software.tched-router.sop-validate@v1",
             ),
         );
     }

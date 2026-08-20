@@ -281,7 +281,11 @@ impl MutationEngine {
         Self::new_with_tched_router_client(
             event_chain,
             ovsdb,
-            crate::tched_router_runtime::TchedRouterRuntimeClient::new(endpoint, agent_alias, token),
+            crate::tched_router_runtime::TchedRouterRuntimeClient::new(
+                endpoint,
+                agent_alias,
+                token,
+            ),
         )
     }
 
@@ -1920,6 +1924,28 @@ impl MutationEngine {
                     >(serde_json::to_value(&parsed_value)?)
                     .context("invalid tched_router.Chat arguments")?;
                     serde_json::to_value(self.tched_router_runtime.chat(&state, args).await?)?
+                } else if op_plugins::state_plugins::tched_router::RUNTIME_EXECUTED_METHODS
+                    .contains(&method)
+                {
+                    // Daemon-backed methods: the plugin declares them, this
+                    // crate executes them and remains the audit boundary.
+                    let result = self
+                        .tched_router_runtime
+                        .dispatch_runtime_method(method, json_args)
+                        .await?;
+                    if op_plugins::state_plugins::tched_router::tched_router_method_mutates(method)
+                    {
+                        self.persist_tched_router_mutation(method, &result).await?;
+                        // Config changed underneath the projection, so re-read
+                        // rather than serving the pre-mutation snapshot.
+                        if let Err(error) = self.refresh_tched_router_projection().await {
+                            tracing::warn!(
+                                %error,
+                                "unable to refresh ZeroClaw projection after {method}"
+                            );
+                        }
+                    }
+                    result
                 } else {
                     match op_plugins::state_plugins::tched_router::dispatch_tched_router_method(
                         method, json_args, &state,
@@ -2191,16 +2217,24 @@ impl MutationEngine {
         state: &op_plugins::state_plugins::tched_router::TchedRouterState,
     ) -> anyhow::Result<()> {
         let owned = simd_json::serde::to_owned_value(state)?;
-        self.update_state_cache("tched_router".to_string(), owned).await;
+        self.update_state_cache("tched_router".to_string(), owned)
+            .await;
         Ok(())
     }
 
     async fn refresh_tched_router_projection(&self) -> anyhow::Result<()> {
         let declared_state = self
-            .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>("tched_router")
+            .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>(
+                "tched_router",
+            )
             .await
-            .unwrap_or_else(op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state);
-        let state = self.tched_router_runtime.project_state(declared_state).await?;
+            .unwrap_or_else(
+                op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state,
+            );
+        let state = self
+            .tched_router_runtime
+            .project_state(declared_state)
+            .await?;
         self.cache_tched_router_state(&state).await?;
         self.publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
             .await

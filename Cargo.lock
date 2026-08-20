@@ -4920,6 +4920,7 @@ dependencies = [
  "hex",
  "jsonwebtoken",
  "op-identity",
+ "op-llm-probe",
  "op-plugins",
  "op-state-store",
  "reqwest 0.11.27",
@@ -4931,6 +4932,18 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "op-llm-probe"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5083,6 +5096,7 @@ dependencies = [
  "op-dbus-model",
  "op-dynamic-loader",
  "op-execution-tracker",
+ "op-llm-probe",
  "op-network",
  "op-state",
  "op-state-store",

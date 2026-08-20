@@ -146,6 +146,47 @@ pub fn category_required_fields(category: &str) -> &'static [&'static str] {
     }
 }
 
+/// Namespace the *subject* token of shared subids with the consuming plugin.
+///
+/// When two plugins flatten the same nested struct, they inherit identical
+/// subids and violate uniqueness. Subids are immutable per subject, so the fix
+/// is a distinct subject per consumer rather than a renamed shared one: the
+/// struct's owning plugin keeps the bare subject and each borrower prefixes it.
+///
+/// `exp.network.wireguard.peer.endpoint.render@v1` in `wg_opdbus` becomes
+/// `exp.network.wg-opdbus-wireguard.peer.endpoint.render@v1`.
+///
+/// `plugin_name` is normalized to hyphens because callers pass a plugin id
+/// (`wg_opdbus`) while subid subjects are hyphen-delimited. Idempotent, so it is
+/// safe to apply more than once to one schema.
+pub fn namespace_shared_subids(
+    schema: &mut op_state_store::PluginSchema,
+    plugin_name: &str,
+    shared_subject_prefix: &str,
+) {
+    let slug = plugin_name.replace('_', "-");
+    let already = format!("{slug}-{shared_subject_prefix}");
+    for subid in schema.subids.values_mut() {
+        let parts: Vec<&str> = subid.split('.').collect();
+        // <category>.<component-type>.<subject>.<verb>[.<facet>]
+        if parts.len() < 4 {
+            continue;
+        }
+        let subject = parts[2];
+        if !subject.starts_with(shared_subject_prefix) || subject.starts_with(&already) {
+            continue;
+        }
+        *subid = format!(
+            "{}.{}.{}-{}.{}",
+            parts[0],
+            parts[1],
+            slug,
+            subject,
+            parts[3..].join(".")
+        );
+    }
+}
+
 /// Ensure a `PluginSchema` carries the metadata fields required by its subid categories.
 ///
 /// This is a runtime/schema-build helper: if the schema declares any `mut.*`, `evt.*`, or

@@ -122,7 +122,10 @@ fn example_query_scope() -> Option<String> {
 /// Operational category. Determines which additional fields are required.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[schemars(extend("x-oscal-subid" = "sch.standard.oscal-subid-registry.category@v1"))]
+// The `.vocabulary` facet distinguishes the enum (the closed vocabulary) from
+// the entry's `category` field, which reuses the unfaceted subid. Reusing one
+// subid for both made the artifact ambiguous.
+#[schemars(extend("x-oscal-subid" = "sch.standard.oscal-subid-registry.category.vocabulary@v1"))]
 pub enum OscalSubidCategory {
     Src,
     Prj,
@@ -136,7 +139,9 @@ pub enum OscalSubidCategory {
 /// OSCAL component-type vocabulary. Reuse OSCAL nouns — do not invent new types.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[schemars(extend("x-oscal-subid" = "sch.standard.oscal-subid-registry.component-type@v1"))]
+#[schemars(extend(
+    "x-oscal-subid" = "sch.standard.oscal-subid-registry.component-type.vocabulary@v1"
+))]
 pub enum OscalComponentType {
     ThisSystem,
     System,

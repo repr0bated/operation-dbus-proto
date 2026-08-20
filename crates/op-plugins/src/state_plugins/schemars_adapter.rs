@@ -91,6 +91,10 @@ pub fn plugin_schema_from_json(
         }
     }
 
+    // Harvest nested `$defs` subids *after* `__schema__` derivation above, so a
+    // derived schema subid still reflects only the plugin's own top-level fields.
+    collect_nested_subids(defs, &mut subids);
+
     let mut schema = PluginSchema::builder(name)
         .version(version)
         .description(description)
@@ -110,6 +114,33 @@ pub fn plugin_schema_from_json(
     // cannot be forgotten separately.
     super::common::oscal::ensure_category_metadata_fields(&mut schema);
     schema
+}
+
+/// Harvest subids declared on nested `$defs` types and their properties.
+///
+/// Only top-level `properties` used to reach `PluginSchema.subids`, so the
+/// uniqueness and pattern gate in `default_registry` never inspected a subid
+/// declared on a nested struct. Generated plugins carry the bulk of their
+/// subids there, which left most of the namespace unenforced.
+///
+/// Keys are `$defs.<Def>` and `$defs.<Def>.<prop>`. They name the artifact for
+/// gate diagnostics; they are not state addresses.
+fn collect_nested_subids(defs: Option<&Map<String, JVal>>, out: &mut HashMap<String, String>) {
+    let Some(defs) = defs else {
+        return;
+    };
+    for (def_name, def_node) in defs {
+        if let Some(subid) = def_node.get("x-oscal-subid").and_then(JVal::as_str) {
+            out.insert(format!("$defs.{def_name}"), subid.to_string());
+        }
+        if let Some(props) = def_node.get("properties").and_then(JVal::as_object) {
+            for (prop_name, prop_node) in props {
+                if let Some(subid) = prop_node.get("x-oscal-subid").and_then(JVal::as_str) {
+                    out.insert(format!("$defs.{def_name}.{prop_name}"), subid.to_string());
+                }
+            }
+        }
+    }
 }
 
 /// Follow a single `$ref` into `$defs`/`definitions`, recursively.
