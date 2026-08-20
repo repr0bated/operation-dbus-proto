@@ -93,13 +93,21 @@ fn build_set_config(xid: u32) -> Vec<u8> {
 
 /// Build an OpenFlow PortDesc multipart request.
 ///
-/// Body: type(2) + flags(2) + pad(12) = 16 bytes (24-byte message).
+/// Body: `ofp_multipart_request` type(2) + flags(2) + pad(4), followed by the
+/// OF1.5-only `ofp15_port_desc_request` port_no(4) + pad(4) = 16 bytes
+/// (24-byte message).
 ///
 /// OVS 3.7 validates the OF1.5 request against the full `ofp_multipart_request`
 /// layout and rejects the shorter 16-byte form.
+///
+/// OF1.5 added the port_no body that OF1.3 does not have (`openflow-1.5.h`:
+/// "All ports if OFPP_ANY"). Leaving it zeroed asks for port 0, which is not a
+/// valid port: OVS answers with an empty list and **no error**, so every
+/// symbolic port name silently fails to resolve.
 fn build_port_desc_request(xid: u32) -> Vec<u8> {
     let mut body = [0u8; 16];
     body[0..2].copy_from_slice(&OFPMP_PORT_DESC.to_be_bytes());
+    body[8..12].copy_from_slice(&OFPP_ANY.to_be_bytes());
     build_raw_msg(MessageType::MultipartRequest, xid, &body)
 }
 
@@ -403,17 +411,42 @@ async fn handle_connection(
         }
     }
 
+    // 5b. Re-assert static FDB pins BEFORE any symbolic-port work. These live
+    // in ovs-vswitchd's L2 table, not in OVSDB or the flow table, so a vswitchd
+    // restart silently drops them — and without them `actions=NORMAL` floods
+    // every port instead of unicasting. L2 reachability must never be gated on
+    // a static flow resolving a port name.
+    if !static_fdb.is_empty() {
+        let added = ensure_static_fdb_entries(&static_fdb).await;
+        log::info!(
+            "OF controller: {} static FDB pin(s) configured, {} (re)added",
+            static_fdb.len(),
+            added
+        );
+    }
+
     // 6b. Install durable static flows (rich match) — reinstalled every
     // reconnect, after delete_managed so the fallback/managed set is clean.
+    //
+    // A flow that cannot be translated (typically an `in_port` naming a port
+    // that is not currently attached to the bridge) is skipped, not fatal: the
+    // plugin declares `atomic_operations: false`, so one unresolvable flow must
+    // not tear down the connection and take every other flow with it.
     let mut static_installed = 0u32;
+    let mut static_skipped = 0u32;
     for flow_json in static_flows.iter() {
-        push_flow_add(&mut stream, flow_json, &port_map, &port_macs, &mut xid)
-            .await
-            .with_context(|| format!("static flow install failed: {flow_json}"))?;
-        static_installed += 1;
+        match push_flow_add(&mut stream, flow_json, &port_map, &port_macs, &mut xid).await {
+            Ok(_) => static_installed += 1,
+            Err(e) => {
+                static_skipped += 1;
+                log::warn!("OF controller: skipping static flow ({e:#}): {flow_json}");
+            }
+        }
     }
-    if static_installed > 0 {
-        log::info!("OF controller: {static_installed} static flow(s) installed");
+    if static_installed > 0 || static_skipped > 0 {
+        log::info!(
+            "OF controller: {static_installed} static flow(s) installed, {static_skipped} skipped"
+        );
     }
 
     // A barrier makes static-flow acceptance deterministic. Any FlowMod error
@@ -434,9 +467,18 @@ async fn handle_connection(
                     .payload
                     .get(2..4)
                     .map(|v| u16::from_be_bytes([v[0], v[1]]));
-                anyhow::bail!(
-                    "switch rejected OpenFlow programming: type={error_type:?} code={error_code:?}"
+                // Report but do not abort: a single rejected FlowMod must not
+                // cost us the NORMAL fallback, the FDB pins and every other
+                // installed flow. If the switch errored on the barrier itself
+                // there will be no BarrierReply, so stop waiting for one.
+                log::warn!(
+                    "OF controller: switch rejected OpenFlow programming: \
+                     type={error_type:?} code={error_code:?} xid={}",
+                    msg.xid
                 );
+                if msg.xid == barrier_xid {
+                    break;
+                }
             }
             2 /* EchoRequest */ => {
                 send_msg(&mut stream, &build_echo_reply(msg.xid, &msg.payload)).await?;
@@ -444,18 +486,6 @@ async fn handle_connection(
             21 /* BarrierReply */ if msg.xid == barrier_xid => break,
             _ => {}
         }
-    }
-
-    // 6c. Re-assert static FDB pins. These live in ovs-vswitchd's L2 table, not
-    // in OVSDB or the flow table, so a vswitchd restart silently drops them —
-    // and without them `actions=NORMAL` floods every port instead of unicasting.
-    if !static_fdb.is_empty() {
-        let added = ensure_static_fdb_entries(&static_fdb).await;
-        log::info!(
-            "OF controller: {} static FDB pin(s) configured, {} (re)added",
-            static_fdb.len(),
-            added
-        );
     }
 
     log::info!(
@@ -778,6 +808,31 @@ mod tests {
         assert_eq!(msg[0], 0x06);
         // FlowMod type = 14
         assert_eq!(msg[1], 14);
+    }
+
+    /// OF1.5 PORT_DESC carries a request body; `port_no` must be `OFPP_ANY` to
+    /// mean "all ports". A zeroed body asks for port 0 and OVS answers with an
+    /// empty list and no error, which silently breaks all name resolution.
+    #[test]
+    fn test_port_desc_request_asks_for_all_ports() {
+        let msg = build_port_desc_request(4);
+        assert_eq!(msg.len(), 24, "OF1.5 PORT_DESC request is 8 + 16 bytes");
+        let declared_len = u16::from_be_bytes([msg[2], msg[3]]) as usize;
+        assert_eq!(declared_len, msg.len(), "declared length must match actual");
+        assert_eq!(msg[0], 0x06); // OpenFlow 1.5
+        assert_eq!(msg[1], 18); // MultipartRequest
+
+        // ofp_multipart_request: type(2) + flags(2) + pad(4)
+        let body = &msg[8..];
+        assert_eq!(u16::from_be_bytes([body[0], body[1]]), OFPMP_PORT_DESC);
+        assert_eq!(u16::from_be_bytes([body[2], body[3]]), 0, "flags");
+
+        // ofp15_port_desc_request: port_no(4) + pad(4)
+        let port_no = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
+        assert_eq!(
+            port_no, OFPP_ANY,
+            "port_no must be OFPP_ANY, not 0 (port 0 returns an empty reply)"
+        );
     }
 
     #[test]
