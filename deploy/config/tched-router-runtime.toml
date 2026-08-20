@@ -9,7 +9,11 @@ directory = "shared/skills/default"
 
 [gateway]
 host = "127.0.0.1"
-port = 8082
+port = 8084
+# Pairing stays off by design. This daemon binds loopback only and its sole
+# client is op-grpc-bridge, which already authenticates callers by WireGuard
+# identity and checks capability grants. Enabling pairing would add a second
+# trust root and a credential to rotate without adding a security boundary.
 require_pairing = false
 allow_public_bind = false
 allow_remote_admin = false

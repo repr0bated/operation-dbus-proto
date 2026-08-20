@@ -15,6 +15,11 @@ GRPC_BIND=0.0.0.0:8090
 ZEROCLAW_BIND_ADDR=0.0.0.0:8090
 # Host-local native gRPC (op-web, zbusctl)
 ZEROCLAW_UNIX_SOCKET=/run/opdbus/grpc.sock
+# tched_router plugin runtime — the official zeroclaw binary under the
+# dedicated `tched-router` runit service (loopback-only, own state dir;
+# op-grpc-bridge is the only consumer)
+ZEROCLAW_RUNTIME_ENDPOINT=http://127.0.0.1:8084
+ZEROCLAW_RUNTIME_AGENT=dashboard
 # Shared fabric for NIC-less containers (bind-mount /run/ghostbridge)
 GHOSTBRIDGE_SOCKET_PATH=/run/ghostbridge/container.sock
 

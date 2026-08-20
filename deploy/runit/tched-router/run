@@ -1,0 +1,72 @@
+#!/bin/sh
+exec 2>&1
+set -eu
+
+# tched-router — dedicated runtime for the sealed 3tched_router plugin.
+#
+# Runs the OFFICIAL upstream zeroclaw binary, but as a hermetic instance owned
+# by the control plane: its own state dir, bootstrap config, HOME, and secret —
+# fully independent of the operator's on-disk zeroclaw instance
+# (/var/lib/zeroclaw on :8082 and ~jeremy dotfiles). Restarting, upgrading, or
+# reconfiguring that instance never touches this one.
+#
+# The daemon binds loopback only. Its sole consumer is op-grpc-bridge's
+# tched_router runtime client (ZEROCLAW_RUNTIME_ENDPOINT), so every external
+# caller still enters through the existing piping — the bridge on :8090 /
+# /run/opdbus/grpc.sock / /run/ghostbridge/container.sock — never this port.
+
+set -a
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+set +a
+
+CONFIG_DIR=${TCHED_ROUTER_CONFIG_DIR:-/var/lib/tched-router}
+BOOTSTRAP_CONFIG=${TCHED_ROUTER_BOOTSTRAP_CONFIG:-/etc/op-dbus/tched-router-runtime.toml}
+BOOTSTRAP_SKILLS=${TCHED_ROUTER_BOOTSTRAP_SKILLS:-/etc/op-dbus/zeroclaw-skills/default}
+SECRET_FILE=${TCHED_ROUTER_OPENCODE_KEY_FILE:-/etc/op-dbus/secrets/opencode-api-key}
+HOST=${TCHED_ROUTER_HOST:-127.0.0.1}
+PORT=${TCHED_ROUTER_PORT:-8084}
+
+install -d -o jeremy -g jeremy -m 0700 "$CONFIG_DIR" "$CONFIG_DIR/home"
+if [ ! -f "$CONFIG_DIR/config.toml" ]; then
+    install -o jeremy -g jeremy -m 0600 "$BOOTSTRAP_CONFIG" "$CONFIG_DIR/config.toml"
+fi
+
+# Seed/refresh the same sealed drill-down skill bundle the plugin schema
+# declares (skills drill down under the router surface; not a separate render).
+if [ -d "$BOOTSTRAP_SKILLS" ]; then
+    install -d -o jeremy -g jeremy -m 0755 "$CONFIG_DIR/shared/skills/default"
+    cp -a "$BOOTSTRAP_SKILLS"/. "$CONFIG_DIR/shared/skills/default/"
+    chown -R jeremy:jeremy "$CONFIG_DIR/shared/skills/default"
+fi
+
+# One-time seed of the provider key into /etc/op-dbus/secrets (the same pattern
+# as voyage-api-key). After the seed this service never reads the operator
+# instance's home again; delete or rotate $SECRET_FILE to re-seed.
+if [ ! -f "$SECRET_FILE" ]; then
+    AUTH_FILE=${OPENCODE_AUTH_FILE:-/home/jeremy/.local/share/opencode/auth.json}
+    if [ -r "$AUTH_FILE" ] && command -v jq >/dev/null 2>&1; then
+        if key=$(jq -er '.["opencode-go"].key | strings | select(length > 0)' "$AUTH_FILE"); then
+            install -d -m 0700 "$(dirname "$SECRET_FILE")"
+            umask 077
+            printf '%s\n' "$key" > "$SECRET_FILE"
+        fi
+    fi
+fi
+[ -r "$SECRET_FILE" ] || {
+    echo "tched-router: no provider key at $SECRET_FILE and no seed source" >&2
+    exit 1
+}
+
+/usr/local/libexec/3tched/runit-ready-signal tched-router 2>/dev/null || true
+
+exec chpst -u jeremy:jeremy env -i \
+    HOME="$CONFIG_DIR/home" \
+    USER=jeremy \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    ZEROCLAW_CONFIG_DIR="$CONFIG_DIR" \
+    OPENCODE_API_KEY="$(cat "$SECRET_FILE")" \
+    /usr/bin/zeroclaw daemon \
+        --config-dir "$CONFIG_DIR" \
+        --host "$HOST" \
+        --port "$PORT" \
+        --log-level warn

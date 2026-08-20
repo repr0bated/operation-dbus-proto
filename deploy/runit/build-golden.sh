@@ -183,6 +183,9 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
             "$GOLDEN_DIR/etc/zeroclaw-runtime.toml"
+    [ -f "$SCRIPT_DIR/../config/tched-router-runtime.toml" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/tched-router-runtime.toml" \
+            "$GOLDEN_DIR/etc/tched-router-runtime.toml"
     [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
             "$GOLDEN_DIR/etc/netmaker-broker.env"
@@ -322,6 +325,9 @@ install_live() {
     [ -f "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/zeroclaw-runtime.toml" \
             /etc/op-dbus/zeroclaw-runtime.toml
+    [ -f "$SCRIPT_DIR/../config/tched-router-runtime.toml" ] &&
+        run install -Dm644 "$SCRIPT_DIR/../config/tched-router-runtime.toml" \
+            /etc/op-dbus/tched-router-runtime.toml
     [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
             /etc/op-dbus/netmaker-broker.env

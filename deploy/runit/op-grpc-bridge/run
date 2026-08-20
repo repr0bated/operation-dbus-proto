@@ -45,6 +45,13 @@ export EMQX_BROKER_SOCKET="${NETMAKER_BROKER_SOCKET:-/run/ghostbridge/NetMaker/b
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
 export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
+# tched_router plugin runtime piping: the official ZeroClaw binary runs under
+# the dedicated `tched-router` service (loopback :8084, own state dir at
+# /var/lib/tched-router), independent of the operator zeroclaw instance on
+# :8082. The bridge is that daemon's only consumer — external callers reach it
+# exclusively through this bridge's surfaces, never the loopback port itself.
+export ZEROCLAW_RUNTIME_ENDPOINT="${ZEROCLAW_RUNTIME_ENDPOINT:-http://127.0.0.1:8084}"
+export ZEROCLAW_RUNTIME_AGENT="${ZEROCLAW_RUNTIME_AGENT:-dashboard}"
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
 export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
 [ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"
