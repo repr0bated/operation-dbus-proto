@@ -15,6 +15,9 @@ import ConfigPage from "./pages/ConfigPage";
 import InspectorPage from "./pages/InspectorPage";
 import StatePage from "./pages/StatePage";
 import KnowledgeStorePage from "./pages/claw/KnowledgeStorePage";
+import JsonRenderDemoPage from "./pages/JsonRenderDemoPage";
+import PluginCatalogPage from "./pages/PluginCatalogPage";
+import PluginChatPage from "./pages/PluginChatPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -46,6 +49,9 @@ const App = () => (
             <Route path="/inspector" element={<InspectorPage />} />
             <Route path="/state" element={<StatePage />} />
             <Route path="/claw/search" element={<KnowledgeStorePage />} />
+            <Route path="/json-render" element={<JsonRenderDemoPage />} />
+            <Route path="/plugins" element={<PluginCatalogPage />} />
+            <Route path="/plugin-chat" element={<PluginChatPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AppShell>

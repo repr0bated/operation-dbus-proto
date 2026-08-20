@@ -12,6 +12,8 @@ import {
   fetchLlmModels,
   switchModel,
   fetchConfig,
+  fetchPluginStates,
+  fetchPluginState,
 } from "@/api/client";
 
 // ── Health ────────────────────────────────────────────────────
@@ -116,5 +118,32 @@ export function useConfig() {
   return useQuery({
     queryKey: ["config"],
     queryFn: fetchConfig,
+  });
+}
+
+// ── Plugin State ──────────────────────────────────────────────
+
+/**
+ * Fetch all plugin projection states from SHM
+ */
+export function usePluginStates() {
+  return useQuery({
+    queryKey: ["pluginStates"],
+    queryFn: fetchPluginStates,
+    refetchInterval: 5_000, // Poll every 5s for updates
+    staleTime: 2_000,
+  });
+}
+
+/**
+ * Fetch a single plugin's projection state
+ */
+export function usePluginState(pluginId: string) {
+  return useQuery({
+    queryKey: ["pluginState", pluginId],
+    queryFn: () => fetchPluginState(pluginId),
+    enabled: !!pluginId,
+    refetchInterval: 5_000,
+    staleTime: 2_000,
   });
 }

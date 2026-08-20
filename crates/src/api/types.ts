@@ -141,3 +141,55 @@ export interface ChatResponse {
   message: ChatMessage;
   session_id: string;
 }
+
+// ── Plugin State Types ───────────────────────────────────────
+
+/**
+ * Child object summary — used for repeat binding in json-render specs.
+ * Maps to Rust `ChildSummary` in json_render.rs.
+ */
+export interface ChildSummary {
+  id: string;
+  label: string;
+  status: ChildStatus;
+  created_at: number;
+  updated_at: number;
+  /** Freeform payload keyed by plugin-specific field names */
+  data: Record<string, unknown>;
+  /** Per-item actions the UI can invoke */
+  actions: ChildAction[];
+}
+
+export type ChildStatus = 'pending' | 'active' | 'completed' | 'failed' | 'cancelled';
+
+export interface ChildAction {
+  name: string;
+  label: string;
+  variant?: 'default' | 'destructive' | 'outline' | 'ghost';
+  confirm?: string;
+}
+
+/**
+ * Bounded collection of child objects for a plugin.
+ * Maps to Rust `BoundedChildren` in json_render.rs.
+ */
+export interface BoundedChildren {
+  children: ChildSummary[];
+  total: number;
+  window_size: number;
+  cursor?: string;
+}
+
+/**
+ * Plugin projection state — the full present-state JSON object
+ * stored in /dev/shm/opdbus/state/<plugin>.json
+ */
+export type PluginState = Record<string, unknown>;
+
+/**
+ * Response from GET /api/ui-model/state
+ */
+export interface PluginStateResponse {
+  plugins: string[];
+  state: Record<string, PluginState>;
+}

@@ -8,6 +8,8 @@ import type {
   LlmStatus,
   LlmModel,
   ChatResponse,
+  PluginStateResponse,
+  PluginState,
 } from "./types";
 
 class ApiError extends Error {
@@ -226,4 +228,21 @@ export function connectWebSocket(
   };
   if (onError) ws.onerror = onError;
   return ws;
+}
+
+// ── Plugin State ──────────────────────────────────────────────
+
+/**
+ * Fetch all plugin projection states from /dev/shm/opdbus/state/
+ */
+export async function fetchPluginStates(): Promise<PluginStateResponse> {
+  return request<PluginStateResponse>("/ui-model/state");
+}
+
+/**
+ * Fetch a single plugin's projection state
+ */
+export async function fetchPluginState(pluginId: string): Promise<PluginState | null> {
+  const res = await fetchPluginStates();
+  return res.state[pluginId] ?? null;
 }
