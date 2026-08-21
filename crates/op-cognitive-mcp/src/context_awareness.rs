@@ -79,6 +79,9 @@ const IDLE_REFRESH_THRESHOLD_SECS: u64 = 300; // 5 minutes
 const EVALUATION_INTERVAL_MS: u64 = 5000;
 /// Minimum relevance score to push knowledge
 const MIN_RELEVANCE_SCORE: f32 = 0.75;
+/// Current-topic state is a bounded, ephemeral convenience signal, never a
+/// second memory namespace.
+const MAX_CURRENT_TOPICS: usize = 8;
 
 /// Types of knowledge push triggers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,6 +315,37 @@ impl SessionContextState {
             self.query_hashes.push_back(hash);
             while self.query_hashes.len() > 10 {
                 self.query_hashes.pop_front();
+            }
+            self.update_current_topics(&content);
+        }
+    }
+
+    fn update_current_topics(&mut self, content: &str) {
+        let content = content.to_ascii_lowercase();
+        for (topic, keywords) in [
+            (
+                "database",
+                &["postgres", "sqlite", "query", "schema", "table"][..],
+            ),
+            ("api", &["endpoint", "rest", "grpc", "http", "request"][..]),
+            ("frontend", &["react", "component", "ui", "html", "css"][..]),
+            (
+                "infrastructure",
+                &["docker", "kubernetes", "deploy", "server"][..],
+            ),
+            (
+                "security",
+                &["auth", "encrypt", "token", "vulnerability", "oauth"][..],
+            ),
+        ] {
+            if keywords.iter().any(|keyword| content.contains(keyword)) {
+                if let Some(index) = self.current_topics.iter().position(|known| known == topic) {
+                    self.current_topics.remove(index);
+                }
+                self.current_topics.push(topic.to_string());
+                while self.current_topics.len() > MAX_CURRENT_TOPICS {
+                    self.current_topics.remove(0);
+                }
             }
         }
     }
@@ -1068,6 +1102,35 @@ mod tests {
         );
 
         assert_eq!(state.recent_error_count, 2);
+    }
+
+    #[test]
+    fn query_activity_derives_bounded_ephemeral_topics() {
+        let mut state = SessionContextState::new("test".to_string());
+
+        state.record_activity(
+            ActivityType::Query,
+            "Inspect the gRPC API schema, OAuth token, React UI, and Docker deployment".to_string(),
+            serde_json::json!({}),
+        );
+        assert_eq!(
+            state.current_topics,
+            vec![
+                "database".to_string(),
+                "api".to_string(),
+                "frontend".to_string(),
+                "infrastructure".to_string(),
+                "security".to_string(),
+            ]
+        );
+
+        state.record_activity(
+            ActivityType::Query,
+            "Investigate a PostgreSQL table migration".to_string(),
+            serde_json::json!({}),
+        );
+        assert_eq!(state.current_topics.last(), Some(&"database".to_string()));
+        assert!(state.current_topics.len() <= MAX_CURRENT_TOPICS);
     }
 
     #[test]

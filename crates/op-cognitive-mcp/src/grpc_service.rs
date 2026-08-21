@@ -24,6 +24,7 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::context_awareness::{ActivityType, ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::memory_store::{CognitiveMemoryStore, MemoryEntry, MemoryNamespace, NamespaceKind};
 use crate::proto::cognitive_tool_service_server::CognitiveToolService;
 use crate::proto::*;
@@ -173,6 +174,7 @@ pub struct CognitiveGrpcService {
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
     tool_registry: Arc<ToolRegistry>,
+    context_engine: Arc<ContextAwarenessEngine>,
     mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
     model_router: Arc<dyn CognitiveModelRouter>,
 }
@@ -203,10 +205,15 @@ impl CognitiveGrpcService {
         mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
     ) -> Self {
         Self::with_operational_adapters(
-            memory_store,
+            memory_store.clone(),
             session_manager,
             quota_manager,
             tool_registry,
+            Arc::new(ContextAwarenessEngine::new(
+                ContextAwarenessConfig::default(),
+                memory_store,
+                None,
+            )),
             mutation_auditor,
             Arc::new(UnavailableModelRouter),
         )
@@ -219,6 +226,7 @@ impl CognitiveGrpcService {
         session_manager: Arc<SessionManager>,
         quota_manager: Arc<QuotaManager>,
         tool_registry: Arc<ToolRegistry>,
+        context_engine: Arc<ContextAwarenessEngine>,
         mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
         model_router: Arc<dyn CognitiveModelRouter>,
     ) -> Self {
@@ -227,6 +235,7 @@ impl CognitiveGrpcService {
             session_manager,
             quota_manager,
             tool_registry,
+            context_engine,
             mutation_auditor,
             model_router,
         }
@@ -263,6 +272,25 @@ impl CognitiveGrpcService {
                 arguments,
             })
             .await
+    }
+
+    /// Record grounded-query activity in the shared, ephemeral awareness
+    /// engine. This is deliberately not memory ingestion: it has no namespace
+    /// write API and only returns bounded session signals to the caller.
+    async fn record_query_context(&self, session_id: &str, namespace: &str, query: &str) -> String {
+        self.context_engine
+            .record_activity(
+                session_id,
+                ActivityType::Query,
+                query.to_string(),
+                serde_json::json!({ "namespace": namespace, "source": "grounded_query" }),
+            )
+            .await;
+        self.context_engine
+            .get_session_signals(session_id)
+            .await
+            .and_then(|signals| serde_json::to_string(&signals).ok())
+            .unwrap_or_else(|| "{}".to_string())
     }
 
     /// Resolve either stable UUIDs returned by `ListNotebooks`, canonical
@@ -388,12 +416,16 @@ impl CognitiveToolService for CognitiveGrpcService {
                 grounded,
             },
         );
+        let context_json = self
+            .record_query_context(&conversation_id, &namespace, &req.query)
+            .await;
 
         Ok(Response::new(AskQuestionResponse {
             answer,
             citations,
             conversation_id,
             grounded,
+            context_json,
         }))
     }
 
@@ -431,21 +463,26 @@ impl CognitiveToolService for CognitiveGrpcService {
         let (answer, citations, grounded) =
             format_grounded_query(&entries, &req.query, &req.notebook_id);
 
+        let query = req.query;
         let _ = self.session_manager.append_turn(
             &session.id,
             QueryTurn {
-                query: req.query,
+                query: query.clone(),
                 answer: answer.clone(),
                 timestamp: Utc::now(),
                 citations_count: citations.len() as u32,
                 grounded,
             },
         );
+        let context_json = self
+            .record_query_context(&session.id, &namespace, &query)
+            .await;
 
         Ok(Response::new(QueryNotebookResponse {
             answer,
             citations,
             conversation_id: session.id,
+            context_json,
         }))
     }
 
@@ -2067,6 +2104,11 @@ mod tests {
             .into_inner();
         assert!(by_id.grounded);
         assert!(by_id.answer.contains("canonical ingress is unified"));
+        let context: serde_json::Value =
+            serde_json::from_str(&by_id.context_json).expect("bounded context signals");
+        assert_eq!(context["session_id"], by_id.conversation_id);
+        assert_eq!(context["activity_count"], 1);
+        assert!(context["current_topics"].is_array());
         let session = service
             .session_manager
             .get_session(&by_id.conversation_id)
@@ -2158,6 +2200,11 @@ mod tests {
             Arc::new(SessionManager::with_defaults()),
             Arc::new(QuotaManager::with_defaults()),
             Arc::new(ToolRegistry::new()),
+            Arc::new(ContextAwarenessEngine::new(
+                ContextAwarenessConfig::default(),
+                store.clone(),
+                None,
+            )),
             Arc::new(RecordingMutationAuditor::default()),
             model.clone(),
         );
