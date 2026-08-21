@@ -7,7 +7,7 @@ command = "npx"
 args = [
     "-y",
     "@modelcontextprotocol/server-filesystem",
-    "/home/admin/git/odbus",
+    "${ODBUS_HOME:-/var/lib/odbus}",
 ]
 
 [mcp_servers.memory]
