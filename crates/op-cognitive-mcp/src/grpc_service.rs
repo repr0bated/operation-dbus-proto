@@ -40,6 +40,16 @@ const DEFAULT_PAGE_SIZE: usize = 100;
 const MAX_PAGE_SIZE: usize = 500;
 const DEFAULT_HISTORY_PAGE_SIZE: usize = 50;
 const MAX_HISTORY_PAGE_SIZE: usize = 200;
+const MAX_NOTEBOOK_REF_BYTES: usize = 512;
+const MAX_NOTEBOOK_TITLE_BYTES: usize = 256;
+const MAX_NOTEBOOK_DESCRIPTION_BYTES: usize = 8 * 1024;
+const MAX_BATCH_NOTEBOOKS: usize = 100;
+const MAX_SOURCE_CONTENT_BYTES: usize = 5 * 1024 * 1024;
+const MAX_SOURCE_TITLE_BYTES: usize = 512;
+const MAX_SOURCE_TAGS: usize = 32;
+const MAX_SOURCE_TAG_BYTES: usize = 128;
+const MAX_FOLDER_PATTERNS: usize = 32;
+const MAX_FOLDER_PATTERN_BYTES: usize = 128;
 
 /// The gRPC service implementation.
 ///
@@ -78,6 +88,7 @@ impl CognitiveGrpcService {
         if notebook_ref.is_empty() {
             return Err(Status::invalid_argument("notebook_id is required"));
         }
+        require_at_most_bytes(notebook_ref, "notebook_id", MAX_NOTEBOOK_REF_BYTES)?;
 
         if let Some(namespace) = self
             .memory_store
@@ -386,6 +397,11 @@ impl CognitiveToolService for CognitiveGrpcService {
     ) -> Result<Response<CreateNotebookResponse>, Status> {
         let req = request.into_inner();
         info!(title = %req.title, "CreateNotebook");
+        require_at_most_bytes(
+            &req.description,
+            "description",
+            MAX_NOTEBOOK_DESCRIPTION_BYTES,
+        )?;
 
         let kind = if req.kind.is_empty() {
             NamespaceKind::Project
@@ -439,11 +455,25 @@ impl CognitiveToolService for CognitiveGrpcService {
     ) -> Result<Response<BatchCreateNotebooksResponse>, Status> {
         let req = request.into_inner();
         info!(count = req.notebooks.len(), "BatchCreateNotebooks");
+        if req.notebooks.len() > MAX_BATCH_NOTEBOOKS {
+            return Err(Status::invalid_argument(format!(
+                "notebooks exceeds the {MAX_BATCH_NOTEBOOKS}-item batch limit"
+            )));
+        }
 
         let mut created_notebooks = Vec::new();
         let mut failed = 0i32;
 
         for nb_req in req.notebooks {
+            if let Err(error) = require_at_most_bytes(
+                &nb_req.description,
+                "description",
+                MAX_NOTEBOOK_DESCRIPTION_BYTES,
+            ) {
+                warn!(title = %nb_req.title, error = %error, "Failed to validate notebook description");
+                failed += 1;
+                continue;
+            }
             let kind = if nb_req.kind.is_empty() {
                 NamespaceKind::Project
             } else {
@@ -514,6 +544,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             source_type = %req.source_type,
             "AddSource"
         );
+        validate_source_request(&req)?;
 
         let namespace = self
             .resolve_or_create_notebook(&req.notebook_id)
@@ -552,6 +583,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             folder_path = %req.folder_path,
             "AddFolder"
         );
+        validate_folder_patterns(&req.patterns)?;
 
         // Bulk import is intentionally opt-in. The gRPC client never gets to
         // turn an arbitrary readable host directory into retrievable notebook
@@ -1045,6 +1077,7 @@ fn canonical_notebook_name(notebook_ref: &str) -> Result<String, Status> {
     if notebook_ref.is_empty() {
         return Err(Status::invalid_argument("notebook_id is required"));
     }
+    require_at_most_bytes(notebook_ref, "notebook_id", MAX_NOTEBOOK_REF_BYTES)?;
     if explicit_namespace_kind(notebook_ref).is_some() {
         Ok(notebook_ref.to_string())
     } else {
@@ -1058,6 +1091,15 @@ fn require_query(query: &str) -> Result<(), Status> {
 
 fn require_conversation_id(conversation_id: &str) -> Result<(), Status> {
     crate::ingress::validate_conversation_id(conversation_id).map_err(Status::invalid_argument)
+}
+
+fn require_at_most_bytes(value: &str, field: &str, limit: usize) -> Result<(), Status> {
+    if value.len() > limit {
+        return Err(Status::invalid_argument(format!(
+            "{field} exceeds the {limit}-byte limit"
+        )));
+    }
+    Ok(())
 }
 
 fn bounded_limit(requested: i32, default: usize, max: usize) -> usize {
@@ -1080,11 +1122,56 @@ fn canonical_create_notebook(
     if title.is_empty() {
         return Err(Status::invalid_argument("title is required"));
     }
+    require_at_most_bytes(title, "title", MAX_NOTEBOOK_TITLE_BYTES)?;
     if let Some(kind) = explicit_namespace_kind(title) {
         Ok((title.to_string(), kind))
     } else {
         Ok((format!("{requested_kind}:{title}"), requested_kind))
     }
+}
+
+fn validate_source_request(request: &AddSourceRequest) -> Result<(), Status> {
+    if !matches!(request.source_type.as_str(), "url" | "text" | "file") {
+        return Err(Status::invalid_argument(
+            "source_type must be url, text, or file",
+        ));
+    }
+    if request.content.trim().is_empty() {
+        return Err(Status::invalid_argument("content must not be empty"));
+    }
+    require_at_most_bytes(&request.content, "content", MAX_SOURCE_CONTENT_BYTES)?;
+    require_at_most_bytes(&request.title, "title", MAX_SOURCE_TITLE_BYTES)?;
+    if request.tags.len() > MAX_SOURCE_TAGS {
+        return Err(Status::invalid_argument(format!(
+            "tags exceeds the {MAX_SOURCE_TAGS}-item limit"
+        )));
+    }
+    for tag in &request.tags {
+        if tag.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "tags must not contain empty values",
+            ));
+        }
+        require_at_most_bytes(tag, "tag", MAX_SOURCE_TAG_BYTES)?;
+    }
+    Ok(())
+}
+
+fn validate_folder_patterns(patterns: &[String]) -> Result<(), Status> {
+    if patterns.len() > MAX_FOLDER_PATTERNS {
+        return Err(Status::invalid_argument(format!(
+            "patterns exceeds the {MAX_FOLDER_PATTERNS}-item limit"
+        )));
+    }
+    for pattern in patterns {
+        if pattern.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "patterns must not contain empty values",
+            ));
+        }
+        require_at_most_bytes(pattern, "pattern", MAX_FOLDER_PATTERN_BYTES)?;
+    }
+    Ok(())
 }
 
 fn namespace_kind_from_name(name: &str) -> NamespaceKind {
@@ -1347,6 +1434,33 @@ mod tests {
             MAX_QUERY_RESULTS
         );
         assert_eq!(nonnegative_offset(-5), 0);
+    }
+
+    #[test]
+    fn source_and_folder_mutations_require_bounded_structured_input() {
+        let valid = AddSourceRequest {
+            notebook_id: "project:3tched-cognative".to_string(),
+            source_type: "text".to_string(),
+            content: "operator-approved source".to_string(),
+            title: "Source".to_string(),
+            tags: vec!["cognitive".to_string()],
+        };
+        validate_source_request(&valid).expect("valid source request");
+
+        let mut invalid_type = valid.clone();
+        invalid_type.source_type = "shell".to_string();
+        assert_eq!(
+            validate_source_request(&invalid_type)
+                .expect_err("unknown source type must fail")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+
+        let mut empty_tag = valid;
+        empty_tag.tags = vec![" ".to_string()];
+        assert!(validate_source_request(&empty_tag).is_err());
+        assert!(validate_folder_patterns(&["*.rs".to_string(), "*.md".to_string()]).is_ok());
+        assert!(validate_folder_patterns(&["".to_string()]).is_err());
     }
 
     #[test]
