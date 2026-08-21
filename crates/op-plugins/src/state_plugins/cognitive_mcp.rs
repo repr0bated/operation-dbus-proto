@@ -25,7 +25,7 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 // =============================================================================
 
 const PLUGIN_NAME: &str = "cognitive_mcp";
-const PLUGIN_VERSION: &str = "3.3.0";
+const PLUGIN_VERSION: &str = "3.4.0";
 const PLUGIN_CATEGORY: &str = "service";
 const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
@@ -869,21 +869,41 @@ pub struct RegisterToolOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryStoreOutput {
     pub success: bool,
+    pub id: String,
+    pub namespace: String,
     pub key: String,
+    pub semantic_mirrored: bool,
 }
 
 /// Output for MemoryRetrieve method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryRetrieveOutput {
-    pub success: bool,
-    pub value: Option<String>,
+    pub found: bool,
+    pub id: Option<String>,
     pub namespace: String,
+    pub key: String,
+    pub value: Option<serde_json::Value>,
+    pub tags: Option<Vec<String>>,
+    pub access_count: Option<i64>,
+    pub updated_at: Option<String>,
+}
+
+/// A memory entry returned from a bounded metadata query.  Value content is
+/// intentionally omitted; callers use `memory_retrieve` for a point read.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryEntryInfo {
+    pub id: String,
+    pub namespace_id: String,
+    pub key: String,
+    pub tags: Vec<String>,
+    pub access_count: i64,
+    pub updated_at: String,
 }
 
 /// Output for MemoryQuery method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryQueryOutput {
-    pub results: Vec<String>,
+    pub entries: Vec<MemoryEntryInfo>,
     pub count: usize,
 }
 
@@ -891,27 +911,71 @@ pub struct MemoryQueryOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryDeleteOutput {
     pub success: bool,
-    pub keys_deleted: usize,
+    pub namespace: String,
+    pub key: String,
+}
+
+/// One registered memory namespace with its available ownership metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryNamespaceInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub description: Option<String>,
+    pub linked_task_id: Option<String>,
+    pub linked_cron: Option<String>,
 }
 
 /// Output for MemoryListNamespaces method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryListNamespacesOutput {
-    pub namespaces: Vec<String>,
+    pub namespaces: Vec<MemoryNamespaceInfo>,
+    pub count: usize,
+}
+
+/// One ranked code chunk from the RAG pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CodeSearchResult {
+    pub retrieval_collection: String,
+    pub score: f64,
+    pub repo: String,
+    pub file_path: String,
+    pub language: String,
+    pub file_type: String,
+    pub symbols: Vec<String>,
+    pub doc_comments: Vec<String>,
+    pub imports: Vec<String>,
+    pub tags: Vec<String>,
+    pub is_test: bool,
+    pub line_start: i64,
+    pub line_end: i64,
+    pub chunk_index: i64,
+    pub total_chunks: i64,
+    pub content: String,
 }
 
 /// Output for CodeSearch method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CodeSearchOutput {
-    pub results: Vec<String>,
+    pub results: Vec<CodeSearchResult>,
     pub count: usize,
+    pub collections: Vec<String>,
+    pub retrieval_mode: String,
+    pub rerank_enabled: bool,
+    pub kiro_lsp_state_dir: String,
 }
 
 /// Output for CodeIndex method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CodeIndexOutput {
     pub success: bool,
+    pub mode: String,
+    pub collection: String,
     pub files_indexed: usize,
+    pub chunks_created: usize,
+    pub chunks_upserted: usize,
+    pub chunks_skipped: usize,
+    pub errors: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1012,8 +1076,15 @@ pub struct DevelopmentVerificationOutput {
 /// Output for CodeContext method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CodeContextOutput {
-    pub context: String,
-    pub sources: Vec<String>,
+    pub results: Vec<CodeSearchResult>,
+    pub count: usize,
+    pub collections: Vec<String>,
+    pub retrieval_mode: String,
+    pub rerank_enabled: bool,
+    pub kiro_lsp_state_dir: String,
+    pub session_id: String,
+    pub signals: serde_json::Value,
+    pub retrieval_error: Option<String>,
 }
 
 /// Output for the provider-neutral grounded question method.

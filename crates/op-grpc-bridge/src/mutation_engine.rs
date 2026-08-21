@@ -3262,7 +3262,7 @@ async fn dispatch_cognitive_mcp_method(
         .context("serialize cognitive invoke_tool response");
     }
 
-    Ok(result)
+    cognitive_schema_method_response(method, result)
 }
 
 /// Decode the canonical JSON argument object supplied to a Cognitive MCP
@@ -3282,6 +3282,106 @@ fn cognitive_set_config_input(
     args: &serde_json::Value,
 ) -> anyhow::Result<op_plugins::state_plugins::cognitive_mcp::SetConfigInput> {
     serde_json::from_value(args.clone()).context("invalid cognitive_mcp.set_config arguments")
+}
+
+/// Project a live tool response onto the method's sealed output contract.
+///
+/// Tool implementations can retain useful runtime details, but fixed schema
+/// methods must never let incidental fields leak into generated gRPC clients or
+/// json-render consumers.  `invoke_tool` is intentionally excluded: its
+/// declared `result` field is the explicit generic escape hatch for a tool's
+/// own response shape.
+fn cognitive_schema_method_response(
+    method: &str,
+    response: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    match method {
+        "memory_store" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::MemoryStoreOutput,
+        >(method, rename_response_field(response, "ok", "success")?),
+        "memory_retrieve" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::MemoryRetrieveOutput,
+        >(method, response),
+        "memory_query" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::MemoryQueryOutput,
+        >(method, response),
+        "memory_delete" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::MemoryDeleteOutput,
+        >(method, rename_response_field(response, "ok", "success")?),
+        "memory_list_namespaces" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::MemoryListNamespacesOutput,
+        >(method, response),
+        "code_search" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::CodeSearchOutput,
+        >(method, response),
+        "code_index" => {
+            let response = rename_response_field(response, "ok", "success")?;
+            cognitive_typed_method_response::<
+                op_plugins::state_plugins::cognitive_mcp::CodeIndexOutput,
+            >(
+                method,
+                rename_response_field(response, "files_parsed", "files_indexed")?,
+            )
+        }
+        "code_context" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::CodeContextOutput,
+        >(method, response),
+        "ask_question" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::AskQuestionOutput,
+        >(method, response),
+        "register_tool" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::RegisterToolOutput,
+        >(method, response),
+        "development_upsert" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::DevelopmentUpsertOutput,
+        >(method, response),
+        "development_list" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::DevelopmentListOutput,
+        >(method, response),
+        "development_categories" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::DevelopmentCategoriesOutput,
+        >(method, response),
+        "development_summary" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::DevelopmentSummaryOutput,
+        >(method, response),
+        "development_history" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::DevelopmentHistoryOutput,
+        >(method, response),
+        "development_record_verification" => cognitive_typed_method_response::<
+            op_plugins::state_plugins::cognitive_mcp::DevelopmentVerificationOutput,
+        >(method, response),
+        other => Err(anyhow::anyhow!(
+            "cognitive_mcp method '{other}' has no sealed response projection"
+        )),
+    }
+}
+
+fn cognitive_typed_method_response<T>(
+    method: &str,
+    response: serde_json::Value,
+) -> anyhow::Result<serde_json::Value>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    let typed: T = serde_json::from_value(response)
+        .with_context(|| format!("{method} tool response does not satisfy its sealed output"))?;
+    serde_json::to_value(typed).with_context(|| format!("serialize sealed {method} response"))
+}
+
+fn rename_response_field(
+    response: serde_json::Value,
+    from: &str,
+    to: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let mut object = response
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("cognitive tool response must be a JSON object"))?;
+    let value = object
+        .remove(from)
+        .ok_or_else(|| anyhow::anyhow!("cognitive tool response missing field '{from}'"))?;
+    object.insert(to.to_string(), value);
+    Ok(serde_json::Value::Object(object))
 }
 
 /// Convert the full Cognitive MCP projection into the narrow response that a
@@ -3590,8 +3690,8 @@ mod cognitive_development_dispatch_tests {
 #[cfg(test)]
 mod cognitive_tool_catalog_tests {
     use super::{
-        cognitive_projection_response, cognitive_set_config_input, cognitive_tool_catalog_response,
-        dispatch_cognitive_mcp_method,
+        cognitive_projection_response, cognitive_schema_method_response,
+        cognitive_set_config_input, cognitive_tool_catalog_response, dispatch_cognitive_mcp_method,
     };
     use anyhow::Result;
     use async_trait::async_trait;
@@ -3770,6 +3870,48 @@ mod cognitive_tool_catalog_tests {
         assert!(missing_required
             .to_string()
             .contains("invalid cognitive_mcp.set_config arguments"));
+    }
+
+    #[test]
+    fn fixed_cognitive_methods_project_live_tool_data_to_their_sealed_outputs() {
+        let retrieved = cognitive_schema_method_response(
+            "memory_retrieve",
+            json!({
+                "found": true,
+                "id": "entry-1",
+                "namespace": "project:3tched-cognative",
+                "key": "roadmap",
+                "value": { "stage": "implemented" },
+                "tags": ["development"],
+                "access_count": 2,
+                "updated_at": "2026-08-21T12:00:00Z",
+                "runtime_only": "must not leak",
+            }),
+        )
+        .expect("memory response projects");
+        assert_eq!(retrieved["value"]["stage"], "implemented");
+        assert_eq!(retrieved["tags"], json!(["development"]));
+        assert!(retrieved.get("runtime_only").is_none());
+
+        let indexed = cognitive_schema_method_response(
+            "code_index",
+            json!({
+                "ok": true,
+                "mode": "source",
+                "collection": "repomix_rag",
+                "files_parsed": 1,
+                "chunks_created": 3,
+                "chunks_upserted": 3,
+                "chunks_skipped": 0,
+                "errors": 0,
+                "runtime_only": "must not leak",
+            }),
+        )
+        .expect("code index response projects");
+        assert_eq!(indexed["success"], true);
+        assert_eq!(indexed["files_indexed"], 1);
+        assert!(indexed.get("ok").is_none());
+        assert!(indexed.get("runtime_only").is_none());
     }
 
     #[tokio::test]
