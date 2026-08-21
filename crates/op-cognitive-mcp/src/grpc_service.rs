@@ -137,6 +137,9 @@ impl CognitiveToolService for CognitiveGrpcService {
             "AskQuestion"
         );
 
+        require_query(&req.query)?;
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
+
         // R11 — quota check
         let (allowed, remaining, _limit) = self.quota_manager.check_and_increment().await;
         if !allowed {
@@ -149,13 +152,12 @@ impl CognitiveToolService for CognitiveGrpcService {
         // R2 — conversation_id session management
         let session = self
             .session_manager
-            .get_or_create(&req.conversation_id, &req.notebook_id);
+            .get_or_create(&req.conversation_id, &namespace);
         let conversation_id = session.id.clone();
 
         // Attempt grounded query via memory store.
         // Phase 1: query entries matching the notebook namespace.
         // Phase 2+: this forwards through the NotebookLM bridge.
-        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
         let entries = self
             .memory_store
             .search_entries(&namespace, &req.query, 10)
@@ -221,6 +223,9 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!(notebook_id = %req.notebook_id, "QueryNotebook");
 
+        require_query(&req.query)?;
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
+
         let (allowed, _, _) = self.quota_manager.check_and_increment().await;
         if !allowed {
             return Err(Status::resource_exhausted("Daily query quota exceeded"));
@@ -228,9 +233,8 @@ impl CognitiveToolService for CognitiveGrpcService {
 
         let session = self
             .session_manager
-            .get_or_create(&req.conversation_id, &req.notebook_id);
+            .get_or_create(&req.conversation_id, &namespace);
 
-        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
         let limit = if req.max_results > 0 {
             req.max_results as i64
         } else {
@@ -988,6 +992,13 @@ fn canonical_notebook_name(notebook_ref: &str) -> Result<String, Status> {
     }
 }
 
+fn require_query(query: &str) -> Result<(), Status> {
+    if query.trim().is_empty() {
+        return Err(Status::invalid_argument("query must not be empty"));
+    }
+    Ok(())
+}
+
 fn canonical_create_notebook(
     title: &str,
     requested_kind: NamespaceKind,
@@ -1165,6 +1176,11 @@ mod tests {
             .into_inner();
         assert!(by_id.grounded);
         assert!(by_id.answer.contains("canonical ingress is unified"));
+        let session = service
+            .session_manager
+            .get_session(&by_id.conversation_id)
+            .expect("UUID query session");
+        assert_eq!(session.notebook_id, "project:3tched-cognative");
 
         let by_name = service
             .ask_question(Request::new(AskQuestionRequest {
@@ -1187,6 +1203,37 @@ mod tests {
             .notebook
             .expect("notebook payload");
         assert_eq!(notebook.name, "project:3tched-cognative");
+    }
+
+    #[tokio::test]
+    async fn invalid_queries_do_not_consume_quota_or_create_sessions() {
+        let (service, _) = test_service().await;
+        let quota_before = service.quota_manager.status().await;
+
+        let blank = service
+            .ask_question(Request::new(AskQuestionRequest {
+                notebook_id: "project:3tched-cognative".to_string(),
+                query: " \t ".to_string(),
+                conversation_id: String::new(),
+            }))
+            .await
+            .expect_err("blank query must fail");
+        assert_eq!(blank.code(), tonic::Code::InvalidArgument);
+        assert_eq!(service.quota_manager.status().await, quota_before);
+        assert_eq!(service.session_manager.count(), 0);
+
+        let missing = service
+            .query_notebook(Request::new(QueryNotebookRequest {
+                notebook_id: "project:not-present".to_string(),
+                query: "find this".to_string(),
+                conversation_id: String::new(),
+                max_results: 10,
+            }))
+            .await
+            .expect_err("unknown notebook must fail");
+        assert_eq!(missing.code(), tonic::Code::NotFound);
+        assert_eq!(service.quota_manager.status().await, quota_before);
+        assert_eq!(service.session_manager.count(), 0);
     }
 
     #[tokio::test]
