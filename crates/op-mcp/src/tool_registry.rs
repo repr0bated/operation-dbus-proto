@@ -131,10 +131,16 @@ impl ToolRegistry {
             .ok_or_else(|| anyhow::anyhow!("Tool not found: {}", name))?;
 
         // Readiness is an executable contract, not merely catalog decoration.
-        // A disabled integration must not be callable through an alternate
-        // client path which bypasses the operator catalog.
-        if let ToolReadiness::Disabled { reason } = tool.readiness() {
-            anyhow::bail!("Tool '{}' is disabled: {}", name, reason);
+        // Model clients must not call either a disabled integration or a
+        // catalogued mock by guessing its name instead of discovering it.
+        match tool.readiness() {
+            ToolReadiness::Live => {}
+            ToolReadiness::Mock { reason } => {
+                anyhow::bail!("Tool '{}' is a mock: {}", name, reason);
+            }
+            ToolReadiness::Disabled { reason } => {
+                anyhow::bail!("Tool '{}' is disabled: {}", name, reason);
+            }
         }
 
         tool.execute(input).await
@@ -338,6 +344,13 @@ impl ToolExecutor for RegistryExecutor {
     }
 
     async fn get_tool_schema(&self, name: &str) -> Result<Option<Value>> {
+        let Some(tool) = self.registry.get(name).await else {
+            return Ok(None);
+        };
+        if !matches!(tool.readiness(), ToolReadiness::Live) {
+            return Ok(None);
+        }
+
         Ok(self
             .registry
             .get_definition(name)
@@ -618,5 +631,77 @@ mod tests {
             "Tool 'disabled_tool' is disabled: the backing service is unavailable"
         );
         assert!(!executed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn mock_tools_are_rejected_before_execution() {
+        let registry = ToolRegistry::new();
+        let executed = Arc::new(AtomicBool::new(false));
+        registry
+            .register(Arc::new(DisabledTool {
+                executed: executed.clone(),
+            }))
+            .await
+            .expect("register disabled test tool");
+
+        // A mock uses the same inert executor but must be rejected distinctly
+        // before execution just like a disabled external integration.
+        struct MockTool {
+            executed: Arc<AtomicBool>,
+        }
+        #[async_trait]
+        impl Tool for MockTool {
+            fn name(&self) -> &str {
+                "mock_tool"
+            }
+            fn description(&self) -> &str {
+                "Mock external integration"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type":"object"})
+            }
+            fn readiness(&self) -> ToolReadiness {
+                ToolReadiness::Mock {
+                    reason: "the adapter is not implemented".to_string(),
+                }
+            }
+            async fn execute(&self, _input: Value) -> Result<Value> {
+                self.executed.store(true, Ordering::SeqCst);
+                Ok(json!({"unexpected": true}))
+            }
+        }
+        registry
+            .register(Arc::new(MockTool {
+                executed: executed.clone(),
+            }))
+            .await
+            .expect("register mock tool");
+
+        let error = registry
+            .execute("mock_tool", json!({}))
+            .await
+            .expect_err("mock tool must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "Tool 'mock_tool' is a mock: the adapter is not implemented"
+        );
+        assert!(!executed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn model_executor_only_exposes_live_tool_schemas() {
+        let registry = Arc::new(test_registry().await);
+        let executor = RegistryExecutor::new(registry);
+
+        assert!(executor
+            .get_tool_schema("zeta_query")
+            .await
+            .expect("live schema lookup")
+            .is_some());
+        assert!(executor
+            .get_tool_schema("alpha_query")
+            .await
+            .expect("mock schema lookup")
+            .is_none());
     }
 }
