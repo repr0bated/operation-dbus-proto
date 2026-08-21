@@ -42,6 +42,17 @@ pub async fn register_typed_tools(
     quota: Arc<QuotaManager>,
 ) -> Result<usize> {
     let tools: Vec<BoxedTool> = vec![
+        // Canonical provider-neutral question surface for the Cognitive MCP
+        // project. Provider routing belongs to the orchestrator; this tool
+        // only retrieves from the project's own memory namespace.
+        Arc::new(TypedQueryTool::provider_neutral(
+            "ask_question",
+            "Answer a grounded question from the canonical Cognitive MCP project memory",
+            "project:3tched-cognative",
+            store.clone(),
+            sessions.clone(),
+            quota.clone(),
+        )),
         // R16: dbus_query_core → project:op-dbus-core
         Arc::new(TypedQueryTool::new(
             "dbus_query_core",
@@ -93,7 +104,9 @@ pub async fn register_typed_tools(
 struct TypedQueryTool {
     name: String,
     description: String,
-    namespace: String,
+    memory_namespace: String,
+    catalog_namespace: String,
+    catalog_tags: Vec<String>,
     store: Arc<CognitiveMemoryStore>,
     sessions: Arc<SessionManager>,
     quota: Arc<QuotaManager>,
@@ -108,10 +121,54 @@ impl TypedQueryTool {
         sessions: Arc<SessionManager>,
         quota: Arc<QuotaManager>,
     ) -> Self {
+        Self::with_catalog(
+            name,
+            description,
+            namespace,
+            "notebooklm",
+            vec!["notebooklm", "query", "grounded"],
+            store,
+            sessions,
+            quota,
+        )
+    }
+
+    fn provider_neutral(
+        name: &str,
+        description: &str,
+        memory_namespace: &str,
+        store: Arc<CognitiveMemoryStore>,
+        sessions: Arc<SessionManager>,
+        quota: Arc<QuotaManager>,
+    ) -> Self {
+        Self::with_catalog(
+            name,
+            description,
+            memory_namespace,
+            "cognitive",
+            vec!["question", "grounded", "memory"],
+            store,
+            sessions,
+            quota,
+        )
+    }
+
+    fn with_catalog(
+        name: &str,
+        description: &str,
+        memory_namespace: &str,
+        catalog_namespace: &str,
+        catalog_tags: Vec<&str>,
+        store: Arc<CognitiveMemoryStore>,
+        sessions: Arc<SessionManager>,
+        quota: Arc<QuotaManager>,
+    ) -> Self {
         Self {
             name: name.to_string(),
             description: description.to_string(),
-            namespace: namespace.to_string(),
+            memory_namespace: memory_namespace.to_string(),
+            catalog_namespace: catalog_namespace.to_string(),
+            catalog_tags: catalog_tags.into_iter().map(str::to_string).collect(),
             store,
             sessions,
             quota,
@@ -134,15 +191,11 @@ impl Tool for TypedQueryTool {
     }
 
     fn namespace(&self) -> &str {
-        "notebooklm"
+        &self.catalog_namespace
     }
 
     fn tags(&self) -> Vec<String> {
-        vec![
-            "notebooklm".to_string(),
-            "query".to_string(),
-            "grounded".to_string(),
-        ]
+        self.catalog_tags.clone()
     }
 
     fn input_schema(&self) -> Value {
@@ -181,17 +234,11 @@ impl Tool for TypedQueryTool {
 
         let session = self
             .sessions
-            .get_or_create(conversation_id, &self.namespace);
+            .get_or_create(conversation_id, &self.memory_namespace);
 
         let entries = self
             .store
-            .query_entries(crate::memory_store::EntryQuery {
-                namespace_id: Some(self.namespace.clone()),
-                key_pattern: Some(query.to_string()),
-                tags: None,
-                limit: Some(10),
-                offset: None,
-            })
+            .search_entries(&self.memory_namespace, query, 10)
             .await?;
 
         let grounded = !entries.is_empty();
@@ -202,7 +249,10 @@ impl Tool for TypedQueryTool {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         } else {
-            format!("No grounded answer for '{}' in {}", query, self.namespace)
+            format!(
+                "No grounded answer for '{}' in {}",
+                query, self.memory_namespace
+            )
         };
 
         let citations: Vec<Value> = entries
@@ -232,8 +282,77 @@ impl Tool for TypedQueryTool {
             "citations": citations,
             "grounded": grounded,
             "conversation_id": session.id,
-            "namespace": self.namespace
+            "namespace": self.memory_namespace
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cozo_shuttle::CozoGraphShuttle;
+    use crate::memory_store::NamespaceKind;
+
+    #[tokio::test]
+    async fn canonical_question_is_registered_and_searches_memory_content() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let sessions = Arc::new(SessionManager::with_defaults());
+        let quota = Arc::new(QuotaManager::with_defaults());
+        let registry = ToolRegistry::new();
+
+        register_typed_tools(&registry, store.clone(), sessions, quota)
+            .await
+            .expect("register typed tools");
+
+        let definition = registry
+            .get_definition("ask_question")
+            .await
+            .expect("canonical question definition");
+        assert_eq!(definition.namespace, "cognitive");
+        assert_eq!(definition.tags, vec!["question", "grounded", "memory"]);
+
+        store
+            .upsert_namespace(
+                "project:3tched-cognative",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+        store
+            .store_entry(
+                "project:3tched-cognative",
+                "architecture",
+                serde_json::json!({
+                    "content": "The canonical ingress validates every Cognitive MCP tool call."
+                }),
+                vec![],
+                None,
+            )
+            .await
+            .expect("entry");
+
+        let response = registry
+            .execute(
+                "ask_question",
+                json!({"query": "canonical ingress", "conversation_id": "operator"}),
+            )
+            .await
+            .expect("grounded question");
+
+        assert_eq!(response["grounded"].as_bool(), Some(true));
+        assert_eq!(
+            response["namespace"].as_str(),
+            Some("project:3tched-cognative")
+        );
+        assert_eq!(
+            response["citations"][0]["text"].as_str(),
+            Some("architecture")
+        );
     }
 }
 
