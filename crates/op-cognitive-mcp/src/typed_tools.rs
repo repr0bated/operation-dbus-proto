@@ -219,6 +219,9 @@ impl Tool for TypedQueryTool {
         let query = field(&input, "query")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing query"))?;
+        if query.trim().is_empty() {
+            anyhow::bail!("query must not be empty");
+        }
 
         // Quota check
         let (allowed, remaining, _) = self.quota.check_and_increment().await;
@@ -384,6 +387,28 @@ mod tests {
             .await
             .expect_err("quota exhaustion must not return a fake answer payload");
         assert!(error.to_string().contains("Daily query quota exceeded"));
+    }
+
+    #[tokio::test]
+    async fn canonical_question_rejects_blank_input_before_quota_or_session_mutation() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let sessions = Arc::new(SessionManager::with_defaults());
+        let quota = Arc::new(QuotaManager::with_defaults());
+        let registry = ToolRegistry::new();
+
+        register_typed_tools(&registry, store, sessions.clone(), quota.clone())
+            .await
+            .expect("register typed tools");
+        let quota_before = quota.status().await;
+
+        let error = registry
+            .execute("ask_question", json!({"query": " \n "}))
+            .await
+            .expect_err("blank query must fail");
+        assert!(error.to_string().contains("query must not be empty"));
+        assert_eq!(quota.status().await, quota_before);
+        assert_eq!(sessions.count(), 0);
     }
 }
 
