@@ -147,11 +147,7 @@ pub fn get_query_history(session_manager: &SessionManager, limit: usize) -> Vec<
                 "conversation_id": session.id,
                 "notebook_id": session.notebook_id,
                 "query": turn.query,
-                "answer_preview": if turn.answer.len() > 200 {
-                    format!("{}...", &turn.answer[..200])
-                } else {
-                    turn.answer.clone()
-                },
+                "answer_preview": answer_preview(&turn.answer),
                 "timestamp": turn.timestamp.to_rfc3339(),
                 "citations_count": turn.citations_count,
                 "grounded": turn.grounded,
@@ -167,6 +163,22 @@ pub fn get_query_history(session_manager: &SessionManager, limit: usize) -> Vec<
     });
 
     all_turns.into_iter().take(limit).collect()
+}
+
+/// Bound a preview by bytes without slicing through a UTF-8 code point.
+/// gRPC history must be able to report arbitrary model output, including
+/// answers with multibyte scripts and emoji.
+fn answer_preview(answer: &str) -> String {
+    const MAX_PREVIEW_BYTES: usize = 200;
+    if answer.len() <= MAX_PREVIEW_BYTES {
+        return answer.to_string();
+    }
+
+    let mut end = MAX_PREVIEW_BYTES;
+    while end > 0 && !answer.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &answer[..end])
 }
 
 #[cfg(test)]
@@ -200,5 +212,12 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0]["query"], "test query");
         assert_eq!(history[0]["grounded"], true);
+    }
+
+    #[test]
+    fn query_history_preview_preserves_utf8_boundaries() {
+        let answer = format!("{}🧠", "a".repeat(199));
+        assert_eq!(answer.len(), 203);
+        assert_eq!(answer_preview(&answer), format!("{}...", "a".repeat(199)));
     }
 }

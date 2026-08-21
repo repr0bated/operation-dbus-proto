@@ -51,16 +51,22 @@ impl QuotaManager {
     pub async fn check_and_increment(&self) -> (bool, u32, u32) {
         self.maybe_reset().await;
 
-        let tier = self.tier.read().await;
-        let current = self.queries_today.fetch_add(1, Ordering::Relaxed);
+        let limit = self.tier.read().await.daily_limit;
+        loop {
+            let current = self.queries_today.load(Ordering::Acquire);
+            if current >= limit {
+                return (false, 0, limit);
+            }
 
-        if current >= tier.daily_limit {
-            // Roll back the increment — over quota
-            self.queries_today.fetch_sub(1, Ordering::Relaxed);
-            (false, 0, tier.daily_limit)
-        } else {
-            let remaining = tier.daily_limit.saturating_sub(current + 1);
-            (true, remaining, tier.daily_limit)
+            // `current < limit <= u32::MAX`, so this increment cannot wrap.
+            let next = current + 1;
+            if self
+                .queries_today
+                .compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return (true, limit.saturating_sub(next), limit);
+            }
         }
     }
 
@@ -86,11 +92,14 @@ impl QuotaManager {
     /// Reset counter if a new UTC day has started.
     async fn maybe_reset(&self) {
         let now = Utc::now();
-        let last = *self.last_reset.read().await;
-
+        // One writer protects the date comparison and counter reset as a
+        // single operation. With a read-then-write pair, two first requests
+        // after midnight could each reset the counter and erase an admission
+        // made by the other request.
+        let mut last = self.last_reset.write().await;
         if now.date_naive() != last.date_naive() {
             self.queries_today.store(0, Ordering::Relaxed);
-            *self.last_reset.write().await = now;
+            *last = now;
         }
     }
 }
@@ -133,5 +142,31 @@ mod tests {
         let (remaining, limit) = mgr.status().await;
         assert_eq!(remaining, 50);
         assert_eq!(limit, 50);
+    }
+
+    #[tokio::test]
+    async fn quota_counter_never_wraps_at_the_u32_boundary() {
+        let mgr = QuotaManager::new(QuotaTier {
+            name: "maximum".into(),
+            daily_limit: u32::MAX,
+        });
+        mgr.queries_today.store(u32::MAX - 1, Ordering::Relaxed);
+
+        assert_eq!(mgr.check_and_increment().await, (true, 0, u32::MAX));
+        assert_eq!(mgr.check_and_increment().await, (false, 0, u32::MAX));
+        assert_eq!(mgr.status().await, (0, u32::MAX));
+    }
+
+    #[tokio::test]
+    async fn stale_quota_is_reset_before_the_next_admission() {
+        let mgr = QuotaManager::new(QuotaTier {
+            name: "test".into(),
+            daily_limit: 2,
+        });
+        mgr.queries_today.store(2, Ordering::Relaxed);
+        *mgr.last_reset.write().await = Utc::now() - chrono::Duration::days(1);
+
+        assert_eq!(mgr.check_and_increment().await, (true, 1, 2));
+        assert_eq!(mgr.status().await, (1, 2));
     }
 }

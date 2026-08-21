@@ -2005,6 +2005,22 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingRuntimeProjector {
+        calls: std::sync::Mutex<Vec<CognitiveRuntimeSnapshot>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CognitiveRuntimeProjector for RecordingRuntimeProjector {
+        async fn project_runtime(&self, snapshot: CognitiveRuntimeSnapshot) -> Result<(), Status> {
+            self.calls
+                .lock()
+                .expect("test runtime projector lock")
+                .push(snapshot);
+            Ok(())
+        }
+    }
+
     async fn test_service() -> (
         CognitiveGrpcService,
         Arc<CognitiveMemoryStore>,
@@ -2347,6 +2363,7 @@ mod tests {
             calls: std::sync::Mutex::new(Vec::new()),
         });
         let quota = Arc::new(QuotaManager::with_defaults());
+        let projector = Arc::new(RecordingRuntimeProjector::default());
         let service = CognitiveGrpcService::with_operational_adapters(
             store.clone(),
             Arc::new(SessionManager::with_defaults()),
@@ -2359,7 +2376,7 @@ mod tests {
             )),
             Arc::new(RecordingMutationAuditor::default()),
             model.clone(),
-            Arc::new(NoopRuntimeProjector),
+            projector.clone(),
         );
         let namespace = store
             .upsert_namespace(
@@ -2409,6 +2426,19 @@ mod tests {
         assert_eq!(calls[0].capability_id, "cognitive_mcp.read");
         assert!(calls[0].prompt.contains("Cognitive MCP is active."));
         assert_eq!(quota.status().await, (49, 50));
+        assert_eq!(
+            projector
+                .calls
+                .lock()
+                .expect("test runtime projector lock")
+                .as_slice(),
+            &[CognitiveRuntimeSnapshot {
+                queries_remaining: 49,
+                queries_limit: 50,
+                notebook_count: 1,
+            }],
+            "direct gRPC operations refresh the same runtime snapshot StateSync consumes"
+        );
     }
 
     #[tokio::test]
