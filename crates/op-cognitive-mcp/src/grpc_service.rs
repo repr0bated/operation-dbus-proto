@@ -787,6 +787,7 @@ impl CognitiveToolService for CognitiveGrpcService {
 
         let (remaining, limit) = self.quota_manager.status().await;
 
+        let mut healthy = true;
         let mut components = serde_json::json!({
             "memory_store": "ok",
             "session_manager": "ok",
@@ -803,6 +804,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                     });
                 }
                 Err(e) => {
+                    healthy = false;
                     components["memory_store"] = serde_json::json!(format!("error: {}", e));
                 }
             }
@@ -812,8 +814,8 @@ impl CognitiveToolService for CognitiveGrpcService {
         }
 
         Ok(Response::new(GetHealthResponse {
-            healthy: true,
-            status: "operational".to_string(),
+            healthy,
+            status: if healthy { "operational" } else { "degraded" }.to_string(),
             components_json: serde_json::to_string(&components)
                 .unwrap_or_else(|_| "{}".to_string()),
             queries_remaining: remaining as i32,
@@ -1324,6 +1326,23 @@ mod tests {
         assert_eq!(missing.code(), tonic::Code::NotFound);
         assert_eq!(service.quota_manager.status().await, quota_before);
         assert_eq!(service.session_manager.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn deep_health_reports_checked_memory_state() {
+        let (service, _) = test_service().await;
+
+        let health = service
+            .get_health(Request::new(GetHealthRequest { deep_check: true }))
+            .await
+            .expect("deep health")
+            .into_inner();
+        assert!(health.healthy);
+        assert_eq!(health.status, "operational");
+        let components: serde_json::Value =
+            serde_json::from_str(&health.components_json).expect("health JSON");
+        assert_eq!(components["memory_store"], "ok");
+        assert!(components["memory_store_stats"].is_object());
     }
 
     #[tokio::test]
