@@ -17,7 +17,7 @@ use crate::context_awareness::{ActivityType, ContextAwarenessEngine};
 use crate::rag_pipeline::{CodeFilter, RagPipeline, RagResult, RetrievalMode, RetrievalProfile};
 use anyhow::Result;
 use async_trait::async_trait;
-use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
+use op_mcp::tool_registry::{BoxedTool, Tool, ToolReadiness, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::path::PathBuf;
@@ -49,6 +49,74 @@ pub async fn register_code_tools(
         .register(Arc::new(CodeIndexTool { rag, collection }) as BoxedTool)
         .await?;
     Ok(3)
+}
+
+/// Keep the Cognitive MCP catalog truthful when its RAG dependencies are not
+/// configured.  The sealed plugin methods still exist, so silently omitting
+/// their backing tools makes a client see a misleading "not found" error.
+/// Disabled tools preserve discovery and explain exactly what must be restored.
+pub async fn register_disabled_code_tools(
+    registry: &ToolRegistry,
+    reason: impl Into<String>,
+) -> Result<usize> {
+    let reason = reason.into();
+    for (name, schema_field) in [
+        ("code_search", "code_search"),
+        ("code_context", "code_context"),
+        ("code_index", "code_index"),
+    ] {
+        registry
+            .register(Arc::new(DisabledCodeTool {
+                name,
+                schema_field,
+                reason: reason.clone(),
+            }) as BoxedTool)
+            .await?;
+    }
+    Ok(3)
+}
+
+struct DisabledCodeTool {
+    name: &'static str,
+    schema_field: &'static str,
+    reason: String,
+}
+
+#[async_trait]
+impl Tool for DisabledCodeTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "DISABLED: code-RAG dependency is unavailable. See readiness_reason for the required repair."
+    }
+
+    fn category(&self) -> &str {
+        "code"
+    }
+
+    fn tags(&self) -> Vec<String> {
+        vec!["code".into(), "rag".into(), "disabled".into()]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Disabled {
+            reason: self.reason.clone(),
+        }
+    }
+
+    fn input_schema(&self) -> Value {
+        tool_input_schema(self.schema_field)
+    }
+
+    async fn execute(&self, _input: Value) -> Result<Value> {
+        Err(anyhow::anyhow!(
+            "{} is disabled: {}",
+            self.name,
+            self.reason
+        ))
+    }
 }
 
 // ─── code_search ────────────────────────────────────────────────────────────
@@ -387,4 +455,28 @@ fn serde_to_simd(v: &serde_json::Value) -> Value {
     let s = serde_json::to_string(v).unwrap_or_default();
     let mut buf = s.into_bytes();
     simd_json::from_slice(&mut buf).unwrap_or(Value::Static(simd_json::StaticNode::Null))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::register_disabled_code_tools;
+    use op_mcp::tool_registry::ToolRegistry;
+
+    #[tokio::test]
+    async fn unavailable_rag_tools_are_explicitly_disabled_and_discoverable() {
+        let registry = ToolRegistry::new();
+        register_disabled_code_tools(&registry, "VOYAGE_API_KEY is not configured")
+            .await
+            .expect("register disabled code tools");
+
+        let catalog = registry.catalog(0, 10, Some("code")).await;
+        assert_eq!(catalog.len(), 3);
+        for entry in catalog {
+            assert_eq!(entry.readiness.status(), "disabled");
+            assert!(entry
+                .readiness
+                .reason()
+                .is_some_and(|reason| reason.contains("VOYAGE_API_KEY")));
+        }
+    }
 }

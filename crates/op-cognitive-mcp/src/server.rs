@@ -3,7 +3,7 @@
 //! Single persistent backend (CozoDB) hosts every relation:
 //! memory namespaces/entries, users, sessions, compliance graph, subid registry, audit log.
 
-use crate::code_tools::register_code_tools;
+use crate::code_tools::{register_code_tools, register_disabled_code_tools};
 use crate::cognitive_tools::CognitiveToolRegistry;
 use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::cozo_shuttle::CozoGraphShuttle;
@@ -73,9 +73,12 @@ impl CognitiveMcpServer {
         let rag_pipeline = match RagPipeline::from_env() {
             Ok(p) => Some(Arc::new(p)),
             Err(e) => {
+                let reason = format!("Code RAG unavailable: {e}");
+                let disabled = register_disabled_code_tools(&tool_registry, reason.clone()).await?;
                 tracing::warn!(
                     error = %e,
-                    "RAG pipeline unavailable; code-context tools will not be registered"
+                    disabled,
+                    "RAG pipeline unavailable; disabled code-context tools remain discoverable"
                 );
                 None
             }
