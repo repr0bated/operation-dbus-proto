@@ -133,6 +133,7 @@ impl ChainVectorIndex {
             .with_context(|| format!("failed to open chain at {}", chain_path.display()))?;
 
         let qdrant = Qdrant::from_url(&url)
+            .skip_compatibility_check()
             .build()
             .with_context(|| format!("failed to build Qdrant client for {url}"))?;
         qdrant

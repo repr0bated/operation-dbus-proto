@@ -81,7 +81,12 @@ impl QdrantSemanticShuttle {
         let user_memory_collection = user_memory_collection.into();
         let blob_vectors_collection = blob_vectors_collection.into();
         let sled_path = sled_path.into();
+        // Qdrant's default constructor prints failed compatibility probes to
+        // stdout. This client is used by the stdio MCP process, where stdout
+        // is exclusively JSON-RPC framing; probe compatibility explicitly in
+        // deployment/diagnostics instead of corrupting protocol messages.
         let client = Qdrant::from_url(qdrant_url)
+            .skip_compatibility_check()
             .build()
             .with_context(|| format!("failed to build Qdrant client for {qdrant_url}"))?;
 

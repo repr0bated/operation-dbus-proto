@@ -1288,7 +1288,10 @@ fn stable_uuid(hash: &str) -> String {
 pub fn qdrant_client_from_env() -> Result<Qdrant> {
     let url = std::env::var("COGNITIVE_MCP_QDRANT_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:6334".into());
+    // `Qdrant::build` emits compatibility failures to stdout by default.
+    // MCP stdio must never write non-JSON-RPC data there.
     Qdrant::from_url(&url)
+        .skip_compatibility_check()
         .build()
         .context("Failed to build Qdrant client")
 }
