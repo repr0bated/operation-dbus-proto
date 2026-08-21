@@ -377,6 +377,8 @@ pub struct ContextAwarenessConfig {
     pub idle_threshold_secs: u64,
     /// Maximum pushes per session per hour
     pub max_pushes_per_hour: u32,
+    /// Maximum ephemeral sessions retained for proactive analysis.
+    pub max_tracked_sessions: usize,
     /// Qdrant collection used for code/repomix RAG retrieval
     pub rag_collection: String,
 }
@@ -390,6 +392,7 @@ impl Default for ContextAwarenessConfig {
             push_rate_limit_secs: MIN_PUSH_INTERVAL_SECS,
             idle_threshold_secs: IDLE_REFRESH_THRESHOLD_SECS,
             max_pushes_per_hour: 20,
+            max_tracked_sessions: 1_000,
             rag_collection: default_collection_from_env(),
         }
     }
@@ -470,6 +473,10 @@ impl ContextAwarenessEngine {
         content: String,
         metadata: serde_json::Value,
     ) {
+        if !self.session_states.contains_key(session_id) {
+            self.evict_for_new_session();
+        }
+
         // Get or create session state
         let state = self
             .session_states
@@ -490,7 +497,45 @@ impl ContextAwarenessEngine {
             metadata,
         };
 
-        let _ = self.activity_tx.send(event).await;
+        // The immediate session state is already updated above. Proactive
+        // evaluation is best-effort and must never backpressure a code-context
+        // request while the monitor is catching up.
+        match self.activity_tx.try_send(event) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                trace!(
+                    session_id,
+                    "Context activity queue is full; skipping deferred evaluation"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                warn!(session_id, "Context activity monitor is not running");
+            }
+        }
+    }
+
+    fn evict_for_new_session(&self) {
+        let max_sessions = self.config.max_tracked_sessions.max(1);
+        while self.session_states.len() >= max_sessions {
+            let candidate = self
+                .session_states
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .value()
+                        .try_read()
+                        .ok()
+                        .map(|state| (entry.key().clone(), state.last_activity))
+                })
+                .min_by_key(|(_, last_activity)| *last_activity)
+                .map(|(session_id, _)| session_id);
+            let Some(session_id) = candidate else {
+                // A concurrent activity update holds every state lock. Do not
+                // block the request; a later new session will retry eviction.
+                break;
+            };
+            self.session_states.remove(&session_id);
+        }
     }
 
     /// Snapshot the awareness signals for a session (async, never blocks).
@@ -1058,5 +1103,41 @@ mod tests {
             .expect("session stats");
         assert_eq!(stats["session_id"], "session-1");
         assert_eq!(stats["activity_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn context_tracking_evicts_the_least_recent_session_at_capacity() {
+        let shuttle =
+            Arc::new(crate::cozo_shuttle::CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let memory_store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let engine = ContextAwarenessEngine::new(
+            ContextAwarenessConfig {
+                max_tracked_sessions: 1,
+                ..Default::default()
+            },
+            memory_store,
+            None,
+        );
+
+        engine
+            .record_activity(
+                "old-session",
+                ActivityType::Query,
+                "first query".to_string(),
+                serde_json::json!({}),
+            )
+            .await;
+        engine
+            .record_activity(
+                "new-session",
+                ActivityType::Query,
+                "second query".to_string(),
+                serde_json::json!({}),
+            )
+            .await;
+
+        assert_eq!(engine.get_active_session_count(), 1);
+        assert!(engine.get_session_signals("old-session").await.is_none());
+        assert!(engine.get_session_signals("new-session").await.is_some());
     }
 }
