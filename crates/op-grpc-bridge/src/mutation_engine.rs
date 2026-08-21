@@ -3154,7 +3154,7 @@ async fn dispatch_cognitive_mcp_method(
         );
         return tokio::time::timeout(timeout, async move {
             let defs = reg.list(0, usize::MAX, None).await;
-            Ok::<serde_json::Value, anyhow::Error>(serde_json::to_value(defs)?)
+            cognitive_tool_catalog_response(defs)
         })
         .await
         .map_err(|_| {
@@ -3202,6 +3202,31 @@ async fn dispatch_cognitive_mcp_method(
     .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e))?;
 
     Ok(result)
+}
+
+fn cognitive_tool_catalog_response(
+    definitions: Vec<op_core::ToolDefinition>,
+) -> anyhow::Result<serde_json::Value> {
+    let mut tools = definitions
+        .into_iter()
+        .map(|tool| {
+            Ok(serde_json::json!({
+                "name": tool.name,
+                "description": tool.description,
+                "category": tool.category,
+                "tags": tool.tags,
+                "namespace": tool.namespace,
+                "input_schema": serde_json::to_value(tool.input_schema)
+                    .context("serialize cognitive tool input schema")?,
+                "schema_version": tool.schema_version,
+            }))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    // ToolRegistry storage is a HashMap.  A stable order keeps catalog views,
+    // generated specs, and tests deterministic across process restarts.
+    tools.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+
+    Ok(serde_json::json!({ "tools": tools }))
 }
 
 /// Translate a `cognitive_mcp` schema method name into a live tool-registry call.
@@ -3417,6 +3442,75 @@ mod cognitive_development_dispatch_tests {
             assert_eq!(args["status"], "planned");
         }
         assert!(map_schema_method_to_tool("development_missing", &json!({})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod cognitive_tool_catalog_tests {
+    use super::cognitive_tool_catalog_response;
+    use op_core::ToolDefinition;
+    use serde_json::json;
+
+    fn definition(
+        name: &str,
+        category: &str,
+        tags: &[&str],
+        namespace: &str,
+        schema_version: &str,
+    ) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: format!("{name} description"),
+            input_schema: simd_json::json!({
+                "type": "object",
+                "properties": { "query": { "type": "string" } },
+            }),
+            schema_version: schema_version.to_string(),
+            category: category.to_string(),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            namespace: namespace.to_string(),
+        }
+    }
+
+    #[test]
+    fn list_tools_is_a_stable_catalog_with_invocation_contracts() {
+        let catalog = cognitive_tool_catalog_response(vec![
+            definition("zeta", "operations", &["write"], "system", "v2"),
+            definition("alpha", "retrieval", &["read", "rag"], "cognitive", "v1"),
+        ])
+        .expect("catalog serialization");
+
+        assert_eq!(
+            catalog,
+            json!({
+                "tools": [
+                    {
+                        "name": "alpha",
+                        "description": "alpha description",
+                        "category": "retrieval",
+                        "tags": ["read", "rag"],
+                        "namespace": "cognitive",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": { "query": { "type": "string" } },
+                        },
+                        "schema_version": "v1",
+                    },
+                    {
+                        "name": "zeta",
+                        "description": "zeta description",
+                        "category": "operations",
+                        "tags": ["write"],
+                        "namespace": "system",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": { "query": { "type": "string" } },
+                        },
+                        "schema_version": "v2",
+                    },
+                ],
+            })
+        );
     }
 }
 

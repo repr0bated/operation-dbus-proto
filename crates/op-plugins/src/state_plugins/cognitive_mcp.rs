@@ -729,7 +729,23 @@ pub struct GetHealthOutput {
 /// Output for ListTools method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ListToolsOutput {
-    pub tools: Vec<String>,
+    pub tools: Vec<CognitiveToolInfo>,
+}
+
+/// A discoverable tool exposed through the bridge-owned Cognitive registry.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CognitiveToolInfo {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub namespace: String,
+    /// JSON Schema accepted by this tool.  The generic `invoke_tool` door
+    /// delegates validation to the tool, so discovery must expose the contract
+    /// a caller needs to construct valid arguments.
+    pub input_schema: serde_json::Value,
+    /// Tool-owned schema revision, if the registry supplies one.
+    pub schema_version: String,
 }
 
 /// Output for RegisterTool method
@@ -1318,6 +1334,35 @@ mod tests {
                 "{name} capability"
             );
             assert_eq!(method.subid, subid, "{name} subid");
+        }
+    }
+
+    #[test]
+    fn list_tools_output_exposes_each_tool_invocation_contract() {
+        let schema = serde_json::to_value(schemars::schema_for!(ListToolsOutput))
+            .expect("list_tools output schema");
+        let definitions = schema
+            .get("$defs")
+            .or_else(|| schema.get("definitions"))
+            .and_then(JVal::as_object)
+            .expect("tool info definition");
+        let fields = definitions["CognitiveToolInfo"]["properties"]
+            .as_object()
+            .expect("tool info properties");
+
+        for field in [
+            "name",
+            "description",
+            "category",
+            "tags",
+            "namespace",
+            "input_schema",
+            "schema_version",
+        ] {
+            assert!(
+                fields.contains_key(field),
+                "missing tool catalog field '{field}'"
+            );
         }
     }
 }
