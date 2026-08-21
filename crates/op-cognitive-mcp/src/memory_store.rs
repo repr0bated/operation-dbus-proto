@@ -416,6 +416,59 @@ impl CognitiveMemoryStore {
         Ok(entries.into_iter().skip(offset).take(limit).collect())
     }
 
+    /// Provider-neutral lexical retrieval over source keys and JSON content.
+    /// Results are ranked by the number of query tokens present in each entry.
+    pub async fn search_entries(
+        &self,
+        namespace_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let mut params: Params = BTreeMap::new();
+        params.insert("ns".into(), DataValue::Str(namespace_name.into()));
+        let rows = self.run(
+            r#"?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
+                := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
+                   namespace = $ns"#,
+            params,
+        )?;
+        let now = Utc::now();
+        let entries = rows
+            .rows
+            .iter()
+            .map(|row| row_to_entry(row))
+            .filter(|entry| entry.expires_at.map(|expiry| expiry > now).unwrap_or(true))
+            .collect::<Vec<_>>();
+        let tokens = query
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|token| token.len() >= 2)
+            .map(|token| token.to_lowercase())
+            .collect::<Vec<_>>();
+        if tokens.is_empty() {
+            return Ok(entries.into_iter().take(limit).collect());
+        }
+        let mut ranked = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let haystack = format!("{} {}", entry.key, entry.value).to_lowercase();
+                let score = tokens
+                    .iter()
+                    .filter(|token| haystack.contains(token.as_str()))
+                    .count();
+                (score > 0).then_some((score, entry))
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.updated_at.cmp(&a.1.updated_at))
+        });
+        Ok(ranked
+            .into_iter()
+            .take(limit)
+            .map(|(_, entry)| entry)
+            .collect())
+    }
+
     /// Count live entries for one namespace without applying the query page size.
     pub async fn count_entries(&self, namespace_name: &str) -> Result<i32> {
         let mut params: Params = BTreeMap::new();
@@ -675,5 +728,37 @@ mod tests {
                 .expect("count"),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn search_entries_ranks_content_matches() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = CognitiveMemoryStore::new(shuttle).await.expect("store");
+        store
+            .upsert_namespace(
+                "project:3tched-cognative",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+        store
+            .store_entry(
+                "project:3tched-cognative",
+                "architecture",
+                serde_json::json!({"content":"canonical ingress and cognitive memory"}),
+                vec![],
+                None,
+            )
+            .await
+            .expect("entry");
+        let results = store
+            .search_entries("project:3tched-cognative", "cognitive memory", 5)
+            .await
+            .expect("search");
+        assert_eq!(results[0].key, "architecture");
     }
 }

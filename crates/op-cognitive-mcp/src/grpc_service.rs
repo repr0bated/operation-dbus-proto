@@ -95,13 +95,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let namespace = format!("project:{}", req.notebook_id);
         let entries = self
             .memory_store
-            .query_entries(crate::memory_store::EntryQuery {
-                namespace_id: Some(namespace.clone()),
-                key_pattern: Some(req.query.clone()),
-                tags: None,
-                limit: Some(10),
-                offset: None,
-            })
+            .search_entries(&namespace, &req.query, 10)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -182,13 +176,7 @@ impl CognitiveToolService for CognitiveGrpcService {
 
         let entries = self
             .memory_store
-            .query_entries(crate::memory_store::EntryQuery {
-                namespace_id: Some(namespace),
-                key_pattern: Some(req.query.clone()),
-                tags: None,
-                limit: Some(limit),
-                offset: None,
-            })
+            .search_entries(&namespace, &req.query, limit as usize)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
