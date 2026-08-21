@@ -189,7 +189,10 @@ pub async fn register_notebooklm_tools(registry: &ToolRegistry) -> Result<usize>
         registered += 1;
     }
 
-    tracing::info!(registered, "Registered NotebookLM MCP tools");
+    tracing::info!(
+        registered,
+        "Catalogued NotebookLM MCP backend tools behind the canonical ingress"
+    );
     Ok(registered)
 }
 
@@ -329,7 +332,15 @@ impl Tool for NotebookLmTool {
             "notebooklm".to_string(),
             "rag".to_string(),
             "research".to_string(),
+            "operator_backend".to_string(),
         ]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Disabled {
+            reason: "NotebookLM sidecar is an operator-managed backend. Route requests through the canonical Cognitive gRPC ingress so identity, capability checks, audit, quotas, and source limits apply."
+                .to_string(),
+        }
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
@@ -488,5 +499,35 @@ mod tests {
             .await
             .expect_err("unavailable tools must not execute");
         assert!(error.to_string().contains("is disabled"));
+    }
+
+    #[test]
+    fn live_sidecar_tools_are_not_model_callable_bypasses() {
+        let config = NotebookLmConfig {
+            enabled: true,
+            command: "notebooklm-mcp".to_string(),
+            args: Vec::new(),
+            server_name: "notebooklm".to_string(),
+            profile: "minimal".to_string(),
+            tool_prefix: None,
+            disabled_tools: None,
+        };
+        let client = Arc::new(Mutex::new(ExternalMcpClient::new(config.external_config())));
+        let tool = NotebookLmTool::new(
+            client,
+            ExternalTool {
+                name: "add_source_text".to_string(),
+                description: "upstream source write".to_string(),
+                input_schema: json!({"type": "object"}),
+                server_name: "notebooklm".to_string(),
+            },
+            "add_source_text".to_string(),
+        );
+
+        assert!(matches!(
+            tool.readiness(),
+            ToolReadiness::Disabled { reason }
+                if reason.contains("canonical Cognitive gRPC ingress")
+        ));
     }
 }
