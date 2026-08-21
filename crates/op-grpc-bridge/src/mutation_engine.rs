@@ -3244,6 +3244,18 @@ fn map_schema_method_to_tool(
             "cognitive_memory".into(),
             with_field("operation", "list_namespaces"),
         )),
+        "development_upsert" => Ok((
+            "cognitive_development".into(),
+            with_field("operation", "upsert"),
+        )),
+        "development_list" => Ok((
+            "cognitive_development".into(),
+            with_field("operation", "list"),
+        )),
+        "development_record_verification" => Ok((
+            "cognitive_development".into(),
+            with_field("operation", "record_verification"),
+        )),
         // Code retrieval / indexing.
         // Code retrieval / indexing (native 1-to-1 mapping now that tools are restored).
         "code_search" => Ok(("code_search".into(), base)),

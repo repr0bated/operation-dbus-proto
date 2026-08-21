@@ -788,6 +788,60 @@ pub struct CodeIndexOutput {
     pub files_indexed: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentUpsertInput {
+    pub capability_id: String,
+    pub category: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub owner: Option<String>,
+    pub status: Option<String>,
+    pub schema_surface: Option<String>,
+    pub required_capability: Option<String>,
+    pub subid: Option<String>,
+    pub dependencies: Option<Vec<String>>,
+    pub tests: Option<Vec<String>>,
+    pub live_verified: Option<bool>,
+    pub deployed_commit: Option<String>,
+    pub blocker: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentUpsertOutput {
+    pub capability_id: String,
+    pub status: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentListInput {
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentListOutput {
+    pub capabilities: Vec<serde_json::Value>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentVerificationInput {
+    pub capability_id: String,
+    pub status: Option<String>,
+    pub live_verified: Option<bool>,
+    pub commit: Option<String>,
+    pub details: Option<String>,
+    pub blocker: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentVerificationOutput {
+    pub capability_id: String,
+    pub status: String,
+    pub live_verified: bool,
+    pub recorded_at: String,
+}
+
 /// Output for CodeContext method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CodeContextOutput {
@@ -1037,6 +1091,39 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             true,
             "cognitive_mcp.invoke",
             "mut.service.cognitive-mcp.restart@v1",
+        ),
+    );
+    schema.methods.insert(
+        "development_upsert".to_string(),
+        method_decl_from_schemars_with_output::<DevelopmentUpsertInput, DevelopmentUpsertOutput>(
+            "development_upsert",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.development.upsert@v1",
+        ),
+    );
+    schema.methods.insert(
+        "development_list".to_string(),
+        method_decl_from_schemars_with_output::<DevelopmentListInput, DevelopmentListOutput>(
+            "development_list",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.development.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "development_record_verification".to_string(),
+        method_decl_from_schemars_with_output::<
+            DevelopmentVerificationInput,
+            DevelopmentVerificationOutput,
+        >(
+            "development_record_verification",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.service.cognitive-mcp.development.verify@v1",
         ),
     );
     // Generic tool invocation. The 15 methods above are fixed at blob-seal time, but

@@ -116,6 +116,10 @@ impl CognitiveMemoryStore {
         Ok(Self { shuttle })
     }
 
+    pub fn shuttle(&self) -> Arc<CozoGraphShuttle> {
+        self.shuttle.clone()
+    }
+
     fn run(&self, script: &str, params: Params) -> Result<NamedRows> {
         self.shuttle
             .db()

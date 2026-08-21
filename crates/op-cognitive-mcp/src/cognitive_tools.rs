@@ -6,6 +6,7 @@
 use crate::agent_tools::register_agent_tools;
 use crate::blob_catalog_tool::register_blob_catalog_tool;
 use crate::blob_vectors_tool::register_blob_vectors_tools;
+use crate::development_ledger::DevelopmentLedger;
 use crate::memory_store::{CognitiveMemoryStore, EntryQuery, NamespaceKind};
 use crate::notebooklm::register_notebooklm_tools;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
@@ -46,11 +47,52 @@ impl CognitiveToolRegistry {
         registry
             .register(Arc::new(RegisterToolTool) as BoxedTool)
             .await?;
+        registry
+            .register(Arc::new(DevelopmentLedgerTool::new(store.clone())) as BoxedTool)
+            .await?;
         register_agent_tools(registry).await?;
         register_notebooklm_tools(registry).await?;
         register_blob_catalog_tool(registry).await?;
         register_blob_vectors_tools(registry, qdrant).await?;
         Ok(())
+    }
+}
+
+pub struct DevelopmentLedgerTool {
+    ledger: DevelopmentLedger,
+}
+
+impl DevelopmentLedgerTool {
+    fn new(store: Arc<CognitiveMemoryStore>) -> Self {
+        // The memory store and ledger intentionally share the same Cozo DB.
+        Self {
+            ledger: DevelopmentLedger::new(store.shuttle()),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for DevelopmentLedgerTool {
+    fn name(&self) -> &str {
+        "cognitive_development"
+    }
+    fn description(&self) -> &str {
+        "Track Cognitive capability implementation, verification, deployment, dependencies, and blockers."
+    }
+    fn category(&self) -> &str {
+        "cognitive"
+    }
+    fn tags(&self) -> Vec<String> {
+        vec!["development".into(), "ledger".into(), "verification".into()]
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"operation":{"type":"string","enum":["upsert","list","record_verification"]},"capability_id":{"type":"string"},"category":{"type":"string"},"status":{"type":"string"},"live_verified":{"type":"boolean"},"commit":{"type":"string"}}})
+    }
+    async fn execute(&self, input: Value) -> Result<Value> {
+        let json_input: serde_json::Value = serde_json::from_str(&input.to_string())?;
+        let output = self.ledger.execute(&json_input)?;
+        let mut bytes = serde_json::to_vec(&output)?;
+        Ok(simd_json::to_owned_value(&mut bytes)?)
     }
 }
 

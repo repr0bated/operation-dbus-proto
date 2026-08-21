@@ -434,6 +434,37 @@ impl CozoGraphShuttle {
                 =>
                 principal_id: String default ""
             }"#,
+            // Structured development ledger for Cognitive capabilities. This is
+            // intentionally relational rather than vectorized: it answers what
+            // exists, what is verified, and what is blocked.
+            r#":create cognitive_development {
+                capability_id: String
+                =>
+                title: String default "",
+                description: String default "",
+                category: String default "runtime",
+                owner: String default "",
+                status: String default "planned",
+                schema_surface: String default "",
+                required_capability: String default "",
+                subid: String default "",
+                dependencies_json: String default "[]",
+                tests_json: String default "[]",
+                live_verified: Bool default false,
+                deployed_commit: String default "",
+                blocker: String default "",
+                created_at: String default "",
+                updated_at: String default ""
+            }"#,
+            r#":create cognitive_development_history {
+                capability_id: String,
+                recorded_at: String
+                =>
+                event: String default "",
+                status: String default "",
+                details: String default "",
+                commit: String default ""
+            }"#,
         ];
 
         for script in &relations {
