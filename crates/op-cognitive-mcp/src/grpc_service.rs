@@ -34,6 +34,14 @@ use op_mcp::tool_registry::ToolRegistry;
 const DEFAULT_INGEST_MAX_FILES: usize = 10_000;
 const DEFAULT_INGEST_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_INGEST_ERROR_REPORTS: usize = 100;
+const MAX_QUERY_BYTES: usize = 16 * 1024;
+const MAX_CONVERSATION_ID_BYTES: usize = 256;
+const DEFAULT_QUERY_RESULTS: usize = 10;
+const MAX_QUERY_RESULTS: usize = 50;
+const DEFAULT_PAGE_SIZE: usize = 100;
+const MAX_PAGE_SIZE: usize = 500;
+const DEFAULT_HISTORY_PAGE_SIZE: usize = 50;
+const MAX_HISTORY_PAGE_SIZE: usize = 200;
 
 /// The gRPC service implementation.
 ///
@@ -144,6 +152,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         );
 
         require_query(&req.query)?;
+        require_conversation_id(&req.conversation_id)?;
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
 
         // R11 — quota check
@@ -230,6 +239,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         info!(notebook_id = %req.notebook_id, "QueryNotebook");
 
         require_query(&req.query)?;
+        require_conversation_id(&req.conversation_id)?;
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
 
         let (allowed, _, _) = self.quota_manager.check_and_increment().await;
@@ -241,15 +251,11 @@ impl CognitiveToolService for CognitiveGrpcService {
             .session_manager
             .get_or_create(&req.conversation_id, &namespace);
 
-        let limit = if req.max_results > 0 {
-            req.max_results as i64
-        } else {
-            10
-        };
+        let limit = bounded_limit(req.max_results, DEFAULT_QUERY_RESULTS, MAX_QUERY_RESULTS);
 
         let entries = self
             .memory_store
-            .search_entries(&namespace, &req.query, limit as usize)
+            .search_entries(&namespace, &req.query, limit)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -315,12 +321,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let total = namespaces.len() as i32;
-        let offset = req.offset.max(0) as usize;
-        let limit = if req.limit > 0 {
-            req.limit as usize
-        } else {
-            100
-        };
+        let offset = nonnegative_offset(req.offset);
+        let limit = bounded_limit(req.limit, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
 
         let mut notebooks = Vec::new();
         for ns in namespaces.into_iter().skip(offset).take(limit) {
@@ -691,7 +693,14 @@ impl CognitiveToolService for CognitiveGrpcService {
         info!(notebook_id = %req.notebook_id, "ListSources");
 
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
-        let limit = if req.limit > 0 { req.limit as i64 } else { 100 };
+        let limit = bounded_limit(req.limit, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE) as i64;
+        let offset = nonnegative_offset(req.offset) as i64;
+
+        let total = self
+            .memory_store
+            .count_entries(&namespace)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
         let entries = self
             .memory_store
@@ -700,12 +709,11 @@ impl CognitiveToolService for CognitiveGrpcService {
                 key_pattern: None,
                 tags: None,
                 limit: Some(limit),
-                offset: Some(req.offset as i64),
+                offset: Some(offset),
             })
             .await
             .map_err(|e| Status::internal(format!("{e:#}")))?;
 
-        let total = entries.len() as i32;
         let sources: Vec<SourceInfo> = entries
             .into_iter()
             .map(|e| {
@@ -1003,16 +1011,11 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!("GetQueryHistory");
 
-        let limit = if req.limit > 0 {
-            req.limit as usize
-        } else {
-            50
-        };
+        let limit = bounded_limit(req.limit, DEFAULT_HISTORY_PAGE_SIZE, MAX_HISTORY_PAGE_SIZE);
 
         let history = crate::doctor::get_query_history(&self.session_manager, limit);
-        let total = history.len() as i32;
 
-        let entries = history
+        let entries: Vec<QueryHistoryEntry> = history
             .into_iter()
             .map(|v| QueryHistoryEntry {
                 conversation_id: v["conversation_id"]
@@ -1029,6 +1032,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             // Filter by conversation_id if provided
             .filter(|e| req.conversation_id.is_empty() || e.conversation_id == req.conversation_id)
             .collect();
+        let total = entries.len().min(i32::MAX as usize) as i32;
 
         Ok(Response::new(GetQueryHistoryResponse { entries, total }))
     }
@@ -1054,7 +1058,33 @@ fn require_query(query: &str) -> Result<(), Status> {
     if query.trim().is_empty() {
         return Err(Status::invalid_argument("query must not be empty"));
     }
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(Status::invalid_argument(format!(
+            "query exceeds the {MAX_QUERY_BYTES}-byte limit"
+        )));
+    }
     Ok(())
+}
+
+fn require_conversation_id(conversation_id: &str) -> Result<(), Status> {
+    if conversation_id.len() > MAX_CONVERSATION_ID_BYTES {
+        return Err(Status::invalid_argument(format!(
+            "conversation_id exceeds the {MAX_CONVERSATION_ID_BYTES}-byte limit"
+        )));
+    }
+    Ok(())
+}
+
+fn bounded_limit(requested: i32, default: usize, max: usize) -> usize {
+    if requested > 0 {
+        (requested as usize).min(max)
+    } else {
+        default
+    }
+}
+
+fn nonnegative_offset(offset: i32) -> usize {
+    offset.max(0) as usize
 }
 
 fn canonical_create_notebook(
@@ -1308,6 +1338,32 @@ mod tests {
     }
 
     #[test]
+    fn query_and_page_ingress_limits_are_bounded_before_storage_access() {
+        assert!(require_query("grounded question").is_ok());
+        assert_eq!(
+            require_query(&"q".repeat(MAX_QUERY_BYTES + 1))
+                .expect_err("oversized query must fail")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            require_conversation_id(&"s".repeat(MAX_CONVERSATION_ID_BYTES + 1))
+                .expect_err("oversized conversation id must fail")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            bounded_limit(0, DEFAULT_QUERY_RESULTS, MAX_QUERY_RESULTS),
+            DEFAULT_QUERY_RESULTS
+        );
+        assert_eq!(
+            bounded_limit(i32::MAX, DEFAULT_QUERY_RESULTS, MAX_QUERY_RESULTS),
+            MAX_QUERY_RESULTS
+        );
+        assert_eq!(nonnegative_offset(-5), 0);
+    }
+
+    #[test]
     fn canonical_create_preserves_explicit_namespace_and_requested_kind() {
         assert_eq!(
             canonical_create_notebook("project:3tched-cognative", NamespaceKind::Custom)
@@ -1455,18 +1511,28 @@ mod tests {
             .into_inner();
         assert!(added.success);
 
+        service
+            .add_source(Request::new(AddSourceRequest {
+                notebook_id: notebook_id.clone(),
+                source_type: "text".to_string(),
+                content: "Second source".to_string(),
+                title: "Second source".to_string(),
+                tags: vec![],
+            }))
+            .await
+            .expect("add second source");
+
         let listed = service
             .list_sources(Request::new(ListSourcesRequest {
                 notebook_id: notebook_id.clone(),
-                limit: 10,
+                limit: 1,
                 offset: 0,
             }))
             .await
             .expect("list sources")
             .into_inner();
-        assert_eq!(listed.total, 1);
-        assert_eq!(listed.sources[0].id, added.source_id);
-        assert_eq!(listed.sources[0].title, "Ingress design");
+        assert_eq!(listed.total, 2, "total counts all sources, not page length");
+        assert_eq!(listed.sources.len(), 1, "request page size is respected");
 
         let content = service
             .get_source_content(Request::new(GetSourceContentRequest {
