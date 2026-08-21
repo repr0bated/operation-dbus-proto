@@ -25,7 +25,7 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 // =============================================================================
 
 const PLUGIN_NAME: &str = "cognitive_mcp";
-const PLUGIN_VERSION: &str = "3.1.0";
+const PLUGIN_VERSION: &str = "3.2.0";
 const PLUGIN_CATEGORY: &str = "service";
 const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
@@ -63,6 +63,19 @@ impl Default for CognitiveMcpConfig {
             dbus_enabled: true,
         }
     }
+}
+
+/// Complete desired configuration accepted by the sealed `set_config` method.
+///
+/// The mutation intentionally requires both fields.  Supplying the whole
+/// configuration makes a request self-contained, so the bridge never has to
+/// guess whether an omitted value means "leave unchanged" or "reset it".
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+pub struct SetConfigInput {
+    /// WireGuard interface from which the Cognitive MCP service reads identity.
+    pub wg_interface: String,
+    /// Whether the service should expose its D-Bus interface.
+    pub dbus_enabled: bool,
 }
 
 // ── Plugin struct + service helpers ─────────────────────────────────────────
@@ -158,6 +171,58 @@ impl Default for CognitiveMcpPlugin {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Apply a complete Cognitive MCP configuration through the plugin's normal
+/// StatePlugin diff/apply path.
+///
+/// This is deliberately the only bridge-facing write helper: callers do not
+/// write runit environment files or signal services directly.  The method is
+/// still authorized, audited, and schema-validated by the bridge before it
+/// reaches this helper.
+pub async fn set_cognitive_mcp_config(input: SetConfigInput) -> Result<SetConfigOutput> {
+    let plugin = CognitiveMcpPlugin::new();
+    let current = simd_json::serde::to_owned_value(&CognitiveMcpPlugin::current_config())?;
+    let desired_config = CognitiveMcpConfig {
+        wg_interface: input.wg_interface,
+        dbus_enabled: input.dbus_enabled,
+    };
+    let desired = simd_json::serde::to_owned_value(&desired_config)?;
+    let diff = plugin.calculate_diff(&current, &desired).await?;
+
+    if diff.actions.is_empty() {
+        return Ok(SetConfigOutput {
+            success: true,
+            message: "Cognitive MCP configuration already matches the requested values".into(),
+        });
+    }
+
+    let applied = plugin.apply_state(&diff).await?;
+    if !applied.success {
+        return Err(anyhow::anyhow!(
+            "Cognitive MCP configuration was not fully applied: {}",
+            applied.errors.join("; ")
+        ));
+    }
+
+    Ok(SetConfigOutput {
+        success: true,
+        message: format!(
+            "Applied Cognitive MCP configuration: {}",
+            applied.changes_applied.join(", ")
+        ),
+    })
+}
+
+/// Reload the Cognitive MCP service through the canonical audited runit D-Bus
+/// control plane.  The legacy method name is retained for schema compatibility;
+/// runit receives a reload signal, not an unsupervised process restart.
+pub async fn reload_cognitive_mcp_service() -> Result<RestartServiceOutput> {
+    CognitiveMcpPlugin::reload_service().await?;
+    Ok(RestartServiceOutput {
+        success: true,
+        message: "Reloaded op-cognitive-mcp through the runit D-Bus control plane".into(),
+    })
 }
 
 // ── StatePlugin impl ─────────────────────────────────────────────────────────
@@ -271,7 +336,10 @@ impl StatePlugin for CognitiveMcpPlugin {
 
         if needs_reload && errors.is_empty() {
             if let Err(e) = Self::reload_service().await {
-                tracing::warn!("cognitive_mcp reload: {e}");
+                // The environment files may have been updated, but callers
+                // must not receive a successful configuration response until
+                // the supervised service has accepted the reload as well.
+                errors.push(format!("cognitive_mcp reload: {e}"));
             }
         }
 
@@ -693,7 +761,11 @@ pub struct GetConfigOutput {
     pub dbus_enabled: bool,
 }
 
-/// Output for SetConfig method
+/// Output for SetConfig method.
+///
+/// Errors are reported through the bridge's D-Bus/gRPC error path.  A returned
+/// value with `success: true` therefore means the configuration was applied and
+/// the service reload was accepted.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SetConfigOutput {
     pub success: bool,
@@ -959,7 +1031,7 @@ pub struct CognitiveMcpState {
 // PLUGIN EXIT: publish the single PluginSchema contract
 // =============================================================================
 
-// Handler audit (all 15 schema methods below) — where each is actually backed:
+// Handler audit (all sealed schema methods below) — where each is actually backed:
 // get_config              → cognitive_mcp.rs:current_config() (this file, StatePlugin)
 // set_config              → cognitive_mcp.rs:apply_state() (this file, StatePlugin)
 // get_health              → op-cognitive-mcp/grpc_service.rs:get_health (tonic RPC)
@@ -1003,7 +1075,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_config".to_string(),
-        method_decl_from_schemars_with_output::<(), SetConfigOutput>(
+        method_decl_from_schemars_with_output::<SetConfigInput, SetConfigOutput>(
             "set_config",
             SideEffect::Mutation,
             false,
@@ -1356,6 +1428,32 @@ mod tests {
             "/org/opdbus/v1/plugins/runit/systemctl"
         );
         assert_eq!(RUNIT_SYSTEMCTL_INTERFACE, RUNIT_SYSTEMCTL_SERVICE);
+    }
+
+    #[test]
+    fn set_config_is_a_complete_typed_mutation_contract() {
+        let schema = cognitive_mcp_schema();
+        let method = schema
+            .methods
+            .get("set_config")
+            .expect("set_config must remain in the Cognitive MCP schema");
+        let args = serde_json::to_value(&method.args).expect("serialize set_config args schema");
+        let properties = args["properties"]
+            .as_object()
+            .expect("set_config args properties");
+        let required = args["required"]
+            .as_array()
+            .expect("set_config required properties");
+
+        assert!(properties.contains_key("wg_interface"));
+        assert!(properties.contains_key("dbus_enabled"));
+        assert!(required.iter().any(|field| field == "wg_interface"));
+        assert!(required.iter().any(|field| field == "dbus_enabled"));
+        assert_eq!(method.side_effect, SideEffect::Mutation);
+        assert_eq!(
+            method.required_capability.as_deref(),
+            Some("cognitive_mcp.invoke")
+        );
     }
 
     #[test]

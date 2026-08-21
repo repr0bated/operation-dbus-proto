@@ -2046,8 +2046,39 @@ impl MutationEngine {
                 op_plugins::state_plugins::ghostbridge::dispatch_ghostbridge_method(method, &state)?
             }
             "cognitive_mcp" => {
-                dispatch_cognitive_mcp_method(&self.cognitive_tool_registry(), method, json_args)
-                    .await?
+                let method_result = dispatch_cognitive_mcp_method(
+                    &self.cognitive_tool_registry(),
+                    method,
+                    json_args,
+                )
+                .await?;
+
+                // `set_config` changes the service's effective configuration
+                // outside the in-memory cache.  Publish the accepted values
+                // immediately so StateSync, json-render `$state`, and the
+                // sealed `get_config` read surface agree with the mutation
+                // result instead of serving a stale projection.
+                if method == "set_config" {
+                    let input: op_plugins::state_plugins::cognitive_mcp::SetConfigInput =
+                        serde_json::from_value(serde_json::to_value(&parsed_value)?)
+                            .context("invalid cognitive_mcp.set_config arguments")?;
+                    self.merge_into_state_cache(
+                        "cognitive_mcp",
+                        &serde_json::json!({
+                            "wg_interface": input.wg_interface,
+                            "dbus_enabled": input.dbus_enabled,
+                        }),
+                    )
+                    .await;
+                    self.publish_plugin_projection_from_cache(
+                        "cognitive_mcp",
+                        ChangeType::PropertySet,
+                    )
+                    .await
+                    .context("publish cognitive_mcp configuration projection")?;
+                }
+
+                method_result
             }
             "large_language_model" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2291,6 +2322,10 @@ impl MutationEngine {
             .get_state(plugin_id)
             .await
             .and_then(|v| serde_json::to_value(&v).ok())
+            .or_else(|| {
+                op_core::projection_shm::read_projection_bytes(plugin_id)
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            })
             .unwrap_or_else(|| serde_json::json!({}));
         if let Some(cur_obj) = current.as_object_mut() {
             for (k, v) in changes_obj {
@@ -3134,8 +3169,25 @@ async fn dispatch_cognitive_mcp_method(
             let val: serde_json::Value = serde_json::from_slice(&bytes)?;
             return cognitive_projection_response(method, &val);
         }
-        "set_config" | "restart_service" => {
-            return Ok(serde_json::json!({"acknowledged": true, "method": method}));
+        _ => {}
+    }
+
+    let args = cognitive_method_arguments(json_args)?;
+    match method {
+        "set_config" => {
+            let input = cognitive_set_config_input(&args)?;
+            let output =
+                op_plugins::state_plugins::cognitive_mcp::set_cognitive_mcp_config(input).await?;
+            return serde_json::to_value(output)
+                .context("serialize cognitive_mcp.set_config response");
+        }
+        "restart_service" => {
+            let _: op_plugins::state_plugins::cognitive_mcp::NoArgs = serde_json::from_value(args)
+                .context("invalid cognitive_mcp.restart_service arguments")?;
+            let output =
+                op_plugins::state_plugins::cognitive_mcp::reload_cognitive_mcp_service().await?;
+            return serde_json::to_value(output)
+                .context("serialize cognitive_mcp.restart_service response");
         }
         _ => {}
     }
@@ -3166,11 +3218,6 @@ async fn dispatch_cognitive_mcp_method(
         .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e));
     }
 
-    let args: serde_json::Value = if json_args.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(json_args)?
-    };
     let (tool_name, tool_args) = map_schema_method_to_tool(method, &args)?;
 
     // Execute with timeout on a spawned task to avoid blocking D-Bus loop
@@ -3216,6 +3263,25 @@ async fn dispatch_cognitive_mcp_method(
     }
 
     Ok(result)
+}
+
+/// Decode the canonical JSON argument object supplied to a Cognitive MCP
+/// schema method.  Keeping this at the ingress boundary makes direct tests and
+/// generated clients see the same empty-body behavior as D-Bus/gRPC callers.
+fn cognitive_method_arguments(json_args: &str) -> anyhow::Result<serde_json::Value> {
+    if json_args.trim().is_empty() {
+        Ok(serde_json::json!({}))
+    } else {
+        serde_json::from_str(json_args).context("invalid cognitive_mcp method arguments")
+    }
+}
+
+/// Parse the sealed `set_config` contract before any host-side StatePlugin work
+/// is attempted.  A malformed request must never be interpreted as defaults.
+fn cognitive_set_config_input(
+    args: &serde_json::Value,
+) -> anyhow::Result<op_plugins::state_plugins::cognitive_mcp::SetConfigInput> {
+    serde_json::from_value(args.clone()).context("invalid cognitive_mcp.set_config arguments")
 }
 
 /// Convert the full Cognitive MCP projection into the narrow response that a
@@ -3524,7 +3590,7 @@ mod cognitive_development_dispatch_tests {
 #[cfg(test)]
 mod cognitive_tool_catalog_tests {
     use super::{
-        cognitive_projection_response, cognitive_tool_catalog_response,
+        cognitive_projection_response, cognitive_set_config_input, cognitive_tool_catalog_response,
         dispatch_cognitive_mcp_method,
     };
     use anyhow::Result;
@@ -3685,6 +3751,25 @@ mod cognitive_tool_catalog_tests {
         )
         .expect_err("incomplete health projection must fail");
         assert!(error.to_string().contains("missing boolean 'running'"));
+    }
+
+    #[test]
+    fn set_config_requires_a_complete_typed_request_before_any_side_effect() {
+        let input = cognitive_set_config_input(&json!({
+            "wg_interface": "wg-cognitive",
+            "dbus_enabled": false,
+        }))
+        .expect("complete configuration parses");
+        assert_eq!(input.wg_interface, "wg-cognitive");
+        assert!(!input.dbus_enabled);
+
+        let missing_required = cognitive_set_config_input(&json!({
+            "wg_interface": "wg-cognitive",
+        }))
+        .expect_err("missing dbus_enabled must not become a default");
+        assert!(missing_required
+            .to_string()
+            .contains("invalid cognitive_mcp.set_config arguments"));
     }
 
     #[tokio::test]
