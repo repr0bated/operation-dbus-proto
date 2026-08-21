@@ -138,6 +138,7 @@ impl CognitiveModelRouter for UnavailableModelRouter {
 
 const DEFAULT_INGEST_MAX_FILES: usize = 10_000;
 const DEFAULT_INGEST_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+const DEFAULT_INGEST_MAX_TOTAL_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_INGEST_ERROR_REPORTS: usize = 100;
 const DEFAULT_QUERY_RESULTS: usize = 10;
 const MAX_QUERY_RESULTS: usize = 50;
@@ -150,6 +151,7 @@ const MAX_NOTEBOOK_TITLE_BYTES: usize = 256;
 const MAX_NOTEBOOK_DESCRIPTION_BYTES: usize = 8 * 1024;
 const MAX_BATCH_NOTEBOOKS: usize = 100;
 const MAX_SOURCE_CONTENT_BYTES: usize = 5 * 1024 * 1024;
+const MAX_SOURCE_ID_BYTES: usize = 512;
 const MAX_SOURCE_TITLE_BYTES: usize = 512;
 const MAX_SOURCE_TAGS: usize = 32;
 const MAX_SOURCE_TAG_BYTES: usize = 128;
@@ -842,6 +844,11 @@ impl CognitiveToolService for CognitiveGrpcService {
             "COGNITIVE_MCP_INGEST_MAX_FILE_BYTES",
             DEFAULT_INGEST_MAX_FILE_BYTES,
         );
+        let max_total_bytes = ingest_limit_u64(
+            "COGNITIVE_MCP_INGEST_MAX_TOTAL_BYTES",
+            DEFAULT_INGEST_MAX_TOTAL_BYTES,
+        );
+        let mut ingested_bytes = 0u64;
 
         // Walk directory — no shell, pure Rust
         // Discover only one more file than can be imported. The former helper
@@ -890,6 +897,21 @@ impl CognitiveToolService for CognitiveGrpcService {
                     );
                     continue;
                 }
+                Ok(metadata) if metadata.len() > max_total_bytes.saturating_sub(ingested_bytes) => {
+                    // Stop rather than continuing to read a huge directory
+                    // once the configured operation-wide content budget is
+                    // exhausted. `sources_skipped` remains an observed lower
+                    // bound because unvisited files are deliberately never
+                    // discovered or read.
+                    skipped += 1;
+                    record_ingest_error(
+                        &mut errors,
+                        format!(
+                            "Folder import reached its {max_total_bytes}-byte total content limit; additional files were not read."
+                        ),
+                    );
+                    break;
+                }
                 Ok(_) => {}
                 Err(error) => {
                     skipped += 1;
@@ -903,6 +925,22 @@ impl CognitiveToolService for CognitiveGrpcService {
 
             match std::fs::read_to_string(&entry_path) {
                 Ok(content) => {
+                    let content_bytes = content.len() as u64;
+                    if content_bytes > max_total_bytes.saturating_sub(ingested_bytes) {
+                        skipped += 1;
+                        record_ingest_error(
+                            &mut errors,
+                            format!(
+                                "Folder import reached its {max_total_bytes}-byte total content limit while reading {}; additional files were not read.",
+                                entry_path.display(),
+                            ),
+                        );
+                        break;
+                    }
+                    // Charge every successfully read file before attempting
+                    // storage. A transient storage error must not turn the
+                    // total ingest budget into an unbounded read loop.
+                    ingested_bytes = ingested_bytes.saturating_add(content_bytes);
                     // Keys must be unique within a notebook. A basename would
                     // silently overwrite `src/lib.rs` with `tests/lib.rs`; use
                     // a stable hash of the root-relative path instead.
@@ -1024,6 +1062,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         request: Request<GetSourceContentRequest>,
     ) -> Result<Response<GetSourceContentResponse>, Status> {
         let req = request.into_inner();
+        require_source_id(&req.source_id)?;
         info!(
             notebook_id = %req.notebook_id,
             source_id = %req.source_id,
@@ -1100,17 +1139,37 @@ impl CognitiveToolService for CognitiveGrpcService {
                 model: String::new(),
                 audit_event_id: 0,
                 audit_event_hash: String::new(),
+                source_ids: Vec::new(),
             }));
         }
 
-        let prompt = build_data_table_prompt(&req, &entries)?;
+        let table_input = build_data_table_prompt(&req, &entries)?;
+        if table_input.source_ids.is_empty() {
+            return Ok(Response::new(GenerateDataTableResponse {
+                data_json: "[]".to_string(),
+                row_count: 0,
+                model_provider: String::new(),
+                model: String::new(),
+                audit_event_id: 0,
+                audit_event_hash: String::new(),
+                source_ids: Vec::new(),
+            }));
+        }
+
+        let (allowed, remaining, _limit) = self.quota_manager.check_and_increment().await;
+        if !allowed {
+            return Err(Status::resource_exhausted(format!(
+                "Daily query quota exceeded ({} remaining)",
+                remaining
+            )));
+        }
         let model = self
             .model_router
             .generate(CognitiveModelRequest {
                 actor_id: context.actor_id,
                 capability_id: context.capability_id,
                 operation: "generate_data_table".to_string(),
-                prompt,
+                prompt: table_input.prompt,
             })
             .await?;
         let rows = parse_data_table_output(&model.content, &req.columns)?;
@@ -1127,6 +1186,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             model: model.model,
             audit_event_id: model.audit_event_id,
             audit_event_hash: model.audit_event_hash,
+            source_ids: table_input.source_ids,
         }))
     }
 
@@ -1219,6 +1279,7 @@ impl CognitiveToolService for CognitiveGrpcService {
     ) -> Result<Response<RemoveSourceResponse>, Status> {
         let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
+        require_source_id(&req.source_id)?;
         info!(
             notebook_id = %req.notebook_id,
             source_id = %req.source_id,
@@ -1385,6 +1446,13 @@ fn require_at_most_bytes(value: &str, field: &str, limit: usize) -> Result<(), S
     Ok(())
 }
 
+fn require_source_id(source_id: &str) -> Result<(), Status> {
+    if source_id.trim().is_empty() {
+        return Err(Status::invalid_argument("source_id is required"));
+    }
+    require_at_most_bytes(source_id, "source_id", MAX_SOURCE_ID_BYTES)
+}
+
 fn content_fingerprint(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }
@@ -1429,12 +1497,18 @@ fn validate_data_table_request(request: &GenerateDataTableRequest) -> Result<(),
     Ok(())
 }
 
+struct DataTableInput {
+    prompt: String,
+    source_ids: Vec<String>,
+}
+
 fn build_data_table_prompt(
     request: &GenerateDataTableRequest,
     entries: &[MemoryEntry],
-) -> Result<String, Status> {
+) -> Result<DataTableInput, Status> {
     let mut remaining = MAX_DATA_TABLE_SOURCE_CONTEXT_BYTES;
     let mut sources = Vec::new();
+    let mut source_ids = Vec::new();
     for entry in entries {
         if remaining == 0 {
             break;
@@ -1445,6 +1519,7 @@ fn build_data_table_prompt(
             continue;
         }
         remaining = remaining.saturating_sub(snippet.len());
+        source_ids.push(entry.key.clone());
         sources.push(serde_json::json!({
             "source_id": entry.key,
             "title": entry.value.get("title").and_then(serde_json::Value::as_str),
@@ -1459,11 +1534,14 @@ fn build_data_table_prompt(
         format!("Use only these columns: {}.", request.columns.join(", "))
     };
 
-    Ok(format!(
-        "You are a structured data extraction route. Return only a valid JSON array, never Markdown, prose, or code fences. Each array item must be an object. Use only information present in the supplied sources; use null when a requested value is absent. Return at most {MAX_DATA_TABLE_ROWS} rows. {columns}\n\nExtraction request:\n{}\n\nSources:\n{}",
-        request.prompt.trim(),
-        source_json,
-    ))
+    Ok(DataTableInput {
+        prompt: format!(
+            "You are a structured data extraction route. Return only a valid JSON array, never Markdown, prose, or code fences. Each array item must be an object. Use only information present in the supplied sources; use null when a requested value is absent. Return at most {MAX_DATA_TABLE_ROWS} rows. {columns}\n\nExtraction request:\n{}\n\nSources:\n{}",
+            request.prompt.trim(),
+            source_json,
+        ),
+        source_ids,
+    })
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
@@ -2014,6 +2092,19 @@ mod tests {
         assert!(validate_source_request(&empty_tag).is_err());
         assert!(validate_folder_patterns(&["*.rs".to_string(), "*.md".to_string()]).is_ok());
         assert!(validate_folder_patterns(&["".to_string()]).is_err());
+        assert!(require_source_id("source-1").is_ok());
+        assert_eq!(
+            require_source_id(" ")
+                .expect_err("blank source id must fail")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            require_source_id(&"s".repeat(MAX_SOURCE_ID_BYTES + 1))
+                .expect_err("oversized source id must fail")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
@@ -2195,10 +2286,11 @@ mod tests {
             content: r#"[{"service":"Cognitive MCP","status":"active"}]"#.to_string(),
             calls: std::sync::Mutex::new(Vec::new()),
         });
+        let quota = Arc::new(QuotaManager::with_defaults());
         let service = CognitiveGrpcService::with_operational_adapters(
             store.clone(),
             Arc::new(SessionManager::with_defaults()),
-            Arc::new(QuotaManager::with_defaults()),
+            quota.clone(),
             Arc::new(ToolRegistry::new()),
             Arc::new(ContextAwarenessEngine::new(
                 ContextAwarenessConfig::default(),
@@ -2243,6 +2335,7 @@ mod tests {
         assert_eq!(response.model_provider, "test-provider");
         assert_eq!(response.model, "test-model");
         assert_eq!(response.audit_event_id, 99);
+        assert_eq!(response.source_ids, vec!["service-source"]);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&response.data_json)
                 .expect("returned table JSON")[0]["status"],
@@ -2254,6 +2347,7 @@ mod tests {
         assert_eq!(calls[0].actor_id, "test-session");
         assert_eq!(calls[0].capability_id, "cognitive_mcp.read");
         assert!(calls[0].prompt.contains("Cognitive MCP is active."));
+        assert_eq!(quota.status().await, (49, 50));
     }
 
     #[tokio::test]

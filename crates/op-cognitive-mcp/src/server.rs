@@ -60,14 +60,6 @@ impl CognitiveMcpServer {
         )
         .await?;
 
-        typed_tools::register_typed_tools(
-            &tool_registry,
-            memory_store.clone(),
-            session_manager.clone(),
-            quota_manager.clone(),
-        )
-        .await?;
-
         // Code-RAG pipeline: optional, like qdrant_shuttle. Without a Voyage key
         // (env or ~/.ssh/mongo-voyage) the cognitive MCP still serves memory tools.
         let rag_pipeline = match RagPipeline::from_env() {
@@ -95,6 +87,15 @@ impl CognitiveMcpServer {
             rag_pipeline.clone(),
         ));
         context_engine.clone().start_monitoring();
+
+        typed_tools::register_typed_tools(
+            &tool_registry,
+            memory_store.clone(),
+            session_manager.clone(),
+            quota_manager.clone(),
+            context_engine.clone(),
+        )
+        .await?;
 
         if let Some(rag) = &rag_pipeline {
             let n = register_code_tools(

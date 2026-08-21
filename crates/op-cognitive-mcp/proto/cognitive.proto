@@ -262,6 +262,8 @@ message GenerateDataTableResponse {
   string model = 4;
   uint64 audit_event_id = 5;
   string audit_event_hash = 6;
+  // Exact notebook source ids supplied to the model route for this extraction.
+  repeated string source_ids = 7;
 }
 
 // ---------------------------------------------------------------------------

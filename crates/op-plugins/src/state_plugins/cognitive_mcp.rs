@@ -1095,6 +1095,9 @@ pub struct AskQuestionOutput {
     pub grounded: bool,
     pub conversation_id: String,
     pub namespace: String,
+    /// Bounded, ephemeral session signals from the shared context engine.
+    /// This is observable query state, not a mutable memory namespace.
+    pub context_json: serde_json::Value,
 }
 
 /// Output for RestartService method

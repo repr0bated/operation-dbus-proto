@@ -20,6 +20,7 @@
 //! 16. doctor
 
 use crate::cognitive_tools::field;
+use crate::context_awareness::{ActivityType, ContextAwarenessEngine};
 use crate::ingress::{validate_conversation_id, validate_query};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -41,6 +42,7 @@ pub async fn register_typed_tools(
     store: Arc<CognitiveMemoryStore>,
     sessions: Arc<SessionManager>,
     quota: Arc<QuotaManager>,
+    context_engine: Arc<ContextAwarenessEngine>,
 ) -> Result<usize> {
     let tools: Vec<BoxedTool> = vec![
         // Canonical provider-neutral question surface for the Cognitive MCP
@@ -53,6 +55,7 @@ pub async fn register_typed_tools(
             store.clone(),
             sessions.clone(),
             quota.clone(),
+            context_engine.clone(),
         )),
         // R16: dbus_query_core → project:op-dbus-core
         Arc::new(TypedQueryTool::new(
@@ -62,6 +65,7 @@ pub async fn register_typed_tools(
             store.clone(),
             sessions.clone(),
             quota.clone(),
+            context_engine.clone(),
         )),
         // R16: dbus_query_bindings → project:op-dbus-bindings
         Arc::new(TypedQueryTool::new(
@@ -71,6 +75,7 @@ pub async fn register_typed_tools(
             store.clone(),
             sessions.clone(),
             quota.clone(),
+            context_engine,
         )),
         // R16: dbus_store → add_source_text
         Arc::new(TypedStoreTool::new(
@@ -111,6 +116,7 @@ struct TypedQueryTool {
     store: Arc<CognitiveMemoryStore>,
     sessions: Arc<SessionManager>,
     quota: Arc<QuotaManager>,
+    context_engine: Arc<ContextAwarenessEngine>,
 }
 
 impl TypedQueryTool {
@@ -121,6 +127,7 @@ impl TypedQueryTool {
         store: Arc<CognitiveMemoryStore>,
         sessions: Arc<SessionManager>,
         quota: Arc<QuotaManager>,
+        context_engine: Arc<ContextAwarenessEngine>,
     ) -> Self {
         Self::with_catalog(
             name,
@@ -131,6 +138,7 @@ impl TypedQueryTool {
             store,
             sessions,
             quota,
+            context_engine,
         )
     }
 
@@ -141,6 +149,7 @@ impl TypedQueryTool {
         store: Arc<CognitiveMemoryStore>,
         sessions: Arc<SessionManager>,
         quota: Arc<QuotaManager>,
+        context_engine: Arc<ContextAwarenessEngine>,
     ) -> Self {
         Self::with_catalog(
             name,
@@ -151,6 +160,7 @@ impl TypedQueryTool {
             store,
             sessions,
             quota,
+            context_engine,
         )
     }
 
@@ -163,6 +173,7 @@ impl TypedQueryTool {
         store: Arc<CognitiveMemoryStore>,
         sessions: Arc<SessionManager>,
         quota: Arc<QuotaManager>,
+        context_engine: Arc<ContextAwarenessEngine>,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -173,6 +184,7 @@ impl TypedQueryTool {
             store,
             sessions,
             quota,
+            context_engine,
         }
     }
 }
@@ -278,13 +290,30 @@ impl Tool for TypedQueryTool {
                 grounded,
             },
         );
+        self.context_engine
+            .record_activity(
+                &session.id,
+                ActivityType::Query,
+                query.to_string(),
+                serde_json::json!({
+                    "namespace": self.memory_namespace,
+                    "source": "schema_grounded_query",
+                }),
+            )
+            .await;
+        let context_json = self
+            .context_engine
+            .get_session_signals(&session.id)
+            .await
+            .unwrap_or_else(|| serde_json::json!({}));
 
         Ok(json!({
             "answer": answer,
             "citations": citations,
             "grounded": grounded,
             "conversation_id": session.id,
-            "namespace": self.memory_namespace
+            "namespace": self.memory_namespace,
+            "context_json": context_json,
         }))
     }
 }
@@ -292,6 +321,7 @@ impl Tool for TypedQueryTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context_awareness::ContextAwarenessConfig;
     use crate::cozo_shuttle::CozoGraphShuttle;
     use crate::memory_store::NamespaceKind;
     use crate::quota::QuotaTier;
@@ -302,9 +332,14 @@ mod tests {
         let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
         let sessions = Arc::new(SessionManager::with_defaults());
         let quota = Arc::new(QuotaManager::with_defaults());
+        let context_engine = Arc::new(ContextAwarenessEngine::new(
+            ContextAwarenessConfig::default(),
+            store.clone(),
+            None,
+        ));
         let registry = ToolRegistry::new();
 
-        register_typed_tools(&registry, store.clone(), sessions, quota)
+        register_typed_tools(&registry, store.clone(), sessions, quota, context_engine)
             .await
             .expect("register typed tools");
 
@@ -365,6 +400,8 @@ mod tests {
             response["citations"][0]["text"].as_str(),
             Some("architecture")
         );
+        assert_eq!(response["context_json"]["activity_count"], 1);
+        assert!(response["context_json"]["current_topics"].is_array());
     }
 
     #[tokio::test]
@@ -376,9 +413,14 @@ mod tests {
             name: "exhausted".into(),
             daily_limit: 0,
         }));
+        let context_engine = Arc::new(ContextAwarenessEngine::new(
+            ContextAwarenessConfig::default(),
+            store.clone(),
+            None,
+        ));
         let registry = ToolRegistry::new();
 
-        register_typed_tools(&registry, store, sessions, quota)
+        register_typed_tools(&registry, store, sessions, quota, context_engine)
             .await
             .expect("register typed tools");
 
@@ -395,11 +437,22 @@ mod tests {
         let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
         let sessions = Arc::new(SessionManager::with_defaults());
         let quota = Arc::new(QuotaManager::with_defaults());
+        let context_engine = Arc::new(ContextAwarenessEngine::new(
+            ContextAwarenessConfig::default(),
+            store.clone(),
+            None,
+        ));
         let registry = ToolRegistry::new();
 
-        register_typed_tools(&registry, store, sessions.clone(), quota.clone())
-            .await
-            .expect("register typed tools");
+        register_typed_tools(
+            &registry,
+            store,
+            sessions.clone(),
+            quota.clone(),
+            context_engine,
+        )
+        .await
+        .expect("register typed tools");
         let quota_before = quota.status().await;
 
         let error = registry
