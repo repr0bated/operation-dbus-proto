@@ -991,6 +991,30 @@ pub async fn init_cognitive_mcp() -> Option<CognitiveMcpHandle> {
     }
 }
 
+/// Publish whether the in-process Cognitive MCP runtime actually initialized.
+/// The sealed plugin state is seeded before this step, so without this explicit
+/// projection a failed MCP initialization would leave example `healthy: true`
+/// values visible to the operator surfaces.
+pub async fn project_cognitive_mcp_runtime_health(
+    mutation_engine: &MutationEngine,
+    handle: Option<&CognitiveMcpHandle>,
+) {
+    let (healthy, running, remaining, limit) = match handle {
+        Some(handle) => {
+            let (remaining, limit) = handle.server.quota_manager().status().await;
+            (true, true, i64::from(remaining), i64::from(limit))
+        }
+        None => (false, false, 0, 0),
+    };
+
+    if let Err(error) = mutation_engine
+        .project_cognitive_mcp_runtime_health(healthy, running, remaining, limit)
+        .await
+    {
+        warn!(%error, "unable to publish Cognitive MCP runtime health projection");
+    }
+}
+
 /// Mount [`CognitiveToolService`] when a shared [`CognitiveMcpHandle`] is available.
 pub async fn attach_cognitive_tool_service(
     server: OperationGrpcServer,
@@ -1056,6 +1080,7 @@ pub async fn run_grpc_server(
         mutation_engine
             .attach_cognitive_mcp(Some(handle.tool_registry()), Some(handle.context_state()));
     }
+    project_cognitive_mcp_runtime_health(&mutation_engine, cognitive.as_ref()).await;
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(mutation_engine, provider)

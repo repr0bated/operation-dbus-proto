@@ -75,6 +75,21 @@ pub enum ChangeSource {
     Internal,
 }
 
+fn cognitive_runtime_health_projection(
+    healthy: bool,
+    running: bool,
+    queries_remaining: i64,
+    queries_limit: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "healthy": healthy,
+        "running": running,
+        "auth_status": "none",
+        "queries_remaining": queries_remaining,
+        "queries_limit": queries_limit,
+    })
+}
+
 /// One plugin's sealed contract, held for stream hydration.
 ///
 /// Both fields come out of the same [`op_blob::blobify_plugin_schema`] call that
@@ -329,6 +344,31 @@ impl MutationEngine {
         if let Ok(mut guard) = self.cognitive_context_engine.write() {
             *guard = context;
         }
+    }
+
+    /// Project the in-process Cognitive MCP runtime status onto the same
+    /// authoritative state surface consumed by `get_health`, StateSync, and
+    /// json-render.  Startup must not leave the schema's example values in
+    /// place when the actual MCP registry failed to initialize.
+    pub async fn project_cognitive_mcp_runtime_health(
+        &self,
+        healthy: bool,
+        running: bool,
+        queries_remaining: i64,
+        queries_limit: i64,
+    ) -> anyhow::Result<()> {
+        self.merge_into_state_cache(
+            "cognitive_mcp",
+            &cognitive_runtime_health_projection(
+                healthy,
+                running,
+                queries_remaining,
+                queries_limit,
+            ),
+        )
+        .await;
+        self.publish_plugin_projection_from_cache("cognitive_mcp", ChangeType::PropertySet)
+            .await
     }
 
     fn cognitive_tool_registry(&self) -> Option<Arc<ToolRegistry>> {
@@ -3690,8 +3730,9 @@ mod cognitive_development_dispatch_tests {
 #[cfg(test)]
 mod cognitive_tool_catalog_tests {
     use super::{
-        cognitive_projection_response, cognitive_schema_method_response,
-        cognitive_set_config_input, cognitive_tool_catalog_response, dispatch_cognitive_mcp_method,
+        cognitive_projection_response, cognitive_runtime_health_projection,
+        cognitive_schema_method_response, cognitive_set_config_input,
+        cognitive_tool_catalog_response, dispatch_cognitive_mcp_method,
     };
     use anyhow::Result;
     use async_trait::async_trait;
@@ -3912,6 +3953,24 @@ mod cognitive_tool_catalog_tests {
         assert_eq!(indexed["files_indexed"], 1);
         assert!(indexed.get("ok").is_none());
         assert!(indexed.get("runtime_only").is_none());
+    }
+
+    #[test]
+    fn cognitive_runtime_health_reflects_actual_initialization_state() {
+        assert_eq!(
+            cognitive_runtime_health_projection(false, false, 0, 0),
+            json!({
+                "healthy": false,
+                "running": false,
+                "auth_status": "none",
+                "queries_remaining": 0,
+                "queries_limit": 0,
+            })
+        );
+        assert_eq!(
+            cognitive_runtime_health_projection(true, true, 42, 50)["queries_remaining"],
+            42
+        );
     }
 
     #[tokio::test]

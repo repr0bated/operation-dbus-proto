@@ -35,6 +35,7 @@ use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
 use crate::grpc_server::{
     attach_cognitive_tool_service, build_operation_routes, init_cognitive_mcp,
+    project_cognitive_mcp_runtime_health,
 };
 use crate::proto::tched_router::{
     tched_router_service_server::{TchedRouterService, TchedRouterServiceServer},
@@ -457,6 +458,7 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
+    project_cognitive_mcp_runtime_health(&mutation_engine, cognitive.as_ref()).await;
 
     // Seeding can replace a stale sealed schema with the plugin's current
     // projection. Load only after that write so the later reflection freeze
