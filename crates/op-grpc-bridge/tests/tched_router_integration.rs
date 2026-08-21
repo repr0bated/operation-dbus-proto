@@ -322,7 +322,7 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
             "tched_router",
             "ListModels",
             r#"{"provider":"opencode"}"#,
-            Some("cap.software.tched_router.models.read@v1"),
+            Some("cap.software.tched-router.models.read@v1"),
             "integration-test-actor",
         )
         .await
@@ -361,7 +361,7 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
     assert_eq!(event.method_name.as_deref(), Some("ListModels"));
     assert_eq!(
         event.capability_id.as_deref(),
-        Some("cap.software.tched_router.models.read@v1")
+        Some("cap.software.tched-router.models.read@v1")
     );
     assert_eq!(event.actor_id, "integration-test-actor");
     assert!(event.json_args_footprint.is_some());

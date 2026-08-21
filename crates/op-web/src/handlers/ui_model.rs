@@ -2,7 +2,7 @@
 //!
 //! The Antigravity chat UI renders json-render `Spec`s. The model-agnostic
 //! inference loop (`op-gallery-gen`) is the producer: any model loaded through
-//! ZeroClaw reads the sealed blob `PluginSchema` plus json-render.dev docs
+//! 3tched Router reads the sealed blob `PluginSchema` plus json-render.dev docs
 //! and emits specs. The operator interacts through the /gallery-gen/* API.
 //!
 //! Legacy compatibility: the old `/api/ui-model/gallery` endpoint still reads
@@ -12,7 +12,7 @@
 //! Source-of-truth rules (per CLAUDE.md):
 //! - Plugin schemas come from the sealed blob catalog via
 //!   `op_blob::catalog::read_plugin_schema_shm`, never a monolith file.
-//! - Gallery generation uses `op-gallery-gen` (model-agnostic, via ZeroClaw).
+//! - Gallery generation uses `op-gallery-gen` (model-agnostic, via 3tched Router).
 
 use crate::state::AppState;
 use crate::state_tree;

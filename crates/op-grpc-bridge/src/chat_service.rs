@@ -68,7 +68,7 @@ impl ChatService for ChatServiceImpl {
         crate::grpc_server::authorize_schema_method(
             "tched_router",
             "Chat",
-            Some("cap.software.tched_router.chat@v1"),
+            Some("cap.software.tched-router.chat@v1"),
             Some(&identity),
         )?;
         let req = request.into_inner();
@@ -143,7 +143,7 @@ impl ChatService for ChatServiceImpl {
                     "tched_router",
                     "Chat",
                     &chat_args,
-                    Some("cap.software.tched_router.chat@v1"),
+                    Some("cap.software.tched-router.chat@v1"),
                     &actor_id,
                 ) => result.and_then(|result| {
                     let payload = result

@@ -1,4 +1,4 @@
-//! ZeroClaw HTTP compatibility handlers and schema-driven UI surface.
+//! 3tched Router HTTP compatibility handlers and schema-driven UI surface.
 //!
 //! Port 8080 owns ordinary HTTP. Every model/provider request is adapted into
 //! the bridge's schema-declared gRPC method pipeline on port 8090.
@@ -81,7 +81,7 @@ async fn call_tched_router_method(
     let payload = envelope.get("result").cloned().ok_or_else(|| {
         json_error_response(
             StatusCode::BAD_GATEWAY,
-            "ZeroClaw method response is missing its result payload",
+            "3tched Router method response is missing its result payload",
         )
     })?;
     let json = simd_json::to_string(&payload)
@@ -123,7 +123,7 @@ pub async fn tched_router_chat_handler(
     if req.stream {
         return json_error_response(
             StatusCode::BAD_REQUEST,
-            "use op_chat.chat.ChatService.Send on the gRPC bridge for streaming",
+            "use operation.method.tched_router.chat.ChatService/Chat on the gRPC bridge for streaming",
         );
     }
     let messages = if req.messages.is_empty() {
@@ -145,7 +145,7 @@ pub async fn tched_router_chat_handler(
     let result = match call_tched_router_method(
         &headers,
         "Chat",
-        "cap.software.tched_router.chat@v1",
+        "cap.software.tched-router.chat@v1",
         serde_json::json!({
             "messages": messages,
             "provider": req.provider.unwrap_or_default(),
@@ -175,7 +175,7 @@ pub async fn tched_router_chat_handler(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("stop");
     // Salad (and some other providers) emit usage counts as floats (e.g. 30.0).
-    // OpenAI-compatible clients like ZeroClaw deserialize them as u64 — coerce.
+    // OpenAI-compatible clients like 3tched Router deserialize them as u64 — coerce.
     let usage = normalize_openai_usage(result.get("usage"));
 
     Json(serde_json::json!({
@@ -227,7 +227,7 @@ pub async fn tched_router_chat_stream_handler(
 ) -> Response {
     json_error_response(
         StatusCode::BAD_REQUEST,
-        "use op_chat.chat.ChatService.Send on port 8090 for streaming",
+        "use operation.method.tched_router.chat.ChatService/Chat on port 8090 for streaming",
     )
 }
 
@@ -239,7 +239,7 @@ pub async fn openai_models_handler(
     let result = match call_tched_router_method(
         &headers,
         "ListModels",
-        "cap.software.tched_router.models.read@v1",
+        "cap.software.tched-router.models.read@v1",
         serde_json::json!({}),
     )
     .await
@@ -253,7 +253,7 @@ pub async fn openai_models_handler(
     else {
         return json_error_response(
             StatusCode::BAD_GATEWAY,
-            "ZeroClaw ListModels returned no model_routes",
+            "3tched Router ListModels returned no model_routes",
         );
     };
     let mut seen = std::collections::HashSet::new();
@@ -351,7 +351,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
     json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "ZeroClaw HTTP compatibility",
+            "title": "3tched Router HTTP compatibility",
             "version": "1.0.0"
         },
         "paths": {
@@ -390,7 +390,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
                     "operationId": "tched_router.Chat",
                     "responses": {
                         "200": {
-                            "description": "ZeroClaw chat completion"
+                            "description": "3tched Router chat completion"
                         }
                     }
                 }
@@ -400,7 +400,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
                     "operationId": "tched_router.Chat",
                     "responses": {
                         "200": {
-                            "description": "ZeroClaw chat completion"
+                            "description": "3tched Router chat completion"
                         }
                     }
                 }
@@ -411,7 +411,7 @@ fn compatibility_openapi(schema: Option<&Value>) -> Value {
 
 /// Serve the combined schema for schema-driven UI rendering.
 ///
-/// Combines the locally-derived HTTP adapter document with the ZeroClaw plugin
+/// Combines the locally-derived HTTP adapter document with the 3tched Router plugin
 /// projection (providers, model_routes, tools, structured_output) so the
 /// frontend can render the entire chat interface from a single schema.
 /// GET /api/tched_router/schema

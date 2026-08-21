@@ -333,20 +333,28 @@ impl TchedRouterRuntimeClient {
             });
         }
 
+        // Fetch each provider family's catalog once. Agents commonly share a
+        // family, and the previous code re-fetched per agent.
+        let mut catalogs: std::collections::BTreeMap<String, ModelCatalogResponse> =
+            std::collections::BTreeMap::new();
+        for agent in agents.iter().filter(|agent| agent.enabled) {
+            if !catalogs.contains_key(&agent.family) {
+                if let Ok(catalog) = self.model_catalog(&agent.family).await {
+                    catalogs.insert(agent.family.clone(), catalog);
+                }
+            }
+        }
+
         // One route per enabled agent: the agent is the thing that can actually
         // serve the model, so the route set and the reachable set are the same
         // set by construction.
         let mut routes = Vec::new();
         for agent in agents.iter().filter(|agent| agent.enabled) {
-            let catalog = self.model_catalog(&agent.family).await.ok();
+            let catalog = catalogs.get(&agent.family);
             let listed = catalog
-                .as_ref()
                 .map(|catalog| catalog.models.iter().any(|model| model == &agent.model))
                 .unwrap_or(false);
-            let live = catalog
-                .as_ref()
-                .map(|catalog| catalog.live)
-                .unwrap_or(false);
+            let live = catalog.map(|catalog| catalog.live).unwrap_or(false);
             routes.push(ModelRoute {
                 hint: if agent.skill_bundles.is_empty() {
                     "runtime".to_string()
@@ -377,6 +385,47 @@ impl TchedRouterRuntimeClient {
                 api_key: None,
                 ..Default::default()
             });
+        }
+
+        // Every model the provider catalog reports is selectable, not just the
+        // one each agent pins. Without this the catalog was fetched and thrown
+        // away except for the `listed`/`live` booleans above, so a provider
+        // offering 90+ models surfaced only the handful named by agents.
+        // Agent-served models already have a richer route and are not duplicated.
+        for (family, catalog) in &catalogs {
+            for model in &catalog.models {
+                if routes
+                    .iter()
+                    .any(|route| &route.provider == family && &route.model == model)
+                {
+                    continue;
+                }
+                routes.push(ModelRoute {
+                    hint: "catalog".to_string(),
+                    provider: family.clone(),
+                    upstream_provider: family.clone(),
+                    transport: "tched_router-catalog".to_string(),
+                    model: model.clone(),
+                    kind: "chat".to_string(),
+                    status: if catalog.live {
+                        "available".to_string()
+                    } else {
+                        "configured".to_string()
+                    },
+                    available: catalog.live,
+                    status_reason: format!(
+                        "Reported by the '{}' provider catalog; {}.",
+                        family,
+                        if catalog.live {
+                            "live"
+                        } else {
+                            "cached catalog only"
+                        }
+                    ),
+                    api_key: None,
+                    ..Default::default()
+                });
+            }
         }
 
         state.status = "active".to_string();
