@@ -275,15 +275,7 @@ impl McpServer {
     }
 
     async fn handle_tools_list(&self, request: McpRequest) -> McpResponse {
-        // Check if compact mode
-        let client_info = self.client_info.read().await;
-        let use_compact = self.config.compact_mode
-            || client_info
-                .as_ref()
-                .map(|c| Self::should_use_compact_mode(&c.name))
-                .unwrap_or(false);
-
-        if use_compact {
+        if self.uses_compact_mode().await {
             return self.get_compact_tools_response(request.id).await;
         }
 
@@ -326,7 +318,7 @@ impl McpServer {
             .and_then(|obj| obj.get("name"))
             .and_then(|n| n.as_str())
         {
-            Some(n) => n,
+            Some(n) => n.to_string(),
             None => {
                 return McpResponse::error(
                     request.id,
@@ -336,7 +328,7 @@ impl McpServer {
         };
 
         // Check if blocked
-        if self.is_tool_blocked(tool_name) {
+        if self.is_tool_blocked(&tool_name) {
             warn!(tool = %tool_name, "Blocked tool execution attempt");
             return McpResponse::error(
                 request.id,
@@ -350,6 +342,23 @@ impl McpServer {
             .cloned()
             .unwrap_or(json!({}));
 
+        // MCP clients always invoke a listed tool through `tools/call`. The
+        // compact helpers were previously advertised in `tools/list` but only
+        // handled through a legacy direct-RPC route, which made every helper
+        // fail as "Tool not found". Repackage their arguments for the shared
+        // compact handler before looking up a real tool.
+        if self.uses_compact_mode().await && is_compact_meta_tool(&tool_name) {
+            return self
+                .handle_compact_tool(McpRequest {
+                    jsonrpc: request.jsonrpc.clone(),
+                    id: request.id.clone(),
+                    method: tool_name,
+                    params: Some(arguments),
+                    meta: request.meta.clone(),
+                })
+                .await;
+        }
+
         // Inject code context for smart suggestions (if op-tools has code_search)
         #[cfg(feature = "code_search")]
         let arguments = {
@@ -360,7 +369,7 @@ impl McpServer {
                 .or(arguments.get("file").and_then(|f| f.as_str()));
 
             let code_context =
-                op_tools::code_search::inject_code_context(tool_name, &arguments, current_file)
+                op_tools::code_search::inject_code_context(&tool_name, &arguments, current_file)
                     .await;
             if !code_context.is_empty() {
                 arguments["_code_context"] = code_context.to_json();
@@ -369,7 +378,7 @@ impl McpServer {
             arguments
         };
 
-        match self.tool_executor.execute_tool(tool_name, arguments).await {
+        match self.tool_executor.execute_tool(&tool_name, arguments).await {
             Ok(result) => McpResponse::success(
                 request.id,
                 json!({
@@ -622,7 +631,10 @@ impl McpServer {
                     })),
                     meta: None,
                 };
-                self.handle_tools_call(call_request).await
+                // `execute_tool` re-enters the standard MCP call path for
+                // the selected real tool. Box the future to keep the compact
+                // dispatch path finite in the type system.
+                Box::pin(self.handle_tools_call(call_request)).await
             }
             "respond" => {
                 let message = params
@@ -731,6 +743,17 @@ impl McpServer {
         name_lower.contains("gemini") || name_lower.contains("cursor")
     }
 
+    async fn uses_compact_mode(&self) -> bool {
+        self.config.compact_mode
+            || self
+                .client_info
+                .read()
+                .await
+                .as_ref()
+                .map(|client| Self::should_use_compact_mode(&client.name))
+                .unwrap_or(false)
+    }
+
     /// Get tool executor reference
     pub fn tool_executor(&self) -> &Arc<dyn ToolExecutor> {
         &self.tool_executor
@@ -742,6 +765,13 @@ impl McpServer {
             "initialize" | "initialized" | "notifications/initialized" | "ping"
         )
     }
+}
+
+fn is_compact_meta_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "list_tools" | "search_tools" | "get_tool_schema" | "execute_tool" | "respond"
+    )
 }
 
 #[cfg(test)]
@@ -791,6 +821,16 @@ mod tests {
         McpServer::with_executor(Default::default(), Arc::new(MockToolExecutor))
     }
 
+    fn compact_test_server() -> McpServer {
+        McpServer::with_executor(
+            McpServerConfig {
+                compact_mode: true,
+                ..Default::default()
+            },
+            Arc::new(MockToolExecutor),
+        )
+    }
+
     #[tokio::test]
     async fn should_reject_non_lifecycle_request_before_initialize() {
         let server = test_server();
@@ -819,6 +859,64 @@ mod tests {
             .handle_request(McpRequest::new("notifications/initialized"))
             .await;
         assert!(response.is_success());
+    }
+
+    #[tokio::test]
+    async fn compact_meta_tools_are_callable_through_standard_tools_call() {
+        let server = compact_test_server();
+        let _ = server
+            .handle_request(
+                McpRequest::new("initialize")
+                    .with_id(json!(1))
+                    .with_params(json!({ "clientInfo": { "name": "test-client" } })),
+            )
+            .await;
+
+        let response =
+            server
+                .handle_request(McpRequest::new("tools/call").with_id(json!(2)).with_params(
+                    json!({
+                        "name": "search_tools",
+                        "arguments": { "query": "echo", "limit": 10 }
+                    }),
+                ))
+                .await;
+
+        assert!(response.is_success());
+        let text = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("content"))
+            .and_then(|content| content.as_array())
+            .and_then(|content| content.first())
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str())
+            .expect("compact search result text");
+        assert!(text.contains("echo"));
+
+        let execute_response =
+            server
+                .handle_request(McpRequest::new("tools/call").with_id(json!(3)).with_params(
+                    json!({
+                        "name": "execute_tool",
+                        "arguments": {
+                            "tool_name": "echo",
+                            "arguments": { "message": "hello" }
+                        }
+                    }),
+                ))
+                .await;
+        assert!(execute_response.is_success());
+        let execute_text = execute_response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("content"))
+            .and_then(|content| content.as_array())
+            .and_then(|content| content.first())
+            .and_then(|content| content.get("text"))
+            .and_then(|text| text.as_str())
+            .expect("compact execution result text");
+        assert!(execute_text.contains("hello"));
     }
 
     #[tokio::test]

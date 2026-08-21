@@ -125,7 +125,11 @@ impl CognitiveMcpServer {
 
         let config = McpServerConfig {
             name: Some("cognitive-mcp".to_string()),
-            compact_mode: false,
+            // A cognitive runtime can register hundreds of agent operations.
+            // Advertising every schema consumes the model's working context
+            // before it can answer; compact mode retains deterministic tool
+            // discovery through list/search/schema/execute meta-tools.
+            compact_mode: compact_mode_from_env(),
             ..Default::default()
         };
 
@@ -178,5 +182,38 @@ impl CognitiveMcpServer {
             self.quota_manager.clone(),
             self.tool_registry.clone(),
         )
+    }
+}
+
+/// Cognitive MCP defaults to compact tool discovery. Set
+/// `COGNITIVE_MCP_COMPACT_MODE=0` for clients which explicitly require the
+/// complete raw `tools/list` response.
+fn compact_mode_from_env() -> bool {
+    let value = std::env::var("COGNITIVE_MCP_COMPACT_MODE").ok();
+    compact_mode_from_value(value.as_deref())
+}
+
+fn compact_mode_from_value(value: Option<&str>) -> bool {
+    value
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_mode_from_value;
+
+    #[test]
+    fn compact_mode_parser_defaults_to_compact_and_allows_full_override() {
+        assert!(compact_mode_from_value(None));
+        assert!(compact_mode_from_value(Some("true")));
+        assert!(!compact_mode_from_value(Some("0")));
+        assert!(!compact_mode_from_value(Some("false")));
+        assert!(!compact_mode_from_value(Some("off")));
     }
 }
