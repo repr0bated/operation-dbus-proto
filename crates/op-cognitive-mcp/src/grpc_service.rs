@@ -797,7 +797,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                 .unwrap_or_else(|_| "{}".to_string()),
             queries_remaining: remaining as i32,
             queries_limit: limit as i32,
-            auth_status: "chrome_profile".to_string(),
+            auth_status: crate::notebooklm::notebooklm_auth_status().to_string(),
         }))
     }
 
@@ -811,14 +811,9 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!(auth_method = %req.auth_method, "SetupAuth");
 
-        // R9 — persistent auth: never wipe Chrome profile on failed launch
-        // R13 — credentials 0o600
-        // Phase 1: validate and store credential reference.
-        // Actual Chrome profile management is in the NotebookLM sidecar.
-
-        if req.auth_method.is_empty() {
+        if !matches!(req.auth_method.as_str(), "chrome_profile" | "cookie") {
             return Err(Status::invalid_argument(
-                "auth_method is required (chrome_profile or cookie)",
+                "auth_method must be chrome_profile or cookie",
             ));
         }
 
@@ -828,40 +823,13 @@ impl CognitiveToolService for CognitiveGrpcService {
             ));
         }
 
-        // Validate Chrome profile path exists if using chrome_profile
-        if req.auth_method == "chrome_profile" {
-            let path = std::path::Path::new(&req.credential);
-            if !path.exists() {
-                return Err(Status::invalid_argument(format!(
-                    "Chrome profile path '{}' does not exist",
-                    req.credential
-                )));
-            }
-
-            // R13 — check permissions (0o600 for credential files)
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if let Ok(metadata) = std::fs::metadata(path) {
-                    let mode = metadata.mode() & 0o777;
-                    if mode & 0o077 != 0 {
-                        warn!(
-                            path = %req.credential,
-                            mode = format!("{:o}", mode),
-                            "Chrome profile has overly permissive permissions; should be 0o600"
-                        );
-                    }
-                }
-            }
-        }
-
-        Ok(Response::new(SetupAuthResponse {
-            success: true,
-            message: format!(
-                "Auth configured: method={}, credential stored",
-                req.auth_method
-            ),
-        }))
+        // This service has no secret-store write path and no ability to reload
+        // the sidecar. Returning success here previously claimed that a raw
+        // credential had been persisted when it had only been discarded.
+        // Authentication remains an operator-controlled runit secret.
+        Err(Status::failed_precondition(
+            "SetupAuth cannot persist credentials. Provision NotebookLM authentication through the operator-managed secret and restart path.",
+        ))
     }
 
     // =========================================================================
@@ -1202,5 +1170,19 @@ mod tests {
             .notebook
             .expect("notebook payload");
         assert_eq!(notebook.name, "project:3tched-cognative");
+    }
+
+    #[tokio::test]
+    async fn setup_auth_rejects_credentials_that_the_service_cannot_persist() {
+        let (service, _) = test_service().await;
+        let error = service
+            .setup_auth(Request::new(SetupAuthRequest {
+                auth_method: "cookie".to_string(),
+                credential: "not-a-real-cookie".to_string(),
+            }))
+            .await
+            .expect_err("raw credentials must not be falsely accepted");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(error.message().contains("cannot persist credentials"));
     }
 }

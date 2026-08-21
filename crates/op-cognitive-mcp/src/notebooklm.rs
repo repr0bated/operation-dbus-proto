@@ -17,6 +17,21 @@ const DEFAULT_NOTEBOOKLM_ARGS: &[&str] = &["-y", "notebooklm-mcp@latest"];
 const DEFAULT_NOTEBOOKLM_SERVER_NAME: &str = "notebooklm";
 const DEFAULT_NOTEBOOKLM_PROFILE: &str = "minimal";
 
+/// Authentication is provisioned outside the model-facing MCP process by the
+/// service definition reading the protected NotebookLM cookie secret. Keep the
+/// status value deliberately secret-free for health and doctor responses.
+pub(crate) fn auth_status_from_cookie(cookie: Option<&str>) -> &'static str {
+    if cookie.is_some_and(|value| !value.trim().is_empty()) {
+        "configured"
+    } else {
+        "unconfigured"
+    }
+}
+
+pub(crate) fn notebooklm_auth_status() -> &'static str {
+    auth_status_from_cookie(std::env::var("NOTEBOOKLM_COOKIE").ok().as_deref())
+}
+
 #[derive(Debug, Clone)]
 struct NotebookLmConfig {
     enabled: bool,
@@ -429,6 +444,16 @@ mod tests {
         assert_eq!(
             config.published_tool_name("notebooklm:ask-question"),
             "tched_router_model_transcript_ask_question"
+        );
+    }
+
+    #[test]
+    fn auth_status_never_exposes_cookie_contents() {
+        assert_eq!(auth_status_from_cookie(None), "unconfigured");
+        assert_eq!(auth_status_from_cookie(Some("   ")), "unconfigured");
+        assert_eq!(
+            auth_status_from_cookie(Some("sensitive-cookie-value")),
+            "configured"
         );
     }
 

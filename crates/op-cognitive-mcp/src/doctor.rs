@@ -111,13 +111,18 @@ pub async fn run_diagnostics(
     });
 
     // 5. Auth Status
-    let auth_method =
-        std::env::var("COGNITIVE_MCP_AUTH_METHOD").unwrap_or_else(|_| "chrome_profile".into());
+    let auth_status = crate::notebooklm::notebooklm_auth_status();
+    if auth_status == "unconfigured" {
+        recommendations.push(
+            "NotebookLM authentication is not provisioned. Install the operator-managed secret before enabling sidecar-backed tools."
+                .into(),
+        );
+    }
     components.push(ComponentStatus {
         name: "auth".into(),
-        status: "configured".into(),
+        status: auth_status.into(),
         details: serde_json::json!({
-            "method": auth_method,
+            "provisioner": "operator_managed_secret",
         }),
     });
 
