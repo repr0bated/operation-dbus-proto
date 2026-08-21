@@ -36,20 +36,27 @@ pub struct QueryTurn {
     pub grounded: bool,
 }
 
-/// Session manager backed by in-memory DashMap with optional SQLite persistence.
-/// Phase 1 uses in-memory only; Phase 3 will add SQLite backing via the
-/// CognitiveMemoryStore's pool.
+/// Session manager backed by an explicitly bounded, in-memory DashMap.
+/// Durable memory belongs to the canonical Cozo memory store rather than an
+/// unbounded conversation map.
 pub struct SessionManager {
     sessions: Arc<DashMap<String, ConversationSession>>,
     /// Maximum turns kept per conversation before eviction.
     max_history: usize,
+    /// Maximum retained session records before least-recently-used eviction.
+    max_sessions: usize,
 }
 
 impl SessionManager {
     pub fn new(max_history: usize) -> Self {
+        Self::with_limits(max_history, 1_000)
+    }
+
+    pub fn with_limits(max_history: usize, max_sessions: usize) -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
             max_history,
+            max_sessions: max_sessions.max(1),
         }
     }
 
@@ -66,18 +73,43 @@ impl SessionManager {
             conversation_id.to_string()
         };
 
-        self.sessions
-            .entry(id.clone())
-            .or_insert_with(|| ConversationSession {
-                id: id.clone(),
-                notebook_id: notebook_id.to_string(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                query_count: 0,
-                history: Vec::new(),
-                active: true,
-            })
-            .clone()
+        if let Some(mut existing) = self.sessions.get_mut(&id) {
+            existing.updated_at = Utc::now();
+            return existing.clone();
+        }
+
+        self.evict_for_new_session();
+        let session = ConversationSession {
+            id: id.clone(),
+            notebook_id: notebook_id.to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            query_count: 0,
+            history: Vec::new(),
+            active: true,
+        };
+        // If another request created the same supplied ID while this request
+        // chose an eviction candidate, preserve that conversation rather than
+        // replacing its history.
+        self.sessions.entry(id).or_insert_with(|| session).clone()
+    }
+
+    fn evict_for_new_session(&self) {
+        while self.sessions.len() >= self.max_sessions {
+            // Closed sessions are evicted first; within either class evict the
+            // least recently updated record. This keeps active follow-ups
+            // stable while placing a hard bound on process memory.
+            let candidate = self
+                .sessions
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.active, entry.updated_at))
+                .min_by_key(|(_, active, updated_at)| (*active, *updated_at))
+                .map(|(id, _, _)| id);
+            let Some(id) = candidate else {
+                break;
+            };
+            self.sessions.remove(&id);
+        }
     }
 
     /// Append a query turn to the conversation and return the updated session.
@@ -231,5 +263,31 @@ mod tests {
         let session = mgr.get_session("conv-c").unwrap();
         assert!(!session.active);
         assert_eq!(mgr.active_count(), 0);
+    }
+
+    #[test]
+    fn evicts_closed_sessions_before_active_sessions_at_capacity() {
+        let mgr = SessionManager::with_limits(20, 2);
+        mgr.get_or_create("closed", "nb-1");
+        mgr.get_or_create("active", "nb-1");
+        mgr.close_session("closed").unwrap();
+
+        mgr.get_or_create("new", "nb-1");
+
+        assert_eq!(mgr.count(), 2);
+        assert!(mgr.get_session("closed").is_none());
+        assert!(mgr.get_session("active").is_some());
+        assert!(mgr.get_session("new").is_some());
+    }
+
+    #[test]
+    fn existing_session_is_reused_without_eviction_at_capacity() {
+        let mgr = SessionManager::with_limits(20, 1);
+        let original = mgr.get_or_create("active", "nb-1");
+        let reused = mgr.get_or_create("active", "nb-2");
+
+        assert_eq!(mgr.count(), 1);
+        assert_eq!(reused.id, original.id);
+        assert_eq!(reused.notebook_id, "nb-1");
     }
 }
