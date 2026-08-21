@@ -108,11 +108,12 @@ impl ToolRegistry {
     ) -> Vec<ToolDefinition> {
         let defs = self.definitions.read().await;
 
-        let filtered: Vec<_> = defs
+        let mut filtered: Vec<_> = defs
             .values()
             .filter(|d| category.is_none_or(|c| d.category == c))
             .cloned()
             .collect();
+        filtered.sort_by(|left, right| left.name.cmp(&right.name));
 
         filtered.into_iter().skip(offset).take(limit).collect()
     }
@@ -122,7 +123,8 @@ impl ToolRegistry {
         let query_lower = query.to_lowercase();
         let defs = self.definitions.read().await;
 
-        defs.values()
+        let mut matches: Vec<_> = defs
+            .values()
             .filter(|d| {
                 d.name.to_lowercase().contains(&query_lower)
                     || d.description.to_lowercase().contains(&query_lower)
@@ -131,9 +133,11 @@ impl ToolRegistry {
                         .iter()
                         .any(|t| t.to_lowercase().contains(&query_lower))
             })
-            .take(50) // Reasonable limit for search results
             .cloned()
-            .collect()
+            .collect();
+        matches.sort_by(|left, right| left.name.cmp(&right.name));
+        matches.truncate(50); // Reasonable limit for search results
+        matches
     }
 
     /// Total tool count
@@ -211,5 +215,105 @@ impl ToolExecutor for RegistryExecutor {
                 annotations: None,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use simd_json::json;
+
+    struct TestTool {
+        name: &'static str,
+        description: &'static str,
+        category: &'static str,
+    }
+
+    #[async_trait]
+    impl Tool for TestTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            self.description
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        fn category(&self) -> &str {
+            self.category
+        }
+
+        async fn execute(&self, input: Value) -> Result<Value> {
+            Ok(input)
+        }
+    }
+
+    async fn test_registry() -> ToolRegistry {
+        let registry = ToolRegistry::new();
+        for tool in [
+            TestTool {
+                name: "zeta_query",
+                description: "Search operational state",
+                category: "operations",
+            },
+            TestTool {
+                name: "alpha_query",
+                description: "Search cognitive memory",
+                category: "cognitive",
+            },
+            TestTool {
+                name: "beta_status",
+                description: "Report current status",
+                category: "operations",
+            },
+        ] {
+            registry
+                .register(Arc::new(tool))
+                .await
+                .expect("register test tool");
+        }
+        registry
+    }
+
+    #[tokio::test]
+    async fn list_is_name_sorted_before_pagination_and_filtering() {
+        let registry = test_registry().await;
+
+        let names: Vec<_> = registry
+            .list(0, usize::MAX, None)
+            .await
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        assert_eq!(names, ["alpha_query", "beta_status", "zeta_query"]);
+
+        let page = registry.list(1, 1, None).await;
+        assert_eq!(page[0].name, "beta_status");
+
+        let operations: Vec<_> = registry
+            .list(0, usize::MAX, Some("operations"))
+            .await
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        assert_eq!(operations, ["beta_status", "zeta_query"]);
+    }
+
+    #[tokio::test]
+    async fn search_is_name_sorted_before_its_result_limit() {
+        let registry = test_registry().await;
+
+        let names: Vec<_> = registry
+            .search("query")
+            .await
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        assert_eq!(names, ["alpha_query", "zeta_query"]);
     }
 }
