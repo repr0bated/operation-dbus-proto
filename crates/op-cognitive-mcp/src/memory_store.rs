@@ -642,7 +642,7 @@ mod tests {
         let store = CognitiveMemoryStore::new(shuttle).await.expect("store");
         store
             .upsert_namespace(
-                "project:test",
+                "project:unit-count-fixture",
                 NamespaceKind::Project,
                 None,
                 None,
@@ -653,14 +653,14 @@ mod tests {
             .expect("namespace");
         assert_eq!(
             store
-                .count_entries("project:test")
+                .count_entries("project:unit-count-fixture")
                 .await
                 .expect("empty count"),
             0
         );
         store
             .store_entry(
-                "project:test",
+                "project:unit-count-fixture",
                 "one",
                 serde_json::json!({"content":"a"}),
                 vec![],
@@ -668,6 +668,12 @@ mod tests {
             )
             .await
             .expect("entry");
-        assert_eq!(store.count_entries("project:test").await.expect("count"), 1);
+        assert_eq!(
+            store
+                .count_entries("project:unit-count-fixture")
+                .await
+                .expect("count"),
+            1
+        );
     }
 }
