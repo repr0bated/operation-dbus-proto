@@ -3312,16 +3312,8 @@ fn map_schema_method_to_tool(
         "code_search" => Ok(("code_search".into(), base)),
         "code_index" => Ok(("code_index".into(), base)),
         "code_context" => Ok(("code_context".into(), base)),
-        // Gemini question answering: the tool names the field `question`.
-        "gemini_query" => {
-            let mut v = base.clone();
-            if let Some(obj) = v.as_object_mut() {
-                if let Some(q) = obj.remove("query") {
-                    obj.insert("question".to_string(), q);
-                }
-            }
-            Ok(("ask_question".into(), v))
-        }
+        // Provider-neutral grounded question answering.
+        "ask_question" => Ok(("ask_question".into(), base)),
         "register_tool" => Ok(("register_tool".into(), base)),
         // Generic door: the caller names the tool.
         "invoke_tool" => {
@@ -3456,6 +3448,23 @@ mod cognitive_development_dispatch_tests {
             assert_eq!(args["status"], "planned");
         }
         assert!(map_schema_method_to_tool("development_missing", &json!({})).is_err());
+    }
+
+    #[test]
+    fn grounded_questions_map_to_the_provider_neutral_tool() {
+        let (tool, args) = map_schema_method_to_tool(
+            "ask_question",
+            &json!({"query": "What is the deployment status?", "conversation_id": "ops"}),
+        )
+        .expect("ask_question should map");
+
+        assert_eq!(tool, "ask_question");
+        assert_eq!(args["query"], "What is the deployment status?");
+        assert_eq!(args["conversation_id"], "ops");
+        assert!(
+            map_schema_method_to_tool("gemini_query", &json!({"query": "status"})).is_err(),
+            "the retired provider-specific method must not be dispatchable"
+        );
     }
 }
 

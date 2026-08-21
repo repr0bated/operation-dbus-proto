@@ -80,7 +80,7 @@ const DEVELOPMENT_CATEGORIES: &[(&str, &str, &str)] = &[
     (
         "external_integrations",
         "External integrations",
-        "Salad, OAuth providers, Gemini, OpenAI, and other connectors.",
+        "Model gateways, OAuth providers, and other external connectors.",
     ),
     (
         "data_quality_lifecycle",

@@ -1,13 +1,11 @@
 //! 🛷 Doctor Diagnostics — R15
 //!
 //! Comprehensive system diagnostics: auth status, quota, memory store
-//! health, session state, NotebookLM bridge status, Gemini fallback,
-//! and query history.
+//! health, session state, NotebookLM bridge status, and query history.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::gemini_fallback::GeminiFallback;
 use crate::memory_store::CognitiveMemoryStore;
 use crate::quota::QuotaManager;
 use crate::session::SessionManager;
@@ -33,7 +31,6 @@ pub async fn run_diagnostics(
     memory_store: &Arc<CognitiveMemoryStore>,
     session_manager: &Arc<SessionManager>,
     quota_manager: &Arc<QuotaManager>,
-    gemini: &Arc<GeminiFallback>,
 ) -> DiagnosticReport {
     let mut components = Vec::new();
     let mut recommendations = Vec::new();
@@ -96,25 +93,7 @@ pub async fn run_diagnostics(
         }),
     });
 
-    // 4. Gemini Fallback
-    let gemini_available = gemini.is_available().await;
-    components.push(ComponentStatus {
-        name: "gemini_fallback".into(),
-        status: if gemini_available {
-            "ok"
-        } else {
-            "unavailable"
-        }
-        .into(),
-        details: serde_json::json!({
-            "available": gemini_available,
-        }),
-    });
-    if !gemini_available {
-        recommendations.push("Gemini fallback unavailable. Set GEMINI_API_KEY for resilient queries when NotebookLM is down.".into());
-    }
-
-    // 5. Tool Profile
+    // 4. Tool Profile
     let profile = tool_profiles::current_profile();
     let estimate = tool_profiles::token_estimate(profile);
     components.push(ComponentStatus {
@@ -128,7 +107,7 @@ pub async fn run_diagnostics(
         }),
     });
 
-    // 6. Auth Status
+    // 5. Auth Status
     let auth_method =
         std::env::var("COGNITIVE_MCP_AUTH_METHOD").unwrap_or_else(|_| "chrome_profile".into());
     components.push(ComponentStatus {

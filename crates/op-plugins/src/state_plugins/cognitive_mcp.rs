@@ -25,7 +25,7 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 // =============================================================================
 
 const PLUGIN_NAME: &str = "cognitive_mcp";
-const PLUGIN_VERSION: &str = "2.0.0";
+const PLUGIN_VERSION: &str = "3.0.0";
 const PLUGIN_CATEGORY: &str = "service";
 const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
@@ -333,23 +333,6 @@ fn example_auth_status() -> AuthStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum GeminiMode {
-    Query,
-    DeepResearch,
-}
-
-impl Default for GeminiMode {
-    fn default() -> Self {
-        Self::Query
-    }
-}
-
-fn default_gemini_mode() -> GeminiMode {
-    GeminiMode::default()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
-#[serde(rename_all = "snake_case")]
 pub enum MemoryOperation {
     Store,
     Retrieve,
@@ -467,10 +450,6 @@ fn default_notebook_count() -> i64 {
     0
 }
 
-fn default_depth() -> u8 {
-    3
-}
-
 fn default_memory_limit() -> i64 {
     50
 }
@@ -534,20 +513,13 @@ pub struct SourceInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GeminiQueryRequest {
-    #[schemars(description = "Natural-language query")]
-    pub query: String,
-    #[schemars(description = "Optional grounding context")]
-    pub context: Option<String>,
-    #[serde(default = "default_gemini_mode")]
-    #[schemars(description = "Query mode")]
-    pub mode: GeminiMode,
-    #[serde(default = "default_depth")]
+pub struct AskQuestionInput {
     #[schemars(
-        range(min = 1, max = 5),
-        description = "Deep-research depth (1-5, default 3)"
+        description = "Natural-language question to answer from the configured notebook namespace"
     )]
-    pub depth: u8,
+    pub query: String,
+    #[schemars(description = "Optional session identifier for follow-up question context")]
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -906,11 +878,14 @@ pub struct CodeContextOutput {
     pub sources: Vec<String>,
 }
 
-/// Output for GeminiQuery method
+/// Output for the provider-neutral grounded question method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GeminiQueryOutput {
-    pub response: String,
-    pub citations: Vec<String>,
+pub struct AskQuestionOutput {
+    pub answer: String,
+    pub citations: Vec<Citation>,
+    pub grounded: bool,
+    pub conversation_id: String,
+    pub namespace: String,
 }
 
 /// Output for RestartService method
@@ -948,8 +923,8 @@ pub struct CognitiveMcpState {
     #[serde(default = "default_notebook_count")]
     #[schemars(description = "Number of notebooks in the library", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.notebook-count@v1"))]
     pub notebook_count: i64,
-    #[schemars(description = "R12: Gemini fallback query (requires GEMINI_API_KEY)", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.gemini-query-request@v1"))]
-    pub gemini_query_request: Option<GeminiQueryRequest>,
+    #[schemars(description = "Provider-neutral grounded question input for the configured notebook namespace", extend("readOnly" = true), extend("x-oscal-subid" = "obs.service.cognitive-mcp.question.ask@v1"))]
+    pub ask_question_request: Option<AskQuestionInput>,
     #[schemars(description = "MCP MemoryTool: key-value memory store with operations store/retrieve/query/delete/list_namespaces/stats", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.memory-tool@v1"))]
     pub memory_tool: Option<MemoryToolInput>,
     #[schemars(description = "Citation sub-object: text, source, page. Inherited by grounded query responses.", extend("readOnly" = true), extend("x-oscal-subid" = "exp.software.plugin.cognitive-mcp.citation@v1"))]
@@ -983,7 +958,7 @@ pub struct CognitiveMcpState {
 // code_search             → op-cognitive-mcp/code_tools.rs:CodeSearchTool
 // code_index              → op-cognitive-mcp/code_tools.rs:CodeIndexTool
 // code_context            → op-cognitive-mcp/code_tools.rs:CodeContextTool
-// gemini_query            → op-cognitive-mcp/grpc_service.rs:gemini_query (tonic RPC)
+// ask_question            → op-cognitive-mcp/typed_tools.rs:TypedQueryTool (grounded local retrieval)
 // restart_service         → cognitive_mcp.rs:reload_service_dbus() (this file, StatePlugin)
 pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CognitiveMcpState))
@@ -1131,13 +1106,13 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         ),
     );
     schema.methods.insert(
-        "gemini_query".to_string(),
-        method_decl_from_schemars_with_output::<(), GeminiQueryOutput>(
-            "gemini_query",
-            SideEffect::Mutation,
+        "ask_question".to_string(),
+        method_decl_from_schemars_with_output::<AskQuestionInput, AskQuestionOutput>(
+            "ask_question",
+            SideEffect::Read,
             false,
-            "cognitive_mcp.invoke",
-            "mut.service.gemini.query@v1",
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.question.ask@v1",
         ),
     );
     schema.methods.insert(
@@ -1335,6 +1310,26 @@ mod tests {
             );
             assert_eq!(method.subid, subid, "{name} subid");
         }
+    }
+
+    #[test]
+    fn grounded_question_contract_is_provider_neutral() {
+        let schema = cognitive_mcp_schema();
+        let method = schema
+            .methods
+            .get("ask_question")
+            .expect("ask_question must remain in the Cognitive MCP schema");
+
+        assert_eq!(method.side_effect, SideEffect::Read);
+        assert_eq!(
+            method.required_capability.as_deref(),
+            Some("cognitive_mcp.read")
+        );
+        assert_eq!(method.subid, "obs.service.cognitive-mcp.question.ask@v1");
+        assert!(
+            !schema.methods.contains_key("gemini_query"),
+            "Cognitive MCP must not expose a provider-specific question method"
+        );
     }
 
     #[test]

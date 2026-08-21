@@ -23,7 +23,6 @@ pub mod context_server;
 pub mod cozo_shuttle;
 pub mod development_ledger;
 pub mod doctor;
-pub mod gemini_fallback;
 pub mod grpc_service;
 pub mod live_schema;
 pub mod memory_store;

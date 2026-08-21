@@ -7,7 +7,6 @@ use crate::code_tools::register_code_tools;
 use crate::cognitive_tools::CognitiveToolRegistry;
 use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::cozo_shuttle::CozoGraphShuttle;
-use crate::gemini_fallback::GeminiFallback;
 use crate::grpc_service::CognitiveGrpcService;
 use crate::memory_store::CognitiveMemoryStore;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
@@ -26,7 +25,6 @@ pub struct CognitiveMcpServer {
     tool_registry: Arc<ToolRegistry>,
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
-    gemini_fallback: Arc<GeminiFallback>,
     /// Code-RAG pipeline (Voyage + Qdrant). `None` when no Voyage key is found.
     rag_pipeline: Option<Arc<RagPipeline>>,
     /// Proactive coding-context awareness engine.
@@ -55,8 +53,6 @@ impl CognitiveMcpServer {
 
         let session_manager = Arc::new(SessionManager::with_defaults());
         let quota_manager = Arc::new(QuotaManager::with_defaults());
-        let gemini_fallback = Arc::new(GeminiFallback::new());
-
         CognitiveToolRegistry::register_all(
             &tool_registry,
             memory_store.clone(),
@@ -115,7 +111,6 @@ impl CognitiveMcpServer {
             tool_registry,
             session_manager,
             quota_manager,
-            gemini_fallback,
             rag_pipeline,
             context_engine,
         })
@@ -178,7 +173,6 @@ impl CognitiveMcpServer {
             self.memory_store.clone(),
             self.session_manager.clone(),
             self.quota_manager.clone(),
-            self.gemini_fallback.clone(),
         )
     }
 }

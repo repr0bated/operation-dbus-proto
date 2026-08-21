@@ -22,7 +22,6 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::gemini_fallback::GeminiFallback;
 use crate::memory_store::{CognitiveMemoryStore, NamespaceKind};
 use crate::proto::cognitive_tool_service_server::CognitiveToolService;
 use crate::proto::*;
@@ -39,7 +38,6 @@ pub struct CognitiveGrpcService {
     memory_store: Arc<CognitiveMemoryStore>,
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
-    gemini_fallback: Arc<GeminiFallback>,
 }
 
 impl CognitiveGrpcService {
@@ -47,13 +45,11 @@ impl CognitiveGrpcService {
         memory_store: Arc<CognitiveMemoryStore>,
         session_manager: Arc<SessionManager>,
         quota_manager: Arc<QuotaManager>,
-        gemini_fallback: Arc<GeminiFallback>,
     ) -> Self {
         Self {
             memory_store,
             session_manager,
             quota_manager,
-            gemini_fallback,
         }
     }
 }
@@ -716,52 +712,9 @@ impl CognitiveToolService for CognitiveGrpcService {
             }));
         }
 
-        let context = entries
-            .iter()
-            .map(|e| {
-                format!(
-                    "Source: {}\nContent: {}",
-                    e.key,
-                    e.value.as_str().unwrap_or(&e.value.to_string())
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n---\n\n");
-
-        // Step 2: Use Gemini Fallback to extract structured data
-        let columns_str = req.columns.join(", ");
-        let prompt = format!(
-            "Task: {}\n\nExtract information into a JSON array of objects. Each object must have exactly these keys: {}.\n\nReturn ONLY the JSON array, nothing else.",
-            req.prompt, columns_str
-        );
-
-        let result = self
-            .gemini_fallback
-            .gemini_query(&prompt, Some(&context))
-            .await
-            .map_err(|e| Status::internal(format!("Data extraction failed: {}", e)))?;
-
-        // Step 3: Clean up Markdown code blocks if any
-        let mut json_str = result.answer.trim().to_string();
-        if json_str.starts_with("```json") {
-            json_str = json_str.trim_start_matches("```json").to_string();
-            json_str = json_str.trim_end_matches("```").trim().to_string();
-        } else if json_str.starts_with("```") {
-            json_str = json_str.trim_start_matches("```").to_string();
-            json_str = json_str.trim_end_matches("```").trim().to_string();
-        }
-
-        // Count rows roughly by parsing
-        let row_count = if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&json_str) {
-            arr.len() as i32
-        } else {
-            0
-        };
-
-        Ok(Response::new(GenerateDataTableResponse {
-            data_json: json_str,
-            row_count,
-        }))
+        Err(Status::failed_precondition(
+            "GenerateDataTable requires a configured provider-neutral model route; Cognitive MCP does not select providers directly.",
+        ))
     }
 
     // =========================================================================
@@ -899,79 +852,6 @@ impl CognitiveToolService for CognitiveGrpcService {
     }
 
     // =========================================================================
-    // R12 — GeminiQuery (Fallback)
-    // =========================================================================
-    async fn gemini_query(
-        &self,
-        request: Request<GeminiQueryRequest>,
-    ) -> Result<Response<GeminiQueryResponse>, Status> {
-        let req = request.into_inner();
-        info!(mode = %req.mode, "GeminiQuery");
-
-        let context = if req.context.is_empty() {
-            None
-        } else {
-            Some(req.context.as_str())
-        };
-
-        if req.mode == "deep_research" {
-            let depth = if req.depth > 0 { req.depth as u32 } else { 3 };
-            let result = self
-                .gemini_fallback
-                .deep_research(&req.query, context, depth)
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?;
-
-            let sections_json =
-                serde_json::to_string(&result.sections).unwrap_or_else(|_| "[]".to_string());
-
-            let citations = result
-                .sections
-                .iter()
-                .flat_map(|s| &s.citations)
-                .cloned()
-                .map(|c| Citation {
-                    text: c.text,
-                    source: c.source,
-                    page: c.page,
-                })
-                .collect();
-
-            Ok(Response::new(GeminiQueryResponse {
-                answer: result.summary,
-                citations,
-                model: result.model,
-                is_fallback: true,
-                sections_json,
-            }))
-        } else {
-            let result = self
-                .gemini_fallback
-                .gemini_query(&req.query, context)
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?;
-
-            let citations = result
-                .citations
-                .into_iter()
-                .map(|c| Citation {
-                    text: c.text,
-                    source: c.source,
-                    page: c.page,
-                })
-                .collect();
-
-            Ok(Response::new(GeminiQueryResponse {
-                answer: result.answer,
-                citations,
-                model: result.model,
-                is_fallback: true,
-                sections_json: "[]".to_string(),
-            }))
-        }
-    }
-
-    // =========================================================================
     // R14 — GetToolProfile
     // =========================================================================
     async fn get_tool_profile(
@@ -1017,7 +897,6 @@ impl CognitiveToolService for CognitiveGrpcService {
             &self.memory_store,
             &self.session_manager,
             &self.quota_manager,
-            &self.gemini_fallback,
         )
         .await;
 

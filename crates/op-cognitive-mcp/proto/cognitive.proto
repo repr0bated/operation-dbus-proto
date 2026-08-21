@@ -8,7 +8,7 @@ package operation.cognitive.v1;
 // Traceability:
 //   R1-R3,R9-R11 → AskQuestion, QueryNotebook, ListNotebooks, GetHealth, SetupAuth
 //   R4-R6        → CreateNotebook, BatchCreateNotebooks, AddFolder, AddSource, ListSources, RemoveSource
-//   R7,R12-R15   → GenerateDataTable, GeminiQuery, GetToolProfile, Doctor, GetQueryHistory
+//   R7,R14-R15   → GenerateDataTable, GetToolProfile, Doctor, GetQueryHistory
 service CognitiveToolService {
   // Core querying (R1)
   rpc AskQuestion(AskQuestionRequest) returns (AskQuestionResponse);
@@ -31,9 +31,6 @@ service CognitiveToolService {
 
   // Advanced outputs (R7)
   rpc GenerateDataTable(GenerateDataTableRequest) returns (GenerateDataTableResponse);
-
-  // Gemini fallback (R12)
-  rpc GeminiQuery(GeminiQueryRequest) returns (GeminiQueryResponse);
 
   // Tool profiles (R14)
   rpc GetToolProfile(GetToolProfileRequest) returns (GetToolProfileResponse);
@@ -297,29 +294,6 @@ message RemoveSourceRequest {
 
 message RemoveSourceResponse {
   bool success = 1;
-}
-
-// ---------------------------------------------------------------------------
-// GeminiQuery (R12 — fallback when browser breaks)
-// ---------------------------------------------------------------------------
-
-message GeminiQueryRequest {
-  string query = 1;
-  // Optional context to ground the query
-  string context = 2;
-  // "query" or "deep_research"
-  string mode = 3;
-  // Depth for deep_research (1-5, default 3)
-  int32 depth = 4;
-}
-
-message GeminiQueryResponse {
-  string answer = 1;
-  repeated Citation citations = 2;
-  string model = 3;
-  bool is_fallback = 4;
-  // For deep_research: JSON of sections
-  string sections_json = 5;
 }
 
 // ---------------------------------------------------------------------------
