@@ -261,20 +261,23 @@ impl CognitiveToolService for CognitiveGrpcService {
             100
         };
 
-        let notebooks: Vec<NotebookInfo> = namespaces
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(|ns| NotebookInfo {
+        let mut notebooks = Vec::new();
+        for ns in namespaces.into_iter().skip(offset).take(limit) {
+            let source_count = self
+                .memory_store
+                .count_entries(&ns.name)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            notebooks.push(NotebookInfo {
                 id: ns.id,
                 name: ns.name,
                 kind: ns.kind.to_string(),
                 description: ns.description.unwrap_or_default(),
-                source_count: 0, // TODO: count entries per namespace
+                source_count,
                 created_at: ns.created_at.to_rfc3339(),
                 updated_at: ns.updated_at.to_rfc3339(),
-            })
-            .collect();
+            });
+        }
 
         Ok(Response::new(ListNotebooksResponse { notebooks, total }))
     }
@@ -302,13 +305,18 @@ impl CognitiveToolService for CognitiveGrpcService {
         let metadata_json =
             serde_json::to_string(&ns.metadata).unwrap_or_else(|_| "{}".to_string());
 
+        let source_count = self
+            .memory_store
+            .count_entries(&ns.name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(GetNotebookResponse {
             notebook: Some(NotebookInfo {
                 id: ns.id,
                 name: ns.name,
                 kind: ns.kind.to_string(),
                 description: ns.description.unwrap_or_default(),
-                source_count: 0,
+                source_count,
                 created_at: ns.created_at.to_rfc3339(),
                 updated_at: ns.updated_at.to_rfc3339(),
             }),
@@ -350,13 +358,19 @@ impl CognitiveToolService for CognitiveGrpcService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
+        let source_count = self
+            .memory_store
+            .count_entries(&ns.name)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         Ok(Response::new(CreateNotebookResponse {
             notebook: Some(NotebookInfo {
                 id: ns.id,
                 name: ns.name,
                 kind: ns.kind.to_string(),
                 description: ns.description.unwrap_or_default(),
-                source_count: 0,
+                source_count,
                 created_at: ns.created_at.to_rfc3339(),
                 updated_at: ns.updated_at.to_rfc3339(),
             }),
@@ -401,12 +415,13 @@ impl CognitiveToolService for CognitiveGrpcService {
                 .await
             {
                 Ok(ns) => {
+                    let source_count = self.memory_store.count_entries(&ns.name).await.unwrap_or(0);
                     created_notebooks.push(NotebookInfo {
                         id: ns.id,
                         name: ns.name,
                         kind: ns.kind.to_string(),
                         description: ns.description.unwrap_or_default(),
-                        source_count: 0,
+                        source_count,
                         created_at: ns.created_at.to_rfc3339(),
                         updated_at: ns.updated_at.to_rfc3339(),
                     });

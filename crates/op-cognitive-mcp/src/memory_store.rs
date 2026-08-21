@@ -416,6 +416,18 @@ impl CognitiveMemoryStore {
         Ok(entries.into_iter().skip(offset).take(limit).collect())
     }
 
+    /// Count live entries for one namespace without applying the query page size.
+    pub async fn count_entries(&self, namespace_name: &str) -> Result<i32> {
+        let mut params: Params = BTreeMap::new();
+        params.insert("ns".into(), DataValue::Str(namespace_name.into()));
+        let rows = self.run(
+            r#"?[key] := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
+                namespace = $ns"#,
+            params,
+        )?;
+        Ok(rows.rows.len().min(i32::MAX as usize) as i32)
+    }
+
     pub async fn delete_entry(&self, namespace_name: &str, key: &str) -> Result<bool> {
         if self.fetch_entry_row(namespace_name, key)?.is_none() {
             return Ok(false);
@@ -618,4 +630,44 @@ fn parse_ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|t| t.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn count_entries_reports_live_namespace_sources() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = CognitiveMemoryStore::new(shuttle).await.expect("store");
+        store
+            .upsert_namespace(
+                "project:test",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+        assert_eq!(
+            store
+                .count_entries("project:test")
+                .await
+                .expect("empty count"),
+            0
+        );
+        store
+            .store_entry(
+                "project:test",
+                "one",
+                serde_json::json!({"content":"a"}),
+                vec![],
+                None,
+            )
+            .await
+            .expect("entry");
+        assert_eq!(store.count_entries("project:test").await.expect("count"), 1);
+    }
 }
