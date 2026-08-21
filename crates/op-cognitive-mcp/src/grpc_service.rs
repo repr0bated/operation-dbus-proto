@@ -189,7 +189,6 @@ const MAX_DATA_TABLE_SOURCES: i64 = 50;
 const MAX_DATA_TABLE_SOURCE_CONTEXT_BYTES: usize = 256 * 1024;
 const MAX_DATA_TABLE_ROWS: usize = 1_000;
 const MAX_DATA_TABLE_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
-const NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK: i32 = 300;
 
 /// The gRPC service implementation.
 ///
@@ -1780,17 +1779,35 @@ fn validate_folder_patterns(patterns: &[String]) -> Result<(), Status> {
 /// configurable because the bridge may later be operated against a different
 /// entitlement, but it is never inferred from a client-supplied request.
 fn max_sources_per_notebook() -> i32 {
-    max_sources_per_notebook_from_value(
+    max_sources_per_notebook_from_values(
+        std::env::var("COGNITIVE_MCP_QUOTA_PROFILE").ok().as_deref(),
         std::env::var("COGNITIVE_MCP_MAX_SOURCES_PER_NOTEBOOK")
             .ok()
             .as_deref(),
     )
 }
 
-fn max_sources_per_notebook_from_value(value: Option<&str>) -> i32 {
-    value
+fn max_sources_per_notebook_from_values(
+    profile: Option<&str>,
+    override_value: Option<&str>,
+) -> i32 {
+    override_value
         .and_then(parse_positive_i32)
-        .unwrap_or(NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK)
+        .unwrap_or_else(|| source_limit_for_profile(profile))
+}
+
+fn source_limit_for_profile(profile: Option<&str>) -> i32 {
+    match profile
+        .unwrap_or("notebooklm_pro")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "free" | "standard" | "notebooklm_free" => 50,
+        "plus" | "notebooklm_plus" => 100,
+        "ultra" | "notebooklm_ultra" => 500,
+        "pro" | "notebooklm_pro" | _ => 300,
+    }
 }
 
 fn parse_positive_i32(value: &str) -> Option<i32> {
@@ -2284,21 +2301,25 @@ mod tests {
 
     #[test]
     fn source_capacity_uses_the_pro_limit_and_rejects_full_notebooks() {
+        let pro_limit = source_limit_for_profile(Some("pro"));
+        assert_eq!(max_sources_per_notebook_from_values(None, None), pro_limit);
+        assert_eq!(source_limit_for_profile(Some("free")), 50);
+        assert_eq!(source_limit_for_profile(Some("plus")), 100);
+        assert_eq!(source_limit_for_profile(Some("ultra")), 500);
         assert_eq!(
-            max_sources_per_notebook_from_value(None),
-            NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK
+            max_sources_per_notebook_from_values(Some("free"), Some("731")),
+            731
         );
-        assert_eq!(max_sources_per_notebook_from_value(Some("731")), 731);
-        assert!(require_source_capacity(299, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK).is_ok());
-        let error = require_source_capacity(300, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK)
+        assert!(require_source_capacity(pro_limit - 1, pro_limit).is_ok());
+        let error = require_source_capacity(pro_limit, pro_limit)
             .expect_err("the Pro source cap is enforced before a write");
         assert_eq!(error.code(), tonic::Code::ResourceExhausted);
         assert_eq!(
-            source_slots_for_folder_import(298, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK)
+            source_slots_for_folder_import(pro_limit - 2, pro_limit)
                 .expect("two remaining source slots"),
             2
         );
-        assert!(source_slots_for_folder_import(300, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK).is_err());
+        assert!(source_slots_for_folder_import(pro_limit, pro_limit).is_err());
         assert_eq!(parse_positive_i32("300"), Some(300));
         assert_eq!(parse_positive_i32("0"), None);
     }
@@ -2714,7 +2735,8 @@ mod tests {
             )
             .await
             .expect("namespace");
-        for index in 0..NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK {
+        let source_limit = source_limit_for_profile(Some("pro"));
+        for index in 0..source_limit {
             store
                 .store_entry(
                     &namespace.name,
@@ -2743,7 +2765,7 @@ mod tests {
                 .count_entries(&namespace.name)
                 .await
                 .expect("source count"),
-            NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK
+            source_limit
         );
     }
 
