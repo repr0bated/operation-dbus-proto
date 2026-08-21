@@ -1226,6 +1226,47 @@ mod tests {
             validate_subid(&subid).expect("invalid subid: {subid}");
         }
     }
+
+    #[test]
+    fn development_methods_are_sealed_with_expected_contracts() {
+        let schema = cognitive_mcp_schema();
+        let expected = [
+            (
+                "development_upsert",
+                SideEffect::Mutation,
+                "cognitive_mcp.invoke",
+                "mut.service.cognitive-mcp.development.upsert@v1",
+            ),
+            (
+                "development_list",
+                SideEffect::Read,
+                "cognitive_mcp.read",
+                "obs.service.cognitive-mcp.development.list@v1",
+            ),
+            (
+                "development_categories",
+                SideEffect::Read,
+                "cognitive_mcp.read",
+                "obs.service.cognitive-mcp.development.categories@v1",
+            ),
+            (
+                "development_record_verification",
+                SideEffect::Mutation,
+                "cognitive_mcp.invoke",
+                "mut.service.cognitive-mcp.development.verify@v1",
+            ),
+        ];
+        for (name, effect, capability, subid) in expected {
+            let method = &schema.methods[name];
+            assert_eq!(method.side_effect, effect, "{name} side effect");
+            assert_eq!(
+                method.required_capability.as_deref(),
+                Some(capability),
+                "{name} capability"
+            );
+            assert_eq!(method.subid, subid, "{name} subid");
+        }
+    }
 }
 
 // Self-registration: the plugin registry discovers this via inventory
