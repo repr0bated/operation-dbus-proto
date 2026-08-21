@@ -189,6 +189,7 @@ const MAX_DATA_TABLE_SOURCES: i64 = 50;
 const MAX_DATA_TABLE_SOURCE_CONTEXT_BYTES: usize = 256 * 1024;
 const MAX_DATA_TABLE_ROWS: usize = 1_000;
 const MAX_DATA_TABLE_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK: i32 = 300;
 
 /// The gRPC service implementation.
 ///
@@ -205,6 +206,10 @@ pub struct CognitiveGrpcService {
     mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
     model_router: Arc<dyn CognitiveModelRouter>,
     runtime_projector: Arc<dyn CognitiveRuntimeProjector>,
+    /// Serializes source-capacity admission across AddSource and AddFolder.
+    /// Cozo writes are separately durable; this gate makes the externally
+    /// visible per-notebook plan limit exact within this service process.
+    source_ingest_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CognitiveGrpcService {
@@ -269,6 +274,7 @@ impl CognitiveGrpcService {
             mutation_auditor,
             model_router,
             runtime_projector,
+            source_ingest_gate: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -838,23 +844,33 @@ impl CognitiveToolService for CognitiveGrpcService {
             )
             .await?;
 
-        let namespace = self
-            .resolve_or_create_notebook(&req.notebook_id)
-            .await?
-            .name;
+        let source_id = {
+            let _source_ingest_guard = self.source_ingest_gate.lock().await;
+            let namespace = self
+                .resolve_or_create_notebook(&req.notebook_id)
+                .await?
+                .name;
+            require_source_capacity(
+                self.memory_store
+                    .count_entries(&namespace)
+                    .await
+                    .map_err(memory_status)?,
+                max_sources_per_notebook(),
+            )?;
 
-        let source_id = Uuid::new_v4().to_string();
+            let source_id = Uuid::new_v4().to_string();
+            let value = serde_json::json!({
+                "source_type": req.source_type,
+                "content": req.content,
+                "title": req.title,
+            });
 
-        let value = serde_json::json!({
-            "source_type": req.source_type,
-            "content": req.content,
-            "title": req.title,
-        });
-
-        self.memory_store
-            .store_entry(&namespace, &source_id, value, req.tags, None)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            self.memory_store
+                .store_entry(&namespace, &source_id, value, req.tags, None)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            source_id
+        };
         self.project_runtime_state().await;
 
         Ok(Response::new(AddSourceResponse {
@@ -899,6 +915,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         // data; the operator supplies the bounded roots through service config.
         let path = resolve_ingest_folder(&req.folder_path)?;
 
+        let _source_ingest_guard = self.source_ingest_gate.lock().await;
         let namespace = self
             .resolve_or_create_notebook(&req.notebook_id)
             .await?
@@ -907,7 +924,14 @@ impl CognitiveToolService for CognitiveGrpcService {
         let mut added = 0i32;
         let mut skipped = 0i32;
         let mut errors = Vec::new();
-        let max_files = ingest_limit("COGNITIVE_MCP_INGEST_MAX_FILES", DEFAULT_INGEST_MAX_FILES);
+        let max_files = ingest_limit("COGNITIVE_MCP_INGEST_MAX_FILES", DEFAULT_INGEST_MAX_FILES)
+            .min(source_slots_for_folder_import(
+                self.memory_store
+                    .count_entries(&namespace)
+                    .await
+                    .map_err(memory_status)?,
+                max_sources_per_notebook(),
+            )?);
         let max_file_bytes = ingest_limit_u64(
             "COGNITIVE_MCP_INGEST_MAX_FILE_BYTES",
             DEFAULT_INGEST_MAX_FILE_BYTES,
@@ -933,7 +957,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             record_ingest_error(
                 &mut errors,
                 format!(
-                    "Folder import reached its {max_files}-file limit; additional files were not read."
+                    "Folder import reached its {max_files}-file or notebook source-capacity limit; additional files were not read."
                 ),
             );
         }
@@ -1745,6 +1769,44 @@ fn validate_folder_patterns(patterns: &[String]) -> Result<(), Status> {
     Ok(())
 }
 
+/// NotebookLM Pro permits 300 sources per notebook. This local capacity is
+/// configurable because the bridge may later be operated against a different
+/// entitlement, but it is never inferred from a client-supplied request.
+fn max_sources_per_notebook() -> i32 {
+    max_sources_per_notebook_from_value(
+        std::env::var("COGNITIVE_MCP_MAX_SOURCES_PER_NOTEBOOK")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn max_sources_per_notebook_from_value(value: Option<&str>) -> i32 {
+    value
+        .and_then(parse_positive_i32)
+        .unwrap_or(NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK)
+}
+
+fn parse_positive_i32(value: &str) -> Option<i32> {
+    value.trim().parse::<i32>().ok().filter(|value| *value > 0)
+}
+
+fn require_source_capacity(current: i32, limit: i32) -> Result<(), Status> {
+    if current >= limit {
+        return Err(Status::resource_exhausted(format!(
+            "Notebook source limit reached ({limit} sources per notebook)"
+        )));
+    }
+    Ok(())
+}
+
+/// Return the maximum count a folder operation may add without exceeding its
+/// configured source limit. A full notebook reports explicit resource
+/// exhaustion rather than a silently successful no-op.
+fn source_slots_for_folder_import(current: i32, limit: i32) -> Result<usize, Status> {
+    require_source_capacity(current, limit)?;
+    Ok((limit - current) as usize)
+}
+
 fn format_grounded_query(
     entries: &[MemoryEntry],
     query: &str,
@@ -2209,6 +2271,27 @@ mod tests {
                 .code(),
             tonic::Code::InvalidArgument
         );
+    }
+
+    #[test]
+    fn source_capacity_uses_the_pro_limit_and_rejects_full_notebooks() {
+        assert_eq!(
+            max_sources_per_notebook_from_value(None),
+            NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK
+        );
+        assert_eq!(max_sources_per_notebook_from_value(Some("731")), 731);
+        assert!(require_source_capacity(299, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK).is_ok());
+        let error = require_source_capacity(300, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK)
+            .expect_err("the Pro source cap is enforced before a write");
+        assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(
+            source_slots_for_folder_import(298, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK)
+                .expect("two remaining source slots"),
+            2
+        );
+        assert!(source_slots_for_folder_import(300, NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK).is_err());
+        assert_eq!(parse_positive_i32("300"), Some(300));
+        assert_eq!(parse_positive_i32("0"), None);
     }
 
     #[test]
