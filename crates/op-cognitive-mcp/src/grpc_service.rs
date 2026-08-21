@@ -103,6 +103,21 @@ pub trait CognitiveModelRouter: Send + Sync {
     ) -> Result<CognitiveModelResponse, Status>;
 }
 
+/// Bounded runtime facts that the bridge projects onto the sealed
+/// `cognitive_mcp` state for StateSync and generated UI consumers. This is an
+/// observability adapter only: it cannot mutate memory, sessions, or quota.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CognitiveRuntimeSnapshot {
+    pub queries_remaining: i64,
+    pub queries_limit: i64,
+    pub notebook_count: i64,
+}
+
+#[async_trait::async_trait]
+pub trait CognitiveRuntimeProjector: Send + Sync {
+    async fn project_runtime(&self, snapshot: CognitiveRuntimeSnapshot) -> Result<(), Status>;
+}
+
 /// Used by a Cognitive service constructed outside the bridge. Reads remain
 /// useful for diagnostics, but writes fail closed rather than bypassing the
 /// canonical event-chain path.
@@ -133,6 +148,16 @@ impl CognitiveModelRouter for UnavailableModelRouter {
         Err(Status::failed_precondition(
             "Cognitive model generation requires the op-grpc-bridge provider-neutral route.",
         ))
+    }
+}
+
+#[derive(Default)]
+struct NoopRuntimeProjector;
+
+#[async_trait::async_trait]
+impl CognitiveRuntimeProjector for NoopRuntimeProjector {
+    async fn project_runtime(&self, _snapshot: CognitiveRuntimeSnapshot) -> Result<(), Status> {
+        Ok(())
     }
 }
 
@@ -179,6 +204,7 @@ pub struct CognitiveGrpcService {
     context_engine: Arc<ContextAwarenessEngine>,
     mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
     model_router: Arc<dyn CognitiveModelRouter>,
+    runtime_projector: Arc<dyn CognitiveRuntimeProjector>,
 }
 
 impl CognitiveGrpcService {
@@ -218,6 +244,7 @@ impl CognitiveGrpcService {
             )),
             mutation_auditor,
             Arc::new(UnavailableModelRouter),
+            Arc::new(NoopRuntimeProjector),
         )
     }
 
@@ -231,6 +258,7 @@ impl CognitiveGrpcService {
         context_engine: Arc<ContextAwarenessEngine>,
         mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
         model_router: Arc<dyn CognitiveModelRouter>,
+        runtime_projector: Arc<dyn CognitiveRuntimeProjector>,
     ) -> Self {
         Self {
             memory_store,
@@ -240,6 +268,7 @@ impl CognitiveGrpcService {
             context_engine,
             mutation_auditor,
             model_router,
+            runtime_projector,
         }
     }
 
@@ -293,6 +322,28 @@ impl CognitiveGrpcService {
             .await
             .and_then(|signals| serde_json::to_string(&signals).ok())
             .unwrap_or_else(|| "{}".to_string())
+    }
+
+    /// Refresh the bridge-owned runtime projection after an operation changed
+    /// quota or notebook state. A projection failure is observable in logs but
+    /// must not convert a completed query or write into a false failure.
+    async fn project_runtime_state(&self) {
+        let (queries_remaining, queries_limit) = self.quota_manager.status().await;
+        let notebook_count = match self.memory_store.get_stats().await {
+            Ok(stats) => i64::from(stats.total_namespaces),
+            Err(error) => {
+                warn!(%error, "unable to count Cognitive namespaces for runtime projection");
+                return;
+            }
+        };
+        let snapshot = CognitiveRuntimeSnapshot {
+            queries_remaining: i64::from(queries_remaining),
+            queries_limit: i64::from(queries_limit),
+            notebook_count,
+        };
+        if let Err(error) = self.runtime_projector.project_runtime(snapshot).await {
+            warn!(%error, "unable to publish Cognitive runtime projection");
+        }
     }
 
     /// Resolve either stable UUIDs returned by `ListNotebooks`, canonical
@@ -421,6 +472,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let context_json = self
             .record_query_context(&conversation_id, &namespace, &req.query)
             .await;
+        self.project_runtime_state().await;
 
         Ok(Response::new(AskQuestionResponse {
             answer,
@@ -479,6 +531,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let context_json = self
             .record_query_context(&session.id, &namespace, &query)
             .await;
+        self.project_runtime_state().await;
 
         Ok(Response::new(QueryNotebookResponse {
             answer,
@@ -625,6 +678,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             .count_entries(&ns.name)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+        self.project_runtime_state().await;
 
         Ok(Response::new(CreateNotebookResponse {
             notebook: Some(NotebookInfo {
@@ -731,6 +785,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         }
 
         let created = created_notebooks.len() as i32;
+        self.project_runtime_state().await;
         Ok(Response::new(BatchCreateNotebooksResponse {
             notebooks: created_notebooks,
             created,
@@ -788,6 +843,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             .store_entry(&namespace, &source_id, value, req.tags, None)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+        self.project_runtime_state().await;
 
         Ok(Response::new(AddSourceResponse {
             source_id,
@@ -981,6 +1037,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             }
         }
 
+        self.project_runtime_state().await;
+
         Ok(Response::new(AddFolderResponse {
             sources_added: added,
             sources_skipped: skipped,
@@ -1163,6 +1221,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                 remaining
             )));
         }
+        self.project_runtime_state().await;
         let model = self
             .model_router
             .generate(CognitiveModelRequest {
@@ -1309,6 +1368,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                 req.source_id
             )));
         }
+        self.project_runtime_state().await;
 
         Ok(Response::new(RemoveSourceResponse {
             success: true,
@@ -2299,6 +2359,7 @@ mod tests {
             )),
             Arc::new(RecordingMutationAuditor::default()),
             model.clone(),
+            Arc::new(NoopRuntimeProjector),
         );
         let namespace = store
             .upsert_namespace(

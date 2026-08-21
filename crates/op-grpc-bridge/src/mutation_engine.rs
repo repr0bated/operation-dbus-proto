@@ -8,7 +8,9 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use op_cognitive_mcp::{CognitiveMemoryStore, ContextAwarenessEngine, SessionManager};
+use op_cognitive_mcp::{
+    CognitiveMemoryStore, ContextAwarenessEngine, QuotaManager, SessionManager,
+};
 use op_mcp::tool_registry::ToolRegistry;
 use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
@@ -37,6 +39,7 @@ pub type CognitiveContextState = (
     Arc<ContextAwarenessEngine>,
     Arc<CognitiveMemoryStore>,
     Arc<SessionManager>,
+    Arc<QuotaManager>,
 );
 
 /// A state change projected from the authoritative system bus
@@ -95,6 +98,7 @@ fn cognitive_runtime_health_projection(
     running: bool,
     queries_remaining: i64,
     queries_limit: i64,
+    notebook_count: i64,
 ) -> serde_json::Value {
     serde_json::json!({
         "healthy": healthy,
@@ -102,6 +106,7 @@ fn cognitive_runtime_health_projection(
         "auth_status": "none",
         "queries_remaining": queries_remaining,
         "queries_limit": queries_limit,
+        "notebook_count": notebook_count,
     })
 }
 
@@ -371,6 +376,7 @@ impl MutationEngine {
         running: bool,
         queries_remaining: i64,
         queries_limit: i64,
+        notebook_count: i64,
     ) -> anyhow::Result<()> {
         self.merge_into_state_cache(
             "cognitive_mcp",
@@ -379,6 +385,7 @@ impl MutationEngine {
                 running,
                 queries_remaining,
                 queries_limit,
+                notebook_count,
             ),
         )
         .await;
@@ -391,6 +398,42 @@ impl MutationEngine {
             .read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    /// Refresh the Cognitive plugin projection from bridge-owned runtime
+    /// handles after a schema tool call. The handles are cloned while the
+    /// synchronous lock is held, then all I/O happens after releasing it.
+    /// Projection is best-effort observability and never changes a completed
+    /// cognitive operation into a false failure.
+    async fn project_attached_cognitive_runtime_state(&self) {
+        let runtime = self.cognitive_context_engine.read().ok().and_then(|guard| {
+            guard.as_ref().map(|(_, memory_store, _, quota_manager)| {
+                (memory_store.clone(), quota_manager.clone())
+            })
+        });
+        let Some((memory_store, quota_manager)) = runtime else {
+            return;
+        };
+        let (remaining, limit) = quota_manager.status().await;
+        let notebook_count = match memory_store.get_stats().await {
+            Ok(stats) => stats.total_namespaces,
+            Err(error) => {
+                tracing::warn!(%error, "unable to count Cognitive namespaces for runtime projection");
+                return;
+            }
+        };
+        if let Err(error) = self
+            .project_cognitive_mcp_runtime_health(
+                true,
+                true,
+                i64::from(remaining),
+                i64::from(limit),
+                notebook_count,
+            )
+            .await
+        {
+            tracing::warn!(%error, "unable to publish Cognitive runtime projection");
+        }
     }
 
     /// Open the durable audit sink and rebuild the in-memory event chain from it.
@@ -2244,6 +2287,8 @@ impl MutationEngine {
                     .context("publish cognitive_mcp configuration projection")?;
                 }
 
+                self.project_attached_cognitive_runtime_state().await;
+
                 method_result
             }
             "large_language_model" => {
@@ -4084,18 +4129,23 @@ mod cognitive_tool_catalog_tests {
     #[test]
     fn cognitive_runtime_health_reflects_actual_initialization_state() {
         assert_eq!(
-            cognitive_runtime_health_projection(false, false, 0, 0),
+            cognitive_runtime_health_projection(false, false, 0, 0, 0),
             json!({
                 "healthy": false,
                 "running": false,
                 "auth_status": "none",
                 "queries_remaining": 0,
                 "queries_limit": 0,
+                "notebook_count": 0,
             })
         );
         assert_eq!(
-            cognitive_runtime_health_projection(true, true, 42, 50)["queries_remaining"],
+            cognitive_runtime_health_projection(true, true, 42, 50, 7)["queries_remaining"],
             42
+        );
+        assert_eq!(
+            cognitive_runtime_health_projection(true, true, 42, 50, 7)["notebook_count"],
+            7
         );
     }
 

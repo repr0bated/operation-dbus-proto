@@ -338,7 +338,10 @@ impl SessionContextState {
                 &["auth", "encrypt", "token", "vulnerability", "oauth"][..],
             ),
         ] {
-            if keywords.iter().any(|keyword| content.contains(keyword)) {
+            if keywords
+                .iter()
+                .any(|keyword| contains_topic_keyword(&content, keyword))
+            {
                 if let Some(index) = self.current_topics.iter().position(|known| known == topic) {
                     self.current_topics.remove(index);
                 }
@@ -394,6 +397,17 @@ impl SessionContextState {
     fn is_suppressed(&self, trigger: PushTrigger) -> bool {
         self.suppressed_triggers.contains(&trigger)
     }
+}
+
+/// Topic signals should be explainable rather than accidental substring
+/// matches: for example, the `ui` topic must not be inferred from `build`.
+/// Keywords are intentionally ASCII identifiers because the current taxonomy
+/// is made of technology names; punctuation is a separator (`gRPC`,
+/// `grpc-web`, and `grpc_web` all match `grpc`).
+fn contains_topic_keyword(content: &str, keyword: &str) -> bool {
+    content
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|token| token == keyword)
 }
 
 /// Context awareness engine configuration
@@ -1131,6 +1145,18 @@ mod tests {
         );
         assert_eq!(state.current_topics.last(), Some(&"database".to_string()));
         assert!(state.current_topics.len() <= MAX_CURRENT_TOPICS);
+    }
+
+    #[test]
+    fn topic_detection_does_not_treat_substrings_as_domains() {
+        let mut state = SessionContextState::new("test".to_string());
+        state.record_activity(
+            ActivityType::Query,
+            "Build and deploy the service".to_string(),
+            serde_json::json!({}),
+        );
+
+        assert_eq!(state.current_topics, vec!["infrastructure"]);
     }
 
     #[test]

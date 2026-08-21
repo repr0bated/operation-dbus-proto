@@ -15,7 +15,8 @@ use op_cognitive_mcp::proto::cognitive_tool_service_server::CognitiveToolService
 use op_cognitive_mcp::{
     CognitiveGrpcService, CognitiveMcpServer, CognitiveModelRequest, CognitiveModelResponse,
     CognitiveModelRouter, CognitiveMutationAuditReceipt, CognitiveMutationAuditRequest,
-    CognitiveMutationAuditor, CognitiveRequestContext, QdrantSemanticShuttle,
+    CognitiveMutationAuditor, CognitiveRequestContext, CognitiveRuntimeProjector,
+    CognitiveRuntimeSnapshot, QdrantSemanticShuttle,
 };
 use op_mcp::tool_registry::ToolRegistry;
 use prost::Message;
@@ -391,6 +392,32 @@ impl CognitiveModelRouter for BridgeCognitiveModelRouter {
             audit_event_id: receipt.event_id,
             audit_event_hash: receipt.event_hash,
         })
+    }
+}
+
+/// Projects non-authoritative runtime facts from the direct Cognitive gRPC
+/// surface onto the same sealed state consumed by StateSync and json-render.
+/// It deliberately receives only a snapshot, never memory or quota handles.
+#[derive(Clone)]
+struct BridgeCognitiveRuntimeProjector {
+    mutation_engine: Arc<MutationEngine>,
+}
+
+#[async_trait::async_trait]
+impl CognitiveRuntimeProjector for BridgeCognitiveRuntimeProjector {
+    async fn project_runtime(&self, snapshot: CognitiveRuntimeSnapshot) -> Result<(), Status> {
+        self.mutation_engine
+            .project_cognitive_mcp_runtime_health(
+                true,
+                true,
+                snapshot.queries_remaining,
+                snapshot.queries_limit,
+                snapshot.notebook_count,
+            )
+            .await
+            .map_err(|error| {
+                Status::internal(format!("project Cognitive runtime state: {error:#}"))
+            })
     }
 }
 
@@ -1222,6 +1249,7 @@ impl CognitiveMcpHandle {
             self.server.context_engine(),
             self.server.memory_store(),
             self.server.session_manager(),
+            self.server.quota_manager(),
         )
     }
 
@@ -1229,9 +1257,10 @@ impl CognitiveMcpHandle {
         &self,
         mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
         model_router: Arc<dyn CognitiveModelRouter>,
+        runtime_projector: Arc<dyn CognitiveRuntimeProjector>,
     ) -> CognitiveGrpcService {
         self.server
-            .cognitive_grpc_service(mutation_auditor, model_router)
+            .cognitive_grpc_service(mutation_auditor, model_router, runtime_projector)
     }
 }
 
@@ -1269,16 +1298,29 @@ pub async fn project_cognitive_mcp_runtime_health(
     mutation_engine: &MutationEngine,
     handle: Option<&CognitiveMcpHandle>,
 ) {
-    let (healthy, running, remaining, limit) = match handle {
+    let (healthy, running, remaining, limit, notebook_count) = match handle {
         Some(handle) => {
             let (remaining, limit) = handle.server.quota_manager().status().await;
-            (true, true, i64::from(remaining), i64::from(limit))
+            let notebook_count = match handle.server.memory_store().get_stats().await {
+                Ok(stats) => stats.total_namespaces,
+                Err(error) => {
+                    warn!(%error, "unable to count Cognitive namespaces for startup projection");
+                    0
+                }
+            };
+            (
+                true,
+                true,
+                i64::from(remaining),
+                i64::from(limit),
+                notebook_count,
+            )
         }
-        None => (false, false, 0, 0),
+        None => (false, false, 0, 0, 0),
     };
 
     if let Err(error) = mutation_engine
-        .project_cognitive_mcp_runtime_health(healthy, running, remaining, limit)
+        .project_cognitive_mcp_runtime_health(healthy, running, remaining, limit, notebook_count)
         .await
     {
         warn!(%error, "unable to publish Cognitive MCP runtime health projection");
@@ -1298,6 +1340,9 @@ pub async fn attach_cognitive_tool_service(
             mutation_engine: server.mutation_engine.clone(),
         }),
         Arc::new(BridgeCognitiveModelRouter {
+            mutation_engine: server.mutation_engine.clone(),
+        }),
+        Arc::new(BridgeCognitiveRuntimeProjector {
             mutation_engine: server.mutation_engine.clone(),
         }),
     );
