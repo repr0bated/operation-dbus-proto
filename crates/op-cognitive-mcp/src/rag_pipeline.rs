@@ -50,6 +50,8 @@ const CHUNK_LINES: usize = 80; // ~2 kB of code per chunk
 const OVERLAP_LINES: usize = 12;
 const VOYAGE_BATCH: usize = 32; // points per upsert batch
 const VOYAGE_RATE_DELAY_MS: u64 = 120; // ms between Voyage calls
+const RAG_MAX_REPOMIX_ENTRY_BYTES_ENV: &str = "COGNITIVE_MCP_RAG_MAX_REPOMIX_ENTRY_BYTES";
+const DEFAULT_MAX_REPOMIX_ENTRY_BYTES: u64 = 25 * 1024 * 1024;
 
 // ─── extracted file metadata ──────────────────────────────────────────────────
 
@@ -291,8 +293,6 @@ impl RagPipeline {
         entry_name: &str,
         collection: &str,
     ) -> Result<IngestStats> {
-        self.ensure_collection(collection).await?;
-
         let repo = repo_name_from_entry(entry_name);
         info!(repo = %repo, entry = %entry_name, "Ingesting repomix entry");
 
@@ -309,6 +309,20 @@ impl RagPipeline {
                     == Some(entry_name)
             })
             .with_context(|| format!("Entry '{entry_name}' not found in zip"))?;
+
+        // Zip metadata reports the uncompressed size, so this limits zip bombs
+        // before parsing/chunking or creating a collection. Operators can raise
+        // it for a known large repository export without making the default MCP
+        // surface unbounded.
+        let entry_bytes = archive.by_index(entry_idx)?.size();
+        let max_entry_bytes = configured_max_repomix_entry_bytes();
+        if entry_bytes > max_entry_bytes {
+            anyhow::bail!(
+                "Repomix entry '{entry_name}' is {entry_bytes} bytes, exceeding the configured {max_entry_bytes}-byte limit"
+            );
+        }
+
+        self.ensure_collection(collection).await?;
 
         let entry = archive.by_index(entry_idx)?;
         let reader = BufReader::new(entry);
@@ -771,6 +785,13 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+fn configured_max_repomix_entry_bytes() -> u64 {
+    env_u64(
+        RAG_MAX_REPOMIX_ENTRY_BYTES_ENV,
+        DEFAULT_MAX_REPOMIX_ENTRY_BYTES,
+    )
 }
 
 fn dedupe_results_by_file(results: &mut Vec<RagResult>) {
