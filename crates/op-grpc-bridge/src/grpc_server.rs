@@ -22,6 +22,7 @@ use serde_json::Value as JsonValue;
 use simd_json::prelude::{ValueAsContainer, ValueAsScalar};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
+use tonic::service::Interceptor;
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
@@ -78,6 +79,61 @@ mod canonical_ingress_identity_tests {
             effective_actor_id(None, "grpc:operation.plugin.v1"),
             "grpc:operation.plugin.v1"
         );
+    }
+
+    #[test]
+    fn direct_cognitive_rpc_surface_has_no_uncategorized_methods() {
+        let expected = [
+            ("AskQuestion", COGNITIVE_READ_CAPABILITY),
+            ("QueryNotebook", COGNITIVE_READ_CAPABILITY),
+            ("ListNotebooks", COGNITIVE_READ_CAPABILITY),
+            ("GetNotebook", COGNITIVE_READ_CAPABILITY),
+            ("CreateNotebook", COGNITIVE_INVOKE_CAPABILITY),
+            ("BatchCreateNotebooks", COGNITIVE_INVOKE_CAPABILITY),
+            ("AddSource", COGNITIVE_INVOKE_CAPABILITY),
+            ("AddFolder", COGNITIVE_INVOKE_CAPABILITY),
+            ("ListSources", COGNITIVE_READ_CAPABILITY),
+            ("GetSourceContent", COGNITIVE_READ_CAPABILITY),
+            ("RemoveSource", COGNITIVE_INVOKE_CAPABILITY),
+            ("GenerateDataTable", COGNITIVE_READ_CAPABILITY),
+            ("GetToolProfile", COGNITIVE_READ_CAPABILITY),
+            ("Doctor", COGNITIVE_READ_CAPABILITY),
+            ("GetQueryHistory", COGNITIVE_READ_CAPABILITY),
+            ("GetHealth", COGNITIVE_READ_CAPABILITY),
+            ("SetupAuth", COGNITIVE_INVOKE_CAPABILITY),
+        ];
+
+        for (method, capability) in expected {
+            assert_eq!(
+                cognitive_tool_required_capability(method),
+                Some(capability),
+                "{method} must be protected by its Cognitive MCP capability"
+            );
+        }
+        assert_eq!(cognitive_tool_required_capability("FutureMethod"), None);
+    }
+
+    #[test]
+    fn direct_cognitive_mutations_reject_a_read_capability_declaration() {
+        let mut request = Request::new(());
+        request
+            .extensions_mut()
+            .insert(tonic::GrpcMethod::new(COGNITIVE_TOOL_SERVICE, "AddSource"));
+        request.extensions_mut().insert(GhostbridgeIdentity {
+            footprint: "test-footprint".to_string(),
+            session_id: "test-session".to_string(),
+        });
+        request.metadata_mut().insert(
+            DECLARED_CAPABILITY_HEADER,
+            COGNITIVE_READ_CAPABILITY
+                .parse()
+                .expect("capability metadata"),
+        );
+
+        let error = authorize_cognitive_tool_request(&request)
+            .expect_err("a read declaration must not authorize AddSource");
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        assert!(error.message().contains(COGNITIVE_INVOKE_CAPABILITY));
     }
 }
 
@@ -188,6 +244,94 @@ fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
 /// identity — which is stricter than the D-Bus path, where possession of the grant
 /// alone suffices.
 pub const DECLARED_CAPABILITY_HEADER: &str = "x-opdbus-capability";
+
+const COGNITIVE_READ_CAPABILITY: &str = "cognitive_mcp.read";
+const COGNITIVE_INVOKE_CAPABILITY: &str = "cognitive_mcp.invoke";
+
+/// The direct `CognitiveToolService` predates generated per-plugin methods, so
+/// it is not automatically covered by their schema-method capability check.
+/// Keep its legacy RPCs on the same read/mutate boundary as `cognitive_mcp`:
+/// memory and notebook mutations require `cognitive_mcp.invoke`; queries and
+/// diagnostics require `cognitive_mcp.read`.
+#[derive(Clone)]
+struct CognitiveToolInterceptor {
+    identity_gate: interceptor::GhostbridgeInterceptorWithValidator,
+}
+
+impl CognitiveToolInterceptor {
+    fn new(validator: Arc<AssertionValidator>) -> Self {
+        Self {
+            identity_gate: interceptor::make_ghostbridge_interceptor(validator),
+        }
+    }
+}
+
+impl Interceptor for CognitiveToolInterceptor {
+    fn call(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+        let request = self.identity_gate.call(request)?;
+        authorize_cognitive_tool_request(&request)?;
+        Ok(request)
+    }
+}
+
+fn cognitive_tool_required_capability(method_name: &str) -> Option<&'static str> {
+    match method_name {
+        "AskQuestion" | "QueryNotebook" | "ListNotebooks" | "GetNotebook" | "ListSources"
+        | "GetSourceContent" | "GenerateDataTable" | "GetToolProfile" | "Doctor"
+        | "GetQueryHistory" | "GetHealth" => Some(COGNITIVE_READ_CAPABILITY),
+        "CreateNotebook"
+        | "BatchCreateNotebooks"
+        | "AddSource"
+        | "AddFolder"
+        | "RemoveSource"
+        | "SetupAuth" => Some(COGNITIVE_INVOKE_CAPABILITY),
+        _ => None,
+    }
+}
+
+fn authorize_cognitive_tool_request(request: &Request<()>) -> Result<(), Status> {
+    let grpc_method = request
+        .extensions()
+        .get::<tonic::GrpcMethod<'_>>()
+        .ok_or_else(|| Status::internal("missing CognitiveToolService method metadata"))?;
+    if grpc_method.service() != COGNITIVE_TOOL_SERVICE {
+        return Err(Status::internal(
+            "CognitiveToolService interceptor applied to another service",
+        ));
+    }
+    let required_capability =
+        cognitive_tool_required_capability(grpc_method.method()).ok_or_else(|| {
+            Status::permission_denied(format!(
+                "CognitiveToolService method '{}' has no capability classification",
+                grpc_method.method()
+            ))
+        })?;
+    let declared_capability = request
+        .metadata()
+        .get(DECLARED_CAPABILITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if declared_capability != Some(required_capability) {
+        return Err(Status::permission_denied(format!(
+            "AccessDenied: CognitiveToolService.{} requires capability {}",
+            grpc_method.method(),
+            required_capability
+        )));
+    }
+
+    let identity =
+        interceptor::bridge_capability_identity(request.extensions()).ok_or_else(|| {
+            Status::unauthenticated("CognitiveToolService request has no authenticated identity")
+        })?;
+    if !load_capability_grants(&identity.footprint).contains(required_capability) {
+        return Err(Status::permission_denied(format!(
+            "AccessDenied: caller is not granted capability {}",
+            required_capability
+        )));
+    }
+    Ok(())
+}
 
 fn method_capability_from_schema(
     schema: &JsonValue,
@@ -887,6 +1031,7 @@ pub fn build_operation_routes_with_validator(
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
 
     let intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
+    let cognitive_intercept = CognitiveToolInterceptor::new(validator.clone());
     let registration_intercept = interceptor::make_registration_interceptor(validator);
 
     let routes = tonic::service::Routes::new(crate::grpc_web::enable(
@@ -936,7 +1081,7 @@ pub fn build_operation_routes_with_validator(
     let mut routes = routes.add_service(crate::grpc_web::enable(reflection_v1));
     if let Some(cognitive) = server.cognitive_grpc.clone() {
         routes = routes.add_service(crate::grpc_web::enable(
-            CognitiveToolServiceServer::with_interceptor(cognitive, intercept),
+            CognitiveToolServiceServer::with_interceptor(cognitive, cognitive_intercept),
         ));
     }
     routes
