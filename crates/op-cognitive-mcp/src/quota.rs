@@ -10,6 +10,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+const NOTEBOOKLM_FREE_DAILY_CHAT_LIMIT: u32 = 50;
+const NOTEBOOKLM_PLUS_DAILY_CHAT_LIMIT: u32 = 200;
+const NOTEBOOKLM_PRO_DAILY_CHAT_LIMIT: u32 = 500;
+const NOTEBOOKLM_ULTRA_DAILY_CHAT_LIMIT: u32 = 2_500;
+
 /// Quota tier configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaTier {
@@ -19,9 +24,42 @@ pub struct QuotaTier {
 
 impl Default for QuotaTier {
     fn default() -> Self {
+        Self::from_config_values(
+            std::env::var("COGNITIVE_MCP_QUOTA_PROFILE").ok().as_deref(),
+            std::env::var("COGNITIVE_MCP_DAILY_QUERY_LIMIT")
+                .ok()
+                .as_deref(),
+        )
+    }
+}
+
+impl QuotaTier {
+    /// Resolve the provider account allowance without making an account claim
+    /// from a cookie. Operators can override the daily query limit explicitly;
+    /// this host defaults to the configured NotebookLM Pro account.
+    fn from_config_values(profile: Option<&str>, configured_limit: Option<&str>) -> Self {
+        let (name, profile_limit) = match profile
+            .unwrap_or("notebooklm_pro")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "free" | "standard" | "notebooklm_free" => {
+                ("notebooklm_free", NOTEBOOKLM_FREE_DAILY_CHAT_LIMIT)
+            }
+            "plus" | "notebooklm_plus" => ("notebooklm_plus", NOTEBOOKLM_PLUS_DAILY_CHAT_LIMIT),
+            "ultra" | "notebooklm_ultra" => ("notebooklm_ultra", NOTEBOOKLM_ULTRA_DAILY_CHAT_LIMIT),
+            // Unknown profile values must not silently reduce the available
+            // Pro allowance. A numeric operator override remains authoritative.
+            "pro" | "notebooklm_pro" | _ => ("notebooklm_pro", NOTEBOOKLM_PRO_DAILY_CHAT_LIMIT),
+        };
+        let daily_limit = configured_limit
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(profile_limit);
         Self {
-            name: "free".to_string(),
-            daily_limit: 50,
+            name: name.to_string(),
+            daily_limit,
         }
     }
 }
@@ -140,8 +178,21 @@ mod tests {
     async fn should_report_status() {
         let mgr = QuotaManager::with_defaults();
         let (remaining, limit) = mgr.status().await;
-        assert_eq!(remaining, 50);
-        assert_eq!(limit, 50);
+        assert_eq!(remaining, NOTEBOOKLM_PRO_DAILY_CHAT_LIMIT);
+        assert_eq!(limit, NOTEBOOKLM_PRO_DAILY_CHAT_LIMIT);
+    }
+
+    #[test]
+    fn profile_configuration_uses_pro_chat_quota_and_keeps_an_operator_override() {
+        let pro = QuotaTier::from_config_values(Some("pro"), None);
+        assert_eq!(pro.name, "notebooklm_pro");
+        assert_eq!(pro.daily_limit, NOTEBOOKLM_PRO_DAILY_CHAT_LIMIT);
+
+        let free = QuotaTier::from_config_values(Some("free"), None);
+        assert_eq!(free.daily_limit, NOTEBOOKLM_FREE_DAILY_CHAT_LIMIT);
+
+        let overridden = QuotaTier::from_config_values(Some("pro"), Some("731"));
+        assert_eq!(overridden.daily_limit, 731);
     }
 
     #[tokio::test]

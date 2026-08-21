@@ -430,6 +430,9 @@ impl CognitiveToolService for CognitiveGrpcService {
         require_query(&req.query)?;
         require_conversation_id(&req.conversation_id)?;
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
+        self.session_manager
+            .ensure_notebook_binding(&req.conversation_id, &namespace)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
 
         // R11 — quota check
         let (allowed, remaining, _limit) = self.quota_manager.check_and_increment().await;
@@ -443,7 +446,8 @@ impl CognitiveToolService for CognitiveGrpcService {
         // R2 — conversation_id session management
         let session = self
             .session_manager
-            .get_or_create(&req.conversation_id, &namespace);
+            .get_or_create_bound(&req.conversation_id, &namespace)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
         let conversation_id = session.id.clone();
 
         // Attempt grounded query via memory store.
@@ -496,6 +500,9 @@ impl CognitiveToolService for CognitiveGrpcService {
         require_query(&req.query)?;
         require_conversation_id(&req.conversation_id)?;
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
+        self.session_manager
+            .ensure_notebook_binding(&req.conversation_id, &namespace)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
 
         let (allowed, _, _) = self.quota_manager.check_and_increment().await;
         if !allowed {
@@ -504,7 +511,8 @@ impl CognitiveToolService for CognitiveGrpcService {
 
         let session = self
             .session_manager
-            .get_or_create(&req.conversation_id, &namespace);
+            .get_or_create_bound(&req.conversation_id, &namespace)
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
 
         let limit = bounded_limit(req.max_results, DEFAULT_QUERY_RESULTS, MAX_QUERY_RESULTS);
 
@@ -554,7 +562,11 @@ impl CognitiveToolService for CognitiveGrpcService {
         let kind = if req.kind_filter.is_empty() {
             None
         } else {
-            req.kind_filter.parse::<NamespaceKind>().ok()
+            Some(
+                parse_namespace_kind_filter(&req.kind_filter).ok_or_else(|| {
+                    Status::invalid_argument("kind_filter must be a supported namespace kind")
+                })?,
+            )
         };
 
         let namespaces = self
@@ -1779,6 +1791,22 @@ fn namespace_kind_from_name(name: &str) -> NamespaceKind {
     explicit_namespace_kind(name).unwrap_or(NamespaceKind::Project)
 }
 
+/// `NamespaceKind::from_str` intentionally maps unknown write prefixes to
+/// `custom`. That compatibility behavior is unsafe for a list filter: a typo
+/// must not quietly return every custom namespace.
+fn parse_namespace_kind_filter(value: &str) -> Option<NamespaceKind> {
+    match value {
+        "project" => Some(NamespaceKind::Project),
+        "session" => Some(NamespaceKind::Session),
+        "database" => Some(NamespaceKind::Database),
+        "workflow" => Some(NamespaceKind::Workflow),
+        "agent" => Some(NamespaceKind::Agent),
+        "cron" => Some(NamespaceKind::Cron),
+        "custom" => Some(NamespaceKind::Custom),
+        _ => None,
+    }
+}
+
 fn explicit_namespace_kind(name: &str) -> Option<NamespaceKind> {
     match name.split_once(':').map(|(prefix, _)| prefix) {
         Some("project") => Some(NamespaceKind::Project),
@@ -2337,6 +2365,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_cannot_cross_notebook_boundaries_or_consume_extra_quota() {
+        let (service, store, _) = test_service().await;
+        for name in ["project:first", "project:second"] {
+            store
+                .upsert_namespace(
+                    name,
+                    NamespaceKind::Project,
+                    None,
+                    None,
+                    None,
+                    serde_json::json!({}),
+                )
+                .await
+                .expect("namespace");
+        }
+
+        service
+            .ask_question(Request::new(AskQuestionRequest {
+                notebook_id: "project:first".to_string(),
+                query: "first question".to_string(),
+                conversation_id: "bound-conversation".to_string(),
+            }))
+            .await
+            .expect("first notebook query");
+        assert_eq!(service.quota_manager.status().await, (499, 500));
+
+        let error = service
+            .query_notebook(Request::new(QueryNotebookRequest {
+                notebook_id: "project:second".to_string(),
+                query: "second question".to_string(),
+                conversation_id: "bound-conversation".to_string(),
+                max_results: 10,
+            }))
+            .await
+            .expect_err("a conversation belongs to its first notebook");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(error.message().contains("already bound"));
+        assert_eq!(service.quota_manager.status().await, (499, 500));
+    }
+
+    #[tokio::test]
+    async fn invalid_notebook_kind_filter_does_not_fall_back_to_all_namespaces() {
+        let (service, _, _) = test_service().await;
+        let error = service
+            .list_notebooks(Request::new(ListNotebooksRequest {
+                kind_filter: "not-a-namespace-kind".to_string(),
+                limit: 10,
+                offset: 0,
+            }))
+            .await
+            .expect_err("unknown filter must not silently widen the list");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
     async fn deep_health_reports_checked_memory_state() {
         let (service, _, _) = test_service().await;
 
@@ -2425,7 +2508,7 @@ mod tests {
         assert_eq!(calls[0].actor_id, "test-session");
         assert_eq!(calls[0].capability_id, "cognitive_mcp.read");
         assert!(calls[0].prompt.contains("Cognitive MCP is active."));
-        assert_eq!(quota.status().await, (49, 50));
+        assert_eq!(quota.status().await, (499, 500));
         assert_eq!(
             projector
                 .calls
@@ -2433,8 +2516,8 @@ mod tests {
                 .expect("test runtime projector lock")
                 .as_slice(),
             &[CognitiveRuntimeSnapshot {
-                queries_remaining: 49,
-                queries_limit: 50,
+                queries_remaining: 499,
+                queries_limit: 500,
                 notebook_count: 1,
             }],
             "direct gRPC operations refresh the same runtime snapshot StateSync consumes"

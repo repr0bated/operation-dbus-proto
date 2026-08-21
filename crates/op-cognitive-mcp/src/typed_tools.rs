@@ -234,6 +234,11 @@ impl Tool for TypedQueryTool {
             .ok_or_else(|| anyhow::anyhow!("missing query"))?;
         validate_query(query).map_err(anyhow::Error::msg)?;
 
+        let conversation_id = field(&input, "conversation_id").as_str().unwrap_or("");
+        validate_conversation_id(conversation_id).map_err(anyhow::Error::msg)?;
+        self.sessions
+            .ensure_notebook_binding(conversation_id, &self.memory_namespace)?;
+
         // Quota check
         let (allowed, remaining, _) = self.quota.check_and_increment().await;
         if !allowed {
@@ -243,12 +248,9 @@ impl Tool for TypedQueryTool {
             ));
         }
 
-        let conversation_id = field(&input, "conversation_id").as_str().unwrap_or("");
-        validate_conversation_id(conversation_id).map_err(anyhow::Error::msg)?;
-
         let session = self
             .sessions
-            .get_or_create(conversation_id, &self.memory_namespace);
+            .get_or_create_bound(conversation_id, &self.memory_namespace)?;
 
         let entries = self
             .store
@@ -462,6 +464,57 @@ mod tests {
         assert!(error.to_string().contains("query must not be empty"));
         assert_eq!(quota.status().await, quota_before);
         assert_eq!(sessions.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn typed_question_rejects_invalid_or_cross_notebook_conversations_before_quota() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let sessions = Arc::new(SessionManager::with_defaults());
+        let quota = Arc::new(QuotaManager::with_defaults());
+        let context_engine = Arc::new(ContextAwarenessEngine::new(
+            ContextAwarenessConfig::default(),
+            store.clone(),
+            None,
+        ));
+        let registry = ToolRegistry::new();
+
+        register_typed_tools(
+            &registry,
+            store,
+            sessions.clone(),
+            quota.clone(),
+            context_engine,
+        )
+        .await
+        .expect("register typed tools");
+
+        let malformed = registry
+            .execute(
+                "ask_question",
+                json!({"query": "status", "conversation_id": "x".repeat(crate::ingress::MAX_CONVERSATION_ID_BYTES + 1)}),
+            )
+            .await
+            .expect_err("oversized conversation id must fail before admission");
+        assert!(malformed.to_string().contains("conversation_id exceeds"));
+        assert_eq!(quota.status().await, (500, 500));
+
+        registry
+            .execute(
+                "ask_question",
+                json!({"query": "status", "conversation_id": "shared"}),
+            )
+            .await
+            .expect("first fixed-notebook query");
+        let cross_notebook = registry
+            .execute(
+                "dbus_query_core",
+                json!({"query": "status", "conversation_id": "shared"}),
+            )
+            .await
+            .expect_err("fixed namespace tools must not mix one conversation");
+        assert!(cross_notebook.to_string().contains("already bound"));
+        assert_eq!(quota.status().await, (499, 500));
     }
 }
 

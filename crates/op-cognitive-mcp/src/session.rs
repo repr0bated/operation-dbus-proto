@@ -94,6 +94,46 @@ impl SessionManager {
         self.sessions.entry(id).or_insert_with(|| session).clone()
     }
 
+    /// Ensure an existing caller-selected conversation remains bound to the
+    /// notebook that created it.  A session carries history and ephemeral
+    /// context signals, so allowing it to silently cross notebook boundaries
+    /// would make both query history and proactive context misleading.
+    ///
+    /// Empty IDs are intentionally allowed: `get_or_create` will mint a fresh
+    /// opaque conversation ID for those requests.
+    pub fn ensure_notebook_binding(&self, conversation_id: &str, notebook_id: &str) -> Result<()> {
+        if conversation_id.is_empty() {
+            return Ok(());
+        }
+        let Some(existing) = self.sessions.get(conversation_id) else {
+            return Ok(());
+        };
+        if existing.notebook_id == notebook_id {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "conversation '{}' is already bound to notebook '{}'; use a new conversation ID for '{}'",
+            conversation_id,
+            existing.notebook_id,
+            notebook_id,
+        );
+    }
+
+    /// Atomically enough for callers to prevent a race between a preflight
+    /// binding check and `get_or_create`: if another request bound the same
+    /// caller-selected ID in between, this returns an error before any query
+    /// history or context activity can be attached to the wrong notebook.
+    pub fn get_or_create_bound(
+        &self,
+        conversation_id: &str,
+        notebook_id: &str,
+    ) -> Result<ConversationSession> {
+        self.ensure_notebook_binding(conversation_id, notebook_id)?;
+        let session = self.get_or_create(conversation_id, notebook_id);
+        self.ensure_notebook_binding(&session.id, notebook_id)?;
+        Ok(session)
+    }
+
     fn evict_for_new_session(&self) {
         while self.sessions.len() >= self.max_sessions {
             // Closed sessions are evicted first; within either class evict the
@@ -289,5 +329,33 @@ mod tests {
         assert_eq!(mgr.count(), 1);
         assert_eq!(reused.id, original.id);
         assert_eq!(reused.notebook_id, "nb-1");
+    }
+
+    #[test]
+    fn conversation_binding_rejects_a_second_notebook() {
+        let mgr = SessionManager::with_defaults();
+        mgr.get_or_create("bound", "nb-1");
+
+        assert!(mgr.ensure_notebook_binding("bound", "nb-1").is_ok());
+        let error = mgr
+            .ensure_notebook_binding("bound", "nb-2")
+            .expect_err("a conversation must not silently cross notebook boundaries");
+        assert!(error
+            .to_string()
+            .contains("already bound to notebook 'nb-1'"));
+    }
+
+    #[test]
+    fn bound_session_creation_never_returns_a_different_notebook() {
+        let mgr = SessionManager::with_defaults();
+        mgr.get_or_create("bound", "nb-1");
+
+        assert!(mgr.get_or_create_bound("bound", "nb-2").is_err());
+        assert_eq!(
+            mgr.get_or_create_bound("bound", "nb-1")
+                .expect("original binding remains usable")
+                .notebook_id,
+            "nb-1"
+        );
     }
 }
