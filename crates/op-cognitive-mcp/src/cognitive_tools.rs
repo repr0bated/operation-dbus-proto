@@ -86,7 +86,29 @@ impl Tool for DevelopmentLedgerTool {
         vec!["development".into(), "ledger".into(), "verification".into()]
     }
     fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{"operation":{"type":"string","enum":["upsert","list","record_verification"]},"capability_id":{"type":"string"},"category":{"type":"string"},"status":{"type":"string"},"live_verified":{"type":"boolean"},"commit":{"type":"string"}}})
+        json!({
+            "type":"object",
+            "properties": {
+                "operation":{"type":"string","enum":["upsert","list","record_verification"]},
+                "capability_id":{"type":"string"},
+                "category":{"type":"string"},
+                "title":{"type":"string"},
+                "description":{"type":"string"},
+                "owner":{"type":"string"},
+                "status":{"type":"string"},
+                "schema_surface":{"type":"string"},
+                "required_capability":{"type":"string"},
+                "subid":{"type":"string"},
+                "dependencies":{"type":"array","items":{"type":"string"}},
+                "tests":{"type":"array","items":{"type":"string"}},
+                "live_verified":{"type":"boolean"},
+                "deployed_commit":{"type":"string"},
+                "commit":{"type":"string"},
+                "blocker":{"type":"string"},
+                "details":{"type":"string"},
+                "checks":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"passed":{"type":"boolean"},"details":{"type":"string"}},"required":["name","passed"]}}
+            }
+        })
     }
     async fn execute(&self, input: Value) -> Result<Value> {
         let json_input: serde_json::Value = serde_json::from_str(&input.to_string())?;

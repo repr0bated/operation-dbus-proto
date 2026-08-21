@@ -832,6 +832,14 @@ pub struct DevelopmentVerificationInput {
     pub commit: Option<String>,
     pub details: Option<String>,
     pub blocker: Option<String>,
+    pub checks: Option<Vec<DevelopmentVerificationCheck>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentVerificationCheck {
+    pub name: String,
+    pub passed: bool,
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

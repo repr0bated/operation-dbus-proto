@@ -155,14 +155,28 @@ impl DevelopmentLedger {
 
     fn record_verification(&self, input: &Value) -> Result<Value> {
         let id = required(input, "capability_id")?;
+        let checks = input
+            .get("checks")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let checks_passed = checks.iter().all(|check| {
+            check
+                .get("passed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        });
+        let has_checks = !checks.is_empty();
         let verified = input
             .get("live_verified")
             .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let status = input
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or(if verified { "verified" } else { "blocked" });
+            .unwrap_or(!has_checks || checks_passed);
+        let requested_status = input.get("status").and_then(Value::as_str);
+        let status = if !verified || !checks_passed {
+            "blocked"
+        } else {
+            requested_status.unwrap_or("verified")
+        };
         let now = chrono::Utc::now().to_rfc3339();
         let mut p = BTreeMap::new();
         p.insert("id".into(), DataValue::Str(id.into()));
@@ -201,15 +215,21 @@ impl DevelopmentLedger {
         )
         .context("record cognitive development verification")?;
         let details = input.get("details").and_then(Value::as_str).unwrap_or("");
+        let history_details = if checks.is_empty() {
+            details.to_string()
+        } else {
+            json!({"details": details, "checks": checks, "checks_passed": checks_passed})
+                .to_string()
+        };
         self.history(
             id,
             "verification",
             status,
-            details,
+            &history_details,
             input.get("commit").and_then(Value::as_str).unwrap_or(""),
         )?;
         Ok(
-            json!({"capability_id": id, "status": status, "live_verified": verified, "recorded_at": now}),
+            json!({"capability_id": id, "status": status, "live_verified": verified, "checks_passed": checks_passed, "check_count": checks.len(), "recorded_at": now}),
         )
     }
 
@@ -322,5 +342,14 @@ mod tests {
             listed["capabilities"][0]["capability_id"],
             "cognitive.memory.query"
         );
+        let blocked = ledger
+            .execute(&json!({
+                "operation": "record_verification",
+                "capability_id": "cognitive.memory.query",
+                "checks": [{"name": "grpc", "passed": false, "details": "not exposed"}]
+            }))
+            .expect("blocked verification");
+        assert_eq!(blocked["status"], "blocked");
+        assert_eq!(blocked["checks_passed"], false);
     }
 }
