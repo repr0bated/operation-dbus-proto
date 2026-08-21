@@ -129,6 +129,14 @@ impl ToolRegistry {
             .get(name)
             .await
             .ok_or_else(|| anyhow::anyhow!("Tool not found: {}", name))?;
+
+        // Readiness is an executable contract, not merely catalog decoration.
+        // A disabled integration must not be callable through an alternate
+        // client path which bypasses the operator catalog.
+        if let ToolReadiness::Disabled { reason } = tool.readiness() {
+            anyhow::bail!("Tool '{}' is disabled: {}", name, reason);
+        }
+
         tool.execute(input).await
     }
 
@@ -286,6 +294,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use simd_json::json;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct TestTool {
         name: &'static str,
@@ -403,5 +412,58 @@ mod tests {
         );
         assert_eq!(catalog[1].readiness.status(), "live");
         assert_eq!(catalog[1].readiness.reason(), None);
+    }
+
+    struct DisabledTool {
+        executed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl Tool for DisabledTool {
+        fn name(&self) -> &str {
+            "disabled_tool"
+        }
+
+        fn description(&self) -> &str {
+            "A tool which must never execute"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        fn readiness(&self) -> ToolReadiness {
+            ToolReadiness::Disabled {
+                reason: "the backing service is unavailable".to_string(),
+            }
+        }
+
+        async fn execute(&self, _input: Value) -> Result<Value> {
+            self.executed.store(true, Ordering::SeqCst);
+            Ok(json!({"unexpected": true}))
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_tools_are_rejected_before_execution() {
+        let registry = ToolRegistry::new();
+        let executed = Arc::new(AtomicBool::new(false));
+        registry
+            .register(Arc::new(DisabledTool {
+                executed: executed.clone(),
+            }))
+            .await
+            .expect("register disabled tool");
+
+        let error = registry
+            .execute("disabled_tool", json!({}))
+            .await
+            .expect_err("disabled tool must be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "Tool 'disabled_tool' is disabled: the backing service is unavailable"
+        );
+        assert!(!executed.load(Ordering::SeqCst));
     }
 }
