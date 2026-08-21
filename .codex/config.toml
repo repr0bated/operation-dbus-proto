@@ -1,0 +1,50 @@
+[mcp_servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+
+[mcp_servers.filesystem]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "/home/admin/git/odbus",
+]
+
+[mcp_servers.memory]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-memory",
+]
+
+[mcp_servers.op-dbus-agents]
+url = "http://127.0.0.1:8080/mcp/agents/message"
+
+[mcp_servers.op-dbus-compact]
+url = "http://127.0.0.1:8080/mcp/compact"
+
+[mcp_servers.op-web-compact]
+command = "/usr/local/bin/op-mcp-server"
+args = [
+    "--stdio",
+    "-m",
+    "cognitive",
+]
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-sequential-thinking",
+]
+
+[mcp_servers.cognitive-mcp]
+url = "http://10.200.0.2:3003/mcp"
+
+[mcp_servers.cognitive-mcp.http_headers]
+X-Ghostbridge-Footprint = "mcp-client"
+X-Ghostbridge-Trace-ID = "mcp-add-project"
+
+[mcp_servers.op-cognitive-mcp]
+command = "/usr/local/bin/op-cognitive-mcp"
+args = ["--stdio"]
