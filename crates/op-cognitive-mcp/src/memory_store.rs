@@ -185,6 +185,21 @@ impl CognitiveMemoryStore {
         Ok(rows.rows.first().map(|r| row_to_namespace(r)))
     }
 
+    /// Resolve the stable namespace identifier returned by the public gRPC
+    /// catalog. Names are the Cozo key, but clients receive both a UUID `id`
+    /// and a canonical name, so ingress code must support either form.
+    pub async fn get_namespace_by_id(&self, id: &str) -> Result<Option<MemoryNamespace>> {
+        let q = r#"
+            ?[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at]
+                := *memory_namespaces[name, id, kind, description, linked_task_id, linked_cron, metadata, created_at, updated_at],
+                   id = $id
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("id".into(), DataValue::Str(id.into()));
+        let rows = self.run(q, p).context("get namespace by id")?;
+        Ok(rows.rows.first().map(|row| row_to_namespace(row)))
+    }
+
     pub async fn list_namespaces(
         &self,
         kind: Option<NamespaceKind>,
@@ -760,5 +775,29 @@ mod tests {
             .await
             .expect("search");
         assert_eq!(results[0].key, "architecture");
+    }
+
+    #[tokio::test]
+    async fn namespace_ids_returned_to_clients_resolve_to_the_canonical_name() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = CognitiveMemoryStore::new(shuttle).await.expect("store");
+        let created = store
+            .upsert_namespace(
+                "project:3tched-cognative",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+
+        let resolved = store
+            .get_namespace_by_id(&created.id)
+            .await
+            .expect("lookup")
+            .expect("namespace from id");
+        assert_eq!(resolved.name, "project:3tched-cognative");
     }
 }

@@ -22,7 +22,7 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::memory_store::{CognitiveMemoryStore, NamespaceKind};
+use crate::memory_store::{CognitiveMemoryStore, MemoryNamespace, NamespaceKind};
 use crate::proto::cognitive_tool_service_server::CognitiveToolService;
 use crate::proto::*;
 use crate::quota::QuotaManager;
@@ -54,6 +54,69 @@ impl CognitiveGrpcService {
             session_manager,
             quota_manager,
             tool_registry,
+        }
+    }
+
+    /// Resolve either stable UUIDs returned by `ListNotebooks`, canonical
+    /// namespace names, or the historic bare project slug accepted by the
+    /// original gRPC API. This keeps every RPC on one namespace identity
+    /// instead of prepending `project:` independently at each call site.
+    async fn resolve_notebook(&self, notebook_ref: &str) -> Result<MemoryNamespace, Status> {
+        let notebook_ref = notebook_ref.trim();
+        if notebook_ref.is_empty() {
+            return Err(Status::invalid_argument("notebook_id is required"));
+        }
+
+        if let Some(namespace) = self
+            .memory_store
+            .get_namespace_by_name(notebook_ref)
+            .await
+            .map_err(memory_status)?
+        {
+            return Ok(namespace);
+        }
+        if let Some(namespace) = self
+            .memory_store
+            .get_namespace_by_id(notebook_ref)
+            .await
+            .map_err(memory_status)?
+        {
+            return Ok(namespace);
+        }
+        if !notebook_ref.contains(':') {
+            let canonical_name = format!("project:{notebook_ref}");
+            if let Some(namespace) = self
+                .memory_store
+                .get_namespace_by_name(&canonical_name)
+                .await
+                .map_err(memory_status)?
+            {
+                return Ok(namespace);
+            }
+        }
+
+        Err(Status::not_found(format!(
+            "Notebook '{notebook_ref}' not found"
+        )))
+    }
+
+    /// Source-ingest RPCs preserve their legacy create-on-first-use behavior,
+    /// but only after resolving every public notebook reference form above.
+    async fn resolve_or_create_notebook(
+        &self,
+        notebook_ref: &str,
+    ) -> Result<MemoryNamespace, Status> {
+        match self.resolve_notebook(notebook_ref).await {
+            Ok(namespace) => Ok(namespace),
+            Err(status) if status.code() == tonic::Code::NotFound => {
+                let name = canonical_notebook_name(notebook_ref)?;
+                let kind = namespace_kind_from_name(&name);
+                self.memory_store
+                    .upsert_namespace(&name, kind, None, None, None, serde_json::json!({}))
+                    .await
+                    .map_err(memory_status)
+            }
+            Err(status) => Err(status),
         }
     }
 }
@@ -92,7 +155,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         // Attempt grounded query via memory store.
         // Phase 1: query entries matching the notebook namespace.
         // Phase 2+: this forwards through the NotebookLM bridge.
-        let namespace = format!("project:{}", req.notebook_id);
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
         let entries = self
             .memory_store
             .search_entries(&namespace, &req.query, 10)
@@ -167,7 +230,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             .session_manager
             .get_or_create(&req.conversation_id, &req.notebook_id);
 
-        let namespace = format!("project:{}", req.notebook_id);
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
         let limit = if req.max_results > 0 {
             req.max_results as i64
         } else {
@@ -280,15 +343,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!(notebook_id = %req.notebook_id, "GetNotebook");
 
-        // Try by ID-as-name first
-        let ns = self
-            .memory_store
-            .get_namespace_by_name(&req.notebook_id)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .ok_or_else(|| {
-                Status::not_found(format!("Notebook '{}' not found", req.notebook_id))
-            })?;
+        let ns = self.resolve_notebook(&req.notebook_id).await?;
 
         let metadata_json =
             serde_json::to_string(&ns.metadata).unwrap_or_else(|_| "{}".to_string());
@@ -328,7 +383,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             req.kind.parse().unwrap_or(NamespaceKind::Custom)
         };
 
-        let name = format!("{}:{}", kind, req.title);
+        let (name, kind) = canonical_create_notebook(&req.title, kind)?;
         let ns = self
             .memory_store
             .upsert_namespace(
@@ -385,7 +440,14 @@ impl CognitiveToolService for CognitiveGrpcService {
                 nb_req.kind.parse().unwrap_or(NamespaceKind::Custom)
             };
 
-            let name = format!("{}:{}", kind, nb_req.title);
+            let (name, kind) = match canonical_create_notebook(&nb_req.title, kind) {
+                Ok(value) => value,
+                Err(status) => {
+                    warn!(title = %nb_req.title, error = %status, "Failed to validate notebook name");
+                    failed += 1;
+                    continue;
+                }
+            };
             match self
                 .memory_store
                 .upsert_namespace(
@@ -443,22 +505,10 @@ impl CognitiveToolService for CognitiveGrpcService {
             "AddSource"
         );
 
-        let namespace = format!("project:{}", req.notebook_id);
-
-        // Ensure namespace exists
-        let kind = NamespaceKind::Project;
-        if self
-            .memory_store
-            .get_namespace_by_name(&namespace)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .is_none()
-        {
-            self.memory_store
-                .upsert_namespace(&namespace, kind, None, None, None, serde_json::json!({}))
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
+        let namespace = self
+            .resolve_or_create_notebook(&req.notebook_id)
+            .await?
+            .name;
 
         let source_id = Uuid::new_v4().to_string();
         let key = if req.title.is_empty() {
@@ -507,27 +557,10 @@ impl CognitiveToolService for CognitiveGrpcService {
             )));
         }
 
-        let namespace = format!("project:{}", req.notebook_id);
-        // Ensure namespace exists
-        if self
-            .memory_store
-            .get_namespace_by_name(&namespace)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?
-            .is_none()
-        {
-            self.memory_store
-                .upsert_namespace(
-                    &namespace,
-                    NamespaceKind::Project,
-                    None,
-                    None,
-                    None,
-                    serde_json::json!({}),
-                )
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
+        let namespace = self
+            .resolve_or_create_notebook(&req.notebook_id)
+            .await?
+            .name;
 
         let mut added = 0i32;
         let mut skipped = 0i32;
@@ -602,7 +635,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!(notebook_id = %req.notebook_id, "ListSources");
 
-        let namespace = format!("project:{}", req.notebook_id);
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
         let limit = if req.limit > 0 { req.limit as i64 } else { 100 };
 
         let entries = self
@@ -655,7 +688,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             "GetSourceContent"
         );
 
-        let namespace = format!("project:{}", req.notebook_id);
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
         let entry = self
             .memory_store
             .retrieve_entry(&namespace, &req.source_id)
@@ -694,7 +727,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!(notebook_id = %req.notebook_id, "GenerateDataTable");
 
-        let namespace = format!("project:{}", req.notebook_id);
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
 
         // Step 1: Get all sources in the notebook
         let entries = self
@@ -845,7 +878,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             "RemoveSource"
         );
 
-        let namespace = format!("project:{}", req.notebook_id);
+        let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
 
         self.memory_store
             .delete_entry(&namespace, &req.source_id)
@@ -954,6 +987,54 @@ impl CognitiveToolService for CognitiveGrpcService {
     }
 }
 
+fn memory_status(error: anyhow::Error) -> Status {
+    Status::internal(error.to_string())
+}
+
+fn canonical_notebook_name(notebook_ref: &str) -> Result<String, Status> {
+    let notebook_ref = notebook_ref.trim();
+    if notebook_ref.is_empty() {
+        return Err(Status::invalid_argument("notebook_id is required"));
+    }
+    if explicit_namespace_kind(notebook_ref).is_some() {
+        Ok(notebook_ref.to_string())
+    } else {
+        Ok(format!("project:{notebook_ref}"))
+    }
+}
+
+fn canonical_create_notebook(
+    title: &str,
+    requested_kind: NamespaceKind,
+) -> Result<(String, NamespaceKind), Status> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(Status::invalid_argument("title is required"));
+    }
+    if let Some(kind) = explicit_namespace_kind(title) {
+        Ok((title.to_string(), kind))
+    } else {
+        Ok((format!("{requested_kind}:{title}"), requested_kind))
+    }
+}
+
+fn namespace_kind_from_name(name: &str) -> NamespaceKind {
+    explicit_namespace_kind(name).unwrap_or(NamespaceKind::Project)
+}
+
+fn explicit_namespace_kind(name: &str) -> Option<NamespaceKind> {
+    match name.split_once(':').map(|(prefix, _)| prefix) {
+        Some("project") => Some(NamespaceKind::Project),
+        Some("session") => Some(NamespaceKind::Session),
+        Some("database") | Some("db") => Some(NamespaceKind::Database),
+        Some("workflow") => Some(NamespaceKind::Workflow),
+        Some("agent") => Some(NamespaceKind::Agent),
+        Some("cron") => Some(NamespaceKind::Cron),
+        Some("custom") => Some(NamespaceKind::Custom),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem helpers — no shell=True, pure Rust (R13)
 // ---------------------------------------------------------------------------
@@ -1014,6 +1095,19 @@ fn glob_match_inner(pattern: &[char], name: &[char]) -> bool {
 mod tests {
     use super::*;
 
+    async fn test_service() -> (CognitiveGrpcService, Arc<CognitiveMemoryStore>) {
+        let shuttle =
+            Arc::new(crate::cozo_shuttle::CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let service = CognitiveGrpcService::new(
+            store.clone(),
+            Arc::new(SessionManager::with_defaults()),
+            Arc::new(QuotaManager::with_defaults()),
+            Arc::new(ToolRegistry::new()),
+        );
+        (service, store)
+    }
+
     #[test]
     fn should_glob_match_star() {
         assert!(glob_match("*.rs", "main.rs"));
@@ -1031,5 +1125,82 @@ mod tests {
     fn should_glob_match_exact() {
         assert!(glob_match("main.rs", "main.rs"));
         assert!(!glob_match("main.rs", "lib.rs"));
+    }
+
+    #[test]
+    fn canonical_create_preserves_explicit_namespace_and_requested_kind() {
+        assert_eq!(
+            canonical_create_notebook("project:3tched-cognative", NamespaceKind::Custom)
+                .expect("canonical name"),
+            (
+                "project:3tched-cognative".to_string(),
+                NamespaceKind::Project
+            )
+        );
+        assert_eq!(
+            canonical_create_notebook("agent-session", NamespaceKind::Agent)
+                .expect("agent namespace"),
+            ("agent:agent-session".to_string(), NamespaceKind::Agent)
+        );
+    }
+
+    #[tokio::test]
+    async fn grpc_resolves_notebook_uuid_and_canonical_name_without_double_prefixing() {
+        let (service, store) = test_service().await;
+        let namespace = store
+            .upsert_namespace(
+                "project:3tched-cognative",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+        store
+            .store_entry(
+                &namespace.name,
+                "ingress",
+                serde_json::json!({"content":"canonical ingress is unified"}),
+                vec![],
+                None,
+            )
+            .await
+            .expect("entry");
+
+        let by_id = service
+            .ask_question(Request::new(AskQuestionRequest {
+                notebook_id: namespace.id.clone(),
+                query: "canonical ingress".to_string(),
+                conversation_id: String::new(),
+            }))
+            .await
+            .expect("query by UUID")
+            .into_inner();
+        assert!(by_id.grounded);
+        assert!(by_id.answer.contains("canonical ingress is unified"));
+
+        let by_name = service
+            .ask_question(Request::new(AskQuestionRequest {
+                notebook_id: namespace.name.clone(),
+                query: "canonical ingress".to_string(),
+                conversation_id: String::new(),
+            }))
+            .await
+            .expect("query by canonical namespace")
+            .into_inner();
+        assert!(by_name.grounded);
+
+        let notebook = service
+            .get_notebook(Request::new(GetNotebookRequest {
+                notebook_id: namespace.id,
+            }))
+            .await
+            .expect("notebook by UUID")
+            .into_inner()
+            .notebook
+            .expect("notebook payload");
+        assert_eq!(notebook.name, "project:3tched-cognative");
     }
 }
