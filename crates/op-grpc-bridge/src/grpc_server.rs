@@ -802,6 +802,16 @@ impl OperationGrpcServer {
         self.cognitive_grpc.is_some()
     }
 
+    /// Browser-facing context streaming is mounted only through the bridge's
+    /// TLS listener. The Cognitive server supplies an authenticated router;
+    /// an absent Cognitive runtime means there is no `/context` surface.
+    pub fn cognitive_context_router(&self) -> anyhow::Result<Option<axum::Router>> {
+        self.cognitive_server
+            .as_ref()
+            .map(|server| server.authenticated_context_router())
+            .transpose()
+    }
+
     /// Hydrate in-memory reflection from the sealed SHM blob catalog.
     ///
     /// The blob catalog IS the plugin registry: a restart must advertise the
@@ -1300,7 +1310,13 @@ pub async fn project_cognitive_mcp_runtime_health(
 ) {
     let (healthy, running, remaining, limit, notebook_count) = match handle {
         Some(handle) => {
-            let (remaining, limit) = handle.server.quota_manager().status().await;
+            let (remaining, limit) = match handle.server.quota_manager().status().await {
+                Ok(status) => status,
+                Err(error) => {
+                    warn!(%error, "unable to read durable Cognitive quota state at startup");
+                    (0, 0)
+                }
+            };
             let notebook_count = match handle.server.memory_store().get_stats().await {
                 Ok(stats) => stats.total_namespaces,
                 Err(error) => {

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::memory_store::CognitiveMemoryStore;
 use crate::quota::QuotaManager;
+use crate::rag_pipeline::rag_configuration_readiness;
 use crate::session::SessionManager;
 use crate::tool_profiles;
 use op_mcp::tool_registry::ToolRegistry;
@@ -77,23 +78,44 @@ pub async fn run_diagnostics(
     });
 
     // 3. Quota Manager
-    let (remaining, limit) = quota_manager.status().await;
     let tier = quota_manager.tier().await;
-    let quota_status = if remaining == 0 { "exhausted" } else { "ok" };
-    if remaining == 0 {
-        recommendations.push(
-            "Query quota exhausted. Consider upgrading tier or waiting for daily reset.".into(),
-        );
+    match quota_manager.status().await {
+        Ok((remaining, limit)) => {
+            let quota_status = if remaining == 0 { "exhausted" } else { "ok" };
+            if remaining == 0 {
+                recommendations.push(
+                    "Query quota exhausted. Consider upgrading tier or waiting for daily reset."
+                        .into(),
+                );
+            }
+            components.push(ComponentStatus {
+                name: "quota_manager".into(),
+                status: quota_status.into(),
+                details: serde_json::json!({
+                    "tier": tier.name,
+                    "remaining": remaining,
+                    "limit": limit,
+                    "durable": true,
+                }),
+            });
+        }
+        Err(error) => {
+            all_ok = false;
+            components.push(ComponentStatus {
+                name: "quota_manager".into(),
+                status: "error".into(),
+                details: serde_json::json!({
+                    "tier": tier.name,
+                    "durable": true,
+                    "error": error.to_string(),
+                }),
+            });
+            recommendations.push(
+                "Durable quota accounting is unavailable. Restore Cozo storage before serving queries."
+                    .into(),
+            );
+        }
     }
-    components.push(ComponentStatus {
-        name: "quota_manager".into(),
-        status: quota_status.into(),
-        details: serde_json::json!({
-            "tier": tier.name,
-            "remaining": remaining,
-            "limit": limit,
-        }),
-    });
 
     // 4. Tool Profile
     let profile = tool_profiles::current_profile();
@@ -125,6 +147,29 @@ pub async fn run_diagnostics(
             "provisioner": "operator_managed_secret",
         }),
     });
+
+    // 6. Code RAG configuration.  This deliberately avoids a billable
+    // embedding request; operators invoke `op-cog-admin rag-verify --live`
+    // to verify both external dependencies end-to-end.
+    match rag_configuration_readiness() {
+        Ok(readiness) => components.push(ComponentStatus {
+            name: "code_rag".into(),
+            status: "configured".into(),
+            details: serde_json::to_value(readiness).unwrap_or_else(|_| serde_json::json!({})),
+        }),
+        Err(error) => {
+            all_ok = false;
+            components.push(ComponentStatus {
+                name: "code_rag".into(),
+                status: "unavailable".into(),
+                details: serde_json::json!({ "error": error.to_string() }),
+            });
+            recommendations.push(
+                "Code RAG is unavailable. Configure the embedding-model key and COGNITIVE_MCP_QDRANT_URL, then run `op-cog-admin rag-verify --live`."
+                    .into(),
+            );
+        }
+    }
 
     let overall = if all_ok { "healthy" } else { "degraded" };
 

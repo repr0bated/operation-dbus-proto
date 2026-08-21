@@ -16,6 +16,10 @@ use op_mcp::tool_registry::{BoxedTool, Tool, ToolReadiness, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
+use tokio::sync::Mutex;
+
+const DYNAMIC_TOOL_NAMESPACE: &str = "project:3tched-cognative";
+const DYNAMIC_TOOL_KEY_PREFIX: &str = "_tool_alias:";
 
 /// Safe field access for simd_json values.
 ///
@@ -37,24 +41,35 @@ pub struct CognitiveToolRegistry;
 
 impl CognitiveToolRegistry {
     pub async fn register_all(
-        registry: &ToolRegistry,
+        registry: Arc<ToolRegistry>,
         store: Arc<CognitiveMemoryStore>,
         qdrant: Option<Arc<QdrantSemanticShuttle>>,
     ) -> Result<()> {
+        let dynamic_tools = Arc::new(DynamicToolCatalog::new(registry.clone(), store.clone()));
         registry
             .register(Arc::new(MemoryTool::new(store.clone(), qdrant.clone())) as BoxedTool)
             .await?;
         registry
-            .register(Arc::new(RegisterToolTool) as BoxedTool)
+            .register(Arc::new(RegisterToolTool::new(dynamic_tools.clone())) as BoxedTool)
             .await?;
         registry
             .register(Arc::new(DevelopmentLedgerTool::new(store.clone())) as BoxedTool)
             .await?;
-        register_agent_tools(registry).await?;
-        register_notebooklm_tools(registry).await?;
-        register_blob_catalog_tool(registry).await?;
-        register_blob_vectors_tools(registry, qdrant).await?;
+        register_agent_tools(registry.as_ref()).await?;
+        register_notebooklm_tools(registry.as_ref()).await?;
+        register_blob_catalog_tool(registry.as_ref()).await?;
+        register_blob_vectors_tools(registry.as_ref(), qdrant).await?;
         Ok(())
+    }
+
+    /// Restore declarative aliases only after every optional runtime tool has
+    /// been registered.  That lets an alias target a live code-RAG tool while
+    /// still refusing it if its dependency is disabled in this boot.
+    pub async fn restore_dynamic_tools(
+        registry: Arc<ToolRegistry>,
+        store: Arc<CognitiveMemoryStore>,
+    ) -> Result<usize> {
+        DynamicToolCatalog::new(registry, store).restore().await
     }
 }
 
@@ -248,11 +263,252 @@ impl Tool for MemoryTool {
     }
 }
 
-/// Explicitly marked mock for the `register_tool` schema method
-/// (`mut.service.cognitive-mcp.tool.register@v1`). The registry cannot safely
-/// turn arbitrary schema text into executable code at runtime, so callers see
-/// its status before invocation rather than mistaking it for a live control.
-pub struct RegisterToolTool;
+/// A persisted declaration for a safe runtime tool alias.  This does not carry
+/// code, shell, URL, or provider fields: dynamic registration can only expose
+/// a second catalog name for an already-live, allow-listed registry tool.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ToolAliasRegistration {
+    version: u8,
+    name: String,
+    target: String,
+    description: Option<String>,
+}
+
+/// Bridge-owned registry for declarative aliases.  The admission gate prevents
+/// a model from creating executable code or escalating into a disabled/mock
+/// tool.  Successful aliases are persisted so the catalog survives a restart.
+struct DynamicToolCatalog {
+    registry: Arc<ToolRegistry>,
+    store: Arc<CognitiveMemoryStore>,
+    gate: Mutex<()>,
+}
+
+impl DynamicToolCatalog {
+    fn new(registry: Arc<ToolRegistry>, store: Arc<CognitiveMemoryStore>) -> Self {
+        Self {
+            registry,
+            store,
+            gate: Mutex::new(()),
+        }
+    }
+
+    async fn restore(&self) -> Result<usize> {
+        let entries = self
+            .store
+            .query_entries(EntryQuery {
+                namespace_id: Some(DYNAMIC_TOOL_NAMESPACE.to_string()),
+                key_pattern: Some(DYNAMIC_TOOL_KEY_PREFIX.to_string()),
+                limit: Some(500),
+                ..Default::default()
+            })
+            .await?;
+        let mut restored = 0;
+        for entry in entries {
+            let registration = match serde_json::from_value::<ToolAliasRegistration>(entry.value) {
+                Ok(registration) if registration.version == 1 => registration,
+                Ok(registration) => {
+                    tracing::warn!(
+                        name = %registration.name,
+                        version = registration.version,
+                        "skipping unsupported persisted Cognitive tool alias version"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(key = %entry.key, %error, "skipping malformed persisted Cognitive tool alias");
+                    continue;
+                }
+            };
+            match self.install(&registration).await {
+                Ok(()) => restored += 1,
+                Err(error) => tracing::warn!(
+                    name = %registration.name,
+                    target = %registration.target,
+                    %error,
+                    "skipping unavailable persisted Cognitive tool alias"
+                ),
+            }
+        }
+        if restored > 0 {
+            tracing::info!(restored, "restored persisted Cognitive tool aliases");
+        }
+        Ok(restored)
+    }
+
+    async fn register(&self, registration: ToolAliasRegistration) -> Result<()> {
+        let _guard = self.gate.lock().await;
+        self.assert_installable(&registration).await?;
+        self.store
+            .upsert_namespace(
+                DYNAMIC_TOOL_NAMESPACE,
+                NamespaceKind::Project,
+                Some("Cognitive operational state; not model-controlled memory"),
+                None,
+                None,
+                serde_json::json!({
+                    "owner": "canonical_orchestrator",
+                    "purpose": "declarative_tool_aliases",
+                }),
+            )
+            .await?;
+        // Persist before exposing the alias. A storage failure therefore
+        // fails closed rather than creating a live alias that disappears on
+        // the next process restart.
+        self.store
+            .store_entry(
+                DYNAMIC_TOOL_NAMESPACE,
+                &format!("{DYNAMIC_TOOL_KEY_PREFIX}{}", registration.name),
+                serde_json::to_value(&registration)?,
+                vec!["internal".to_string(), "tool-alias".to_string()],
+                None,
+            )
+            .await?;
+        self.install(&registration).await?;
+        Ok(())
+    }
+
+    async fn assert_installable(&self, registration: &ToolAliasRegistration) -> Result<()> {
+        validate_alias_registration(registration)?;
+        if self.registry.get(&registration.name).await.is_some() {
+            anyhow::bail!("tool name '{}' is already registered", registration.name);
+        }
+        let target = self
+            .registry
+            .get(&registration.target)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!("target tool '{}' is not registered", registration.target)
+            })?;
+        if !matches!(target.readiness(), ToolReadiness::Live) {
+            anyhow::bail!(
+                "target tool '{}' is not live and cannot be exposed by an alias",
+                registration.target
+            );
+        }
+        if target.tags().iter().any(|tag| tag == "dynamic_alias") {
+            anyhow::bail!("dynamic aliases may not target another alias");
+        }
+        Ok(())
+    }
+
+    async fn install(&self, registration: &ToolAliasRegistration) -> Result<()> {
+        self.assert_installable(registration).await?;
+        let definition = self
+            .registry
+            .get_definition(&registration.target)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "target tool '{}' has no catalog definition",
+                    registration.target
+                )
+            })?;
+        let description = registration
+            .description
+            .clone()
+            .unwrap_or_else(|| format!("Declared alias for {}", registration.target));
+        self.registry
+            .register(Arc::new(RegisteredAliasTool {
+                name: registration.name.clone(),
+                target: registration.target.clone(),
+                description,
+                input_schema: definition.input_schema,
+                category: definition.category,
+                namespace: definition.namespace,
+                registry: self.registry.clone(),
+            }) as BoxedTool)
+            .await
+    }
+}
+
+fn validate_alias_registration(registration: &ToolAliasRegistration) -> Result<()> {
+    if registration.version != 1 {
+        anyhow::bail!("unsupported tool alias version {}", registration.version);
+    }
+    let valid_name = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    };
+    if !valid_name(&registration.name) {
+        anyhow::bail!(
+            "tool alias name must be 1-64 lowercase ASCII letters, digits, or underscores"
+        );
+    }
+    if !valid_name(&registration.target) {
+        anyhow::bail!("tool alias target must be an existing lowercase registry tool name");
+    }
+    if registration.name == registration.target || registration.target == "register_tool" {
+        anyhow::bail!("tool aliases cannot target themselves or register_tool");
+    }
+    if registration
+        .description
+        .as_deref()
+        .is_some_and(|description| description.trim().is_empty() || description.len() > 512)
+    {
+        anyhow::bail!("tool alias description must be non-empty and at most 512 bytes");
+    }
+    Ok(())
+}
+
+struct RegisteredAliasTool {
+    name: String,
+    target: String,
+    description: String,
+    input_schema: Value,
+    category: String,
+    namespace: String,
+    registry: Arc<ToolRegistry>,
+}
+
+#[async_trait]
+impl Tool for RegisteredAliasTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        self.input_schema.clone()
+    }
+
+    fn category(&self) -> &str {
+        &self.category
+    }
+
+    fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    fn tags(&self) -> Vec<String> {
+        vec![
+            "dynamic_alias".to_string(),
+            format!("target:{}", self.target),
+        ]
+    }
+
+    async fn execute(&self, input: Value) -> Result<Value> {
+        self.registry.execute(&self.target, input).await
+    }
+}
+
+/// Declaratively register a persisted alias for an already-live tool.
+/// Runtime registration never interprets schema text as code and cannot
+/// re-enable disabled or mock integrations.
+pub struct RegisterToolTool {
+    dynamic_tools: Arc<DynamicToolCatalog>,
+}
+
+impl RegisterToolTool {
+    fn new(dynamic_tools: Arc<DynamicToolCatalog>) -> Self {
+        Self { dynamic_tools }
+    }
+}
 
 #[async_trait]
 impl Tool for RegisterToolTool {
@@ -261,7 +517,7 @@ impl Tool for RegisterToolTool {
     }
 
     fn description(&self) -> &str {
-        "MOCK: dynamic MCP tool registration is not implemented."
+        "Register a persisted, declarative alias for an existing live Cognitive tool. Aliases cannot add code, providers, or permissions."
     }
 
     fn category(&self) -> &str {
@@ -272,26 +528,44 @@ impl Tool for RegisterToolTool {
         vec![
             "tool".to_string(),
             "registry".to_string(),
-            "mock".to_string(),
+            "registration".to_string(),
+            "declarative".to_string(),
         ]
     }
 
-    fn readiness(&self) -> ToolReadiness {
-        ToolReadiness::Mock {
-            reason:
-                "Dynamic registration cannot safely create executable tools from untrusted input."
-                    .to_string(),
-        }
-    }
-
     fn input_schema(&self) -> Value {
-        json!({"type": "object", "additionalProperties": true})
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "name": {"type": "string", "description": "New lowercase alias name"},
+                "target": {"type": "string", "description": "Existing live registry tool to expose"},
+                "description": {"type": "string", "description": "Optional operator-facing alias description"}
+            },
+            "required": ["name", "target"]
+        })
     }
 
-    async fn execute(&self, _input: Value) -> Result<Value> {
-        Err(anyhow::anyhow!(
-            "register_tool is not yet implemented — no dynamic tool-registration mechanism exists"
-        ))
+    async fn execute(&self, input: Value) -> Result<Value> {
+        let registration = ToolAliasRegistration {
+            version: 1,
+            name: field(&input, "name")
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("register_tool requires name"))?
+                .to_string(),
+            target: field(&input, "target")
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("register_tool requires target"))?
+                .to_string(),
+            description: field(&input, "description").as_str().map(str::to_string),
+        };
+        self.dynamic_tools.register(registration.clone()).await?;
+        Ok(json!({
+            "success": true,
+            "tool_name": registration.name,
+            "target": registration.target,
+            "persisted": true,
+        }))
     }
 }
 
@@ -754,15 +1028,89 @@ fn identity_link_value(input: &Value, identity_id: Option<&str>) -> serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cozo_shuttle::CozoGraphShuttle;
 
-    #[test]
-    fn dynamic_tool_registration_is_loudly_catalogued_as_mock() {
-        let tool = RegisterToolTool;
-        assert_eq!(tool.readiness().status(), "mock");
-        assert!(tool
-            .readiness()
-            .reason()
-            .is_some_and(|reason| reason.contains("untrusted input")));
-        assert!(tool.description().starts_with("MOCK:"));
+    struct EchoTool;
+
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo_tool"
+        }
+
+        fn description(&self) -> &str {
+            "Returns its JSON input for alias tests"
+        }
+
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+
+        async fn execute(&self, input: Value) -> Result<Value> {
+            Ok(input)
+        }
+    }
+
+    async fn test_store() -> Arc<CognitiveMemoryStore> {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("in-memory Cozo"));
+        Arc::new(
+            CognitiveMemoryStore::new(shuttle)
+                .await
+                .expect("Cognitive memory store"),
+        )
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_registration_creates_a_safe_persisted_alias() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(Arc::new(EchoTool)).await.unwrap();
+        let store = test_store().await;
+        let catalog = DynamicToolCatalog::new(registry.clone(), store.clone());
+        let registration = ToolAliasRegistration {
+            version: 1,
+            name: "project_echo".to_string(),
+            target: "echo_tool".to_string(),
+            description: Some("Project-local echo alias".to_string()),
+        };
+
+        catalog.register(registration).await.unwrap();
+        let alias = registry
+            .get("project_echo")
+            .await
+            .expect("registered alias");
+        assert_eq!(alias.readiness().status(), "live");
+        let mut input = br#"{"hello":"world"}"#.to_vec();
+        assert_eq!(
+            registry
+                .execute(
+                    "project_echo",
+                    simd_json::to_owned_value(&mut input).unwrap()
+                )
+                .await
+                .unwrap(),
+            json!({"hello":"world"})
+        );
+        assert!(store
+            .retrieve_entry(DYNAMIC_TOOL_NAMESPACE, "_tool_alias:project_echo")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_registration_rejects_disabled_or_recursive_targets() {
+        let registry = Arc::new(ToolRegistry::new());
+        let store = test_store().await;
+        let catalog = DynamicToolCatalog::new(registry, store);
+        let error = catalog
+            .register(ToolAliasRegistration {
+                version: 1,
+                name: "loop".to_string(),
+                target: "register_tool".to_string(),
+                description: None,
+            })
+            .await
+            .expect_err("register_tool must not be aliasable");
+        assert!(error.to_string().contains("register_tool"));
     }
 }

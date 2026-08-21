@@ -8,6 +8,7 @@
 
 use crate::voyage::VoyageClient;
 use anyhow::{Context, Result};
+use op_plugins::state_plugins::embedding_model::{voyage_embed_params, VoyageModel};
 use qdrant_client::{
     qdrant::{
         vectors_config::Config as VectorsConfigEnum, Condition, CreateCollectionBuilder, Distance,
@@ -274,6 +275,20 @@ pub struct RagPipeline {
     voyage: VoyageClient,
 }
 
+/// Credential-free RAG readiness report for diagnostics and operator checks.
+/// Endpoint and model metadata are useful for repair; API keys are never
+/// returned or written to the Cognitive projection.
+#[derive(Debug, Clone, Serialize)]
+pub struct RagReadiness {
+    pub qdrant_url: String,
+    pub embedding_endpoint: String,
+    pub embedding_model: String,
+    pub collections: Vec<String>,
+    pub qdrant_reachable: bool,
+    pub embedding_verified: bool,
+    pub embedding_dimensions: Option<usize>,
+}
+
 impl RagPipeline {
     pub fn from_env() -> Result<Self> {
         // Config (endpoint/model/key) resolves through the embedding_model
@@ -283,6 +298,43 @@ impl RagPipeline {
         let qdrant = qdrant_client_from_env()?;
 
         Ok(Self { qdrant, voyage })
+    }
+
+    /// Build the production RAG pipeline only after its Qdrant dependency has
+    /// passed a health check.  A configured-but-dead endpoint must not cause
+    /// live code tools to be advertised as executable.
+    pub async fn from_env_verified() -> Result<Self> {
+        let pipeline = Self::from_env()?;
+        pipeline
+            .qdrant
+            .health_check()
+            .await
+            .context("Qdrant RAG health check failed")?;
+        Ok(pipeline)
+    }
+
+    /// Perform an explicit operator-requested live verification.  This makes
+    /// one minimal embedding request and checks that its shared-space
+    /// dimensionality is suitable for the configured Qdrant collections.
+    /// It is intentionally never called by ordinary health/doctor requests.
+    pub async fn verify_live_from_env() -> Result<RagReadiness> {
+        let pipeline = Self::from_env_verified().await?;
+        let vector = pipeline
+            .embed_query("cognitive-rag-readiness-probe")
+            .await
+            .context("Voyage RAG embedding probe failed")?;
+        let expected = VoyageModel::SHARED_EMBEDDING_DIMS as usize;
+        anyhow::ensure!(
+            vector.len() == expected,
+            "Voyage RAG embedding probe returned {} dimensions; expected {expected}",
+            vector.len()
+        );
+        Ok(RagReadiness {
+            qdrant_reachable: true,
+            embedding_verified: true,
+            embedding_dimensions: Some(vector.len()),
+            ..rag_configuration_readiness()?
+        })
     }
 
     /// Ingest a single repomix file from the zip into Qdrant.
@@ -733,6 +785,27 @@ impl RagPipeline {
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
         self.voyage.embed(text, Some("query")).await
     }
+}
+
+/// Validate configuration without calling a provider.  This is safe for the
+/// diagnostic RPC and tells operators exactly which non-secret endpoint/model
+/// the optional RAG capability will use when it is enabled.
+pub fn rag_configuration_readiness() -> Result<RagReadiness> {
+    let params = voyage_embed_params().context(
+        "Voyage RAG configuration is missing; provision the embedding-model API key through its operator-managed environment",
+    )?;
+    qdrant_client_from_env().context("Qdrant RAG configuration is invalid")?;
+    let qdrant_url = std::env::var("COGNITIVE_MCP_QDRANT_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:6334".to_string());
+    Ok(RagReadiness {
+        qdrant_url,
+        embedding_endpoint: params.endpoint,
+        embedding_model: params.model_id,
+        collections: default_collections_for_mode(RetrievalMode::Search),
+        qdrant_reachable: false,
+        embedding_verified: false,
+        embedding_dimensions: None,
+    })
 }
 
 pub fn default_collection_from_env() -> String {

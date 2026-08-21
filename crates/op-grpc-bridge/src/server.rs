@@ -408,14 +408,25 @@ pub fn build_axum_app_with_mqtt_socket(
             "grpc-status-details-bin".parse().unwrap(),
         ]);
 
-    build_routes(loader, server)
-        .into_axum_router()
-        .route(
-            "/mqtt",
-            get(mqtt_websocket_proxy).with_state(MqttProxyState { broker_socket }),
-        )
-        .layer(cors)
-        .layer(GhostbridgeTraceLayer::new())
+    let context_router = match server.cognitive_context_router() {
+        Ok(router) => router,
+        Err(error) => {
+            tracing::warn!(%error, "Cognitive context stream is not mounted");
+            None
+        }
+    };
+    let app = build_routes(loader, server).into_axum_router();
+    let app = match context_router {
+        Some(router) => app.nest("/context", router),
+        None => app,
+    };
+
+    app.route(
+        "/mqtt",
+        get(mqtt_websocket_proxy).with_state(MqttProxyState { broker_socket }),
+    )
+    .layer(cors)
+    .layer(GhostbridgeTraceLayer::new())
 }
 
 /// Build the production Axum app using the canonical NetMaker broker socket.

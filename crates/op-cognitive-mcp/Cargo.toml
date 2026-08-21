@@ -70,6 +70,7 @@ path = "src/bin/op-chain-vectors.rs"
 tonic-build = { version = "0.12" }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 # qdrant-client 1.19 is built against tonic 0.14, while this crate's own gRPC
 # surface is on the workspace's tonic 0.12. Both are in the tree; they are
 # different types with the same name. Tests that construct a `QdrantError`

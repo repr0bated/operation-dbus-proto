@@ -863,6 +863,19 @@ pub struct CognitiveToolInfo {
 pub struct RegisterToolOutput {
     pub success: bool,
     pub tool_name: String,
+    pub target: String,
+    pub persisted: bool,
+}
+
+/// Input for safe dynamic registration.  Registration creates only a
+/// persisted declarative alias to an existing live tool; it never evaluates
+/// caller-provided code, schema, provider credentials, or permissions.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterToolInput {
+    pub name: String,
+    pub target: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Output for MemoryStore method
@@ -1161,7 +1174,7 @@ pub struct CognitiveMcpState {
 // get_health              → op-cognitive-mcp/grpc_service.rs:get_health (tonic RPC)
 // list_tools              → op-cognitive-mcp/dbus_interface.rs:list_tools (D-Bus)
 // register_tool           → op-cognitive-mcp/cognitive_tools.rs:RegisterToolTool
-//                           (explicitly catalogued as mock; dynamic registration is unsafe)
+//                           (persisted allow-listed alias; never executable code)
 // memory_store            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_store
 // memory_retrieve         → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_retrieve
 // memory_query            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_query
@@ -1229,7 +1242,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "register_tool".to_string(),
-        method_decl_from_schemars_with_output::<(), RegisterToolOutput>(
+        method_decl_from_schemars_with_output::<RegisterToolInput, RegisterToolOutput>(
             "register_tool",
             SideEffect::Mutation,
             false,

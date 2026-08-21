@@ -414,7 +414,13 @@ impl MutationEngine {
         let Some((memory_store, quota_manager)) = runtime else {
             return;
         };
-        let (remaining, limit) = quota_manager.status().await;
+        let (remaining, limit) = match quota_manager.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::warn!(%error, "unable to read durable Cognitive quota state for runtime projection");
+                return;
+            }
+        };
         let notebook_count = match memory_store.get_stats().await {
             Ok(stats) => stats.total_namespaces,
             Err(error) => {

@@ -6,6 +6,7 @@
 use crate::code_tools::{register_code_tools, register_disabled_code_tools};
 use crate::cognitive_tools::CognitiveToolRegistry;
 use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
+use crate::context_server::build_context_router;
 use crate::cozo_shuttle::CozoGraphShuttle;
 use crate::grpc_service::{
     CognitiveGrpcService, CognitiveModelRouter, CognitiveMutationAuditor, CognitiveRuntimeProjector,
@@ -54,9 +55,13 @@ impl CognitiveMcpServer {
         };
 
         let session_manager = Arc::new(SessionManager::with_defaults());
-        let quota_manager = Arc::new(QuotaManager::with_defaults());
+        let quota_manager = Arc::new(
+            QuotaManager::with_persistent_defaults(memory_store.clone())
+                .await
+                .map_err(|error| format!("initialize durable Cognitive quota state: {error:#}"))?,
+        );
         CognitiveToolRegistry::register_all(
-            &tool_registry,
+            tool_registry.clone(),
             memory_store.clone(),
             qdrant_shuttle.clone(),
         )
@@ -64,7 +69,7 @@ impl CognitiveMcpServer {
 
         // Code-RAG pipeline: optional, like qdrant_shuttle. Without a Voyage key
         // (env or ~/.ssh/mongo-voyage) the cognitive MCP still serves memory tools.
-        let rag_pipeline = match RagPipeline::from_env() {
+        let rag_pipeline = match RagPipeline::from_env_verified().await {
             Ok(p) => Some(Arc::new(p)),
             Err(e) => {
                 let reason = format!("Code RAG unavailable: {e}");
@@ -109,6 +114,9 @@ impl CognitiveMcpServer {
             .await?;
             tracing::info!(registered = n, "Registered code-context tools");
         }
+
+        CognitiveToolRegistry::restore_dynamic_tools(tool_registry.clone(), memory_store.clone())
+            .await?;
 
         Ok(Self {
             memory_store,
@@ -175,6 +183,17 @@ impl CognitiveMcpServer {
 
     pub fn context_engine(&self) -> Arc<ContextAwarenessEngine> {
         self.context_engine.clone()
+    }
+
+    /// Build the authenticated HTTP/SSE context surface for mounting under the
+    /// bridge's TLS listener.  This crate never opens a second public socket:
+    /// missing authentication configuration keeps the router unmounted.
+    pub fn authenticated_context_router(&self) -> anyhow::Result<axum::Router> {
+        build_context_router(
+            self.context_engine.clone(),
+            self.memory_store.clone(),
+            self.session_manager.clone(),
+        )
     }
 
     /// Build the gRPC ingress surface for mounting on the bridge's `:50051` listener.

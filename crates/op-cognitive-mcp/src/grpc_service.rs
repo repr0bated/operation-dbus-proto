@@ -333,7 +333,13 @@ impl CognitiveGrpcService {
     /// quota or notebook state. A projection failure is observable in logs but
     /// must not convert a completed query or write into a false failure.
     async fn project_runtime_state(&self) {
-        let (queries_remaining, queries_limit) = self.quota_manager.status().await;
+        let (queries_remaining, queries_limit) = match self.quota_manager.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                warn!(%error, "unable to read durable Cognitive quota state for runtime projection");
+                return;
+            }
+        };
         let notebook_count = match self.memory_store.get_stats().await {
             Ok(stats) => i64::from(stats.total_namespaces),
             Err(error) => {
@@ -440,7 +446,11 @@ impl CognitiveToolService for CognitiveGrpcService {
             .map_err(|error| Status::failed_precondition(error.to_string()))?;
 
         // R11 — quota check
-        let (allowed, remaining, _limit) = self.quota_manager.check_and_increment().await;
+        let (allowed, remaining, _limit) = self
+            .quota_manager
+            .check_and_increment()
+            .await
+            .map_err(quota_status)?;
         if !allowed {
             return Err(Status::resource_exhausted(format!(
                 "Daily query quota exceeded ({} remaining)",
@@ -509,7 +519,11 @@ impl CognitiveToolService for CognitiveGrpcService {
             .ensure_notebook_binding(&req.conversation_id, &namespace)
             .map_err(|error| Status::failed_precondition(error.to_string()))?;
 
-        let (allowed, _, _) = self.quota_manager.check_and_increment().await;
+        let (allowed, _, _) = self
+            .quota_manager
+            .check_and_increment()
+            .await
+            .map_err(quota_status)?;
         if !allowed {
             return Err(Status::resource_exhausted("Daily query quota exceeded"));
         }
@@ -1249,7 +1263,11 @@ impl CognitiveToolService for CognitiveGrpcService {
             }));
         }
 
-        let (allowed, remaining, _limit) = self.quota_manager.check_and_increment().await;
+        let (allowed, remaining, _limit) = self
+            .quota_manager
+            .check_and_increment()
+            .await
+            .map_err(quota_status)?;
         if !allowed {
             return Err(Status::resource_exhausted(format!(
                 "Daily query quota exceeded ({} remaining)",
@@ -1294,13 +1312,19 @@ impl CognitiveToolService for CognitiveGrpcService {
         let req = request.into_inner();
         info!(deep_check = req.deep_check, "GetHealth");
 
-        let (remaining, limit) = self.quota_manager.status().await;
+        let (remaining, limit, quota_healthy) = match self.quota_manager.status().await {
+            Ok((remaining, limit)) => (remaining, limit, true),
+            Err(error) => {
+                warn!(%error, "durable Cognitive quota state unavailable during health check");
+                (0, 0, false)
+            }
+        };
 
-        let mut healthy = true;
+        let mut healthy = quota_healthy;
         let mut components = serde_json::json!({
             "memory_store": "ok",
             "session_manager": "ok",
-            "quota_manager": "ok",
+            "quota_manager": if quota_healthy { "ok" } else { "error" },
         });
 
         if req.deep_check {
@@ -1509,6 +1533,12 @@ impl CognitiveToolService for CognitiveGrpcService {
 
 fn memory_status(error: anyhow::Error) -> Status {
     Status::internal(error.to_string())
+}
+
+fn quota_status(error: anyhow::Error) -> Status {
+    Status::unavailable(format!(
+        "durable Cognitive quota accounting unavailable: {error:#}"
+    ))
 }
 
 fn canonical_notebook_name(notebook_ref: &str) -> Result<String, Status> {
@@ -2449,7 +2479,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_queries_do_not_consume_quota_or_create_sessions() {
         let (service, _, _) = test_service().await;
-        let quota_before = service.quota_manager.status().await;
+        let quota_before = service.quota_manager.status().await.unwrap();
 
         let blank = service
             .ask_question(Request::new(AskQuestionRequest {
@@ -2460,7 +2490,7 @@ mod tests {
             .await
             .expect_err("blank query must fail");
         assert_eq!(blank.code(), tonic::Code::InvalidArgument);
-        assert_eq!(service.quota_manager.status().await, quota_before);
+        assert_eq!(service.quota_manager.status().await.unwrap(), quota_before);
         assert_eq!(service.session_manager.count(), 0);
 
         let missing = service
@@ -2473,7 +2503,7 @@ mod tests {
             .await
             .expect_err("unknown notebook must fail");
         assert_eq!(missing.code(), tonic::Code::NotFound);
-        assert_eq!(service.quota_manager.status().await, quota_before);
+        assert_eq!(service.quota_manager.status().await.unwrap(), quota_before);
         assert_eq!(service.session_manager.count(), 0);
     }
 
@@ -2502,7 +2532,7 @@ mod tests {
             }))
             .await
             .expect("first notebook query");
-        assert_eq!(service.quota_manager.status().await, (499, 500));
+        assert_eq!(service.quota_manager.status().await.unwrap(), (499, 500));
 
         let error = service
             .query_notebook(Request::new(QueryNotebookRequest {
@@ -2515,7 +2545,7 @@ mod tests {
             .expect_err("a conversation belongs to its first notebook");
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
         assert!(error.message().contains("already bound"));
-        assert_eq!(service.quota_manager.status().await, (499, 500));
+        assert_eq!(service.quota_manager.status().await.unwrap(), (499, 500));
     }
 
     #[tokio::test]
@@ -2623,7 +2653,7 @@ mod tests {
         assert_eq!(calls[0].actor_id, "test-session");
         assert_eq!(calls[0].capability_id, "cognitive_mcp.read");
         assert!(calls[0].prompt.contains("Cognitive MCP is active."));
-        assert_eq!(quota.status().await, (499, 500));
+        assert_eq!(quota.status().await.unwrap(), (499, 500));
         assert_eq!(
             projector
                 .calls

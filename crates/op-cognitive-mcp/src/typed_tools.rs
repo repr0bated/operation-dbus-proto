@@ -240,7 +240,10 @@ impl Tool for TypedQueryTool {
             .ensure_notebook_binding(conversation_id, &self.memory_namespace)?;
 
         // Quota check
-        let (allowed, remaining, _) = self.quota.check_and_increment().await;
+        let (allowed, remaining, _) =
+            self.quota.check_and_increment().await.map_err(|error| {
+                anyhow::anyhow!("durable quota accounting unavailable: {error:#}")
+            })?;
         if !allowed {
             return Err(anyhow::anyhow!(
                 "Daily query quota exceeded ({} remaining)",
@@ -455,14 +458,14 @@ mod tests {
         )
         .await
         .expect("register typed tools");
-        let quota_before = quota.status().await;
+        let quota_before = quota.status().await.unwrap();
 
         let error = registry
             .execute("ask_question", json!({"query": " \n "}))
             .await
             .expect_err("blank query must fail");
         assert!(error.to_string().contains("query must not be empty"));
-        assert_eq!(quota.status().await, quota_before);
+        assert_eq!(quota.status().await.unwrap(), quota_before);
         assert_eq!(sessions.count(), 0);
     }
 
@@ -497,7 +500,7 @@ mod tests {
             .await
             .expect_err("oversized conversation id must fail before admission");
         assert!(malformed.to_string().contains("conversation_id exceeds"));
-        assert_eq!(quota.status().await, (500, 500));
+        assert_eq!(quota.status().await.unwrap(), (500, 500));
 
         registry
             .execute(
@@ -514,7 +517,7 @@ mod tests {
             .await
             .expect_err("fixed namespace tools must not mix one conversation");
         assert!(cross_notebook.to_string().contains("already bound"));
-        assert_eq!(quota.status().await, (499, 500));
+        assert_eq!(quota.status().await.unwrap(), (499, 500));
     }
 }
 
