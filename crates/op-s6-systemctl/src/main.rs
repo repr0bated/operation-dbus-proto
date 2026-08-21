@@ -36,6 +36,9 @@ use zbus::connection::Connection;
 mod dbus;
 use dbus::S6SystemctlService;
 
+const RUNIT_SYSTEMCTL_PATH: &str = "/org/opdbus/v1/plugins/runit/systemctl";
+const LEGACY_S6_SYSTEMCTL_PATH: &str = "/org/opdbus/v1/plugins/s6/systemctl";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -57,9 +60,16 @@ async fn main() -> Result<()> {
 
     // Register the service on the connection
     conn.object_server()
-        .at("/org/opdbus/v1/plugins/s6/systemctl", service)
+        .at(RUNIT_SYSTEMCTL_PATH, service)
         .await
         .context("Failed to register D-Bus object")?;
+
+    // Retain the old object path while already-installed clients are migrated.
+    // The runit path above is the canonical contract for all new callers.
+    conn.object_server()
+        .at(LEGACY_S6_SYSTEMCTL_PATH, S6SystemctlService::new())
+        .await
+        .context("Failed to register legacy D-Bus object alias")?;
 
     // Request the bus name. The legacy `S6.Systemctl` name is also claimed for
     // one release so already-installed clients keep working until the next
@@ -71,7 +81,7 @@ async fn main() -> Result<()> {
         warn!("legacy bus name org.opdbus.v1.S6.Systemctl unavailable: {error}");
     }
 
-    info!("D-Bus service registered at /org/opdbus/v1/plugins/runit/systemctl");
+    info!("D-Bus service registered at {RUNIT_SYSTEMCTL_PATH}");
     info!("Interface: org.opdbus.v1.Runit.Systemctl (legacy alias: org.opdbus.v1.S6.Systemctl)");
     info!("Daemon ready - press Ctrl+C to stop");
 
@@ -95,5 +105,19 @@ async fn main() -> Result<()> {
     // Keep the connection alive
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runit_path_is_canonical_and_six_path_is_only_an_alias() {
+        assert_eq!(
+            RUNIT_SYSTEMCTL_PATH,
+            "/org/opdbus/v1/plugins/runit/systemctl"
+        );
+        assert_ne!(RUNIT_SYSTEMCTL_PATH, LEGACY_S6_SYSTEMCTL_PATH);
     }
 }

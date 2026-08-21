@@ -34,6 +34,9 @@ const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
 const SUPERVISED_PATH: &str = "/run/runit/service/op-cognitive-mcp";
 const ENV_DIR: &str = "/etc/runit/sv/op-cognitive-mcp/env";
 const RUNTIME_ENV_DIR: &str = "/run/runit/service/op-cognitive-mcp/env";
+const RUNIT_SYSTEMCTL_SERVICE: &str = "org.opdbus.v1.Runit.Systemctl";
+const RUNIT_SYSTEMCTL_PATH: &str = "/org/opdbus/v1/plugins/runit/systemctl";
+const RUNIT_SYSTEMCTL_INTERFACE: &str = "org.opdbus.v1.Runit.Systemctl";
 const DEFAULT_WG: &str = "netmaker";
 
 // ── Deployment config (tunable via env-dir / apply_state) ──────────────────
@@ -108,7 +111,8 @@ impl CognitiveMcpPlugin {
     }
 
     async fn reload_service() -> Result<()> {
-        // D-Bus only per AGENTS.md §4 - no subprocess fallbacks
+        // Application lifecycle calls use the audited runit D-Bus service;
+        // agents themselves continue to use `sudo sv` for host operations.
         Self::reload_service_dbus().await
     }
 
@@ -119,24 +123,33 @@ impl CognitiveMcpPlugin {
 
         let reply = conn
             .call_method(
-                Some("opdbus.v1"),
-                "/org/opdbus/v1/plugins/s6/systemctl",
-                Some("opdbus.v1.S6.Systemctl"),
+                Some(RUNIT_SYSTEMCTL_SERVICE),
+                RUNIT_SYSTEMCTL_PATH,
+                Some(RUNIT_SYSTEMCTL_INTERFACE),
                 "reload",
                 &("op-cognitive-mcp",),
             )
             .await
-            .context("Failed to call reload on s6-systemctl D-Bus service")?;
+            .context("Failed to call reload on runit-systemctl D-Bus service")?;
 
         let (success, message): (bool, String) = reply.body().deserialize().map_err(|e| {
-            anyhow::anyhow!("Failed to deserialize s6-systemctl reload response: {}", e)
+            anyhow::anyhow!(
+                "Failed to deserialize runit-systemctl reload response: {}",
+                e
+            )
         })?;
 
         if success {
-            tracing::info!("Reloaded op-cognitive-mcp via D-Bus: {}", message);
+            tracing::info!(
+                "Reloaded op-cognitive-mcp through runit D-Bus control: {}",
+                message
+            );
             Ok(())
         } else {
-            Err(anyhow::anyhow!("s6-systemctl reload failed: {}", message))
+            Err(anyhow::anyhow!(
+                "runit-systemctl reload failed: {}",
+                message
+            ))
         }
     }
 }
@@ -171,9 +184,8 @@ impl StatePlugin for CognitiveMcpPlugin {
     /// plugin's frozen per-method gRPC services get activated — the sealed blob is
     /// advertised in the reflection catalog but nothing is mounted to serve it.
     ///
-    /// Checks runit and s6 layouts. This host runs runit
-    /// (`/etc/runit/sv/op-cognitive-mcp`); checking only the s6 path reported the
-    /// plugin unavailable and silently suppressed its gRPC surface.
+    /// Checks the host's runit layout. The runit definition and supervised
+    /// service are the only lifecycle observations used on this host.
     fn is_available(&self) -> bool {
         ["/etc/runit/sv/op-cognitive-mcp", SUPERVISED_PATH]
             .iter()
@@ -910,7 +922,7 @@ pub struct CognitiveMcpState {
     #[schemars(description = "Register on D-Bus as org.opdbus.CognitiveMcp", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.dbus-enabled@v1"))]
     pub dbus_enabled: bool,
     #[serde(default = "default_running")]
-    #[schemars(description = "Whether the s6 service is currently running", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.running@v1"))]
+    #[schemars(description = "Whether the runit service is currently running", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.running@v1"))]
     pub running: bool,
     #[serde(default = "default_healthy")]
     #[schemars(description = "Last known health status from GetHealth", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.healthy@v1"))]
@@ -1334,6 +1346,16 @@ mod tests {
             !schema.methods.contains_key("gemini_query"),
             "Cognitive MCP must not expose a provider-specific question method"
         );
+    }
+
+    #[test]
+    fn lifecycle_control_uses_the_canonical_runit_dbus_contract() {
+        assert_eq!(RUNIT_SYSTEMCTL_SERVICE, "org.opdbus.v1.Runit.Systemctl");
+        assert_eq!(
+            RUNIT_SYSTEMCTL_PATH,
+            "/org/opdbus/v1/plugins/runit/systemctl"
+        );
+        assert_eq!(RUNIT_SYSTEMCTL_INTERFACE, RUNIT_SYSTEMCTL_SERVICE);
     }
 
     #[test]
