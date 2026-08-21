@@ -64,7 +64,11 @@ async fn call_tched_router_method(
     let arguments = simd_json::to_owned_value(&mut bytes)
         .map_err(|error| json_error_response(StatusCode::BAD_REQUEST, &error.to_string()))?;
     let envelope = crate::state_manager_client::call_plugin_method(
-        "tched_router", method, arguments, capability, &identity,
+        "tched_router",
+        method,
+        arguments,
+        capability,
+        &identity,
     )
     .await
     .map_err(|error| {

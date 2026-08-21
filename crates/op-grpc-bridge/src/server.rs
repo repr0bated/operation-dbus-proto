@@ -283,7 +283,9 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
 /// device).
 fn build_routes(loader: Arc<SchemaLoader>, server: OperationGrpcServer) -> tonic::service::Routes {
     let tched_router_svc =
-        crate::grpc_web::enable(TchedRouterServiceServer::new(TchedRouterGrpcService { loader }));
+        crate::grpc_web::enable(TchedRouterServiceServer::new(TchedRouterGrpcService {
+            loader,
+        }));
     build_operation_routes(server).add_service(tched_router_svc)
 }
 
@@ -433,14 +435,6 @@ fn build_tonic_routes(
 /// Returns only when both listeners exit (which should not happen under normal
 /// operation).
 pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()> {
-    let loader = Arc::new(SchemaLoader::new_for_plugin(
-        &config.schema_path,
-        config.plugin_id.clone(),
-    )?);
-
-    // SIGHUP reload watcher.
-    let _sighup_handle = loader.clone().watch_sighup();
-
     // PluginService (PluginService.CallMethod) backed by the authoritative
     // MutationEngine. This is how createunixsocket is invoked: a CallMethod with
     // plugin_id="unix_socket" routes through MutationEngine.mutate →
@@ -463,6 +457,18 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
+
+    // Seeding can replace a stale sealed schema with the plugin's current
+    // projection. Load only after that write so the later reflection freeze
+    // cannot persist an older in-memory schema back over the fresh blob.
+    let loader = Arc::new(SchemaLoader::new_for_plugin(
+        &config.schema_path,
+        config.plugin_id.clone(),
+    )?);
+
+    // SIGHUP reload watcher.
+    let _sighup_handle = loader.clone().watch_sighup();
+
     // Start the OVSDB → process_authoritative_change feed after seed (same as run_grpc_server).
     match mutation_engine.clone().start().await {
         Ok(()) => tracing::info!("MutationEngine OVSDB monitor started"),

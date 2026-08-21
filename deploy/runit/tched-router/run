@@ -23,6 +23,7 @@ CONFIG_DIR=${TCHED_ROUTER_CONFIG_DIR:-/var/lib/tched-router}
 BOOTSTRAP_CONFIG=${TCHED_ROUTER_BOOTSTRAP_CONFIG:-/etc/op-dbus/tched-router-runtime.toml}
 BOOTSTRAP_SKILLS=${TCHED_ROUTER_BOOTSTRAP_SKILLS:-/etc/op-dbus/zeroclaw-skills/default}
 SECRET_FILE=${TCHED_ROUTER_OPENCODE_KEY_FILE:-/etc/op-dbus/secrets/opencode-api-key}
+SALAD_SECRET_FILE=${TCHED_ROUTER_SALAD_KEY_FILE:-/etc/op-dbus/secrets/salad-api-key}
 HOST=${TCHED_ROUTER_HOST:-127.0.0.1}
 PORT=${TCHED_ROUTER_PORT:-8084}
 
@@ -56,6 +57,49 @@ fi
     echo "tched-router: no provider key at $SECRET_FILE and no seed source" >&2
     exit 1
 }
+
+# `custom` profiles have no provider-specific environment variable. Store the
+# Salad credential through ZeroClaw's secret-aware config surface so the TOML
+# contains only an encrypted reference/value, never the plaintext key.
+if [ -r "$SALAD_SECRET_FILE" ]; then
+    SALAD_SECRET_VALUE=$(cat "$SALAD_SECRET_FILE")
+    chpst -u jeremy:jeremy env \
+        HOME="$CONFIG_DIR/home" \
+        USER=jeremy \
+        PATH=/usr/local/bin:/usr/bin:/bin \
+        ZEROCLAW_CONFIG_DIR="$CONFIG_DIR" \
+        /usr/bin/zeroclaw config \
+            --config-dir "$CONFIG_DIR" \
+            set providers.models.custom.salad.api_key \
+            "$SALAD_SECRET_VALUE" \
+            --no-interactive \
+            --log-level error >/dev/null
+    unset SALAD_SECRET_VALUE
+fi
+
+# The Codex Responses endpoint rejects this optional cache hint on newer Sol
+# models. ZeroClaw merges provider_extra over its request defaults, so a JSON
+# null removes the field while retaining OAuth and the exact selected model.
+if chpst -u jeremy:jeremy env \
+        HOME="$CONFIG_DIR/home" \
+        USER=jeremy \
+        PATH=/usr/local/bin:/usr/bin:/bin \
+        ZEROCLAW_CONFIG_DIR="$CONFIG_DIR" \
+        /usr/bin/zeroclaw config \
+            --config-dir "$CONFIG_DIR" \
+            get providers.models.openai.chatgpt.model >/dev/null 2>&1; then
+    chpst -u jeremy:jeremy env \
+        HOME="$CONFIG_DIR/home" \
+        USER=jeremy \
+        PATH=/usr/local/bin:/usr/bin:/bin \
+        ZEROCLAW_CONFIG_DIR="$CONFIG_DIR" \
+        /usr/bin/zeroclaw config \
+            --config-dir "$CONFIG_DIR" \
+            set providers.models.openai.chatgpt.provider_extra \
+            '{"prompt_cache_retention":null}' \
+            --no-interactive \
+            --log-level error >/dev/null
+fi
 
 /usr/local/libexec/3tched/runit-ready-signal tched-router 2>/dev/null || true
 

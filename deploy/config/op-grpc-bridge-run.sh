@@ -20,6 +20,15 @@ set -a
 [ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
 set +a
 
+if [ -r /etc/op-dbus/host-session-id ]; then
+    IFS= read -r IDENTITY_SLED_HOST_SESSION_ID < /etc/op-dbus/host-session-id
+    export IDENTITY_SLED_HOST_SESSION_ID
+fi
+if [ -r /etc/op-dbus/host-session-uid-map ]; then
+    IFS= read -r GHOSTBRIDGE_UID_SESSION_MAP < /etc/op-dbus/host-session-uid-map
+    export GHOSTBRIDGE_UID_SESSION_MAP
+fi
+
 # One TLS TCP door: :8090 demuxes MQTT/WebSocket `/mqtt`, gRPC-Web, and native
 # gRPC. Mesh/svc0 publishers relay back to this loopback listener.
 # Do not bind :50051 — same routes already live on :8090 and the sockets.
@@ -30,6 +39,7 @@ export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
 export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
-export COGNITIVE_MCP_MCP_URL="${COGNITIVE_MCP_MCP_URL:-http://10.200.0.2:8090/mcp}"
+# CognitiveToolService and schema-derived cognitive methods are mounted
+# in-process on this bridge.  No cognitive loopback URL or second server.
 
 exec /usr/local/bin/op-grpc-bridge

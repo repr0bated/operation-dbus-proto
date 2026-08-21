@@ -40,9 +40,9 @@ pub mod schema_loader;
 pub mod schema_router;
 pub mod server;
 pub mod shared_socket;
-pub mod tracing;
 pub mod tched_router_object_blob;
 mod tched_router_runtime;
+pub mod tracing;
 
 // Re-export main types
 pub use grpc_client::{

@@ -5,15 +5,16 @@
 //! identity). The bridge remains the capability and audit boundary; it does not
 //! implement another model provider.
 //!
-//! Agent resolution is deliberately internal. Callers choose a *model*; they
-//! never name an agent. Each configured agent already pins its own
-//! `model_provider`, so a requested model resolves to the agent that serves it
-//! and the request is dispatched to that agent's A2A endpoint. That is what
-//! keeps a chat request off the control-plane agent, and it is why selection no
-//! longer rewrites shared daemon config: nothing has to be re-pointed for a
-//! caller to reach a different model.
+//! Agent resolution is deliberately internal. Callers choose a provider/model
+//! pair; they never name an agent. The pair resolves to the task-specialized
+//! agent for that provider and executes through ZeroClaw's one-shot agent
+//! surface with explicit provider/model overrides. Selection never rewrites
+//! shared daemon config, and catalog models cannot silently fall back to the
+//! model pinned in an A2A agent entry.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -25,6 +26,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8084";
+const DEFAULT_ZEROCLAW_BIN: &str = "/usr/bin/zeroclaw";
+const DEFAULT_ZEROCLAW_CONFIG_DIR: &str = "/var/lib/tched-router";
+const SALAD_PROVIDER_REF: &str = "custom.salad";
 
 /// Agent used only when a caller specifies neither model nor provider. It is a
 /// last resort, not "the chat agent": any configured agent is reachable by
@@ -37,6 +41,8 @@ pub(crate) struct TchedRouterRuntimeClient {
     endpoint: String,
     fallback_agent: String,
     token: Option<String>,
+    zeroclaw_bin: PathBuf,
+    zeroclaw_config_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +50,7 @@ struct ConfiguredProvider {
     family: String,
     reference: String,
     selected_model: String,
+    uri: Option<String>,
 }
 
 /// One task-oriented agent as the daemon reports it. `skill_bundles` is the
@@ -57,6 +64,25 @@ struct ConfiguredAgent {
     model: String,
     enabled: bool,
     skill_bundles: Vec<String>,
+}
+
+fn provider_selection_id(family: &str, reference: &str) -> String {
+    if family == "custom" {
+        reference
+            .strip_prefix("custom.")
+            .unwrap_or(reference)
+            .to_string()
+    } else {
+        family.to_string()
+    }
+}
+
+fn configured_provider_id(provider: &ConfiguredProvider) -> String {
+    provider_selection_id(&provider.family, &provider.reference)
+}
+
+fn configured_agent_provider_id(agent: &ConfiguredAgent) -> String {
+    provider_selection_id(&agent.family, &agent.provider_ref)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,7 +121,7 @@ struct ConfigApiError {
     op_index: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ModelCatalogResponse {
     #[serde(default)]
     models: Vec<String>,
@@ -112,7 +138,14 @@ impl TchedRouterRuntimeClient {
         let token = std::env::var("ZEROCLAW_RUNTIME_TOKEN")
             .ok()
             .filter(|value| !value.trim().is_empty());
-        Self::new(endpoint, fallback_agent, token)
+        let mut client = Self::new(endpoint, fallback_agent, token);
+        client.zeroclaw_bin = std::env::var_os("ZEROCLAW_RUNTIME_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_ZEROCLAW_BIN));
+        client.zeroclaw_config_dir = std::env::var_os("ZEROCLAW_RUNTIME_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_ZEROCLAW_CONFIG_DIR));
+        client
     }
 
     pub(crate) fn new(endpoint: String, fallback_agent: String, token: Option<String>) -> Self {
@@ -126,6 +159,8 @@ impl TchedRouterRuntimeClient {
             endpoint: endpoint.trim_end_matches('/').to_string(),
             fallback_agent,
             token,
+            zeroclaw_bin: PathBuf::from(DEFAULT_ZEROCLAW_BIN),
+            zeroclaw_config_dir: PathBuf::from(DEFAULT_ZEROCLAW_CONFIG_DIR),
         }
     }
 
@@ -244,6 +279,110 @@ impl TchedRouterRuntimeClient {
         .await
     }
 
+    async fn provider_catalog(
+        &self,
+        provider: &ConfiguredProvider,
+    ) -> anyhow::Result<ModelCatalogResponse> {
+        let mut catalog = if provider.reference == SALAD_PROVIDER_REF {
+            self.salad_model_catalog(provider).await.unwrap_or_default()
+        } else {
+            self.model_catalog(&provider.family)
+                .await
+                .unwrap_or_default()
+        };
+        if catalog.models.is_empty() && !provider.selected_model.is_empty() {
+            catalog.models.push(provider.selected_model.clone());
+        }
+        Ok(catalog)
+    }
+
+    async fn salad_model_catalog(
+        &self,
+        provider: &ConfiguredProvider,
+    ) -> anyhow::Result<ModelCatalogResponse> {
+        let endpoint = provider
+            .uri
+            .as_deref()
+            .context("custom.salad has no configured URI")?
+            .trim_end_matches('/');
+        let key = std::env::var("SALAD_API_KEY").context("SALAD_API_KEY is not configured")?;
+        let response: Value = self
+            .send_json(
+                self.http.get(format!("{endpoint}/models")).bearer_auth(key),
+                "list custom.salad models",
+            )
+            .await?;
+        let mut models = response
+            .get("data")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|model| model.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        models.sort();
+        models.dedup();
+        Ok(ModelCatalogResponse { models, live: true })
+    }
+
+    /// Retry a Salad completion without Qwen's separate reasoning channel.
+    ///
+    /// Salad names that channel `reasoning`, while the currently installed
+    /// ZeroClaw compatible-provider parser recognizes `reasoning_content`.
+    /// Some prompts therefore complete successfully with empty stdout. Keep
+    /// ZeroClaw as the primary agent surface, but make that provider-specific
+    /// response-shape mismatch recoverable without exposing chain-of-thought.
+    async fn salad_visible_completion(
+        &self,
+        provider: &ConfiguredProvider,
+        model: &str,
+        input: &ChatInput,
+    ) -> anyhow::Result<String> {
+        let endpoint = provider
+            .uri
+            .as_deref()
+            .context("custom.salad has no configured URI")?
+            .trim_end_matches('/');
+        let key = std::env::var("SALAD_API_KEY").context("SALAD_API_KEY is not configured")?;
+        let messages = if input.messages.is_empty() {
+            json!([{ "role": "user", "content": input.message }])
+        } else {
+            serde_json::to_value(&input.messages).context("serialize Salad chat history")?
+        };
+        let response = self
+            .http
+            .post(format!("{endpoint}/chat/completions"))
+            .bearer_auth(key)
+            .json(&json!({
+                "model": model,
+                "messages": messages,
+                "chat_template_kwargs": { "enable_thinking": false }
+            }))
+            .send()
+            .await
+            .context("Salad visible-completion retry failed")?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .context("Salad visible-completion response body failed")?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "Salad visible-completion retry returned {status}: {}",
+                truncate_error(&String::from_utf8_lossy(&body))
+            ));
+        }
+        let response: Value = serde_json::from_slice(&body)
+            .context("Salad visible-completion retry returned invalid JSON")?;
+        response
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|content| !content.is_empty())
+            .map(str::to_string)
+            .context("Salad visible-completion retry returned no visible content")
+    }
+
     /// Resolve the agent that serves a requested model/provider. Callers never
     /// pass an agent; this is the whole point of the indirection.
     fn resolve_agent(
@@ -268,6 +407,7 @@ impl TchedRouterRuntimeClient {
             if let Some(agent) = enabled().find(|agent| {
                 agent.family.eq_ignore_ascii_case(provider_hint)
                     || agent.provider_ref.eq_ignore_ascii_case(provider_hint)
+                    || configured_agent_provider_id(agent).eq_ignore_ascii_case(provider_hint)
                     || agent.alias.eq_ignore_ascii_case(provider_hint)
             }) {
                 return Ok(agent.clone());
@@ -315,15 +455,25 @@ impl TchedRouterRuntimeClient {
         }
         let configured = self.configured_providers().await?;
 
-        let selected = Self::resolve_agent(&agents, &self.fallback_agent, "", "")?;
+        // Retain the dashboard's last validated selection when refreshing the
+        // projection. Resolving unconditionally with empty hints chooses the
+        // configured fallback agent and makes every GetRouter call undo a
+        // successful SetProvider/SetModel/SetSelection mutation.
+        let mut selected = Self::resolve_agent(
+            &agents,
+            &self.fallback_agent,
+            &state.selected_provider,
+            &state.selected_model,
+        )
+        .or_else(|_| Self::resolve_agent(&agents, &self.fallback_agent, "", ""))?;
 
         let mut providers = Vec::with_capacity(configured.len());
         for provider in &configured {
             providers.push(Provider {
-                id: provider.family.clone(),
+                id: configured_provider_id(provider),
                 route: provider.reference.clone(),
                 kind: "tched_router-runtime".to_string(),
-                aliases: vec![provider.reference.clone()],
+                aliases: vec![provider.family.clone()],
                 sdk: "tched_router".to_string(),
                 description: format!(
                     "Configured ZeroClaw provider alias '{}'.",
@@ -337,12 +487,30 @@ impl TchedRouterRuntimeClient {
         // family, and the previous code re-fetched per agent.
         let mut catalogs: std::collections::BTreeMap<String, ModelCatalogResponse> =
             std::collections::BTreeMap::new();
-        for agent in agents.iter().filter(|agent| agent.enabled) {
-            if !catalogs.contains_key(&agent.family) {
-                if let Ok(catalog) = self.model_catalog(&agent.family).await {
-                    catalogs.insert(agent.family.clone(), catalog);
+        for provider in &configured {
+            if agents
+                .iter()
+                .any(|agent| agent.enabled && agent.provider_ref == provider.reference)
+            {
+                if let Ok(catalog) = self.provider_catalog(provider).await {
+                    catalogs.insert(configured_provider_id(provider), catalog);
                 }
             }
+        }
+
+        // Preserve a catalog model selected for the current provider.
+        if agents.iter().any(|agent| {
+            agent.enabled && configured_agent_provider_id(agent) == state.selected_provider
+        }) && catalogs
+            .get(&state.selected_provider)
+            .is_some_and(|catalog| {
+                catalog
+                    .models
+                    .iter()
+                    .any(|model| model == &state.selected_model)
+            })
+        {
+            selected.model = state.selected_model.clone();
         }
 
         // One route per enabled agent: the agent is the thing that can actually
@@ -350,7 +518,12 @@ impl TchedRouterRuntimeClient {
         // set by construction.
         let mut routes = Vec::new();
         for agent in agents.iter().filter(|agent| agent.enabled) {
-            let catalog = catalogs.get(&agent.family);
+            // `catalogs` is keyed by the dashboard-facing provider id (for
+            // example `salad`), not ZeroClaw's internal provider reference
+            // (`custom.salad`). Looking up the latter marked pinned models
+            // unavailable and then suppressed their live catalog duplicate.
+            let provider_id = configured_agent_provider_id(agent);
+            let catalog = catalogs.get(&provider_id);
             let listed = catalog
                 .map(|catalog| catalog.models.iter().any(|model| model == &agent.model))
                 .unwrap_or(false);
@@ -361,7 +534,7 @@ impl TchedRouterRuntimeClient {
                 } else {
                     agent.skill_bundles.join("+")
                 },
-                provider: agent.family.clone(),
+                provider: provider_id,
                 upstream_provider: agent.family.clone(),
                 transport: "tched_router-agent".to_string(),
                 model: agent.model.clone(),
@@ -392,18 +565,24 @@ impl TchedRouterRuntimeClient {
         // away except for the `listed`/`live` booleans above, so a provider
         // offering 90+ models surfaced only the handful named by agents.
         // Agent-served models already have a richer route and are not duplicated.
-        for (family, catalog) in &catalogs {
+        for (provider_id, catalog) in &catalogs {
+            let provider = configured
+                .iter()
+                .find(|provider| configured_provider_id(provider) == *provider_id);
+            let family = provider
+                .map(|provider| provider.family.as_str())
+                .unwrap_or(provider_id);
             for model in &catalog.models {
                 if routes
                     .iter()
-                    .any(|route| &route.provider == family && &route.model == model)
+                    .any(|route| &route.provider == provider_id && &route.model == model)
                 {
                     continue;
                 }
                 routes.push(ModelRoute {
                     hint: "catalog".to_string(),
-                    provider: family.clone(),
-                    upstream_provider: family.clone(),
+                    provider: provider_id.clone(),
+                    upstream_provider: family.to_string(),
                     transport: "tched_router-catalog".to_string(),
                     model: model.clone(),
                     kind: "chat".to_string(),
@@ -415,7 +594,7 @@ impl TchedRouterRuntimeClient {
                     available: catalog.live,
                     status_reason: format!(
                         "Reported by the '{}' provider catalog; {}.",
-                        family,
+                        provider_id,
                         if catalog.live {
                             "live"
                         } else {
@@ -429,12 +608,12 @@ impl TchedRouterRuntimeClient {
         }
 
         state.status = "active".to_string();
-        state.selected_provider = selected.family.clone();
+        state.selected_provider = configured_agent_provider_id(&selected);
         state.selected_model = selected.model.clone();
         state.transport.grpc_target = self.endpoint.clone();
         state.projection.providers = providers;
         state.projection.model_routes = routes;
-        state.projection.router.provider = selected.family.clone();
+        state.projection.router.provider = configured_agent_provider_id(&selected);
         state.projection.router.model = selected.model.clone();
         state.projection.router.endpoint = self.endpoint.clone();
         state.projection.router.role = "tched_router-runtime-authority".to_string();
@@ -451,7 +630,7 @@ impl TchedRouterRuntimeClient {
         let agents = self.configured_agents().await?;
         let agent = Self::resolve_agent(&agents, &self.fallback_agent, provider_id, "")?;
         Ok(RuntimeSelection {
-            provider: agent.family,
+            provider: configured_agent_provider_id(&agent),
             model: agent.model,
         })
     }
@@ -459,11 +638,60 @@ impl TchedRouterRuntimeClient {
     /// Change the *default* model. Validated against what an enabled agent can
     /// actually serve; no daemon mutation, for the same reason as
     /// [`set_provider`](Self::set_provider).
-    pub(crate) async fn set_model(&self, model_id: &str) -> anyhow::Result<String> {
+    pub(crate) async fn set_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> anyhow::Result<RuntimeSelection> {
         self.health().await?;
         let agents = self.configured_agents().await?;
-        let agent = Self::resolve_agent(&agents, &self.fallback_agent, "", model_id)?;
-        Ok(agent.model)
+        let provider = Self::resolve_agent(&agents, &self.fallback_agent, provider_id, "")?;
+        let configured = self.configured_providers().await?;
+        let provider = configured
+            .iter()
+            .find(|candidate| candidate.reference == provider.provider_ref)
+            .context("resolved agent references an unconfigured provider")?;
+        let catalog = self.provider_catalog(provider).await?;
+        if !catalog.models.iter().any(|model| model == model_id) {
+            return Err(anyhow!(
+                "model {} is not in the {} provider catalog",
+                model_id,
+                provider.reference
+            ));
+        }
+        Ok(RuntimeSelection {
+            provider: configured_provider_id(provider),
+            model: model_id.to_string(),
+        })
+    }
+
+    /// Validate and return a provider/model pair as one indivisible selection.
+    pub(crate) async fn set_selection(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> anyhow::Result<RuntimeSelection> {
+        self.health().await?;
+        let providers = self.configured_providers().await?;
+        let provider = providers
+            .iter()
+            .find(|provider| {
+                provider.family.eq_ignore_ascii_case(provider_id)
+                    || provider.reference.eq_ignore_ascii_case(provider_id)
+                    || configured_provider_id(provider).eq_ignore_ascii_case(provider_id)
+            })
+            .with_context(|| format!("provider '{provider_id}' is not configured"))?;
+        let catalog = self.provider_catalog(provider).await?;
+        if !catalog.models.iter().any(|model| model == model_id) {
+            return Err(anyhow!(
+                "model '{model_id}' is not in the '{}' provider catalog",
+                provider.reference
+            ));
+        }
+        Ok(RuntimeSelection {
+            provider: configured_provider_id(provider),
+            model: model_id.to_string(),
+        })
     }
 
     pub(crate) async fn chat(
@@ -486,39 +714,87 @@ impl TchedRouterRuntimeClient {
             Self::resolve_agent(&agents, &self.fallback_agent, provider_hint, &input.model)?;
 
         let prompt = conversation_prompt(&input)?;
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let response: Value = self
-            .send_json(
-                self.http
-                    .post(format!("{}/a2a/{}", self.endpoint, agent.alias))
-                    .json(&json!({
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "method": "message/send",
-                        "params": {
-                            "message": {
-                                "role": "user",
-                                "parts": [{ "kind": "text", "text": prompt }]
-                            }
-                        }
-                    })),
-                &format!("chat via agent {}", agent.alias),
-            )
-            .await?;
-        if let Some(error) = response.get("error") {
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown ZeroClaw A2A error");
-            return Err(anyhow!("ZeroClaw chat failed: {}", truncate_error(message)));
+        let requested_model = if input.model.trim().is_empty() {
+            agent.model.as_str()
+        } else {
+            input.model.trim()
+        };
+
+        // A2A dispatch contains no provider/model override. Sending a catalog
+        // selection to `/a2a/{alias}` therefore executes the model pinned in
+        // the agent config and can truthfully return a different vendor. The
+        // official one-shot agent surface accepts both overrides and uses the
+        // same sealed config/auth profiles, so every request executes exactly
+        // the pair the capability boundary already validated.
+        // SAFETY: `geteuid` has no preconditions and does not dereference memory.
+        let running_as_root = unsafe { libc::geteuid() } == 0;
+        let mut command = if running_as_root {
+            let mut command = tokio::process::Command::new("/usr/bin/chpst");
+            command.args(["-u", "jeremy:jeremy"]);
+            command.arg(&self.zeroclaw_bin);
+            command
+        } else {
+            tokio::process::Command::new(&self.zeroclaw_bin)
+        };
+        command
+            .env("HOME", self.zeroclaw_config_dir.join("home"))
+            .env("USER", "jeremy")
+            .env("ZEROCLAW_CONFIG_DIR", &self.zeroclaw_config_dir)
+            .arg("agent")
+            .arg("--config-dir")
+            .arg(&self.zeroclaw_config_dir)
+            .arg("--agent")
+            .arg(&agent.alias)
+            .arg("--model-provider")
+            .arg(&agent.provider_ref)
+            .arg("--model")
+            .arg(requested_model)
+            .arg("--message")
+            .arg(prompt)
+            .arg("--log-level")
+            .arg("error")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if agent.provider_ref == SALAD_PROVIDER_REF {
+            if let Ok(key) = std::env::var("SALAD_API_KEY") {
+                command.env("API_KEY", key);
+            }
         }
-        let content = extract_chat_text(&response)?;
+        let output = tokio::time::timeout(Duration::from_secs(600), command.output())
+            .await
+            .context("ZeroClaw exact-model chat timed out")?
+            .context("failed to start ZeroClaw exact-model chat")?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "ZeroClaw exact-model chat failed: {}",
+                truncate_error(&detail)
+            ));
+        }
+        let mut content = String::from_utf8(output.stdout)
+            .context("ZeroClaw exact-model chat returned non-UTF-8 output")?
+            .trim()
+            .to_string();
+        if content.is_empty() && agent.provider_ref == SALAD_PROVIDER_REF {
+            let providers = self.configured_providers().await?;
+            let provider = providers
+                .iter()
+                .find(|provider| provider.reference == agent.provider_ref)
+                .context("ZeroClaw Salad agent references an unconfigured provider")?;
+            content = self
+                .salad_visible_completion(provider, requested_model, &input)
+                .await?;
+        } else if content.is_empty() {
+            return Err(anyhow!(
+                "ZeroClaw exact-model chat returned an empty response"
+            ));
+        }
 
         Ok(ChatOutput {
             content,
-            provider: agent.family.clone(),
-            model: agent.model.clone(),
-            finish_reason: extract_finish_reason(&response),
+            provider: configured_agent_provider_id(&agent),
+            model: requested_model.to_string(),
+            finish_reason: "stop".to_string(),
             usage: self.usage_for(&agent).await,
         })
     }
@@ -841,31 +1117,46 @@ impl TchedRouterRuntimeClient {
 }
 
 fn parse_configured_providers(entries: Vec<ConfigListEntry>) -> Vec<ConfiguredProvider> {
-    let mut providers = BTreeMap::new();
+    #[derive(Default)]
+    struct Partial {
+        model: Option<String>,
+        uri: Option<String>,
+    }
+
+    let mut partials: BTreeMap<String, Partial> = BTreeMap::new();
     for entry in entries {
         let Some(path) = entry.path.strip_prefix("providers.models.") else {
             continue;
         };
-        let Some(reference) = path.strip_suffix(".model") else {
+        let Some((reference, field)) = path.rsplit_once('.') else {
             continue;
         };
-        let Some((family, _alias)) = reference.split_once('.') else {
+        if reference.split_once('.').is_none() {
             continue;
-        };
-        let selected_model = entry
+        }
+        let value = entry
             .value
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_default();
-        providers.insert(
-            reference.to_string(),
-            ConfiguredProvider {
-                family: family.to_string(),
-                reference: reference.to_string(),
-                selected_model,
-            },
-        );
+        let partial = partials.entry(reference.to_string()).or_default();
+        match field {
+            "model" => partial.model = Some(value),
+            "uri" => partial.uri = Some(value),
+            _ => {}
+        }
     }
-    providers.into_values().collect()
+    partials
+        .into_iter()
+        .filter_map(|(reference, partial)| {
+            let (family, _alias) = reference.split_once('.')?;
+            Some(ConfiguredProvider {
+                family: family.to_string(),
+                reference,
+                selected_model: partial.model.unwrap_or_default(),
+                uri: partial.uri.filter(|uri| !uri.is_empty()),
+            })
+        })
+        .collect()
 }
 
 /// Build the agent routing table from `agents.<alias>.*` entries.
@@ -938,8 +1229,8 @@ fn conversation_prompt(input: &ChatInput) -> anyhow::Result<String> {
         return Ok(input.message.clone());
     }
 
-    // A2A `message/send` carries a single message, so a multi-turn
-    // conversation has to be serialized into text. System turns are hoisted
+    // The one-shot agent surface carries one prompt, so a multi-turn
+    // conversation is serialized into text. System turns are hoisted
     // ahead of the transcript so they read as instructions rather than as
     // another line of dialogue.
     let (system, dialogue): (Vec<_>, Vec<_>) = input
@@ -963,48 +1254,6 @@ fn conversation_prompt(input: &ChatInput) -> anyhow::Result<String> {
         prompt.push_str("\n\n");
     }
     Ok(prompt)
-}
-
-fn extract_chat_text(response: &Value) -> anyhow::Result<String> {
-    response
-        .pointer("/result/artifacts")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|artifact| {
-            artifact
-                .get("parts")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .find_map(|part| {
-            (part.get("kind").and_then(Value::as_str) == Some("text"))
-                .then(|| part.get("text").and_then(Value::as_str))
-                .flatten()
-        })
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("ZeroClaw chat response contains no text artifact"))
-}
-
-/// Derive the finish reason from what the daemon actually reported. Previously
-/// hardcoded to "stop", which mislabelled truncated and failed turns.
-fn extract_finish_reason(response: &Value) -> String {
-    for pointer in [
-        "/result/status/state",
-        "/result/status/reason",
-        "/result/finish_reason",
-    ] {
-        if let Some(state) = response.pointer(pointer).and_then(Value::as_str) {
-            if !state.trim().is_empty() {
-                return state.to_string();
-            }
-        }
-    }
-    if response.pointer("/result/artifacts").is_some() {
-        return "stop".to_string();
-    }
-    "unknown".to_string()
 }
 
 fn truncate_error(detail: &str) -> String {
@@ -1035,11 +1284,13 @@ mod tests {
                 family: "opencode".to_string(),
                 reference: "opencode.go".to_string(),
                 selected_model: "deepseek-v4-flash-free".to_string(),
+                uri: None,
             },
             ConfiguredProvider {
-                family: "salad".to_string(),
-                reference: "salad.default".to_string(),
+                family: "custom".to_string(),
+                reference: "custom.salad".to_string(),
                 selected_model: "qwen3.6-35b-a3b".to_string(),
+                uri: Some("https://ai.salad.cloud/v1".to_string()),
             },
         ]
     }
@@ -1050,10 +1301,10 @@ mod tests {
                 entry("agents.dashboard.model_provider", Some("opencode.go")),
                 entry("agents.dashboard.enabled", Some("true")),
                 entry("agents.dashboard.skill_bundles", Some("[\"default\"]")),
-                entry("agents.salad-chat.model_provider", Some("salad.default")),
-                entry("agents.salad-chat.enabled", Some("true")),
-                entry("agents.salad-chat.skill_bundles", Some("[\"default\"]")),
-                entry("agents.retired.model_provider", Some("salad.default")),
+                entry("agents.salad_chat.model_provider", Some("custom.salad")),
+                entry("agents.salad_chat.enabled", Some("true")),
+                entry("agents.salad_chat.skill_bundles", Some("[\"default\"]")),
+                entry("agents.retired.model_provider", Some("custom.salad")),
                 entry("agents.retired.enabled", Some("false")),
             ],
             &sample_providers(),
@@ -1075,6 +1326,7 @@ mod tests {
                 family: "opencode".to_string(),
                 reference: "opencode.go".to_string(),
                 selected_model: "deepseek-v4-flash-free".to_string(),
+                uri: None,
             }]
         );
     }
@@ -1109,7 +1361,7 @@ mod tests {
         let resolved =
             TchedRouterRuntimeClient::resolve_agent(&agents, "dashboard", "", "qwen3.6-35b-a3b")
                 .unwrap();
-        assert_eq!(resolved.alias, "salad-chat");
+        assert_eq!(resolved.alias, "salad_chat");
     }
 
     #[test]
@@ -1123,11 +1375,12 @@ mod tests {
     #[test]
     fn disabled_agents_are_never_resolved() {
         let agents = sample_agents();
-        // `retired` also serves salad.default but is disabled, so the enabled
+        // `retired` also serves custom.salad but is disabled, so the enabled
         // salad agent must win rather than the disabled one.
         let resolved =
-            TchedRouterRuntimeClient::resolve_agent(&agents, "dashboard", "salad", "").unwrap();
-        assert_eq!(resolved.alias, "salad-chat");
+            TchedRouterRuntimeClient::resolve_agent(&agents, "dashboard", "custom.salad", "")
+                .unwrap();
+        assert_eq!(resolved.alias, "salad_chat");
     }
 
     #[test]
@@ -1182,24 +1435,5 @@ mod tests {
             prompt.find("BE-TERSE").unwrap() < prompt.find("[user]").unwrap(),
             "system content must precede the transcript: {prompt}"
         );
-    }
-
-    #[test]
-    fn a2a_text_artifact_is_extracted() {
-        let response = json!({
-            "result": { "artifacts": [{ "parts": [{ "kind": "text", "text": "PONG" }] }] }
-        });
-        assert_eq!(extract_chat_text(&response).unwrap(), "PONG");
-    }
-
-    #[test]
-    fn finish_reason_prefers_reported_state_over_assuming_stop() {
-        let reported = json!({ "result": { "status": { "state": "length" }, "artifacts": [] } });
-        assert_eq!(extract_finish_reason(&reported), "length");
-
-        let silent = json!({ "result": { "artifacts": [] } });
-        assert_eq!(extract_finish_reason(&silent), "stop");
-
-        assert_eq!(extract_finish_reason(&json!({})), "unknown");
     }
 }

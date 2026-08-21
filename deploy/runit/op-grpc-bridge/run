@@ -35,6 +35,18 @@ set -a
 [ -r /etc/op-dbus/netmaker-api.env ] && . /etc/op-dbus/netmaker-api.env
 set +a
 
+# Canonical host identity for UDS peer authentication.  The socket transport
+# proves the peer uid; this stable session id selects that peer's authoritative
+# Identity Sled record.  Never fall back to caller-supplied metadata.
+if [ -r /etc/op-dbus/host-session-id ]; then
+    IFS= read -r IDENTITY_SLED_HOST_SESSION_ID < /etc/op-dbus/host-session-id
+    export IDENTITY_SLED_HOST_SESSION_ID
+fi
+if [ -r /etc/op-dbus/host-session-uid-map ]; then
+    IFS= read -r GHOSTBRIDGE_UID_SESSION_MAP < /etc/op-dbus/host-session-uid-map
+    export GHOSTBRIDGE_UID_SESSION_MAP
+fi
+
 # One TLS TCP door: :8090 demuxes MQTT/WebSocket `/mqtt`, gRPC-Web, and native
 # gRPC. Bind loopback before netclient; mesh/svc0 publications relay back to
 # this listener after their addresses exist. Local non-TCP clients use the UDS.
@@ -52,6 +64,8 @@ export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-sv
 # exclusively through this bridge's surfaces, never the loopback port itself.
 export ZEROCLAW_RUNTIME_ENDPOINT="${ZEROCLAW_RUNTIME_ENDPOINT:-http://127.0.0.1:8084}"
 export ZEROCLAW_RUNTIME_AGENT="${ZEROCLAW_RUNTIME_AGENT:-dashboard}"
+[ -r /etc/op-dbus/secrets/opencode-api-key ] && export OPENCODE_API_KEY="$(cat /etc/op-dbus/secrets/opencode-api-key)"
+[ -r /etc/op-dbus/secrets/salad-api-key ] && export SALAD_API_KEY="$(cat /etc/op-dbus/secrets/salad-api-key)"
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
 export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
 [ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"

@@ -1,15 +1,10 @@
 {
   "mcpServers": {
-    "op-dbus": {
-      "url": "unix:///run/ghostbridge/container.sock",
-      "type": "stdio",
-      "_comment": "Prefer: one socket door. If the client cannot speak UDS gRPC directly, use the stdio adapter below which talks to that same authenticated surface."
-    },
-    "op-dbus-socket": {
+    "cognitive": {
       "command": "/usr/local/bin/op-mcp-server",
-      "args": ["--stdio", "-m", "compact"],
+      "args": ["--stdio", "-m", "cognitive"],
       "type": "stdio",
-      "_comment": "Stdio adapter onto the single socket-authenticated control plane (all tools)."
+      "_comment": "Compatibility adapter only. Cognitive execution stays in the canonical op-grpc-bridge runtime; this process never opens the cognitive store."
     }
   }
 }

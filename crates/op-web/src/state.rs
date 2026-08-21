@@ -398,9 +398,7 @@ impl AppState {
                                                     msg.object_path,
                                                     msg.property_name.as_deref().unwrap_or(""),
                                                 );
-                                                state_clone
-                                                    .hydration
-                                                    .record_state(key, &json_str);
+                                                state_clone.hydration.record_state(key, &json_str);
                                             }
                                             state_clone
                                                 .sse_broadcaster

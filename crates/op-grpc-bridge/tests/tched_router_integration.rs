@@ -7,7 +7,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::extract::Query;
@@ -27,6 +27,12 @@ use tonic::metadata::MetadataValue;
 const TEST_TRACE_HEADER: &str = "x-ghostbridge-trace-id";
 const TEST_FOOTPRINT_HEADER: &str = "x-ghostbridge-footprint";
 
+fn isolate_projection_state() {
+    static STATE_DIR: OnceLock<PathBuf> = OnceLock::new();
+    let state_dir = STATE_DIR.get_or_init(|| tempfile::tempdir().unwrap().keep());
+    std::env::set_var("OP_SHM_STATE_DIR", state_dir);
+}
+
 fn write_schema(path: &PathBuf, value: &serde_json::Value) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -35,6 +41,7 @@ fn write_schema(path: &PathBuf, value: &serde_json::Value) {
 }
 
 async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
+    isolate_projection_state();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("live-schema.json");
     let schema = json!({
@@ -72,6 +79,7 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
 }
 
 async fn start_tched_router_runtime() -> SocketAddr {
+    isolate_projection_state();
     async fn health() -> Json<serde_json::Value> {
         Json(json!({ "status": "ok" }))
     }
@@ -337,23 +345,15 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
         .iter()
         .all(|route| { route["provider"] == "opencode" }));
 
-    // A route is only real if some agent can serve it. The A2A surface is
-    // addressed as `/a2a/{alias}` and carries no model field, so an agent
-    // answers with whatever model its `model_provider` pins. The mock catalog
-    // also offers `runtime-discovered-test-model`, which no agent pins, so it
-    // must NOT be advertised: doing so previously promised a model that Chat
-    // could only deliver by rewriting shared daemon config out from under
-    // concurrent callers. Reaching another model means configuring another
-    // agent, which is what makes agents task-specialized.
+    // The picker must expose the provider's complete catalog, not only the
+    // models currently pinned by an agent. SetSelection validates these same
+    // provider/model pairs without rewriting the shared daemon config.
     assert!(routes
         .iter()
         .any(|route| route["model"] == "deepseek-v4-flash-free"));
-    assert!(
-        !routes
-            .iter()
-            .any(|route| route["model"] == "runtime-discovered-test-model"),
-        "advertised a model no configured agent can serve: {routes:#?}"
-    );
+    assert!(routes
+        .iter()
+        .any(|route| route["model"] == "runtime-discovered-test-model"));
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();
@@ -365,4 +365,59 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
     );
     assert_eq!(event.actor_id, "integration-test-actor");
     assert!(event.json_args_footprint.is_some());
+}
+
+#[tokio::test]
+async fn selection_updates_provider_and_model_atomically() {
+    let runtime_addr = start_tched_router_runtime().await;
+    let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+        op_state_store::ChainConfig::default(),
+    )));
+    let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+    let engine = op_grpc_bridge::MutationEngine::new_with_tched_router_runtime(
+        event_chain.clone(),
+        ovsdb,
+        format!("http://{runtime_addr}"),
+        "dashboard".to_string(),
+        None,
+    );
+
+    let result = engine
+        .dispatch_method_call(
+            "tched_router",
+            "SetSelection",
+            r#"{"provider_id":"opencode","model_id":"runtime-discovered-test-model"}"#,
+            Some("cap.software.tched-router.selection.set@v1"),
+            "integration-test-actor",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result["result"]["selected_provider"], "opencode");
+    assert_eq!(
+        result["result"]["selected_model"],
+        "runtime-discovered-test-model"
+    );
+
+    let router = engine
+        .dispatch_method_call(
+            "tched_router",
+            "GetRouter",
+            "{}",
+            Some("cap.software.tched-router.router.read@v1"),
+            "integration-test-actor",
+        )
+        .await
+        .unwrap();
+    assert_eq!(router["result"]["router"]["provider"], "opencode");
+    assert_eq!(
+        router["result"]["router"]["model"],
+        "runtime-discovered-test-model"
+    );
+
+    let chain = event_chain.read().await;
+    assert!(chain.events().iter().any(|event| {
+        event.method_name.as_deref() == Some("SetSelection")
+            && event.capability_id.as_deref() == Some("cap.software.tched-router.selection.set@v1")
+    }));
 }

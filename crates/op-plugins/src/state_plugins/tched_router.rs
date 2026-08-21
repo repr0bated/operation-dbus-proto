@@ -401,6 +401,15 @@ pub struct SetModelInput {
     pub model_id: String,
 }
 
+/// Input for atomically selecting a provider and one of its models.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetSelectionInput {
+    /// Provider identifier declared in the provider catalog.
+    pub provider_id: String,
+    /// Model identifier declared for the selected provider.
+    pub model_id: String,
+}
+
 /// Output for the complete ZeroClaw state surface.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "exp.service.tched-router.state.result@v1"))]
@@ -512,6 +521,16 @@ pub struct SetProviderOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "mut.service.tched-router.selected-model.result@v1"))]
 pub struct SetModelOutput {
+    /// Selected model identifier.
+    pub selected_model: String,
+}
+
+/// Output for an atomic provider/model selection.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.service.tched-router.selection.result@v1"))]
+pub struct SetSelectionOutput {
+    /// Selected provider identifier.
+    pub selected_provider: String,
     /// Selected model identifier.
     pub selected_model: String,
 }
@@ -1905,6 +1924,16 @@ fn tched_router_schema_from_state(state: TchedRouterState) -> PluginSchema {
         ),
     );
     schema.methods.insert(
+        "SetSelection".to_string(),
+        method_decl_from_schemars_with_output::<SetSelectionInput, SetSelectionOutput>(
+            "SetSelection",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.tched-router.selection.set@v1",
+            "mut.service.tched-router.selection.set@v1",
+        ),
+    );
+    schema.methods.insert(
         "SetOvsRoutingModel".to_string(),
         method_decl_from_schemars_with_output::<SetOvsRoutingModelInput, SetOvsRoutingModelOutput>(
             "SetOvsRoutingModel",
@@ -2043,6 +2072,7 @@ pub fn dispatch_tched_router_method(
         "ListModels" => list_models(json_args, state).map(DispatchOutcome::plain),
         "SetProvider" => set_provider_handler(json_args, state),
         "SetModel" => set_model_handler(json_args, state),
+        "SetSelection" => set_selection_handler(json_args, state),
         "SetOvsRoutingModel" => set_role_model_handler(json_args, state, "ovs_routing"),
         "SetObfuscationModel" => set_role_model_handler(json_args, state, "obfuscation"),
         "SetVectorizationModel" => set_role_model_handler(json_args, state, "vectorization"),
@@ -2232,6 +2262,53 @@ fn set_model_handler(
     })
 }
 
+fn set_selection_handler(
+    json_args: &str,
+    state: &TchedRouterState,
+) -> std::result::Result<DispatchOutcome, TchedRouterError> {
+    let args = parse_args("SetSelection", json_args)?;
+    let provider_id = require_str(&args, "provider_id", "SetSelection")?;
+    let model_id = require_str(&args, "model_id", "SetSelection")?;
+
+    if !state
+        .projection
+        .providers
+        .iter()
+        .any(|provider| provider.id == provider_id)
+    {
+        return Err(TchedRouterError::ProviderNotDeclared {
+            provider: provider_id,
+        });
+    }
+    if !state
+        .projection
+        .model_routes
+        .iter()
+        .any(|route| route.provider == provider_id && route.model == model_id)
+    {
+        return Err(TchedRouterError::ExecutionDenied {
+            reason: format!("model '{model_id}' is not declared for provider '{provider_id}'"),
+        });
+    }
+
+    Ok(DispatchOutcome {
+        result: serde_json::json!({
+            "selected_provider": provider_id,
+            "selected_model": model_id,
+        }),
+        signal: Some(DispatchSignal {
+            name: "SelectionChanged".to_string(),
+            payload: serde_json::json!({
+                "old_provider": state.selected_provider.clone(),
+                "old_model": state.selected_model.clone(),
+                "new_provider": provider_id,
+                "new_model": model_id,
+                "reason": "explicit atomic set",
+            }),
+        }),
+    })
+}
+
 fn set_role_model_handler(
     json_args: &str,
     state: &TchedRouterState,
@@ -2360,6 +2437,10 @@ mod tests {
                 "ListModels" => serde_json::json!({ "provider": "salad" }),
                 "SetProvider" => serde_json::json!({ "provider_id": "salad" }),
                 "SetModel" => serde_json::json!({ "model_id": "qwen3.6-27b" }),
+                "SetSelection" => serde_json::json!({
+                    "provider_id": "salad",
+                    "model_id": "qwen3.6-27b",
+                }),
                 name if name.starts_with("Set") => {
                     serde_json::json!({ "model_id": "qwen3.6-27b" })
                 }
@@ -2376,6 +2457,38 @@ mod tests {
             dispatch_tched_router_method("NotDeclared", "{}", &TchedRouterPlugin::current_state())
                 .unwrap_err();
         assert!(error.to_string().contains("undeclared method"));
+    }
+
+    #[test]
+    fn atomic_selection_rejects_a_model_from_another_provider() {
+        let state = TchedRouterPlugin::current_state();
+        let mismatched = state.projection.model_routes.iter().find_map(|route| {
+            state
+                .projection
+                .providers
+                .iter()
+                .find(|provider| {
+                    provider.id != route.provider
+                        && !state.projection.model_routes.iter().any(|candidate| {
+                            candidate.provider == provider.id && candidate.model == route.model
+                        })
+                })
+                .map(|provider| (provider.id.clone(), route.model.clone()))
+        });
+        let (provider_id, model_id) = mismatched.expect("fixture has a cross-provider model pair");
+
+        let error = dispatch_tched_router_method(
+            "SetSelection",
+            &serde_json::json!({
+                "provider_id": provider_id,
+                "model_id": model_id,
+            })
+            .to_string(),
+            &state,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("is not declared for provider"));
     }
 }
 

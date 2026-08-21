@@ -400,12 +400,11 @@ fn schema_message_proto(message_name: &str, schema: &simd_json::OwnedValue) -> S
         proto.push_str("  // Empty schema object.\n");
     }
 
-    for (idx, field) in fields.into_iter().enumerate() {
-        let number = idx + 1;
+    for field in fields {
         let repeated = if field.repeated { "repeated " } else { "" };
         proto.push_str(&format!(
             "  {}{} {} = {};\n",
-            repeated, field.proto_type, field.name, number
+            repeated, field.proto_type, field.name, field.number
         ));
     }
 
@@ -416,13 +415,11 @@ fn schema_message_proto(message_name: &str, schema: &simd_json::OwnedValue) -> S
 fn schema_descriptor(message_name: &str, schema: &simd_json::OwnedValue) -> DescriptorProto {
     let field = schema_fields(schema)
         .into_iter()
-        .enumerate()
-        .map(|(idx, field)| {
-            let number = idx as i32 + 1;
+        .map(|field| {
             let (field_type, type_name) = field_descriptor_type(&field.proto_type);
             FieldDescriptorProto {
                 name: Some(field.name.clone()),
-                number: Some(number),
+                number: Some(field.number),
                 label: Some(if field.repeated {
                     field_descriptor_proto::Label::Repeated
                 } else {
@@ -448,6 +445,7 @@ struct ProtoField {
     name: String,
     proto_type: String,
     repeated: bool,
+    number: i32,
 }
 
 fn schema_fields(schema: &simd_json::OwnedValue) -> Vec<ProtoField> {
@@ -470,6 +468,7 @@ fn schema_fields(schema: &simd_json::OwnedValue) -> Vec<ProtoField> {
                 name: sanitize_proto_ident(name),
                 proto_type,
                 repeated,
+                number: stable_field_number(name),
             }
         })
         .collect()
@@ -480,7 +479,31 @@ fn fallback_field(name: &str, proto_type: &str, repeated: bool) -> ProtoField {
         name: name.to_string(),
         proto_type: proto_type.to_string(),
         repeated,
+        number: stable_field_number(name),
     }
+}
+
+// Must stay wire-compatible with build.rs, which generates the aggregate
+// operation.plugin.v1 request/response messages mounted by tonic. Frozen
+// per-method reflection is a different service view over those same bytes.
+fn stable_field_number(name: &str) -> i32 {
+    const FNV_OFFSET: u32 = 0x811c9dc5;
+    const FNV_PRIME: u32 = 0x01000193;
+    const MAX_FIELD: u32 = 536_870_911;
+    const RESERVED_START: u32 = 19_000;
+    const RESERVED_END: u32 = 19_999;
+
+    let mut hash = FNV_OFFSET;
+    for byte in name.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    let mut number = (hash % MAX_FIELD).max(1);
+    if (RESERVED_START..=RESERVED_END).contains(&number) {
+        number += RESERVED_END - RESERVED_START + 1;
+    }
+    number as i32
 }
 
 fn json_schema_type_to_proto(schema: &serde_json::Value) -> (String, bool) {
@@ -638,14 +661,34 @@ mod tests {
         assert!(proto.contains("rpc RegisterAgent"));
         assert!(proto.contains("RegisterAgentInput"));
         assert!(proto.contains("RegisterAgentOutput"));
-        assert!(proto.contains("string agent_id = 1;"));
-        assert!(proto.contains("int64 priority = 2;"));
-        assert!(proto.contains("bool success = 1;"));
+        assert!(proto.contains(&format!(
+            "string agent_id = {};",
+            stable_field_number("agent_id")
+        )));
+        assert!(proto.contains(&format!(
+            "int64 priority = {};",
+            stable_field_number("priority")
+        )));
+        assert!(proto.contains(&format!(
+            "bool success = {};",
+            stable_field_number("success")
+        )));
         assert!(proto.contains("subid: exp.service.tched_router.register-agent@v1"));
         assert!(proto.contains("capability: register"));
 
-        let descriptor = generate_method_file_descriptor("tched_router", "RegisterAgent", &method_decl);
+        let descriptor =
+            generate_method_file_descriptor("tched_router", "RegisterAgent", &method_decl);
         assert!(!descriptor.is_empty(), "expected encoded FileDescriptorSet");
+
+        let set = FileDescriptorSet::decode(descriptor.as_slice()).unwrap();
+        let input = &set.file[0].message_type[0];
+        let by_name = input
+            .field
+            .iter()
+            .map(|field| (field.name.as_deref().unwrap(), field.number.unwrap()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(by_name["agent_id"], stable_field_number("agent_id"));
+        assert_eq!(by_name["priority"], stable_field_number("priority"));
     }
 
     #[tokio::test]

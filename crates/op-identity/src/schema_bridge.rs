@@ -556,8 +556,8 @@ pub fn verify_session_genesis(
         let by_pubkey = wireguard_pubkey
             .map(|p| !p.is_empty() && s.wireguard_pubkey == p)
             .unwrap_or(false);
-        let by_genesis = !request_genesis_hex.is_empty()
-            && s.genesis.as_deref() == Some(request_genesis_hex);
+        let by_genesis =
+            !request_genesis_hex.is_empty() && s.genesis.as_deref() == Some(request_genesis_hex);
         by_trace || by_pubkey || by_genesis
     });
 

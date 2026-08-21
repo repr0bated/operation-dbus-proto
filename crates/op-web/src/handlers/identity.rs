@@ -50,10 +50,9 @@ struct SledEntryJson {
 /// Read the active sled from the Cozo-backed state JSON.
 fn read_sled_json() -> Result<SledEntryJson, Box<dyn std::error::Error + Send + Sync>> {
     let path = "/dev/shm/opdbus/state/identity_sled.json";
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {path}: {e}"))?;
-    let state: SledStateJson = serde_json::from_str(&content)
-        .map_err(|e| format!("parse {path}: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
+    let state: SledStateJson =
+        serde_json::from_str(&content).map_err(|e| format!("parse {path}: {e}"))?;
     state
         .sleds
         .into_iter()

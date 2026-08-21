@@ -216,7 +216,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/llm/models/:provider",
             get(handlers::llm::list_models_for_provider_handler),
         )
-        .route("/llm/chat", post(handlers::tched_router::tched_router_chat_handler))
+        .route(
+            "/llm/chat",
+            post(handlers::tched_router::tched_router_chat_handler),
+        )
         // OpenClaw endpoints (internal/base layer)
         .route(
             "/openclaw/status",
@@ -324,7 +327,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .nest("/api", api_routes)
         // Ordinary HTTP compatibility lives on op-web :8080. Each handler is
         // an adapter to a schema-declared bridge method on gRPC :8090.
-        .route("/v1/models", get(handlers::tched_router::openai_models_handler))
+        .route(
+            "/v1/models",
+            get(handlers::tched_router::openai_models_handler),
+        )
         .route(
             "/v1/chat/completions",
             post(handlers::tched_router::tched_router_chat_handler),

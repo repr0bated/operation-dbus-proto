@@ -67,7 +67,10 @@ mod tests {
 
         let first = mint_genesis(&pubkey, &chain_head, head_ts, &catalog, arrival_ts);
         let second = mint_genesis(&pubkey, &chain_head, head_ts, &catalog, arrival_ts);
-        assert_eq!(first, second, "identical inputs must produce identical genesis");
+        assert_eq!(
+            first, second,
+            "identical inputs must produce identical genesis"
+        );
     }
 
     /// VAL-GENESIS-002: Different arrival_timestamp produces different genesis.
@@ -80,7 +83,10 @@ mod tests {
 
         let g1 = mint_genesis(&pubkey, &chain_head, head_ts, &catalog, 1_700_000_100);
         let g2 = mint_genesis(&pubkey, &chain_head, head_ts, &catalog, 1_700_000_200);
-        assert_ne!(g1, g2, "different arrival timestamps must produce different genesis");
+        assert_ne!(
+            g1, g2,
+            "different arrival timestamps must produce different genesis"
+        );
     }
 
     /// VAL-GENESIS-003: All-zeros input does not panic and returns a valid hash.

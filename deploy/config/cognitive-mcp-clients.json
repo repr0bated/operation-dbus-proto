@@ -1,9 +1,9 @@
 {
-  "_comment": "One Model Context door. All tools are served from the shared Ghostbridge socket; identity is authenticated at the socket (Ghostbridge footprint / WireGuard), not via a menu of HTTP ports.",
+  "_comment": "One cognitive runtime and control-plane ingress. Native gRPC clients use the bridge directly; MCP clients use the local stdio adapter, which dispatches into that same bridge-owned runtime and never opens CozoDB.",
   "endpoint": {
     "url": "unix:///run/ghostbridge/container.sock",
     "also": "unix:///run/opdbus/grpc.sock",
-    "description": "Single MCP/gRPC surface — demux by service/method via reflection. Auth at socket connect (x-ghostbridge-footprint / x-ghostbridge-trace-id / x-wireguard-pubkey).",
+    "description": "Single native gRPC surface — demux by service/method via reflection. Auth at socket connect (x-ghostbridge-footprint / x-ghostbridge-trace-id / x-wireguard-pubkey).",
     "auth": {
       "type": "ghostbridge",
       "at": "socket",
@@ -13,9 +13,15 @@
         "x-wireguard-pubkey"
       ]
     },
-    "protocols": ["grpc", "grpc-web", "mcp"],
+    "protocols": ["grpc", "grpc-web"],
     "tcp": "127.0.0.1:8090",
     "also_tcp": "100.69.0.1:8090"
+  },
+  "mcp_adapter": {
+    "transport": "stdio",
+    "command": "/usr/local/bin/op-mcp-server",
+    "args": ["--stdio", "-m", "cognitive"],
+    "description": "Protocol adapter for MCP-only clients; execution remains inside op-grpc-bridge"
   },
   "not_doors": {
     "_comment": "These are NOT separate MCP control-plane endpoints. Browser UI is :8080; chatbot loopback is not an external MCP door.",

@@ -750,16 +750,47 @@ impl SchemaBackedInterface {
             .and_then(|c| c.as_str())
             .filter(|s| !s.is_empty());
 
+        // The compatibility MCP adapter is a separate host process, but the
+        // bridge remains the only cognitive runtime. Resolve that trusted local
+        // caller through the host's authoritative Identity Sled record so D-Bus
+        // fan-in uses the same session/genesis and grant document as TLS/UDS
+        // ingress. The old global 152-byte sled is retained only for tests that
+        // explicitly set OP_SLED_PATH; production must not recover identity from
+        // last-write-wins shared memory.
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            zbus::fdo::Error::Failed(
+                "MutationEngine not wired to this interface — dispatch unavailable".to_string(),
+            )
+        })?;
+        let canonical_host =
+            if let Some(session_id) = crate::identity_sled_dispatch::host_session_id() {
+                crate::identity_sled_dispatch::session_record_for_actor(engine, &session_id)
+                    .await
+                    .and_then(|record| {
+                        let genesis = record.genesis.filter(|value| !value.is_empty())?;
+                        let unexpired = record
+                            .expires_at
+                            .map(|expires| expires > chrono::Utc::now().timestamp())
+                            .unwrap_or(true);
+                        (record.active && unexpired).then_some((session_id, genesis))
+                    })
+            } else {
+                None
+            };
+
         if let Some(cap) = required_cap {
-            // For D-Bus, we check the current sled's footprint grants.
-            // This is the primary gate: footprint validation already passed via
-            // the sled's temporal hash check (NFR-006).
-            let grants = match op_identity::read_sled() {
-                Ok((ptr, _mmap)) => {
-                    let sled = unsafe { &*ptr };
-                    load_capability_grants(&hex::encode(sled.hashed_footprint))
+            let grants = match canonical_host.as_ref() {
+                Some((_session_id, genesis)) => load_capability_grants(genesis),
+                None if std::env::var_os("OP_SLED_PATH").is_some() => {
+                    match op_identity::read_sled() {
+                        Ok((ptr, _mmap)) => {
+                            let sled = unsafe { &*ptr };
+                            load_capability_grants(&hex::encode(sled.hashed_footprint))
+                        }
+                        Err(_) => std::collections::HashSet::new(),
+                    }
                 }
-                Err(_) => std::collections::HashSet::new(),
+                None => std::collections::HashSet::new(),
             };
 
             if !grants.contains(cap) {
@@ -771,23 +802,15 @@ impl SchemaBackedInterface {
             }
         }
 
-        // 4. Real dispatch through MutationEngine (Requirement 5).
-        //    json_args is passed verbatim — no default, no placeholder
-        //    (Requirement 5.4 / VAL-DISPATCH-004).
-        let engine = self.engine.as_ref().ok_or_else(|| {
-            zbus::fdo::Error::Failed(
-                "MutationEngine not wired to this interface — dispatch unavailable".to_string(),
-            )
-        })?;
-
         // The capability_id is read from the MethodDecl's required_capability
         // (enforcement already performed above, here it's threaded into event chain).
         let capability_id = required_cap.map(|s| s.to_string());
 
-        // The actor_id for a D-Bus dispatch is the caller's bus identity.
-        // The interceptor-extracted footprint/session is the primary gate;
-        // here we use the plugin's bus name as the actor for audit purposes.
-        let actor_id = format!("dbus:{}", self.plugin_id);
+        // Preserve the canonical session in the audit chain. Tests without a
+        // provisioned host identity retain a deterministic transport fallback.
+        let actor_id = canonical_host
+            .map(|(session_id, _genesis)| session_id)
+            .unwrap_or_else(|| format!("dbus:{}", self.plugin_id));
 
         let result = engine
             .dispatch_method_call(

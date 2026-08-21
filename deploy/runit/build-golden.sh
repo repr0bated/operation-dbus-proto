@@ -186,6 +186,9 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../config/tched-router-runtime.toml" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/tched-router-runtime.toml" \
             "$GOLDEN_DIR/etc/tched-router-runtime.toml"
+    [ -f "$PROJECT_ROOT/deploy/security/capability-grants.json" ] &&
+        run install -Dm600 "$PROJECT_ROOT/deploy/security/capability-grants.json" \
+            "$GOLDEN_DIR/etc/opdbus/capability-grants.json"
     [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
             "$GOLDEN_DIR/etc/netmaker-broker.env"
@@ -328,6 +331,9 @@ install_live() {
     [ -f "$SCRIPT_DIR/../config/tched-router-runtime.toml" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/tched-router-runtime.toml" \
             /etc/op-dbus/tched-router-runtime.toml
+    [ -f "$PROJECT_ROOT/deploy/security/capability-grants.json" ] &&
+        run install -Dm600 "$PROJECT_ROOT/deploy/security/capability-grants.json" \
+            /etc/opdbus/capability-grants.json
     [ -f "$SCRIPT_DIR/../config/netmaker-broker.env" ] &&
         run install -Dm644 "$SCRIPT_DIR/../config/netmaker-broker.env" \
             /etc/op-dbus/netmaker-broker.env

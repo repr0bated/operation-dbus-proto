@@ -113,7 +113,11 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("tched_router.json"), br#"{"selected_model":"qwen"}"#).unwrap();
+        fs::write(
+            dir.join("tched_router.json"),
+            br#"{"selected_model":"qwen"}"#,
+        )
+        .unwrap();
         fs::write(dir.join("system.memory.json"), br#"{"rss":1}"#).unwrap();
         fs::write(dir.join(".manifest.json"), br#"{"generation":3}"#).unwrap();
         fs::write(dir.join("notes.txt"), b"ignore").unwrap();

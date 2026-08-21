@@ -1909,14 +1909,21 @@ impl MutationEngine {
                     .await
                     .context("ZeroClaw runtime state projection failed")?;
                 self.cache_tched_router_state(&state).await?;
-                if let Err(error) = self
-                    .publish_plugin_projection_from_cache("tched_router", ChangeType::PropertySet)
-                    .await
-                {
-                    tracing::warn!(
-                        %error,
-                        "unable to publish refreshed ZeroClaw state projection"
-                    );
+                // SetSelection publishes only after both fields have been
+                // validated and installed in the same cached projection.
+                if method != "SetSelection" {
+                    if let Err(error) = self
+                        .publish_plugin_projection_from_cache(
+                            "tched_router",
+                            ChangeType::PropertySet,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            %error,
+                            "unable to publish refreshed ZeroClaw state projection"
+                        );
+                    }
                 }
                 if method == "Chat" {
                     let args = serde_json::from_value::<
@@ -1962,6 +1969,9 @@ impl MutationEngine {
                                         self.tched_router_runtime.set_provider(provider_id).await?;
                                     state.selected_provider = selection.provider;
                                     state.selected_model = selection.model;
+                                    state.projection.router.provider =
+                                        state.selected_provider.clone();
+                                    state.projection.router.model = state.selected_model.clone();
                                     self.cache_tched_router_state(&state).await?;
                                 }
                                 "SetModel" => {
@@ -1970,8 +1980,37 @@ impl MutationEngine {
                                         .get("selected_model")
                                         .and_then(serde_json::Value::as_str)
                                         .context("SetModel returned no selected_model")?;
-                                    state.selected_model =
-                                        self.tched_router_runtime.set_model(model_id).await?;
+                                    let selection = self
+                                        .tched_router_runtime
+                                        .set_model(&state.selected_provider, model_id)
+                                        .await?;
+                                    state.selected_provider = selection.provider;
+                                    state.selected_model = selection.model;
+                                    state.projection.router.provider =
+                                        state.selected_provider.clone();
+                                    state.projection.router.model = state.selected_model.clone();
+                                    self.cache_tched_router_state(&state).await?;
+                                }
+                                "SetSelection" => {
+                                    let provider_id = outcome
+                                        .result
+                                        .get("selected_provider")
+                                        .and_then(serde_json::Value::as_str)
+                                        .context("SetSelection returned no selected_provider")?;
+                                    let model_id = outcome
+                                        .result
+                                        .get("selected_model")
+                                        .and_then(serde_json::Value::as_str)
+                                        .context("SetSelection returned no selected_model")?;
+                                    let selection = self
+                                        .tched_router_runtime
+                                        .set_selection(provider_id, model_id)
+                                        .await?;
+                                    state.selected_provider = selection.provider;
+                                    state.selected_model = selection.model;
+                                    state.projection.router.provider =
+                                        state.selected_provider.clone();
+                                    state.projection.router.model = state.selected_model.clone();
                                     self.cache_tched_router_state(&state).await?;
                                 }
                                 _ => {}
@@ -2194,7 +2233,7 @@ impl MutationEngine {
         result: &serde_json::Value,
     ) -> anyhow::Result<()> {
         match method {
-            "SetProvider" | "SetModel" => {
+            "SetProvider" | "SetModel" | "SetSelection" => {
                 self.merge_into_state_cache("tched_router", result).await;
             }
             "SetOvsRoutingModel"

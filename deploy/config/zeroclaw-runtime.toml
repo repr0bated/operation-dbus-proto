@@ -20,16 +20,17 @@ long_running_request_timeout_secs = 600
 model = "deepseek-v4-flash-free"
 uri = "https://opencode.ai/zen/v1"
 
-[providers.models.salad.default]
+[providers.models.custom.salad]
 model = "qwen3.6-35b-a3b"
 uri = "https://ai.salad.cloud/v1"
+wire_api = "chat_completions"
 
 [providers.models.custom.gnoppix]
 uri = "https://us.gnoppix.com/v1"
 model = "google/gemma-4-26b-a4b-it:free"
 wire_api = "chat_completions"
 
-[providers.models.custom.gnoppix-coder]
+[providers.models.custom.gnoppix_coder]
 uri = "https://us.gnoppix.com/v1"
 model = "qwen/qwen3-coder:free"
 wire_api = "chat_completions"
@@ -40,9 +41,9 @@ model_provider = "opencode.go"
 risk_profile = "dashboard"
 skill_bundles = ["default"]
 
-[agents.salad-chat]
+[agents.salad_chat]
 enabled = true
-model_provider = "salad.default"
+model_provider = "custom.salad"
 risk_profile = "dashboard"
 skill_bundles = ["default"]
 
@@ -54,7 +55,7 @@ skill_bundles = ["default"]
 
 [agents.coder]
 enabled = true
-model_provider = "custom.gnoppix-coder"
+model_provider = "custom.gnoppix_coder"
 risk_profile = "dashboard"
 skill_bundles = ["default"]
 
@@ -66,6 +67,9 @@ exposed_skills = [
     "qdrant-collections",
     "mutation-dispatch",
 ]
+
+[agents.salad_chat.a2a]
+published = true
 
 [risk_profiles.dashboard]
 level = "readonly"

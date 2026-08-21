@@ -301,7 +301,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live-schema.json");
         let value = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
-        write_json(&path, &serde_json::json!({ "tched_router": [value.clone()] }));
+        write_json(
+            &path,
+            &serde_json::json!({ "tched_router": [value.clone()] }),
+        );
 
         let loader = SchemaLoader::new(&path).unwrap();
         let loaded = loader.get().await;
@@ -347,7 +350,10 @@ mod tests {
         let path = dir.path().join("live-schema.json");
         let initial = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
         let updated = serde_json::json!({"name": "tched_router", "version": "2.0.0"});
-        write_json(&path, &serde_json::json!({ "tched_router": [initial.clone()] }));
+        write_json(
+            &path,
+            &serde_json::json!({ "tched_router": [initial.clone()] }),
+        );
 
         let loader = Arc::new(SchemaLoader::new(&path).unwrap());
         let mut rx = loader.reload_tx().subscribe();
@@ -364,7 +370,10 @@ mod tests {
         assert_eq!(loader.get().await, initial);
 
         // Update the file and reload again.
-        write_json(&path, &serde_json::json!({ "tched_router": [updated.clone()] }));
+        write_json(
+            &path,
+            &serde_json::json!({ "tched_router": [updated.clone()] }),
+        );
         loader.load().unwrap();
         let _ = loader.reload_tx.send(SchemaReloadEvent {
             event_type: "reload".to_string(),

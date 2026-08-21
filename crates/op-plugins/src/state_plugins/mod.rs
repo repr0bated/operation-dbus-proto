@@ -75,6 +75,7 @@ pub mod service;
 pub mod sessdecl;
 pub mod shared_unix_socket;
 pub mod software;
+pub mod tched_router;
 pub mod unix_socket;
 pub mod users;
 pub mod web_ui;
@@ -84,7 +85,6 @@ pub mod wireguard;
 pub mod workflows_plugin;
 pub mod xray;
 pub mod xray_config_types;
-pub mod tched_router;
 
 // ---------------------------------------------------------------------------
 // Public type re-exports (consumed by `crate::prelude` and other crates).
@@ -137,10 +137,10 @@ pub use service::ServicePlugin;
 pub use sessdecl::SessDeclPlugin;
 pub use shared_unix_socket::SharedUnixSocketPlugin;
 pub use software::SoftwarePlugin;
+pub use tched_router::TchedRouterPlugin;
 pub use unix_socket::UnixSocketPlugin;
 pub use users::UsersPlugin;
 pub use web_ui::WebUiPlugin;
 pub use wg_opdbus::WgOpdbusPlugin;
 pub use wireguard::WireGuardPlugin;
 pub use workflows_plugin::WorkflowsPlugin;
-pub use tched_router::TchedRouterPlugin;

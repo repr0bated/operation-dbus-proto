@@ -490,9 +490,7 @@ mod tests {
     #[test]
     fn v3_fields_present() {
         let raw = serde_json::to_value(schemars::schema_for!(ContainerIdentitySled)).unwrap();
-        let props = raw
-            .get("properties")
-            .expect("schema has properties");
+        let props = raw.get("properties").expect("schema has properties");
         for field in [
             "genesis",
             "arrival_timestamp",

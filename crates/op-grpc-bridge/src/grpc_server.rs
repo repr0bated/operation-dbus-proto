@@ -46,6 +46,41 @@ fn effective_actor_id(identity: Option<&GhostbridgeIdentity>, fallback: &str) ->
     }
 }
 
+#[cfg(test)]
+mod canonical_ingress_identity_tests {
+    use super::*;
+
+    #[test]
+    fn authenticated_session_is_the_audited_actor() {
+        let identity = GhostbridgeIdentity {
+            footprint: "footprint-should-not-win".into(),
+            session_id: "session-from-identity-sled".into(),
+        };
+
+        assert_eq!(
+            effective_actor_id(Some(&identity), "grpc:operation.plugin.v1"),
+            "session-from-identity-sled"
+        );
+    }
+
+    #[test]
+    fn footprint_and_transport_fallbacks_are_deterministic() {
+        let footprint_only = GhostbridgeIdentity {
+            footprint: "anchored-footprint".into(),
+            session_id: String::new(),
+        };
+
+        assert_eq!(
+            effective_actor_id(Some(&footprint_only), "grpc:operation.plugin.v1"),
+            "anchored-footprint"
+        );
+        assert_eq!(
+            effective_actor_id(None, "grpc:operation.plugin.v1"),
+            "grpc:operation.plugin.v1"
+        );
+    }
+}
+
 fn root_disk_used_percent() -> Option<f64> {
     use std::ffi::CString;
     use std::mem::MaybeUninit;
@@ -664,6 +699,13 @@ impl OperationGrpcServer {
             return Err(Status::permission_denied(error.message));
         }
 
+        // Preserve the identity resolved by the ingress interceptor all the way
+        // into MutationEngine.  Using a transport-shaped constant here made
+        // authenticated generated RPCs indistinguishable in the audit chain and
+        // prevented session/genesis attribution from resolving for cognitive_mcp
+        // and every other schema-generated service.
+        let actor_id = effective_actor_id(identity.as_ref(), "grpc:operation.plugin.v1");
+
         let request_bytes = request.into_inner().encode_to_vec();
         let request_desc = plugin_message_descriptor(request_message_name).ok_or_else(|| {
             Status::internal(format!(
@@ -676,21 +718,39 @@ impl OperationGrpcServer {
                     "failed to decode typed request for {plugin_id}.{method_name}: {error}"
                 ))
             })?;
-        let json_args = serde_json::to_string(&request_dynamic).map_err(|error| {
+        // Plugin handlers read their arguments by the *proto* field name
+        // (`require_str(&args, "provider_id", ..)`), but prost-reflect's default
+        // Serialize follows canonical protobuf JSON mapping and emits the
+        // camelCase json_name — so `provider_id` arrived as `providerId` and
+        // every multi-word argument looked absent. Single-word fields like
+        // `provider` are identical under both spellings, which is why
+        // ListModels filtered correctly while SetProvider reported a missing
+        // `provider_id` that had in fact been sent. Serialize with proto field
+        // names, and keep default-valued fields so an explicit empty string is
+        // distinguishable from an omitted argument.
+        let mut json_buf = Vec::new();
+        let mut serializer = serde_json::Serializer::new(&mut json_buf);
+        request_dynamic
+            .serialize_with_options(
+                &mut serializer,
+                &prost_reflect::SerializeOptions::new()
+                    .use_proto_field_name(true)
+                    .skip_default_fields(false),
+            )
+            .map_err(|error| {
+                Status::internal(format!(
+                    "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+                ))
+            })?;
+        let json_args = String::from_utf8(json_buf).map_err(|error| {
             Status::internal(format!(
-                "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
+                "typed request for {plugin_id}.{method_name} was not valid UTF-8: {error}"
             ))
         })?;
 
         let result = self
             .mutation_engine
-            .dispatch_method_call(
-                plugin_id,
-                method_name,
-                &json_args,
-                None,
-                "grpc:operation.plugin.v1",
-            )
+            .dispatch_method_call(plugin_id, method_name, &json_args, None, &actor_id)
             .await
             .map_err(|error| {
                 Status::internal(format!(
@@ -711,13 +771,22 @@ impl OperationGrpcServer {
             ))
         })?;
         let mut deserializer = serde_json::de::Deserializer::from_str(&result_json);
-        let response_dynamic = response_desc
-            .deserialize(&mut deserializer)
-            .map_err(|error| {
-                Status::internal(format!(
-                    "failed to deserialize typed response for {plugin_id}.{method_name}: {error}"
-                ))
-            })?;
+        // Plugin dispatch may return a projection that is intentionally richer
+        // than one method's typed response (for example cognitive_mcp.get_health
+        // reads the complete cognitive projection).  Protobuf responses are a
+        // schema-selected view of that object, so ignore fields not present in
+        // the generated response descriptor while still type-checking every
+        // declared field.
+        let response_dynamic = DynamicMessage::deserialize_with_options(
+            response_desc,
+            &mut deserializer,
+            &prost_reflect::DeserializeOptions::new().deny_unknown_fields(false),
+        )
+        .map_err(|error| {
+            Status::internal(format!(
+                "failed to deserialize typed response for {plugin_id}.{method_name}: {error}"
+            ))
+        })?;
         deserializer.end().map_err(|error| {
             Status::internal(format!(
                 "failed to finish typed response decode for {plugin_id}.{method_name}: {error}"

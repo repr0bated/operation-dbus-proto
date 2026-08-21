@@ -102,8 +102,8 @@ pub mod prelude {
         NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
         OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
         RovsCommandsPlugin, RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
-        SoftwarePlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin, WebUiPlugin, WgOpdbusPlugin,
-        WireGuardPlugin, WorkflowsPlugin, TchedRouterPlugin,
+        SoftwarePlugin, TchedRouterPlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin,
+        WebUiPlugin, WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin,
     };
 }
 pub mod state_publisher;
