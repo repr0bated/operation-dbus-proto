@@ -3126,13 +3126,13 @@ async fn dispatch_cognitive_mcp_method(
     method: &str,
     json_args: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    // Plugin-local methods: unchanged from Phase 1
+    // Plugin-local methods are projected into their sealed output contracts.
     match method {
         "get_config" | "get_health" => {
             let bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
                 .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection not available"))?;
             let val: serde_json::Value = serde_json::from_slice(&bytes)?;
-            return Ok(val);
+            return cognitive_projection_response(method, &val);
         }
         "set_config" | "restart_service" => {
             return Ok(serde_json::json!({"acknowledged": true, "method": method}));
@@ -3216,6 +3216,56 @@ async fn dispatch_cognitive_mcp_method(
     }
 
     Ok(result)
+}
+
+/// Convert the full Cognitive MCP projection into the narrow response that a
+/// read method sealed in the plugin schema promises. Keeping this adapter at
+/// the ingress boundary prevents incidental state fields from becoming an API
+/// contract for chat, generated views, or external gRPC clients.
+fn cognitive_projection_response(
+    method: &str,
+    projection: &serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let state = projection.as_object().ok_or_else(|| {
+        anyhow::anyhow!("cognitive_mcp projection for {method} must be a JSON object")
+    })?;
+
+    let string = |name: &str| -> anyhow::Result<String> {
+        state
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection missing string '{name}'"))
+    };
+    let boolean = |name: &str| -> anyhow::Result<bool> {
+        state
+            .get(name)
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection missing boolean '{name}'"))
+    };
+    let integer = |name: &str| -> anyhow::Result<i64> {
+        state
+            .get(name)
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection missing integer '{name}'"))
+    };
+
+    match method {
+        "get_config" => Ok(serde_json::json!({
+            "wg_interface": string("wg_interface")?,
+            "dbus_enabled": boolean("dbus_enabled")?,
+        })),
+        "get_health" => Ok(serde_json::json!({
+            "healthy": boolean("healthy")?,
+            "running": boolean("running")?,
+            "auth_status": string("auth_status")?,
+            "queries_remaining": integer("queries_remaining")?,
+            "queries_limit": integer("queries_limit")?,
+        })),
+        other => Err(anyhow::anyhow!(
+            "{other} is not a Cognitive MCP projection read method"
+        )),
+    }
 }
 
 fn cognitive_tool_catalog_response(
@@ -3473,7 +3523,10 @@ mod cognitive_development_dispatch_tests {
 
 #[cfg(test)]
 mod cognitive_tool_catalog_tests {
-    use super::{cognitive_tool_catalog_response, dispatch_cognitive_mcp_method};
+    use super::{
+        cognitive_projection_response, cognitive_tool_catalog_response,
+        dispatch_cognitive_mcp_method,
+    };
     use anyhow::Result;
     use async_trait::async_trait;
     use op_core::ToolDefinition;
@@ -3591,6 +3644,47 @@ mod cognitive_tool_catalog_tests {
                 ],
             })
         );
+    }
+
+    #[test]
+    fn projection_reads_return_only_their_declared_contract_fields() {
+        let projection = json!({
+            "wg_interface": "netmaker",
+            "dbus_enabled": true,
+            "healthy": true,
+            "running": true,
+            "auth_status": "api_key",
+            "queries_remaining": 42,
+            "queries_limit": 50,
+            "ask_question_request": { "query": "not part of this response" },
+        });
+
+        assert_eq!(
+            cognitive_projection_response("get_config", &projection).expect("config response"),
+            json!({ "wg_interface": "netmaker", "dbus_enabled": true })
+        );
+        assert_eq!(
+            cognitive_projection_response("get_health", &projection).expect("health response"),
+            json!({
+                "healthy": true,
+                "running": true,
+                "auth_status": "api_key",
+                "queries_remaining": 42,
+                "queries_limit": 50,
+            })
+        );
+    }
+
+    #[test]
+    fn projection_reads_reject_incomplete_state_instead_of_lying() {
+        let error = cognitive_projection_response(
+            "get_health",
+            &json!({
+                "healthy": true,
+            }),
+        )
+        .expect_err("incomplete health projection must fail");
+        assert!(error.to_string().contains("missing boolean 'running'"));
     }
 
     #[tokio::test]
