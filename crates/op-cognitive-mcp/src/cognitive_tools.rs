@@ -139,7 +139,7 @@ impl Tool for MemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Manage cognitive memory namespaces and entries. Operations: store, retrieve, query, delete, list_namespaces, stats."
+        "OPERATOR-ONLY: cognitive memory lifecycle is controlled through the canonical orchestrator and gRPC ingress, not direct model calls."
     }
 
     fn category(&self) -> &str {
@@ -152,6 +152,13 @@ impl Tool for MemoryTool {
             "cognitive".to_string(),
             "storage".to_string(),
         ]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Disabled {
+            reason: "Memory namespace lifecycle and mutation are owned by the canonical orchestrator/gRPC ingress."
+                .to_string(),
+        }
     }
 
     fn input_schema(&self) -> Value {

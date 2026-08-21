@@ -22,7 +22,7 @@
 use crate::cognitive_tools::field;
 use anyhow::Result;
 use async_trait::async_trait;
-use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
+use op_mcp::tool_registry::{BoxedTool, Tool, ToolReadiness, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
@@ -74,13 +74,13 @@ pub async fn register_typed_tools(
         // R16: dbus_store → add_source_text
         Arc::new(TypedStoreTool::new(
             "dbus_store",
-            "Store a source document into an Operation D-Bus notebook",
+            "OPERATOR-ONLY: ingest a source document through the canonical memory ingress",
             store.clone(),
         )),
         // R16: dbus_list_namespaces → list_notebooks
         Arc::new(TypedListNamespacesTool::new(
             "dbus_list_namespaces",
-            "List all Operation D-Bus notebook namespaces",
+            "OPERATOR-ONLY: list memory namespaces through the canonical orchestrator",
             store.clone(),
         )),
     ];
@@ -305,6 +305,15 @@ mod tests {
             .await
             .expect("register typed tools");
 
+        let operator_catalog = registry.catalog(0, usize::MAX, None).await;
+        for name in ["dbus_store", "dbus_list_namespaces"] {
+            let entry = operator_catalog
+                .iter()
+                .find(|entry| entry.definition.name == name)
+                .expect("operator-visible memory ingress tool");
+            assert_eq!(entry.readiness.status(), "disabled");
+        }
+
         let definition = registry
             .get_definition("ask_question")
             .await
@@ -422,6 +431,13 @@ impl Tool for TypedStoreTool {
             "store".to_string(),
             "ingest".to_string(),
         ]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Disabled {
+            reason: "Source ingestion is an orchestrator-owned memory mutation, not a model-controlled MCP action."
+                .to_string(),
+        }
     }
 
     fn input_schema(&self) -> Value {
@@ -544,6 +560,13 @@ impl Tool for TypedListNamespacesTool {
             "list".to_string(),
             "notebooks".to_string(),
         ]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Disabled {
+            reason: "Namespace topology is owned by the canonical orchestrator and is not exposed to model clients."
+                .to_string(),
+        }
     }
 
     fn input_schema(&self) -> Value {

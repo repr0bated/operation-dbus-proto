@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use op_agents::{builtin_agent_descriptors, create_agent, AgentDescriptor, AgentTask};
-use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
+use op_mcp::tool_registry::{BoxedTool, Tool, ToolReadiness, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
@@ -75,6 +75,17 @@ impl Tool for AgentCatalogTool {
             self.descriptor.agent_type.clone(),
             self.operation.clone(),
         ]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        if self.descriptor.agent_type == "memory" {
+            ToolReadiness::Disabled {
+                reason: "Memory is owned by the canonical orchestrator; agent memory operations are not model-controlled MCP actions."
+                    .to_string(),
+            }
+        } else {
+            ToolReadiness::Live
+        }
     }
 
     fn input_schema(&self) -> Value {
@@ -229,6 +240,28 @@ mod tests {
             .and_then(|value| value.as_str())
             .expect("agent result data");
         assert!(data.contains("review the cognitive MCP ingress"));
+    }
+
+    #[tokio::test]
+    async fn memory_agents_are_retained_for_operators_but_not_advertised_to_models() {
+        let registry = ToolRegistry::new();
+        register_agent_tools(&registry)
+            .await
+            .expect("register catalog agents");
+
+        let entries = registry.catalog(0, usize::MAX, Some("agent")).await;
+        let memory_entries = entries
+            .into_iter()
+            .filter(|entry| entry.definition.name.starts_with("agent_memory_"))
+            .collect::<Vec<_>>();
+        assert!(!memory_entries.is_empty());
+        assert!(memory_entries.iter().all(|entry| {
+            entry.readiness.status() == "disabled"
+                && entry
+                    .readiness
+                    .reason()
+                    .is_some_and(|reason| reason.contains("canonical orchestrator"))
+        }));
     }
 
     #[test]
