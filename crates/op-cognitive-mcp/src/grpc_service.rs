@@ -2522,6 +2522,8 @@ mod tests {
             .into_inner();
         assert!(health.healthy);
         assert_eq!(health.status, "operational");
+        assert_eq!(health.queries_remaining, 500);
+        assert_eq!(health.queries_limit, 500);
         let components: serde_json::Value =
             serde_json::from_str(&health.components_json).expect("health JSON");
         assert_eq!(components["memory_store"], "ok");
@@ -2695,6 +2697,53 @@ mod tests {
                 .to_string()
                 .contains("Canonical ingress source content")
                 == false
+        );
+    }
+
+    #[tokio::test]
+    async fn add_source_rejects_a_full_pro_notebook_without_writing_another_entry() {
+        let (service, store, _) = test_service().await;
+        let namespace = store
+            .upsert_namespace(
+                "project:capacity-test",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+        for index in 0..NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK {
+            store
+                .store_entry(
+                    &namespace.name,
+                    &format!("source-{index}"),
+                    serde_json::json!({"content": "existing source"}),
+                    Vec::new(),
+                    None,
+                )
+                .await
+                .expect("seed source");
+        }
+
+        let error = service
+            .add_source(admitted_mutation_request(AddSourceRequest {
+                notebook_id: namespace.name.clone(),
+                source_type: "text".to_string(),
+                content: "one source too many".to_string(),
+                title: "overflow".to_string(),
+                tags: Vec::new(),
+            }))
+            .await
+            .expect_err("the Pro source limit must be enforced at ingress");
+        assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(
+            store
+                .count_entries(&namespace.name)
+                .await
+                .expect("source count"),
+            NOTEBOOKLM_PRO_SOURCES_PER_NOTEBOOK
         );
     }
 

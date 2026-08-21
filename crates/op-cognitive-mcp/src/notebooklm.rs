@@ -501,8 +501,8 @@ mod tests {
         assert!(error.to_string().contains("is disabled"));
     }
 
-    #[test]
-    fn live_sidecar_tools_are_not_model_callable_bypasses() {
+    #[tokio::test]
+    async fn live_sidecar_tools_are_not_model_callable_bypasses() {
         let config = NotebookLmConfig {
             enabled: true,
             command: "notebooklm-mcp".to_string(),
@@ -529,5 +529,16 @@ mod tests {
             ToolReadiness::Disabled { reason }
                 if reason.contains("canonical Cognitive gRPC ingress")
         ));
+
+        let registry = ToolRegistry::new();
+        registry
+            .register(Arc::new(tool) as BoxedTool)
+            .await
+            .expect("catalogue operator backend tool");
+        let error = registry
+            .execute("add_source_text", json!({}))
+            .await
+            .expect_err("registry must reject a raw sidecar invocation");
+        assert!(error.to_string().contains("is disabled"));
     }
 }
