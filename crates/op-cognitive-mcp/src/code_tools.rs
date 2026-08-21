@@ -150,10 +150,7 @@ impl Tool for CodeSearchTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let query = input
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("missing query"))?;
+        let query = required_text(&input, "query")?;
         let profile = retrieval_profile_from(&input, RetrievalMode::Search);
         let limit = input
             .get("limit")
@@ -221,10 +218,7 @@ impl Tool for CodeContextTool {
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
-        let query = input
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("missing query"))?;
+        let query = required_text(&input, "query")?;
         let session_id = input
             .get("session_id")
             .and_then(Value::as_str)
@@ -331,31 +325,16 @@ impl Tool for CodeIndexTool {
 
         let stats = match mode {
             "source" => {
-                let repo = input
-                    .get("repo")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("source mode requires 'repo'"))?;
-                let file_path = input
-                    .get("file_path")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("source mode requires 'file_path'"))?;
-                let content = input
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("source mode requires 'content'"))?;
+                let repo = required_text(&input, "repo")?;
+                let file_path = required_text(&input, "file_path")?;
+                let content = required_text(&input, "content")?;
                 self.rag
                     .ingest_source_text(repo, file_path, content, collection)
                     .await?
             }
             "repomix_zip" => {
-                let zip_path = input
-                    .get("zip_path")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("repomix_zip mode requires 'zip_path'"))?;
-                let entry = input
-                    .get("entry")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("repomix_zip mode requires 'entry'"))?;
+                let zip_path = required_text(&input, "zip_path")?;
+                let entry = required_text(&input, "entry")?;
                 self.rag
                     .ingest_repomix_entry(&PathBuf::from(zip_path), entry, collection)
                     .await?
@@ -385,6 +364,17 @@ fn tool_input_schema(field: &str) -> Value {
     op_plugins::cognitive_mcp_plugin_schema()
         .field_input_schema(field)
         .unwrap_or_else(|| json!({ "type": "object", "properties": {} }))
+}
+
+fn required_text<'a>(input: &'a Value, field: &str) -> Result<&'a str> {
+    let value = input
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing {field}"))?;
+    if value.trim().is_empty() {
+        anyhow::bail!("{field} must not be empty");
+    }
+    Ok(value)
 }
 
 fn filter_from(input: &Value, default_exclude_tests: bool) -> CodeFilter {
@@ -459,8 +449,25 @@ fn serde_to_simd(v: &serde_json::Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::register_disabled_code_tools;
+    use super::{register_disabled_code_tools, required_text};
     use op_mcp::tool_registry::ToolRegistry;
+    use simd_json::json;
+
+    #[test]
+    fn required_text_rejects_blank_values() {
+        assert_eq!(
+            required_text(&json!({ "query": "find ingress" }), "query").expect("query"),
+            "find ingress"
+        );
+        assert!(required_text(&json!({ "query": " \t " }), "query")
+            .expect_err("blank text must fail")
+            .to_string()
+            .contains("query must not be empty"));
+        assert!(required_text(&json!({}), "query")
+            .expect_err("missing text must fail")
+            .to_string()
+            .contains("missing query"));
+    }
 
     #[tokio::test]
     async fn unavailable_rag_tools_are_explicitly_disabled_and_discoverable() {
