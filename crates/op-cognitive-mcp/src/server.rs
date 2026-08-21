@@ -176,6 +176,7 @@ impl CognitiveMcpServer {
             self.memory_store.clone(),
             self.session_manager.clone(),
             self.quota_manager.clone(),
+            self.tool_registry.clone(),
         )
     }
 }

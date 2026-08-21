@@ -27,6 +27,7 @@ use crate::proto::cognitive_tool_service_server::CognitiveToolService;
 use crate::proto::*;
 use crate::quota::QuotaManager;
 use crate::session::{QueryTurn, SessionManager};
+use op_mcp::tool_registry::ToolRegistry;
 
 /// The gRPC service implementation.
 ///
@@ -38,6 +39,7 @@ pub struct CognitiveGrpcService {
     memory_store: Arc<CognitiveMemoryStore>,
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
+    tool_registry: Arc<ToolRegistry>,
 }
 
 impl CognitiveGrpcService {
@@ -45,11 +47,13 @@ impl CognitiveGrpcService {
         memory_store: Arc<CognitiveMemoryStore>,
         session_manager: Arc<SessionManager>,
         quota_manager: Arc<QuotaManager>,
+        tool_registry: Arc<ToolRegistry>,
     ) -> Self {
         Self {
             memory_store,
             session_manager,
             quota_manager,
+            tool_registry,
         }
     }
 }
@@ -869,18 +873,15 @@ impl CognitiveToolService for CognitiveGrpcService {
                 .unwrap_or(crate::tool_profiles::current_profile())
         };
 
-        let estimate = crate::tool_profiles::token_estimate(profile);
-        let tools = crate::tool_profiles::tools_for_profile(profile)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let resolved =
+            crate::tool_profiles::resolve_live_profile(&self.tool_registry, profile).await;
 
         Ok(Response::new(GetToolProfileResponse {
             current_profile: profile.to_string(),
-            tool_count: estimate.tool_count as i32,
-            schema_tokens: estimate.schema_tokens as i32,
-            savings_percent: estimate.savings_percent as i32,
-            tools,
+            tool_count: resolved.tool_count() as i32,
+            schema_tokens: resolved.schema_tokens as i32,
+            savings_percent: resolved.savings_percent as i32,
+            tools: resolved.tools,
         }))
     }
 
@@ -897,6 +898,7 @@ impl CognitiveToolService for CognitiveGrpcService {
             &self.memory_store,
             &self.session_manager,
             &self.quota_manager,
+            &self.tool_registry,
         )
         .await;
 

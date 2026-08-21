@@ -10,6 +10,7 @@ use crate::memory_store::CognitiveMemoryStore;
 use crate::quota::QuotaManager;
 use crate::session::SessionManager;
 use crate::tool_profiles;
+use op_mcp::tool_registry::ToolRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticReport {
@@ -31,6 +32,7 @@ pub async fn run_diagnostics(
     memory_store: &Arc<CognitiveMemoryStore>,
     session_manager: &Arc<SessionManager>,
     quota_manager: &Arc<QuotaManager>,
+    tool_registry: &Arc<ToolRegistry>,
 ) -> DiagnosticReport {
     let mut components = Vec::new();
     let mut recommendations = Vec::new();
@@ -95,15 +97,16 @@ pub async fn run_diagnostics(
 
     // 4. Tool Profile
     let profile = tool_profiles::current_profile();
-    let estimate = tool_profiles::token_estimate(profile);
+    let resolved = tool_profiles::resolve_live_profile(tool_registry, profile).await;
     components.push(ComponentStatus {
         name: "tool_profile".into(),
         status: "ok".into(),
         details: serde_json::json!({
             "profile": profile.to_string(),
-            "tool_count": estimate.tool_count,
-            "schema_tokens": estimate.schema_tokens,
-            "savings_percent": estimate.savings_percent,
+            "tool_count": resolved.tool_count(),
+            "schema_tokens": resolved.schema_tokens,
+            "savings_percent": resolved.savings_percent,
+            "tools": resolved.tools,
         }),
     });
 
