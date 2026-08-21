@@ -24,7 +24,7 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::memory_store::{CognitiveMemoryStore, MemoryNamespace, NamespaceKind};
+use crate::memory_store::{CognitiveMemoryStore, MemoryEntry, MemoryNamespace, NamespaceKind};
 use crate::proto::cognitive_tool_service_server::CognitiveToolService;
 use crate::proto::*;
 use crate::quota::QuotaManager;
@@ -188,34 +188,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let grounded = !entries.is_empty();
-        let answer = if grounded {
-            entries
-                .iter()
-                .map(|e| {
-                    format!(
-                        "[{}] {}",
-                        e.key,
-                        e.value.as_str().unwrap_or(&e.value.to_string())
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        } else {
-            format!(
-                "No grounded answer found for '{}' in notebook '{}'.",
-                req.query, req.notebook_id
-            )
-        };
-
-        let citations: Vec<Citation> = entries
-            .iter()
-            .map(|e| Citation {
-                text: e.key.clone(),
-                source: e.namespace_id.clone(),
-                page: String::new(),
-            })
-            .collect();
+        let (answer, citations, grounded) =
+            format_grounded_query(&entries, &req.query, &req.notebook_id);
 
         // Append turn to session history
         let _ = self.session_manager.append_turn(
@@ -268,26 +242,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let answer = entries
-            .iter()
-            .map(|e| {
-                format!(
-                    "[{}] {}",
-                    e.key,
-                    e.value.as_str().unwrap_or(&e.value.to_string())
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let citations: Vec<Citation> = entries
-            .iter()
-            .map(|e| Citation {
-                text: e.key.clone(),
-                source: e.namespace_id.clone(),
-                page: String::new(),
-            })
-            .collect();
+        let (answer, citations, grounded) =
+            format_grounded_query(&entries, &req.query, &req.notebook_id);
 
         let _ = self.session_manager.append_turn(
             &session.id,
@@ -296,7 +252,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                 answer: answer.clone(),
                 timestamp: Utc::now(),
                 citations_count: citations.len() as u32,
-                grounded: !entries.is_empty(),
+                grounded,
             },
         );
 
@@ -1173,6 +1129,48 @@ fn validate_folder_patterns(patterns: &[String]) -> Result<(), Status> {
     Ok(())
 }
 
+fn format_grounded_query(
+    entries: &[MemoryEntry],
+    query: &str,
+    notebook_ref: &str,
+) -> (String, Vec<Citation>, bool) {
+    if entries.is_empty() {
+        return (
+            format!(
+                "No grounded answer found for '{}' in notebook '{}'.",
+                query, notebook_ref
+            ),
+            Vec::new(),
+            false,
+        );
+    }
+
+    let answer = entries
+        .iter()
+        .map(|entry| format!("[{}] {}", entry.key, memory_entry_content(entry)))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let citations = entries
+        .iter()
+        .map(|entry| Citation {
+            text: entry.key.clone(),
+            source: entry.namespace_id.clone(),
+            page: String::new(),
+        })
+        .collect();
+    (answer, citations, true)
+}
+
+fn memory_entry_content(entry: &MemoryEntry) -> String {
+    entry
+        .value
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| entry.value.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| entry.value.to_string())
+}
+
 fn namespace_kind_from_name(name: &str) -> NamespaceKind {
     explicit_namespace_kind(name).unwrap_or(NamespaceKind::Project)
 }
@@ -1484,6 +1482,41 @@ mod tests {
         assert!(validate_source_request(&empty_tag).is_err());
         assert!(validate_folder_patterns(&["*.rs".to_string(), "*.md".to_string()]).is_ok());
         assert!(validate_folder_patterns(&["".to_string()]).is_err());
+    }
+
+    #[test]
+    fn grounded_queries_render_source_content_and_explain_empty_results() {
+        let now = Utc::now();
+        let entry = MemoryEntry {
+            id: "entry-1".to_string(),
+            namespace_id: "project:3tched-cognative".to_string(),
+            key: "architecture".to_string(),
+            value: serde_json::json!({
+                "source_type": "text",
+                "content": "Canonical ingress is the only question path."
+            }),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
+            access_count: 0,
+            last_accessed: now,
+        };
+
+        let (answer, citations, grounded) =
+            format_grounded_query(&[entry], "question path", "project:3tched-cognative");
+        assert!(grounded);
+        assert_eq!(
+            answer,
+            "[architecture] Canonical ingress is the only question path."
+        );
+        assert_eq!(citations.len(), 1);
+
+        let (empty_answer, empty_citations, grounded) =
+            format_grounded_query(&[], "missing", "project:3tched-cognative");
+        assert!(!grounded);
+        assert!(empty_answer.contains("No grounded answer"));
+        assert!(empty_citations.is_empty());
     }
 
     #[test]
