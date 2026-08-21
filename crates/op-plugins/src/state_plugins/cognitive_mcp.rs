@@ -825,6 +825,18 @@ pub struct DevelopmentListOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentCategoriesOutput {
+    pub categories: Vec<DevelopmentCategory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentCategory {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DevelopmentVerificationInput {
     pub capability_id: String,
     pub status: Option<String>,
@@ -1119,6 +1131,16 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             true,
             "cognitive_mcp.read",
             "obs.service.cognitive-mcp.development.list@v1",
+        ),
+    );
+    schema.methods.insert(
+        "development_categories".to_string(),
+        method_decl_from_schemars_with_output::<(), DevelopmentCategoriesOutput>(
+            "development_categories",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.development.categories@v1",
         ),
     );
     schema.methods.insert(

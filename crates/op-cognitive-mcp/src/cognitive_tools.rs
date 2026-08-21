@@ -89,7 +89,7 @@ impl Tool for DevelopmentLedgerTool {
         json!({
             "type":"object",
             "properties": {
-                "operation":{"type":"string","enum":["upsert","list","record_verification"]},
+                "operation":{"type":"string","enum":["upsert","list","record_verification","categories"]},
                 "capability_id":{"type":"string"},
                 "category":{"type":"string"},
                 "title":{"type":"string"},

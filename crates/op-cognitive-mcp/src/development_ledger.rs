@@ -16,6 +16,79 @@ pub struct DevelopmentLedger {
     db: Arc<cozo::DbInstance>,
 }
 
+const DEVELOPMENT_CATEGORIES: &[(&str, &str, &str)] = &[
+    (
+        "contract_schema",
+        "Contract and schema",
+        "Plugin contracts, schemas, generated interfaces, and catalog identity.",
+    ),
+    (
+        "ingress_identity",
+        "Ingress and identity",
+        "Canonical ingress, authentication, authorization, and session identity.",
+    ),
+    (
+        "runtime_dispatch",
+        "Runtime and dispatch",
+        "Tool routing, mutation dispatch, orchestration, and execution.",
+    ),
+    (
+        "persistence_memory",
+        "Persistence and memory",
+        "Cozo state, memory namespaces, durable records, and lifecycle.",
+    ),
+    (
+        "retrieval_indexing",
+        "Retrieval and indexing",
+        "Qdrant, RAG, semantic search, and index freshness.",
+    ),
+    (
+        "code_intelligence",
+        "Code intelligence",
+        "Code search, context, suggestions, and repository analysis.",
+    ),
+    (
+        "compliance_governance",
+        "Compliance and governance",
+        "Policy, controls, approvals, and evidence requirements.",
+    ),
+    (
+        "model_orchestration",
+        "Model orchestration",
+        "Model selection, provider routing, fallbacks, and quotas.",
+    ),
+    (
+        "generation_surfaces",
+        "Generation surfaces",
+        "JSON render, canvas, UI generation, and catalog promotion.",
+    ),
+    (
+        "observability_accountability",
+        "Observability and accountability",
+        "Audit, activity, provenance, accountability, and reporting.",
+    ),
+    (
+        "verification_testing",
+        "Verification and testing",
+        "Unit, integration, ingress, live, and regression verification.",
+    ),
+    (
+        "deployment_operations",
+        "Deployment and operations",
+        "Builds, runit services, release, health, and rollback.",
+    ),
+    (
+        "external_integrations",
+        "External integrations",
+        "Salad, OAuth providers, Gemini, OpenAI, and other connectors.",
+    ),
+    (
+        "data_quality_lifecycle",
+        "Data quality and lifecycle",
+        "Validation, freshness, migration, retention, and deprecation.",
+    ),
+];
+
 impl DevelopmentLedger {
     pub fn new(shuttle: Arc<CozoGraphShuttle>) -> Self {
         Self { db: shuttle.db() }
@@ -36,6 +109,11 @@ impl DevelopmentLedger {
             "upsert" => self.upsert(input),
             "record_verification" => self.record_verification(input),
             "list" => self.list(input),
+            "categories" => Ok(json!({
+                "categories": DEVELOPMENT_CATEGORIES.iter().map(|(id, title, description)| json!({
+                    "id": id, "title": title, "description": description
+                })).collect::<Vec<_>>()
+            })),
             op => anyhow::bail!("unknown cognitive development operation: {op}"),
         }
     }
@@ -342,6 +420,10 @@ mod tests {
             listed["capabilities"][0]["capability_id"],
             "cognitive.memory.query"
         );
+        let categories = ledger
+            .execute(&json!({"operation": "categories"}))
+            .expect("categories");
+        assert_eq!(categories["categories"].as_array().unwrap().len(), 14);
         let blocked = ledger
             .execute(&json!({
                 "operation": "record_verification",

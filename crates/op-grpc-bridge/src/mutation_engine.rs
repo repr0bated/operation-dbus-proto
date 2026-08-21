@@ -3252,6 +3252,10 @@ fn map_schema_method_to_tool(
             "cognitive_development".into(),
             with_field("operation", "list"),
         )),
+        "development_categories" => Ok((
+            "cognitive_development".into(),
+            with_field("operation", "categories"),
+        )),
         "development_record_verification" => Ok((
             "cognitive_development".into(),
             with_field("operation", "record_verification"),
