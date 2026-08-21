@@ -21,7 +21,7 @@ args = [
 url = "http://127.0.0.1:8080/mcp/agents/message"
 
 [mcp_servers.op-dbus-compact]
-url = "http://127.0.0.1:8080/mcp/compact"
+url = ""
 
 [mcp_servers.op-web-compact]
 command = "/usr/local/bin/op-mcp-server"
