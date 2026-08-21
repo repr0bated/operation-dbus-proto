@@ -109,6 +109,8 @@ impl DevelopmentLedger {
             "upsert" => self.upsert(input),
             "record_verification" => self.record_verification(input),
             "list" => self.list(input),
+            "summary" => self.summary(),
+            "history" => self.history_list(input),
             "categories" => Ok(json!({
                 "categories": DEVELOPMENT_CATEGORIES.iter().map(|(id, title, description)| json!({
                     "id": id, "title": title, "description": description
@@ -120,6 +122,17 @@ impl DevelopmentLedger {
 
     fn upsert(&self, input: &Value) -> Result<Value> {
         let id = required(input, "capability_id")?;
+        let category = input
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or("runtime");
+        if !DEVELOPMENT_CATEGORIES
+            .iter()
+            .any(|(id, _, _)| *id == category)
+            && category != "runtime"
+        {
+            anyhow::bail!("unknown development category '{category}'")
+        }
         let now = chrono::Utc::now().to_rfc3339();
         let mut p = BTreeMap::new();
         for (key, value) in [
@@ -135,13 +148,7 @@ impl DevelopmentLedger {
                     .and_then(Value::as_str)
                     .unwrap_or(""),
             ),
-            (
-                "category",
-                input
-                    .get("category")
-                    .and_then(Value::as_str)
-                    .unwrap_or("runtime"),
-            ),
+            ("category", category),
             (
                 "owner",
                 input.get("owner").and_then(Value::as_str).unwrap_or(""),
@@ -339,10 +346,60 @@ impl DevelopmentLedger {
         Ok(())
     }
 
+    fn history_list(&self, input: &Value) -> Result<Value> {
+        let id = required(input, "capability_id")?;
+        let mut params = BTreeMap::new();
+        params.insert("id".into(), DataValue::Str(id.into()));
+        let rows = self.run(
+            r#"?[recorded_at, event, status, details, commit]
+                := *cognitive_development_history[$id, recorded_at, event, status, details, commit]
+                :order -recorded_at"#,
+            params,
+        )?;
+        let history = rows
+            .rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "recorded_at": as_str(&r[0]), "event": as_str(&r[1]),
+                    "status": as_str(&r[2]), "details": as_str(&r[3]), "commit": as_str(&r[4])
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"capability_id": id, "history": history, "count": history.len()}))
+    }
+
+    fn summary(&self) -> Result<Value> {
+        let rows = self.run(
+            "?[category, status] := *cognitive_development[_id, _title, _description, category, _owner, status, _surface, _cap, _subid, _deps, _tests, _live, _commit, _blocker, _created, _updated]",
+            BTreeMap::new(),
+        )?;
+        let mut counts = BTreeMap::<(String, String), usize>::new();
+        for row in &rows.rows {
+            *counts
+                .entry((as_str(&row[0]), as_str(&row[1])))
+                .or_default() += 1;
+        }
+        let groups = counts.into_iter().map(|((category, status), count)| {
+            json!({"category": category, "status": status, "count": count})
+        }).collect::<Vec<_>>();
+        Ok(json!({"groups": groups, "group_count": groups.len()}))
+    }
+
     fn list(&self, input: &Value) -> Result<Value> {
         let status = input.get("status").and_then(Value::as_str);
-        let (query, mut p) = if let Some(status) = status {
-            ("?[id, title, description, category, owner, status, surface, cap, subid, deps, tests, live, commit, blocker, created, updated] := *cognitive_development[id, title, description, category, owner, status, surface, cap, subid, deps, tests, live, commit, blocker, created, updated], status = $status :order id".to_string(), { let mut p = BTreeMap::new(); p.insert("status".into(), DataValue::Str(status.into())); p })
+        let category = input.get("category").and_then(Value::as_str);
+        let (query, mut p) = if status.is_some() || category.is_some() {
+            let status_clause = status.map(|_| ", status = $status").unwrap_or("");
+            let category_clause = category.map(|_| ", category = $category").unwrap_or("");
+            let mut p = BTreeMap::new();
+            if let Some(status) = status {
+                p.insert("status".into(), DataValue::Str(status.into()));
+            }
+            if let Some(category) = category {
+                p.insert("category".into(), DataValue::Str(category.into()));
+            }
+            (format!("?[id, title, description, category, owner, status, surface, cap, subid, deps, tests, live, commit, blocker, created, updated] := *cognitive_development[id, title, description, category, owner, status, surface, cap, subid, deps, tests, live, commit, blocker, created, updated]{status_clause}{category_clause} :order id"), p)
         } else {
             ("?[id, title, description, category, owner, status, surface, cap, subid, deps, tests, live, commit, blocker, created, updated] := *cognitive_development[id, title, description, category, owner, status, surface, cap, subid, deps, tests, live, commit, blocker, created, updated] :order id".to_string(), BTreeMap::new())
         };
@@ -433,5 +490,23 @@ mod tests {
             .expect("blocked verification");
         assert_eq!(blocked["status"], "blocked");
         assert_eq!(blocked["checks_passed"], false);
+        let summary = ledger
+            .execute(&json!({"operation": "summary"}))
+            .expect("summary");
+        assert_eq!(summary["group_count"], 1);
+        let history = ledger
+            .execute(&json!({
+                "operation": "history",
+                "capability_id": "cognitive.memory.query"
+            }))
+            .expect("history");
+        assert_eq!(history["count"], 3);
+        assert!(ledger
+            .execute(&json!({
+                "operation": "upsert",
+                "capability_id": "bad.category",
+                "category": "not_a_real_category"
+            }))
+            .is_err());
     }
 }

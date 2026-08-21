@@ -837,6 +837,27 @@ pub struct DevelopmentCategory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentSummaryInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentSummaryOutput {
+    pub groups: Vec<serde_json::Value>,
+    pub group_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentHistoryInput {
+    pub capability_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DevelopmentHistoryOutput {
+    pub capability_id: String,
+    pub history: Vec<serde_json::Value>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DevelopmentVerificationInput {
     pub capability_id: String,
     pub status: Option<String>,
@@ -1144,6 +1165,26 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         ),
     );
     schema.methods.insert(
+        "development_summary".to_string(),
+        method_decl_from_schemars_with_output::<DevelopmentSummaryInput, DevelopmentSummaryOutput>(
+            "development_summary",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.development.summary@v1",
+        ),
+    );
+    schema.methods.insert(
+        "development_history".to_string(),
+        method_decl_from_schemars_with_output::<DevelopmentHistoryInput, DevelopmentHistoryOutput>(
+            "development_history",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.development.history@v1",
+        ),
+    );
+    schema.methods.insert(
         "development_record_verification".to_string(),
         method_decl_from_schemars_with_output::<
             DevelopmentVerificationInput,
@@ -1248,6 +1289,18 @@ mod tests {
                 SideEffect::Read,
                 "cognitive_mcp.read",
                 "obs.service.cognitive-mcp.development.categories@v1",
+            ),
+            (
+                "development_summary",
+                SideEffect::Read,
+                "cognitive_mcp.read",
+                "obs.service.cognitive-mcp.development.summary@v1",
+            ),
+            (
+                "development_history",
+                SideEffect::Read,
+                "cognitive_mcp.read",
+                "obs.service.cognitive-mcp.development.history@v1",
             ),
             (
                 "development_record_verification",

@@ -3256,6 +3256,14 @@ fn map_schema_method_to_tool(
             "cognitive_development".into(),
             with_field("operation", "categories"),
         )),
+        "development_summary" => Ok((
+            "cognitive_development".into(),
+            with_field("operation", "summary"),
+        )),
+        "development_history" => Ok((
+            "cognitive_development".into(),
+            with_field("operation", "history"),
+        )),
         "development_record_verification" => Ok((
             "cognitive_development".into(),
             with_field("operation", "record_verification"),
@@ -3408,6 +3416,7 @@ mod cognitive_development_dispatch_tests {
             assert_eq!(args["operation"], operation);
             assert_eq!(args["status"], "planned");
         }
+        assert!(map_schema_method_to_tool("development_missing", &json!({})).is_err());
     }
 }
 
