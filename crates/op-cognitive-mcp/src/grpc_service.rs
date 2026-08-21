@@ -31,6 +31,10 @@ use crate::quota::QuotaManager;
 use crate::session::{QueryTurn, SessionManager};
 use op_mcp::tool_registry::ToolRegistry;
 
+const DEFAULT_INGEST_MAX_FILES: usize = 10_000;
+const DEFAULT_INGEST_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_INGEST_ERROR_REPORTS: usize = 100;
+
 /// The gRPC service implementation.
 ///
 /// Wired into the tonic server alongside health and reflection services.
@@ -562,6 +566,11 @@ impl CognitiveToolService for CognitiveGrpcService {
         let mut added = 0i32;
         let mut skipped = 0i32;
         let mut errors = Vec::new();
+        let max_files = ingest_limit("COGNITIVE_MCP_INGEST_MAX_FILES", DEFAULT_INGEST_MAX_FILES);
+        let max_file_bytes = ingest_limit_u64(
+            "COGNITIVE_MCP_INGEST_MAX_FILE_BYTES",
+            DEFAULT_INGEST_MAX_FILE_BYTES,
+        );
 
         // Walk directory — no shell, pure Rust
         let mut walker = if req.recursive {
@@ -570,8 +579,21 @@ impl CognitiveToolService for CognitiveGrpcService {
             walkdir_shallow(&path)
         };
         walker.sort();
+        let discovered_files = walker.len();
 
-        for entry_path in walker {
+        for (index, entry_path) in walker.into_iter().enumerate() {
+            if index >= max_files {
+                let remaining = discovered_files.saturating_sub(index) as i32;
+                skipped += remaining;
+                record_ingest_error(
+                    &mut errors,
+                    format!(
+                        "Folder import reached its {max_files}-file limit; remaining files were not read."
+                    ),
+                );
+                break;
+            }
+
             // Apply glob patterns if specified
             if !req.patterns.is_empty() {
                 let file_name = entry_path
@@ -581,6 +603,30 @@ impl CognitiveToolService for CognitiveGrpcService {
                 let matches = req.patterns.iter().any(|pat| glob_match(pat, &file_name));
                 if !matches {
                     skipped += 1;
+                    continue;
+                }
+            }
+
+            match entry_path.metadata() {
+                Ok(metadata) if metadata.len() > max_file_bytes => {
+                    skipped += 1;
+                    record_ingest_error(
+                        &mut errors,
+                        format!(
+                            "{}: file is larger than the {}-byte ingest limit",
+                            entry_path.display(),
+                            max_file_bytes
+                        ),
+                    );
+                    continue;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    skipped += 1;
+                    record_ingest_error(
+                        &mut errors,
+                        format!("{}: {}", entry_path.display(), error),
+                    );
                     continue;
                 }
             }
@@ -613,13 +659,16 @@ impl CognitiveToolService for CognitiveGrpcService {
                     {
                         Ok(_) => added += 1,
                         Err(e) => {
-                            errors.push(format!("{}: {}", entry_path.display(), e));
+                            record_ingest_error(
+                                &mut errors,
+                                format!("{}: {}", entry_path.display(), e),
+                            );
                         }
                     }
                 }
                 Err(e) => {
                     skipped += 1;
-                    errors.push(format!("{}: {}", entry_path.display(), e));
+                    record_ingest_error(&mut errors, format!("{}: {}", entry_path.display(), e));
                 }
             }
         }
@@ -1093,6 +1142,38 @@ fn folder_source_key(relative_path: &str) -> String {
     )
 }
 
+fn ingest_limit(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .as_deref()
+        .and_then(parse_positive_usize)
+        .unwrap_or(default)
+}
+
+fn ingest_limit_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .as_deref()
+        .and_then(parse_positive_u64)
+        .unwrap_or(default)
+}
+
+fn parse_positive_usize(value: &str) -> Option<usize> {
+    value.parse::<usize>().ok().filter(|value| *value > 0)
+}
+
+fn parse_positive_u64(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok().filter(|value| *value > 0)
+}
+
+fn record_ingest_error(errors: &mut Vec<String>, error: String) {
+    if errors.len() < MAX_INGEST_ERROR_REPORTS {
+        errors.push(error);
+    } else if errors.len() == MAX_INGEST_ERROR_REPORTS {
+        errors.push("Further folder-import errors were omitted.".to_string());
+    }
+}
+
 /// Walk a directory recursively, yielding regular file paths only. Symlinks
 /// are deliberately skipped so a link created after root validation cannot
 /// escape the configured ingest root.
@@ -1213,6 +1294,17 @@ mod tests {
             folder_source_key("src/lib.rs"),
             folder_source_key("src/lib.rs")
         );
+    }
+
+    #[test]
+    fn ingest_limits_reject_zero_and_malformed_values() {
+        // Parsing stays pure so service-level environment is read only at
+        // runtime rather than mutated by parallel tests.
+        assert_eq!(parse_positive_usize("20"), Some(20));
+        assert_eq!(parse_positive_usize("0"), None);
+        assert_eq!(parse_positive_usize("invalid"), None);
+        assert_eq!(parse_positive_u64("1048576"), Some(1_048_576));
+        assert_eq!(parse_positive_u64("0"), None);
     }
 
     #[test]
