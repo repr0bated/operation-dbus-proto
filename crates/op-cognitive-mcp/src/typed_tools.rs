@@ -223,11 +223,10 @@ impl Tool for TypedQueryTool {
         // Quota check
         let (allowed, remaining, _) = self.quota.check_and_increment().await;
         if !allowed {
-            return Ok(json!({
-                "error": "quota_exceeded",
-                "remaining": remaining,
-                "message": "Daily query quota exceeded"
-            }));
+            return Err(anyhow::anyhow!(
+                "Daily query quota exceeded ({} remaining)",
+                remaining
+            ));
         }
 
         let conversation_id = field(&input, "conversation_id").as_str().unwrap_or("");
@@ -292,6 +291,7 @@ mod tests {
     use super::*;
     use crate::cozo_shuttle::CozoGraphShuttle;
     use crate::memory_store::NamespaceKind;
+    use crate::quota::QuotaTier;
 
     #[tokio::test]
     async fn canonical_question_is_registered_and_searches_memory_content() {
@@ -353,6 +353,28 @@ mod tests {
             response["citations"][0]["text"].as_str(),
             Some("architecture")
         );
+    }
+
+    #[tokio::test]
+    async fn grounded_question_reports_quota_exhaustion_as_a_tool_error() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let sessions = Arc::new(SessionManager::with_defaults());
+        let quota = Arc::new(QuotaManager::new(QuotaTier {
+            name: "exhausted".into(),
+            daily_limit: 0,
+        }));
+        let registry = ToolRegistry::new();
+
+        register_typed_tools(&registry, store, sessions, quota)
+            .await
+            .expect("register typed tools");
+
+        let error = registry
+            .execute("ask_question", json!({"query": "status"}))
+            .await
+            .expect_err("quota exhaustion must not return a fake answer payload");
+        assert!(error.to_string().contains("Daily query quota exceeded"));
     }
 }
 
