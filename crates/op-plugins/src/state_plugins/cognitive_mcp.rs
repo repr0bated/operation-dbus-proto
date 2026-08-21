@@ -523,7 +523,7 @@ fn default_queries_remaining() -> i64 {
 }
 
 fn default_queries_limit() -> i64 {
-    50
+    500
 }
 
 fn default_notebook_count() -> i64 {

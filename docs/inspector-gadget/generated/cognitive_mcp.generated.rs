@@ -538,7 +538,7 @@ fn default_queries_remaining() -> i64 {
 }
 
 fn default_queries_limit() -> i64 {
-    50
+    500
 }
 
 fn default_notebook_count() -> i64 {
@@ -1940,7 +1940,6 @@ mod inspector_gadget_generated {
         #[serde(default)]
         #[schemars(extend("x-oscal-subid" = "obs.software.cognitive_mcp.inputresponses@v1"))]
         pub inputresponses: Option<String>,
-
     }
 
     /// Metadata needed when promoting a generated typed method into `schema.methods`.
@@ -1954,8 +1953,7 @@ mod inspector_gadget_generated {
         pub command: &'static [&'static str],
     }
 
-    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[
-    ];
+    pub const METHOD_CANDIDATES: &[MethodCandidate] = &[];
 
     /// Promote every generated method into the sealed plugin schema.
     pub(super) fn register_methods(schema: &mut op_state_store::PluginSchema) {

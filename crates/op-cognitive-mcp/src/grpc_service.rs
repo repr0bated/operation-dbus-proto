@@ -1328,8 +1328,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             status: if healthy { "operational" } else { "degraded" }.to_string(),
             components_json: serde_json::to_string(&components)
                 .unwrap_or_else(|_| "{}".to_string()),
-            queries_remaining: remaining as i32,
-            queries_limit: limit as i32,
+            queries_remaining: quota_value_for_proto(remaining),
+            queries_limit: quota_value_for_proto(limit),
             auth_status: crate::notebooklm::notebooklm_auth_status().to_string(),
         }))
     }
@@ -1703,6 +1703,13 @@ fn bounded_limit(requested: i32, default: usize, max: usize) -> usize {
     } else {
         default
     }
+}
+
+/// The public protobuf uses signed 32-bit quota fields while an operator
+/// override is stored as `u32`. Preserve a truthful, non-negative response
+/// rather than wrapping a large override through a lossy cast.
+fn quota_value_for_proto(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 fn nonnegative_offset(offset: i32) -> usize {
@@ -2231,6 +2238,8 @@ mod tests {
             MAX_QUERY_RESULTS
         );
         assert_eq!(nonnegative_offset(-5), 0);
+        assert_eq!(quota_value_for_proto(500), 500);
+        assert_eq!(quota_value_for_proto(u32::MAX), i32::MAX);
     }
 
     #[test]
