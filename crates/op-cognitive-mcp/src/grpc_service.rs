@@ -15,9 +15,11 @@
 //! - Credentials stored 0o600
 //! - Exponential backoff retries on bridge calls
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -547,14 +549,10 @@ impl CognitiveToolService for CognitiveGrpcService {
             "AddFolder"
         );
 
-        // Validate path exists — no shell=True, use std::fs
-        let path = std::path::Path::new(&req.folder_path);
-        if !path.exists() || !path.is_dir() {
-            return Err(Status::invalid_argument(format!(
-                "Folder '{}' does not exist or is not a directory",
-                req.folder_path
-            )));
-        }
+        // Bulk import is intentionally opt-in. The gRPC client never gets to
+        // turn an arbitrary readable host directory into retrievable notebook
+        // data; the operator supplies the bounded roots through service config.
+        let path = resolve_ingest_folder(&req.folder_path)?;
 
         let namespace = self
             .resolve_or_create_notebook(&req.notebook_id)
@@ -566,11 +564,12 @@ impl CognitiveToolService for CognitiveGrpcService {
         let mut errors = Vec::new();
 
         // Walk directory — no shell, pure Rust
-        let walker = if req.recursive {
-            walkdir(path)
+        let mut walker = if req.recursive {
+            walkdir(&path)
         } else {
-            walkdir_shallow(path)
+            walkdir_shallow(&path)
         };
+        walker.sort();
 
         for entry_path in walker {
             // Apply glob patterns if specified
@@ -588,15 +587,23 @@ impl CognitiveToolService for CognitiveGrpcService {
 
             match std::fs::read_to_string(&entry_path) {
                 Ok(content) => {
-                    let key = entry_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string());
+                    // Keys must be unique within a notebook. A basename would
+                    // silently overwrite `src/lib.rs` with `tests/lib.rs`; use
+                    // a stable hash of the root-relative path instead.
+                    let relative_path = entry_path
+                        .strip_prefix(&path)
+                        .unwrap_or(&entry_path)
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/");
+                    let key = folder_source_key(&relative_path);
 
                     let value = serde_json::json!({
                         "source_type": "file",
                         "content": content,
-                        "path": entry_path.to_string_lossy(),
+                        "title": relative_path,
+                        // Do not project a host absolute path into a notebook
+                        // source; a relative name is enough for retrieval.
+                        "path": relative_path,
                     });
 
                     match self
@@ -1035,15 +1042,72 @@ fn explicit_namespace_kind(name: &str) -> Option<NamespaceKind> {
 // Filesystem helpers — no shell=True, pure Rust (R13)
 // ---------------------------------------------------------------------------
 
-/// Walk a directory recursively, yielding file paths only.
-fn walkdir(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+/// Resolve an import folder inside one of the operator-configured roots.
+///
+/// `COGNITIVE_MCP_INGEST_ROOTS` uses the host path-list separator (`:` on
+/// Linux). Leaving it unset disables filesystem ingest rather than granting
+/// the gRPC caller access to every file readable by this process.
+fn resolve_ingest_folder(folder_path: &str) -> Result<PathBuf, Status> {
+    let configured = std::env::var_os("COGNITIVE_MCP_INGEST_ROOTS").ok_or_else(|| {
+        Status::failed_precondition(
+            "Filesystem ingest is disabled; configure COGNITIVE_MCP_INGEST_ROOTS with approved directories.",
+        )
+    })?;
+    let roots: Vec<PathBuf> = std::env::split_paths(&configured)
+        .filter_map(|root| root.canonicalize().ok())
+        .filter(|root| root.is_dir())
+        .collect();
+    if roots.is_empty() {
+        return Err(Status::failed_precondition(
+            "Filesystem ingest is disabled because COGNITIVE_MCP_INGEST_ROOTS has no usable directories.",
+        ));
+    }
+
+    let candidate = Path::new(folder_path)
+        .canonicalize()
+        .map_err(|_| Status::invalid_argument(format!("Folder '{folder_path}' does not exist")))?;
+    if !candidate.is_dir() {
+        return Err(Status::invalid_argument(format!(
+            "Folder '{folder_path}' is not a directory"
+        )));
+    }
+    if is_within_ingest_roots(&candidate, &roots) {
+        return Ok(candidate);
+    }
+
+    Err(Status::permission_denied(
+        "Folder is outside the configured filesystem ingest roots.",
+    ))
+}
+
+fn is_within_ingest_roots(candidate: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| candidate.starts_with(root))
+}
+
+fn folder_source_key(relative_path: &str) -> String {
+    format!(
+        "file:{}",
+        hex::encode(Sha256::digest(relative_path.as_bytes()))
+    )
+}
+
+/// Walk a directory recursively, yielding regular file paths only. Symlinks
+/// are deliberately skipped so a link created after root validation cannot
+/// escape the configured ingest root.
+fn walkdir(path: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.is_dir() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 result.extend(walkdir(&p));
-            } else if p.is_file() {
+            } else if file_type.is_file() {
                 result.push(p);
             }
         }
@@ -1052,12 +1116,12 @@ fn walkdir(path: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 /// Walk a directory non-recursively (shallow).
-fn walkdir_shallow(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+fn walkdir_shallow(path: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.is_file() {
+            if entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
                 result.push(p);
             }
         }
@@ -1121,6 +1185,32 @@ mod tests {
     fn should_glob_match_exact() {
         assert!(glob_match("main.rs", "main.rs"));
         assert!(!glob_match("main.rs", "lib.rs"));
+    }
+
+    #[test]
+    fn ingest_root_check_accepts_children_without_prefix_confusion() {
+        let base = std::env::temp_dir().join(format!("cognitive-ingest-{}", Uuid::new_v4()));
+        let allowed = base.join("approved");
+        let child = allowed.join("nested/document.md");
+        let lookalike = base.join("approved-elsewhere/document.md");
+
+        assert!(is_within_ingest_roots(
+            &child,
+            std::slice::from_ref(&allowed)
+        ));
+        assert!(!is_within_ingest_roots(&lookalike, &[allowed]));
+    }
+
+    #[test]
+    fn folder_source_keys_do_not_collide_for_matching_basenames() {
+        assert_ne!(
+            folder_source_key("src/lib.rs"),
+            folder_source_key("tests/lib.rs")
+        );
+        assert_eq!(
+            folder_source_key("src/lib.rs"),
+            folder_source_key("src/lib.rs")
+        );
     }
 
     #[test]
