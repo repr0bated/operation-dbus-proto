@@ -254,15 +254,11 @@ impl ToolExecutor for RegistryExecutor {
     }
 
     async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
-        let tools = self.registry.list(0, 1000, None).await;
+        let tools = self.registry.catalog(0, 1000, None).await;
         Ok(tools
             .into_iter()
-            .map(|t| ToolInfo {
-                name: t.name,
-                description: t.description,
-                input_schema: t.input_schema,
-                annotations: None,
-            })
+            .filter(|entry| matches!(&entry.readiness, ToolReadiness::Live))
+            .map(tool_catalog_entry_to_info)
             .collect())
     }
 
@@ -276,16 +272,37 @@ impl ToolExecutor for RegistryExecutor {
 
     async fn search_tools(&self, query: &str, limit: usize) -> Result<Vec<ToolInfo>> {
         let tools = self.registry.search(query).await;
-        Ok(tools
-            .into_iter()
-            .take(limit)
-            .map(|t| ToolInfo {
-                name: t.name,
-                description: t.description,
-                input_schema: t.input_schema,
+        let mut live = Vec::with_capacity(limit);
+
+        for definition in tools {
+            if live.len() == limit {
+                break;
+            }
+            let Some(tool) = self.registry.get(&definition.name).await else {
+                continue;
+            };
+            if !matches!(&tool.readiness(), ToolReadiness::Live) {
+                continue;
+            }
+
+            live.push(ToolInfo {
+                name: definition.name,
+                description: definition.description,
+                input_schema: definition.input_schema,
                 annotations: None,
-            })
-            .collect())
+            });
+        }
+
+        Ok(live)
+    }
+}
+
+fn tool_catalog_entry_to_info(entry: ToolCatalogEntry) -> ToolInfo {
+    ToolInfo {
+        name: entry.definition.name,
+        description: entry.definition.description,
+        input_schema: entry.definition.input_schema,
+        annotations: None,
     }
 }
 
@@ -412,6 +429,29 @@ mod tests {
         );
         assert_eq!(catalog[1].readiness.status(), "live");
         assert_eq!(catalog[1].readiness.reason(), None);
+    }
+
+    #[tokio::test]
+    async fn mcp_executor_advertises_live_tools_only() {
+        let executor = RegistryExecutor::new(Arc::new(test_registry().await));
+
+        let listed: Vec<_> = executor
+            .list_tools()
+            .await
+            .expect("list live tools")
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(listed, ["beta_status", "zeta_query"]);
+
+        let searched: Vec<_> = executor
+            .search_tools("query", 10)
+            .await
+            .expect("search live tools")
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(searched, ["zeta_query"]);
     }
 
     struct DisabledTool {
