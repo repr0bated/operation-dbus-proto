@@ -932,18 +932,17 @@ impl ContextAwarenessEngine {
 
     /// Get session context statistics
     pub async fn get_session_stats(&self, session_id: &str) -> Option<serde_json::Value> {
-        self.session_states.get(session_id).map(|state| {
-            let state = state.blocking_read();
-            serde_json::json!({
-                "session_id": state.session_id,
-                "activity_count": state.activity_window.len(),
-                "recent_error_count": state.recent_error_count,
-                "is_idle": state.is_idle(),
-                "can_push": state.can_push(),
-                "current_topics": state.current_topics,
-                "suppressed_triggers": state.suppressed_triggers.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
-            })
-        })
+        let state = self.session_states.get(session_id)?;
+        let state = state.read().await;
+        Some(serde_json::json!({
+            "session_id": state.session_id,
+            "activity_count": state.activity_window.len(),
+            "recent_error_count": state.recent_error_count,
+            "is_idle": state.is_idle(),
+            "can_push": state.can_push(),
+            "current_topics": state.current_topics,
+            "suppressed_triggers": state.suppressed_triggers.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+        }))
     }
 
     /// Clear suppressed triggers for a session (e.g., after explicit user action)
@@ -1034,5 +1033,30 @@ mod tests {
 
         state.record_push();
         assert!(!state.can_push()); // Too soon
+    }
+
+    #[tokio::test]
+    async fn session_stats_are_safe_inside_the_async_runtime() {
+        let shuttle =
+            Arc::new(crate::cozo_shuttle::CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let memory_store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let engine =
+            ContextAwarenessEngine::new(ContextAwarenessConfig::default(), memory_store, None);
+
+        engine
+            .record_activity(
+                "session-1",
+                ActivityType::Query,
+                "review canonical ingress".to_string(),
+                serde_json::json!({}),
+            )
+            .await;
+
+        let stats = engine
+            .get_session_stats("session-1")
+            .await
+            .expect("session stats");
+        assert_eq!(stats["session_id"], "session-1");
+        assert_eq!(stats["activity_count"], 1);
     }
 }
