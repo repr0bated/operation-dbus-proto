@@ -25,7 +25,7 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 // =============================================================================
 
 const PLUGIN_NAME: &str = "cognitive_mcp";
-const PLUGIN_VERSION: &str = "3.2.0";
+const PLUGIN_VERSION: &str = "3.3.0";
 const PLUGIN_CATEGORY: &str = "service";
 const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
@@ -633,6 +633,56 @@ pub struct MemoryToolInput {
     pub limit: i64,
 }
 
+/// Input for a controlled memory write.  The operation selector is injected by
+/// the bridge, so callers only provide the data that belongs to this operation.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryStoreInput {
+    /// Explicit system-owned namespace, such as `project:3tched-cognative`.
+    pub namespace: String,
+    pub key: String,
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub namespace_kind: Option<NamespaceKind>,
+    #[serde(default)]
+    pub semantic: bool,
+    /// Optional system container identity used for a linked memory namespace.
+    pub container_id: Option<String>,
+    pub identity_id: Option<String>,
+    pub wireguard_pubkey: Option<String>,
+}
+
+/// Input for a point lookup in a system-owned memory namespace.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryRetrieveInput {
+    pub namespace: String,
+    pub key: String,
+}
+
+/// Input for a bounded metadata query over cognitive memory.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryQueryInput {
+    pub namespace: Option<String>,
+    pub key_pattern: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_memory_limit")]
+    pub limit: i64,
+}
+
+/// Input for deleting one named memory entry.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryDeleteInput {
+    pub namespace: String,
+    pub key: String,
+}
+
+/// Input for listing memory namespaces, optionally filtered by their kind.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryListNamespacesInput {
+    pub namespace_kind: Option<NamespaceKind>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CodeSearchInput {
     #[schemars(
@@ -1115,7 +1165,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "memory_store".to_string(),
-        method_decl_from_schemars_with_output::<(), MemoryStoreOutput>(
+        method_decl_from_schemars_with_output::<MemoryStoreInput, MemoryStoreOutput>(
             "memory_store",
             SideEffect::Mutation,
             false,
@@ -1125,7 +1175,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "memory_retrieve".to_string(),
-        method_decl_from_schemars_with_output::<(), MemoryRetrieveOutput>(
+        method_decl_from_schemars_with_output::<MemoryRetrieveInput, MemoryRetrieveOutput>(
             "memory_retrieve",
             SideEffect::Read,
             true,
@@ -1135,7 +1185,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "memory_query".to_string(),
-        method_decl_from_schemars_with_output::<(), MemoryQueryOutput>(
+        method_decl_from_schemars_with_output::<MemoryQueryInput, MemoryQueryOutput>(
             "memory_query",
             SideEffect::Read,
             true,
@@ -1145,7 +1195,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "memory_delete".to_string(),
-        method_decl_from_schemars_with_output::<(), MemoryDeleteOutput>(
+        method_decl_from_schemars_with_output::<MemoryDeleteInput, MemoryDeleteOutput>(
             "memory_delete",
             SideEffect::Mutation,
             true,
@@ -1155,7 +1205,10 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "memory_list_namespaces".to_string(),
-        method_decl_from_schemars_with_output::<(), MemoryListNamespacesOutput>(
+        method_decl_from_schemars_with_output::<
+            MemoryListNamespacesInput,
+            MemoryListNamespacesOutput,
+        >(
             "memory_list_namespaces",
             SideEffect::Read,
             true,
@@ -1165,7 +1218,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "code_search".to_string(),
-        method_decl_from_schemars_with_output::<(), CodeSearchOutput>(
+        method_decl_from_schemars_with_output::<CodeSearchInput, CodeSearchOutput>(
             "code_search",
             SideEffect::Read,
             true,
@@ -1175,7 +1228,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "code_index".to_string(),
-        method_decl_from_schemars_with_output::<(), CodeIndexOutput>(
+        method_decl_from_schemars_with_output::<CodeIndexInput, CodeIndexOutput>(
             "code_index",
             SideEffect::Mutation,
             false,
@@ -1185,7 +1238,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "code_context".to_string(),
-        method_decl_from_schemars_with_output::<(), CodeContextOutput>(
+        method_decl_from_schemars_with_output::<CodeContextInput, CodeContextOutput>(
             "code_context",
             SideEffect::Read,
             true,
@@ -1454,6 +1507,42 @@ mod tests {
             method.required_capability.as_deref(),
             Some("cognitive_mcp.invoke")
         );
+    }
+
+    #[test]
+    fn memory_and_code_methods_expose_the_arguments_their_live_tools_require() {
+        let schema = cognitive_mcp_schema();
+        let expected_fields = [
+            ("memory_store", "namespace"),
+            ("memory_retrieve", "key"),
+            ("memory_query", "limit"),
+            ("memory_delete", "key"),
+            ("memory_list_namespaces", "namespace_kind"),
+            ("code_search", "query"),
+            ("code_index", "mode"),
+            ("code_context", "session_id"),
+        ];
+
+        for (method_name, required_field) in expected_fields {
+            let method = schema
+                .methods
+                .get(method_name)
+                .unwrap_or_else(|| panic!("missing method {method_name}"));
+            let args = serde_json::to_value(&method.args)
+                .unwrap_or_else(|error| panic!("serialize {method_name} args: {error}"));
+            let properties = args["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{method_name} must accept an object"));
+            assert!(
+                properties.contains_key(required_field),
+                "{method_name} is missing its live tool argument {required_field}"
+            );
+            assert_ne!(
+                args.get("type").and_then(JVal::as_str),
+                Some("null"),
+                "{method_name} must not expose the old unit/null request contract"
+            );
+        }
     }
 
     #[test]
