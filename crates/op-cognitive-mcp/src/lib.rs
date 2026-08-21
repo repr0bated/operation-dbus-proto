@@ -24,6 +24,7 @@ pub mod cozo_shuttle;
 pub mod development_ledger;
 pub mod doctor;
 pub mod grpc_service;
+pub mod ingress;
 pub mod live_schema;
 pub mod memory_store;
 pub mod notebooklm;

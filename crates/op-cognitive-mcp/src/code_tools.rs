@@ -14,6 +14,7 @@
 //!   subid: `src.software.workspace.index@v1`
 
 use crate::context_awareness::{ActivityType, ContextAwarenessEngine};
+use crate::ingress::validate_query;
 use crate::rag_pipeline::{CodeFilter, RagPipeline, RagResult, RetrievalMode, RetrievalProfile};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -156,6 +157,7 @@ impl Tool for CodeSearchTool {
 
     async fn execute(&self, input: Value) -> Result<Value> {
         let query = required_text(&input, "query")?;
+        validate_query(query).map_err(anyhow::Error::msg)?;
         let profile = retrieval_profile_from(&input, RetrievalMode::Search);
         let limit = input
             .get("limit")
@@ -224,6 +226,7 @@ impl Tool for CodeContextTool {
 
     async fn execute(&self, input: Value) -> Result<Value> {
         let query = required_text(&input, "query")?;
+        validate_query(query).map_err(anyhow::Error::msg)?;
         let session_id = input
             .get("session_id")
             .and_then(Value::as_str)

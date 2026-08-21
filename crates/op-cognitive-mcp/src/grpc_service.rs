@@ -34,8 +34,6 @@ use op_mcp::tool_registry::ToolRegistry;
 const DEFAULT_INGEST_MAX_FILES: usize = 10_000;
 const DEFAULT_INGEST_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_INGEST_ERROR_REPORTS: usize = 100;
-const MAX_QUERY_BYTES: usize = 16 * 1024;
-const MAX_CONVERSATION_ID_BYTES: usize = 256;
 const DEFAULT_QUERY_RESULTS: usize = 10;
 const MAX_QUERY_RESULTS: usize = 50;
 const DEFAULT_PAGE_SIZE: usize = 100;
@@ -1055,24 +1053,11 @@ fn canonical_notebook_name(notebook_ref: &str) -> Result<String, Status> {
 }
 
 fn require_query(query: &str) -> Result<(), Status> {
-    if query.trim().is_empty() {
-        return Err(Status::invalid_argument("query must not be empty"));
-    }
-    if query.len() > MAX_QUERY_BYTES {
-        return Err(Status::invalid_argument(format!(
-            "query exceeds the {MAX_QUERY_BYTES}-byte limit"
-        )));
-    }
-    Ok(())
+    crate::ingress::validate_query(query).map_err(Status::invalid_argument)
 }
 
 fn require_conversation_id(conversation_id: &str) -> Result<(), Status> {
-    if conversation_id.len() > MAX_CONVERSATION_ID_BYTES {
-        return Err(Status::invalid_argument(format!(
-            "conversation_id exceeds the {MAX_CONVERSATION_ID_BYTES}-byte limit"
-        )));
-    }
-    Ok(())
+    crate::ingress::validate_conversation_id(conversation_id).map_err(Status::invalid_argument)
 }
 
 fn bounded_limit(requested: i32, default: usize, max: usize) -> usize {
@@ -1267,6 +1252,7 @@ fn glob_match_inner(pattern: &[char], name: &[char]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingress::{MAX_CONVERSATION_ID_BYTES, MAX_QUERY_BYTES};
 
     async fn test_service() -> (CognitiveGrpcService, Arc<CognitiveMemoryStore>) {
         let shuttle =

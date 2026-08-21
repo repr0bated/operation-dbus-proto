@@ -20,6 +20,7 @@
 //! 16. doctor
 
 use crate::cognitive_tools::field;
+use crate::ingress::{validate_conversation_id, validate_query};
 use anyhow::Result;
 use async_trait::async_trait;
 use op_mcp::tool_registry::{BoxedTool, Tool, ToolReadiness, ToolRegistry};
@@ -219,9 +220,7 @@ impl Tool for TypedQueryTool {
         let query = field(&input, "query")
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing query"))?;
-        if query.trim().is_empty() {
-            anyhow::bail!("query must not be empty");
-        }
+        validate_query(query).map_err(anyhow::Error::msg)?;
 
         // Quota check
         let (allowed, remaining, _) = self.quota.check_and_increment().await;
@@ -233,6 +232,7 @@ impl Tool for TypedQueryTool {
         }
 
         let conversation_id = field(&input, "conversation_id").as_str().unwrap_or("");
+        validate_conversation_id(conversation_id).map_err(anyhow::Error::msg)?;
 
         let session = self
             .sessions
