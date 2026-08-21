@@ -166,24 +166,24 @@ impl ToolRegistry {
 
     /// Search tools by query
     pub async fn search(&self, query: &str) -> Vec<ToolDefinition> {
-        let query_lower = query.to_lowercase();
         let defs = self.definitions.read().await;
 
         let mut matches: Vec<_> = defs
             .values()
-            .filter(|d| {
-                d.name.to_lowercase().contains(&query_lower)
-                    || d.description.to_lowercase().contains(&query_lower)
-                    || d.category.to_lowercase().contains(&query_lower)
-                    || d.tags
-                        .iter()
-                        .any(|t| t.to_lowercase().contains(&query_lower))
+            .filter_map(|definition| {
+                tool_search_score(definition, query).map(|score| (score, definition.clone()))
             })
-            .cloned()
             .collect();
-        matches.sort_by(|left, right| left.name.cmp(&right.name));
+        matches.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.name.cmp(&right.name))
+        });
         matches.truncate(50); // Reasonable limit for search results
         matches
+            .into_iter()
+            .map(|(_score, definition)| definition)
+            .collect()
     }
 
     /// List tool definitions together with their executable readiness.
@@ -228,6 +228,81 @@ impl ToolRegistry {
         cats.dedup();
         cats
     }
+}
+
+/// Match human search phrases against catalog identifiers as well as ordinary
+/// prose. Tool names routinely use `snake_case`, while an MCP client is much
+/// more likely to ask for "design api". A literal substring check misses that
+/// otherwise exact match.
+fn tool_search_score(definition: &ToolDefinition, query: &str) -> Option<usize> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let fields = [
+        definition.name.as_str(),
+        definition.description.as_str(),
+        definition.category.as_str(),
+    ];
+    let haystack = fields
+        .iter()
+        .copied()
+        .chain(definition.tags.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if haystack.to_lowercase().contains(&query.to_lowercase()) {
+        // A phrase match within the tool name is the most specific result;
+        // a phrase found only in prose remains useful but lower priority.
+        return Some(
+            if definition
+                .name
+                .to_lowercase()
+                .contains(&query.to_lowercase())
+            {
+                10_000
+            } else {
+                1_000
+            },
+        );
+    }
+
+    let query_terms = search_terms(query);
+    if query_terms.is_empty() {
+        return None;
+    }
+    let haystack_terms = search_terms(&haystack);
+    let matches_all_terms = query_terms
+        .iter()
+        .all(|term| haystack_terms.iter().any(|candidate| candidate == term));
+    if !matches_all_terms {
+        return None;
+    }
+
+    let name_terms = search_terms(&definition.name);
+    let description_terms = search_terms(&definition.description);
+    let category_terms = search_terms(&definition.category);
+    let tag_terms = definition
+        .tags
+        .iter()
+        .flat_map(|tag| search_terms(tag))
+        .collect::<Vec<_>>();
+    let score = query_terms.iter().fold(0, |score, term| {
+        score
+            + usize::from(name_terms.iter().any(|candidate| candidate == term)) * 100
+            + usize::from(description_terms.iter().any(|candidate| candidate == term)) * 10
+            + usize::from(category_terms.iter().any(|candidate| candidate == term)) * 5
+            + usize::from(tag_terms.iter().any(|candidate| candidate == term)) * 3
+    });
+    Some(score)
+}
+
+fn search_terms(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 impl Default for ToolRegistry {
@@ -414,6 +489,44 @@ mod tests {
             .map(|definition| definition.name)
             .collect();
         assert_eq!(names, ["alpha_query", "zeta_query"]);
+    }
+
+    #[tokio::test]
+    async fn search_matches_human_phrases_against_snake_case_catalog_fields() {
+        let registry = test_registry().await;
+
+        let names: Vec<_> = registry
+            .search("operational state")
+            .await
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        assert_eq!(names, ["zeta_query"]);
+
+        let names: Vec<_> = registry
+            .search("zeta query")
+            .await
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        assert_eq!(names, ["zeta_query"]);
+    }
+
+    #[test]
+    fn search_ranking_prefers_operation_names_over_shared_agent_prose() {
+        let definition = |name: &str| ToolDefinition {
+            name: name.to_string(),
+            description: "Backend architect specializing in scalable API design".to_string(),
+            input_schema: json!({}),
+            schema_version: String::new(),
+            category: "agent".to_string(),
+            tags: vec!["backend-architect".to_string()],
+            namespace: "agents".to_string(),
+        };
+        let target = definition("agent_backend_architect_design_api");
+        let broad = definition("agent_backend_architect_analyze");
+
+        assert!(tool_search_score(&target, "design api") > tool_search_score(&broad, "design api"));
     }
 
     #[tokio::test]

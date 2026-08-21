@@ -27,6 +27,7 @@ pub async fn register_agent_tools(registry: &ToolRegistry) -> Result<usize> {
                 .register(Arc::new(AgentCatalogTool {
                     descriptor: descriptor.clone(),
                     operation: operation.clone(),
+                    description: schema.description,
                     input_schema: schema.input_schema,
                     tool_name: format!(
                         "agent_{}_{}",
@@ -45,6 +46,7 @@ pub async fn register_agent_tools(registry: &ToolRegistry) -> Result<usize> {
 struct AgentCatalogTool {
     descriptor: AgentDescriptor,
     operation: String,
+    description: String,
     input_schema: Value,
     tool_name: String,
 }
@@ -56,7 +58,7 @@ impl Tool for AgentCatalogTool {
     }
 
     fn description(&self) -> &str {
-        &self.descriptor.description
+        &self.description
     }
 
     fn category(&self) -> &str {
@@ -200,6 +202,7 @@ mod tests {
             ),
             descriptor,
             operation,
+            description: schema.description,
             input_schema: schema.input_schema,
         }
     }
@@ -212,6 +215,7 @@ mod tests {
             .get("properties")
             .and_then(|properties| properties.get("context"))
             .is_some());
+        assert!(tool.description().contains("analyze"));
     }
 
     #[tokio::test]
