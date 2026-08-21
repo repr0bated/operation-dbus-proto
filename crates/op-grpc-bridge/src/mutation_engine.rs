@@ -3201,6 +3201,20 @@ async fn dispatch_cognitive_mcp_method(
     })?
     .map_err(|e| anyhow::anyhow!("tool execution failed: {}", e))?;
 
+    // `invoke_tool` is the one schema-typed door to the runtime registry. Its
+    // domain response is intentionally stable even though each invoked tool
+    // returns its own payload shape; callers can inspect `result` using the
+    // input contract published by `list_tools`.
+    if method == "invoke_tool" {
+        return serde_json::to_value(op_plugins::state_plugins::cognitive_mcp::InvokeToolOutput {
+            success: true,
+            tool_name,
+            result: Some(result),
+            error: None,
+        })
+        .context("serialize cognitive invoke_tool response");
+    }
+
     Ok(result)
 }
 
@@ -3447,9 +3461,39 @@ mod cognitive_development_dispatch_tests {
 
 #[cfg(test)]
 mod cognitive_tool_catalog_tests {
-    use super::cognitive_tool_catalog_response;
+    use super::{cognitive_tool_catalog_response, dispatch_cognitive_mcp_method};
+    use anyhow::Result;
+    use async_trait::async_trait;
     use op_core::ToolDefinition;
+    use op_mcp::tool_registry::{Tool, ToolRegistry};
     use serde_json::json;
+    use simd_json::OwnedValue;
+    use std::sync::Arc;
+
+    struct EchoTool;
+
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+
+        fn description(&self) -> &str {
+            "Return the supplied arguments for contract testing."
+        }
+
+        fn input_schema(&self) -> OwnedValue {
+            simd_json::json!({
+                "type": "object",
+                "properties": { "message": { "type": "string" } },
+                "required": ["message"],
+            })
+        }
+
+        async fn execute(&self, input: OwnedValue) -> Result<OwnedValue> {
+            Ok(input)
+        }
+    }
 
     fn definition(
         name: &str,
@@ -3509,6 +3553,32 @@ mod cognitive_tool_catalog_tests {
                         "schema_version": "v2",
                     },
                 ],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_tool_wraps_the_runtime_payload_in_the_declared_contract() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry
+            .register(Arc::new(EchoTool))
+            .await
+            .expect("register echo tool");
+
+        let result = dispatch_cognitive_mcp_method(
+            &Some(registry),
+            "invoke_tool",
+            r#"{"tool_name":"echo","arguments":{"message":"hello"}}"#,
+        )
+        .await
+        .expect("invoke echo tool");
+
+        assert_eq!(
+            result,
+            json!({
+                "success": true,
+                "tool_name": "echo",
+                "result": { "message": "hello" },
             })
         );
     }
