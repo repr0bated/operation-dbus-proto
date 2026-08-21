@@ -605,27 +605,26 @@ impl CognitiveToolService for CognitiveGrpcService {
         );
 
         // Walk directory — no shell, pure Rust
-        let mut walker = if req.recursive {
-            walkdir(&path)
-        } else {
-            walkdir_shallow(&path)
-        };
-        walker.sort();
-        let discovered_files = walker.len();
+        // Discover only one more file than can be imported. The former helper
+        // collected every path before applying `max_files`, which meant a huge
+        // tree could exhaust process memory even though its contents were never
+        // read. One look-ahead file makes truncation truthful without scanning
+        // or storing the rest of the tree.
+        let discovery_limit = max_files.saturating_add(1);
+        let mut walker = walkdir_bounded(&path, req.recursive, discovery_limit);
+        let truncated = walker.len() > max_files;
+        if truncated {
+            walker.truncate(max_files);
+            skipped += 1;
+            record_ingest_error(
+                &mut errors,
+                format!(
+                    "Folder import reached its {max_files}-file limit; additional files were not read."
+                ),
+            );
+        }
 
-        for (index, entry_path) in walker.into_iter().enumerate() {
-            if index >= max_files {
-                let remaining = discovered_files.saturating_sub(index) as i32;
-                skipped += remaining;
-                record_ingest_error(
-                    &mut errors,
-                    format!(
-                        "Folder import reached its {max_files}-file limit; remaining files were not read."
-                    ),
-                );
-                break;
-            }
-
+        for entry_path in walker {
             // Apply glob patterns if specified
             if !req.patterns.is_empty() {
                 let file_name = entry_path
@@ -1276,42 +1275,42 @@ fn record_ingest_error(errors: &mut Vec<String>, error: String) {
     }
 }
 
-/// Walk a directory recursively, yielding regular file paths only. Symlinks
-/// are deliberately skipped so a link created after root validation cannot
-/// escape the configured ingest root.
-fn walkdir(path: &Path) -> Vec<PathBuf> {
+/// Walk a directory only until `limit` regular files have been discovered.
+/// Symlinks are deliberately skipped so a link created after root validation
+/// cannot escape the configured ingest root. Directory entries are ordered at
+/// each level to keep the accepted prefix deterministic.
+fn walkdir_bounded(path: &Path, recursive: bool, limit: usize) -> Vec<PathBuf> {
     let mut result = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() {
-                result.extend(walkdir(&p));
-            } else if file_type.is_file() {
-                result.push(p);
-            }
-        }
-    }
+    collect_files_bounded(path, recursive, limit, &mut result);
     result
 }
 
-/// Walk a directory non-recursively (shallow).
-fn walkdir_shallow(path: &Path) -> Vec<PathBuf> {
-    let mut result = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
-                result.push(p);
-            }
+fn collect_files_bounded(path: &Path, recursive: bool, limit: usize, result: &mut Vec<PathBuf>) {
+    if result.len() >= limit {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        if result.len() >= limit {
+            return;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_file() {
+            result.push(entry.path());
+        } else if recursive && file_type.is_dir() {
+            collect_files_bounded(&entry.path(), true, limit, result);
         }
     }
-    result
 }
 
 /// Simple glob matching — supports * and ? only.
@@ -1319,21 +1318,24 @@ fn walkdir_shallow(path: &Path) -> Vec<PathBuf> {
 fn glob_match(pattern: &str, name: &str) -> bool {
     let pattern_chars: Vec<char> = pattern.chars().collect();
     let name_chars: Vec<char> = name.chars().collect();
-    glob_match_inner(&pattern_chars, &name_chars)
-}
+    let mut previous = vec![false; name_chars.len() + 1];
+    previous[0] = true;
 
-fn glob_match_inner(pattern: &[char], name: &[char]) -> bool {
-    match (pattern.first(), name.first()) {
-        (None, None) => true,
-        (Some('*'), _) => {
-            // '*' matches zero or more characters
-            glob_match_inner(&pattern[1..], name)
-                || (!name.is_empty() && glob_match_inner(pattern, &name[1..]))
+    for token in pattern_chars {
+        let mut current = vec![false; name_chars.len() + 1];
+        if token == '*' {
+            current[0] = previous[0];
         }
-        (Some('?'), Some(_)) => glob_match_inner(&pattern[1..], &name[1..]),
-        (Some(p), Some(n)) if *p == *n => glob_match_inner(&pattern[1..], &name[1..]),
-        _ => false,
+        for (index, character) in name_chars.iter().enumerate() {
+            current[index + 1] = match token {
+                '*' => previous[index + 1] || current[index],
+                '?' => previous[index],
+                literal => previous[index] && literal == *character,
+            };
+        }
+        previous = current;
     }
+    previous[name_chars.len()]
 }
 
 #[cfg(test)]
@@ -1371,6 +1373,27 @@ mod tests {
     fn should_glob_match_exact() {
         assert!(glob_match("main.rs", "main.rs"));
         assert!(!glob_match("main.rs", "lib.rs"));
+    }
+
+    #[test]
+    fn glob_matching_stays_linear_for_many_wildcards() {
+        let pattern = format!("{}b", "*a".repeat(64));
+        let name = format!("{}b", "a".repeat(64));
+        assert!(glob_match(&pattern, &name));
+    }
+
+    #[test]
+    fn bounded_walk_stops_discovery_without_building_a_full_tree() {
+        let root = std::env::temp_dir().join(format!("cognitive-walk-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("nested")).expect("create fixture");
+        for file in ["a.txt", "b.txt", "nested/c.txt", "nested/d.txt"] {
+            std::fs::write(root.join(file), "fixture").expect("write fixture");
+        }
+
+        let files = walkdir_bounded(&root, true, 2);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|file| file.starts_with(&root)));
+        std::fs::remove_dir_all(&root).expect("remove fixture");
     }
 
     #[test]
