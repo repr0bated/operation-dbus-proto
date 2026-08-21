@@ -1751,6 +1751,67 @@ impl MutationEngine {
         Ok(recorded.receipt)
     }
 
+    /// Execute a provider-neutral Cognitive model operation through the
+    /// bridge-owned 3tched router. The prompt is never written into the audit
+    /// chain; its Blake3 footprint and byte count make the invocation
+    /// accountable without copying notebook content into the event log.
+    pub async fn execute_cognitive_model_route(
+        &self,
+        method: &str,
+        prompt: &str,
+        capability_id: &str,
+        actor_id: &str,
+    ) -> anyhow::Result<(
+        MethodCallAuditReceipt,
+        op_plugins::state_plugins::tched_router::ChatOutput,
+    )> {
+        if capability_id != "cognitive_mcp.read" {
+            anyhow::bail!(
+                "Cognitive model operation '{}' requires capability cognitive_mcp.read",
+                method
+            );
+        }
+        if prompt.trim().is_empty() {
+            anyhow::bail!("Cognitive model operation '{}' requires a prompt", method);
+        }
+        let audit_args = serde_json::json!({
+            "prompt_blake3": blake3::hash(prompt.as_bytes()).to_hex().to_string(),
+            "prompt_bytes": prompt.len(),
+        })
+        .to_string();
+        let receipt = self
+            .record_method_call_audit(
+                "cognitive_mcp",
+                method,
+                &audit_args,
+                Some(capability_id),
+                actor_id,
+                ChangeSource::Grpc,
+            )
+            .await?
+            .receipt;
+
+        let state = self
+            .projected_state::<op_plugins::state_plugins::tched_router::TchedRouterState>(
+                "tched_router",
+            )
+            .await
+            .unwrap_or_else(
+                op_plugins::state_plugins::tched_router::TchedRouterPlugin::current_state,
+            );
+        let response = self
+            .tched_router_runtime
+            .chat(
+                &state,
+                op_plugins::state_plugins::tched_router::ChatInput {
+                    message: prompt.to_string(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok((receipt, response))
+    }
+
     /// Record a method call and fan it out before its domain implementation is
     /// allowed to report success. Shared by schema-derived methods and native
     /// domain services so they produce indistinguishable accountability events.

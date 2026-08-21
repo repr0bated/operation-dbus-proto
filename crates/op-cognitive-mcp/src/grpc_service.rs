@@ -71,6 +71,37 @@ pub trait CognitiveMutationAuditor: Send + Sync {
     ) -> Result<CognitiveMutationAuditReceipt, Status>;
 }
 
+/// Request for one provider-neutral model operation. Cognitive MCP supplies
+/// the constrained task and source context; the bridge resolves the live
+/// route and is the sole owner of provider/model selection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CognitiveModelRequest {
+    pub actor_id: String,
+    pub capability_id: String,
+    pub operation: String,
+    pub prompt: String,
+}
+
+/// Model output together with the resolved route and audit receipt that made
+/// the external operation accountable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CognitiveModelResponse {
+    pub content: String,
+    pub provider: String,
+    pub model: String,
+    pub audit_event_id: u64,
+    pub audit_event_hash: String,
+}
+
+/// Provider-neutral model routing contract implemented only by the bridge.
+#[async_trait::async_trait]
+pub trait CognitiveModelRouter: Send + Sync {
+    async fn generate(
+        &self,
+        request: CognitiveModelRequest,
+    ) -> Result<CognitiveModelResponse, Status>;
+}
+
 /// Used by a Cognitive service constructed outside the bridge. Reads remain
 /// useful for diagnostics, but writes fail closed rather than bypassing the
 /// canonical event-chain path.
@@ -85,6 +116,21 @@ impl CognitiveMutationAuditor for UnavailableMutationAuditor {
     ) -> Result<CognitiveMutationAuditReceipt, Status> {
         Err(Status::failed_precondition(
             "Cognitive mutations require the op-grpc-bridge canonical audit ingress.",
+        ))
+    }
+}
+
+#[derive(Default)]
+struct UnavailableModelRouter;
+
+#[async_trait::async_trait]
+impl CognitiveModelRouter for UnavailableModelRouter {
+    async fn generate(
+        &self,
+        _request: CognitiveModelRequest,
+    ) -> Result<CognitiveModelResponse, Status> {
+        Err(Status::failed_precondition(
+            "Cognitive model generation requires the op-grpc-bridge provider-neutral route.",
         ))
     }
 }
@@ -108,6 +154,13 @@ const MAX_SOURCE_TAGS: usize = 32;
 const MAX_SOURCE_TAG_BYTES: usize = 128;
 const MAX_FOLDER_PATTERNS: usize = 32;
 const MAX_FOLDER_PATTERN_BYTES: usize = 128;
+const MAX_DATA_TABLE_PROMPT_BYTES: usize = 8 * 1024;
+const MAX_DATA_TABLE_COLUMNS: usize = 100;
+const MAX_DATA_TABLE_COLUMN_BYTES: usize = 128;
+const MAX_DATA_TABLE_SOURCES: i64 = 50;
+const MAX_DATA_TABLE_SOURCE_CONTEXT_BYTES: usize = 256 * 1024;
+const MAX_DATA_TABLE_ROWS: usize = 1_000;
+const MAX_DATA_TABLE_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
 /// The gRPC service implementation.
 ///
@@ -121,6 +174,7 @@ pub struct CognitiveGrpcService {
     quota_manager: Arc<QuotaManager>,
     tool_registry: Arc<ToolRegistry>,
     mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
+    model_router: Arc<dyn CognitiveModelRouter>,
 }
 
 impl CognitiveGrpcService {
@@ -148,23 +202,44 @@ impl CognitiveGrpcService {
         tool_registry: Arc<ToolRegistry>,
         mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
     ) -> Self {
+        Self::with_operational_adapters(
+            memory_store,
+            session_manager,
+            quota_manager,
+            tool_registry,
+            mutation_auditor,
+            Arc::new(UnavailableModelRouter),
+        )
+    }
+
+    /// Construct the bridge-mounted service with canonical audit and model
+    /// routing adapters. Neither adapter can be recreated by an MCP caller.
+    pub fn with_operational_adapters(
+        memory_store: Arc<CognitiveMemoryStore>,
+        session_manager: Arc<SessionManager>,
+        quota_manager: Arc<QuotaManager>,
+        tool_registry: Arc<ToolRegistry>,
+        mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
+        model_router: Arc<dyn CognitiveModelRouter>,
+    ) -> Self {
         Self {
             memory_store,
             session_manager,
             quota_manager,
             tool_registry,
             mutation_auditor,
+            model_router,
         }
     }
 
-    fn mutation_context<T>(request: &Request<T>) -> Result<CognitiveRequestContext, Status> {
+    fn bridge_request_context<T>(request: &Request<T>) -> Result<CognitiveRequestContext, Status> {
         request
             .extensions()
             .get::<CognitiveRequestContext>()
             .cloned()
             .ok_or_else(|| {
                 Status::failed_precondition(
-                    "Cognitive mutation request was not admitted through the canonical bridge ingress.",
+                    "Cognitive request was not admitted through the canonical bridge ingress.",
                 )
             })
     }
@@ -462,7 +537,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<CreateNotebookRequest>,
     ) -> Result<Response<CreateNotebookResponse>, Status> {
-        let context = Self::mutation_context(&request)?;
+        let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
         info!(title = %req.title, "CreateNotebook");
         require_at_most_bytes(
@@ -534,7 +609,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<BatchCreateNotebooksRequest>,
     ) -> Result<Response<BatchCreateNotebooksResponse>, Status> {
-        let context = Self::mutation_context(&request)?;
+        let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
         info!(count = req.notebooks.len(), "BatchCreateNotebooks");
         if req.notebooks.len() > MAX_BATCH_NOTEBOOKS {
@@ -633,7 +708,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<AddSourceRequest>,
     ) -> Result<Response<AddSourceResponse>, Status> {
-        let context = Self::mutation_context(&request)?;
+        let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
         info!(
             notebook_id = %req.notebook_id,
@@ -690,7 +765,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<AddFolderRequest>,
     ) -> Result<Response<AddFolderResponse>, Status> {
-        let context = Self::mutation_context(&request)?;
+        let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
         info!(
             notebook_id = %req.notebook_id,
@@ -960,8 +1035,10 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<GenerateDataTableRequest>,
     ) -> Result<Response<GenerateDataTableResponse>, Status> {
+        let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
         info!(notebook_id = %req.notebook_id, "GenerateDataTable");
+        validate_data_table_request(&req)?;
 
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
 
@@ -972,7 +1049,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                 namespace_id: Some(namespace.clone()),
                 key_pattern: None,
                 tags: None,
-                limit: Some(50), // Sample size for table extraction
+                limit: Some(MAX_DATA_TABLE_SOURCES),
                 offset: None,
             })
             .await
@@ -982,12 +1059,38 @@ impl CognitiveToolService for CognitiveGrpcService {
             return Ok(Response::new(GenerateDataTableResponse {
                 data_json: "[]".to_string(),
                 row_count: 0,
+                model_provider: String::new(),
+                model: String::new(),
+                audit_event_id: 0,
+                audit_event_hash: String::new(),
             }));
         }
 
-        Err(Status::failed_precondition(
-            "GenerateDataTable requires a configured provider-neutral model route; Cognitive MCP does not select providers directly.",
-        ))
+        let prompt = build_data_table_prompt(&req, &entries)?;
+        let model = self
+            .model_router
+            .generate(CognitiveModelRequest {
+                actor_id: context.actor_id,
+                capability_id: context.capability_id,
+                operation: "generate_data_table".to_string(),
+                prompt,
+            })
+            .await?;
+        let rows = parse_data_table_output(&model.content, &req.columns)?;
+        let row_count = i32::try_from(rows.len())
+            .map_err(|_| Status::internal("data table row count exceeds gRPC range"))?;
+        let data_json = serde_json::to_string(&rows).map_err(|error| {
+            Status::internal(format!("serialize generated data table: {error}"))
+        })?;
+
+        Ok(Response::new(GenerateDataTableResponse {
+            data_json,
+            row_count,
+            model_provider: model.provider,
+            model: model.model,
+            audit_event_id: model.audit_event_id,
+            audit_event_hash: model.audit_event_hash,
+        }))
     }
 
     // =========================================================================
@@ -1077,7 +1180,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<RemoveSourceRequest>,
     ) -> Result<Response<RemoveSourceResponse>, Status> {
-        let context = Self::mutation_context(&request)?;
+        let context = Self::bridge_request_context(&request)?;
         let req = request.into_inner();
         info!(
             notebook_id = %req.notebook_id,
@@ -1260,6 +1363,127 @@ fn batch_request_fingerprint(requests: &[CreateNotebookRequest]) -> String {
         }
     }
     hex::encode(hasher.finalize())
+}
+
+fn validate_data_table_request(request: &GenerateDataTableRequest) -> Result<(), Status> {
+    if request.prompt.trim().is_empty() {
+        return Err(Status::invalid_argument("prompt is required"));
+    }
+    require_at_most_bytes(&request.prompt, "prompt", MAX_DATA_TABLE_PROMPT_BYTES)?;
+    if request.columns.len() > MAX_DATA_TABLE_COLUMNS {
+        return Err(Status::invalid_argument(format!(
+            "columns exceeds the {MAX_DATA_TABLE_COLUMNS}-item limit"
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for column in &request.columns {
+        if column.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "columns must not contain empty values",
+            ));
+        }
+        require_at_most_bytes(column, "column", MAX_DATA_TABLE_COLUMN_BYTES)?;
+        if !seen.insert(column.as_str()) {
+            return Err(Status::invalid_argument(
+                "columns must not contain duplicates",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_data_table_prompt(
+    request: &GenerateDataTableRequest,
+    entries: &[MemoryEntry],
+) -> Result<String, Status> {
+    let mut remaining = MAX_DATA_TABLE_SOURCE_CONTEXT_BYTES;
+    let mut sources = Vec::new();
+    for entry in entries {
+        if remaining == 0 {
+            break;
+        }
+        let content = memory_entry_content(entry);
+        let snippet = truncate_utf8(&content, remaining);
+        if snippet.is_empty() {
+            continue;
+        }
+        remaining = remaining.saturating_sub(snippet.len());
+        sources.push(serde_json::json!({
+            "source_id": entry.key,
+            "title": entry.value.get("title").and_then(serde_json::Value::as_str),
+            "content": snippet,
+        }));
+    }
+    let source_json = serde_json::to_string(&sources)
+        .map_err(|error| Status::internal(format!("serialize table sources: {error}")))?;
+    let columns = if request.columns.is_empty() {
+        "No fixed columns were requested; infer a compact, clearly named schema.".to_string()
+    } else {
+        format!("Use only these columns: {}.", request.columns.join(", "))
+    };
+
+    Ok(format!(
+        "You are a structured data extraction route. Return only a valid JSON array, never Markdown, prose, or code fences. Each array item must be an object. Use only information present in the supplied sources; use null when a requested value is absent. Return at most {MAX_DATA_TABLE_ROWS} rows. {columns}\n\nExtraction request:\n{}\n\nSources:\n{}",
+        request.prompt.trim(),
+        source_json,
+    ))
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn parse_data_table_output(
+    content: &str,
+    columns: &[String],
+) -> Result<Vec<serde_json::Value>, Status> {
+    let content = content.trim();
+    if content.len() > MAX_DATA_TABLE_OUTPUT_BYTES {
+        return Err(Status::resource_exhausted(format!(
+            "provider-neutral model output exceeds the {MAX_DATA_TABLE_OUTPUT_BYTES}-byte table limit"
+        )));
+    }
+    let content = content
+        .strip_prefix("```json")
+        .or_else(|| content.strip_prefix("```"))
+        .map(str::trim_start)
+        .and_then(|value| value.strip_suffix("```").map(str::trim_end))
+        .unwrap_or(content);
+    let value: serde_json::Value = serde_json::from_str(content).map_err(|error| {
+        Status::failed_precondition(format!(
+            "provider-neutral model did not return valid JSON for GenerateDataTable: {error}"
+        ))
+    })?;
+    let rows = value.as_array().ok_or_else(|| {
+        Status::failed_precondition(
+            "provider-neutral model must return a JSON array for GenerateDataTable",
+        )
+    })?;
+    if rows.len() > MAX_DATA_TABLE_ROWS {
+        return Err(Status::failed_precondition(format!(
+            "provider-neutral model returned more than {MAX_DATA_TABLE_ROWS} table rows"
+        )));
+    }
+
+    let allowed: std::collections::HashSet<&str> = columns.iter().map(String::as_str).collect();
+    for row in rows {
+        let object = row.as_object().ok_or_else(|| {
+            Status::failed_precondition("provider-neutral model returned a non-object table row")
+        })?;
+        if !allowed.is_empty() && object.keys().any(|key| !allowed.contains(key.as_str())) {
+            return Err(Status::failed_precondition(
+                "provider-neutral model returned a column outside the requested schema",
+            ));
+        }
+    }
+    Ok(rows.clone())
 }
 
 fn bounded_limit(requested: i32, default: usize, max: usize) -> usize {
@@ -1575,6 +1799,37 @@ mod tests {
         request
     }
 
+    fn admitted_read_request<T>(message: T) -> Request<T> {
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(CognitiveRequestContext {
+            actor_id: "test-session".to_string(),
+            capability_id: "cognitive_mcp.read".to_string(),
+        });
+        request
+    }
+
+    struct RecordingModelRouter {
+        content: String,
+        calls: std::sync::Mutex<Vec<CognitiveModelRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CognitiveModelRouter for RecordingModelRouter {
+        async fn generate(
+            &self,
+            request: CognitiveModelRequest,
+        ) -> Result<CognitiveModelResponse, Status> {
+            self.calls.lock().expect("test model lock").push(request);
+            Ok(CognitiveModelResponse {
+                content: self.content.clone(),
+                provider: "test-provider".to_string(),
+                model: "test-model".to_string(),
+                audit_event_id: 99,
+                audit_event_hash: "model-event-99".to_string(),
+            })
+        }
+    }
+
     async fn test_service() -> (
         CognitiveGrpcService,
         Arc<CognitiveMemoryStore>,
@@ -1887,6 +2142,71 @@ mod tests {
             serde_json::from_str(&health.components_json).expect("health JSON");
         assert_eq!(components["memory_store"], "ok");
         assert!(components["memory_store_stats"].is_object());
+    }
+
+    #[tokio::test]
+    async fn data_table_uses_the_injected_provider_neutral_route_and_validates_json() {
+        let shuttle =
+            Arc::new(crate::cozo_shuttle::CozoGraphShuttle::new_in_memory().expect("cozo"));
+        let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
+        let model = Arc::new(RecordingModelRouter {
+            content: r#"[{"service":"Cognitive MCP","status":"active"}]"#.to_string(),
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let service = CognitiveGrpcService::with_operational_adapters(
+            store.clone(),
+            Arc::new(SessionManager::with_defaults()),
+            Arc::new(QuotaManager::with_defaults()),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(RecordingMutationAuditor::default()),
+            model.clone(),
+        );
+        let namespace = store
+            .upsert_namespace(
+                "project:3tched-cognative",
+                NamespaceKind::Project,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .expect("namespace");
+        store
+            .store_entry(
+                &namespace.name,
+                "service-source",
+                serde_json::json!({"title":"Service", "content":"Cognitive MCP is active."}),
+                vec![],
+                None,
+            )
+            .await
+            .expect("source");
+
+        let response = service
+            .generate_data_table(admitted_read_request(GenerateDataTableRequest {
+                notebook_id: namespace.name,
+                prompt: "List the service and its current status.".to_string(),
+                columns: vec!["service".to_string(), "status".to_string()],
+            }))
+            .await
+            .expect("provider-neutral table generation")
+            .into_inner();
+        assert_eq!(response.row_count, 1);
+        assert_eq!(response.model_provider, "test-provider");
+        assert_eq!(response.model, "test-model");
+        assert_eq!(response.audit_event_id, 99);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response.data_json)
+                .expect("returned table JSON")[0]["status"],
+            "active"
+        );
+
+        let calls = model.calls.lock().expect("test model lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].actor_id, "test-session");
+        assert_eq!(calls[0].capability_id, "cognitive_mcp.read");
+        assert!(calls[0].prompt.contains("Cognitive MCP is active."));
     }
 
     #[tokio::test]

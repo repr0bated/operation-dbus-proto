@@ -101,6 +101,25 @@ async fn native_cognitive_mutation_uses_the_same_audit_chain_and_grpc_provenance
 }
 
 #[tokio::test]
+async fn cognitive_model_route_rejects_mutation_capability_before_recording_or_execution() {
+    let engine = engine();
+    let error = engine
+        .execute_cognitive_model_route(
+            "generate_data_table",
+            "Return a JSON array.",
+            "cognitive_mcp.invoke",
+            "authenticated-session",
+        )
+        .await
+        .expect_err("a model read cannot use the mutation capability");
+    assert!(error.to_string().contains("cognitive_mcp.read"));
+    assert!(
+        engine.event_chain.read().await.events().is_empty(),
+        "rejected model calls must not create an allowed audit event"
+    );
+}
+
+#[tokio::test]
 async fn authoritative_change_reaches_chain_subscribers() {
     let engine = engine();
     let mut rx = engine.chain_tx().subscribe();

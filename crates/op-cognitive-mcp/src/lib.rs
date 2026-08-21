@@ -54,8 +54,9 @@ pub use context_awareness::{
 pub use context_server::ContextServerState;
 pub use cozo_shuttle::{CozoGraphShuttle, PolicyVerdict};
 pub use grpc_service::{
-    CognitiveGrpcService, CognitiveMutationAuditReceipt, CognitiveMutationAuditRequest,
-    CognitiveMutationAuditor, CognitiveRequestContext,
+    CognitiveGrpcService, CognitiveModelRequest, CognitiveModelResponse, CognitiveModelRouter,
+    CognitiveMutationAuditReceipt, CognitiveMutationAuditRequest, CognitiveMutationAuditor,
+    CognitiveRequestContext,
 };
 pub use memory_store::CognitiveMemoryStore;
 pub use op_identity::IdentitySled;

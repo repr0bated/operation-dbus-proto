@@ -13,9 +13,9 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
 use op_cognitive_mcp::{
-    CognitiveGrpcService, CognitiveMcpServer, CognitiveMutationAuditReceipt,
-    CognitiveMutationAuditRequest, CognitiveMutationAuditor, CognitiveRequestContext,
-    QdrantSemanticShuttle,
+    CognitiveGrpcService, CognitiveMcpServer, CognitiveModelRequest, CognitiveModelResponse,
+    CognitiveModelRouter, CognitiveMutationAuditReceipt, CognitiveMutationAuditRequest,
+    CognitiveMutationAuditor, CognitiveRequestContext, QdrantSemanticShuttle,
 };
 use op_mcp::tool_registry::ToolRegistry;
 use prost::Message;
@@ -347,6 +347,49 @@ impl CognitiveMutationAuditor for BridgeCognitiveMutationAuditor {
         Ok(CognitiveMutationAuditReceipt {
             event_id: receipt.event_id,
             event_hash: receipt.event_hash,
+        })
+    }
+}
+
+/// Provider-neutral model route for Cognitive MCP. It uses the bridge's live
+/// 3tched router state and exact-model execution; no provider is selected or
+/// configured by the Cognitive service itself.
+#[derive(Clone)]
+struct BridgeCognitiveModelRouter {
+    mutation_engine: Arc<MutationEngine>,
+}
+
+#[async_trait::async_trait]
+impl CognitiveModelRouter for BridgeCognitiveModelRouter {
+    async fn generate(
+        &self,
+        request: CognitiveModelRequest,
+    ) -> Result<CognitiveModelResponse, Status> {
+        if request.operation != "generate_data_table" {
+            return Err(Status::invalid_argument(
+                "unknown provider-neutral Cognitive model operation",
+            ));
+        }
+        let (receipt, response) = self
+            .mutation_engine
+            .execute_cognitive_model_route(
+                &request.operation,
+                &request.prompt,
+                &request.capability_id,
+                &request.actor_id,
+            )
+            .await
+            .map_err(|error| {
+                Status::failed_precondition(format!(
+                    "provider-neutral Cognitive model route unavailable: {error:#}"
+                ))
+            })?;
+        Ok(CognitiveModelResponse {
+            content: response.content,
+            provider: response.provider,
+            model: response.model,
+            audit_event_id: receipt.event_id,
+            audit_event_hash: receipt.event_hash,
         })
     }
 }
@@ -1185,8 +1228,10 @@ impl CognitiveMcpHandle {
     pub fn grpc_service(
         &self,
         mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
+        model_router: Arc<dyn CognitiveModelRouter>,
     ) -> CognitiveGrpcService {
-        self.server.cognitive_grpc_service(mutation_auditor)
+        self.server
+            .cognitive_grpc_service(mutation_auditor, model_router)
     }
 }
 
@@ -1248,9 +1293,14 @@ pub async fn attach_cognitive_tool_service(
     let Some(handle) = handle else {
         return server;
     };
-    let grpc_service = handle.grpc_service(Arc::new(BridgeCognitiveMutationAuditor {
-        mutation_engine: server.mutation_engine.clone(),
-    }));
+    let grpc_service = handle.grpc_service(
+        Arc::new(BridgeCognitiveMutationAuditor {
+            mutation_engine: server.mutation_engine.clone(),
+        }),
+        Arc::new(BridgeCognitiveModelRouter {
+            mutation_engine: server.mutation_engine.clone(),
+        }),
+    );
     server
         .active_reflection()
         .register_static_service(
