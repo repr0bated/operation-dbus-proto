@@ -3390,6 +3390,28 @@ pub(crate) fn ovsdb_monitor_tables(
 }
 
 #[cfg(test)]
+mod cognitive_development_dispatch_tests {
+    use super::map_schema_method_to_tool;
+    use serde_json::json;
+
+    #[test]
+    fn development_schema_methods_share_one_tool_with_distinct_operations() {
+        for (method, operation) in [
+            ("development_upsert", "upsert"),
+            ("development_list", "list"),
+            ("development_categories", "categories"),
+            ("development_record_verification", "record_verification"),
+        ] {
+            let (tool, args) = map_schema_method_to_tool(method, &json!({"status": "planned"}))
+                .expect("development method should map");
+            assert_eq!(tool, "cognitive_development");
+            assert_eq!(args["operation"], operation);
+            assert_eq!(args["status"], "planned");
+        }
+    }
+}
+
+#[cfg(test)]
 mod replay_window_tests {
     use super::{block_number_from_name, DEFAULT_REPLAY_LIMIT};
     use std::cmp::Reverse;
