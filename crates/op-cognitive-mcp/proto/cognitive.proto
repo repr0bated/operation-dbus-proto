@@ -141,6 +141,8 @@ message CreateNotebookRequest {
 
 message CreateNotebookResponse {
   NotebookInfo notebook = 1;
+  uint64 audit_event_id = 2;
+  string audit_event_hash = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +157,8 @@ message BatchCreateNotebooksResponse {
   repeated NotebookInfo notebooks = 1;
   int32 created = 2;
   int32 failed = 3;
+  uint64 audit_event_id = 4;
+  string audit_event_hash = 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +177,8 @@ message AddSourceRequest {
 message AddSourceResponse {
   string source_id = 1;
   bool success = 2;
+  uint64 audit_event_id = 3;
+  string audit_event_hash = 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +197,8 @@ message AddFolderResponse {
   int32 sources_added = 1;
   int32 sources_skipped = 2;
   repeated string errors = 3;
+  uint64 audit_event_id = 4;
+  string audit_event_hash = 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +302,8 @@ message RemoveSourceRequest {
 
 message RemoveSourceResponse {
   bool success = 1;
+  uint64 audit_event_id = 2;
+  string audit_event_hash = 3;
 }
 
 // ---------------------------------------------------------------------------

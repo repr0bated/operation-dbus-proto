@@ -57,6 +57,21 @@ pub struct StateChange {
     pub source: ChangeSource,
 }
 
+/// Receipt for a method invocation that has been appended to the durable,
+/// hash-linked audit chain. Domain services mounted beside the generated
+/// plugin surface use this instead of inventing a parallel audit path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodCallAuditReceipt {
+    pub event_id: u64,
+    pub event_hash: String,
+}
+
+struct RecordedMethodCall {
+    receipt: MethodCallAuditReceipt,
+    arguments: simd_json::OwnedValue,
+    change: StateChange,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeType {
     PropertySet,
@@ -1706,6 +1721,101 @@ impl MutationEngine {
         .await
     }
 
+    /// Append an externally implemented Cognitive MCP mutation to the same
+    /// event chain, durability sink, and subscriber fan-out used by generated
+    /// plugin methods. The Cognitive gRPC service owns its Cozo write, but it
+    /// cannot commit that write until this bridge receipt exists.
+    pub async fn audit_cognitive_mcp_mutation(
+        &self,
+        method: &str,
+        json_args: &str,
+        capability_id: &str,
+        actor_id: &str,
+    ) -> anyhow::Result<MethodCallAuditReceipt> {
+        if capability_id != "cognitive_mcp.invoke" {
+            anyhow::bail!(
+                "Cognitive MCP mutation '{}' requires capability cognitive_mcp.invoke",
+                method
+            );
+        }
+        let recorded = self
+            .record_method_call_audit(
+                "cognitive_mcp",
+                method,
+                json_args,
+                Some(capability_id),
+                actor_id,
+                ChangeSource::Grpc,
+            )
+            .await?;
+        Ok(recorded.receipt)
+    }
+
+    /// Record a method call and fan it out before its domain implementation is
+    /// allowed to report success. Shared by schema-derived methods and native
+    /// domain services so they produce indistinguishable accountability events.
+    async fn record_method_call_audit(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        json_args: &str,
+        capability_id: Option<&str>,
+        actor_id: &str,
+        source: ChangeSource,
+    ) -> anyhow::Result<RecordedMethodCall> {
+        let arguments: simd_json::OwnedValue = {
+            let mut bytes = json_args.as_bytes().to_vec();
+            simd_json::to_owned_value(&mut bytes).map_err(|error| {
+                anyhow::anyhow!("invalid json_args for method '{}': {}", method, error)
+            })?
+        };
+
+        let event = {
+            let mut chain = self.event_chain.write().await;
+            chain
+                .record_method_call(
+                    actor_id.to_string(),
+                    plugin_id.to_string(),
+                    method.to_string(),
+                    capability_id.map(str::to_string),
+                    json_args,
+                )
+                .clone()
+        };
+
+        // The durable append and both subscriber channels are deliberately
+        // shared with `dispatch_method_call`; native services must not become
+        // invisible to accountability consumers.
+        self.persist_audit_event(&event).await;
+        let change = StateChange {
+            change_id: uuid::Uuid::new_v4().to_string(),
+            event_id: event.event_id,
+            plugin_id: plugin_id.to_string(),
+            object_path: format!("/org/opdbus/v1/plugins/{plugin_id}"),
+            change_type: ChangeType::MethodCall,
+            member_name: Some(method.to_string()),
+            old_value: None,
+            new_value: arguments.clone(),
+            tags_touched: vec![],
+            event_hash: event.event_hash.clone(),
+            timestamp: event.timestamp,
+            actor_id: actor_id.to_string(),
+            source,
+        };
+        let _ = self.change_tx.send(change.clone());
+        let _ = self.chain_tx.send(event.clone());
+        self.advance_session_record(event.event_id, actor_id).await;
+
+        Ok(RecordedMethodCall {
+            receipt: MethodCallAuditReceipt {
+                event_id: event.event_id,
+                event_hash: event.event_hash,
+            },
+            arguments,
+            change,
+        })
+    }
+
     /// Dispatch a method call from the schema-backed bridge interface.
     ///
     /// This is the real dispatch path for `SchemaBackedInterface::call`
@@ -1743,63 +1853,18 @@ impl MutationEngine {
             ));
         }
 
-        // Parse the verbatim json_args string. If parsing fails, propagate
-        // the error — the bridge converts it to fdo::Error::Failed.
-        let parsed_value: simd_json::OwnedValue = {
-            let mut bytes = json_args.as_bytes().to_vec();
-            simd_json::to_owned_value(&mut bytes)
-                .map_err(|e| anyhow::anyhow!("invalid json_args for method '{}': {}", method, e))?
-        };
-
-        // Record the immutable event with the full accountability surface.
-        // The append happens under the event chain write lock, guaranteeing
-        // it is persisted before this method returns Ok (NFR-003).
-        let event_summary = {
-            let mut chain = self.event_chain.write().await;
-            let event = chain.record_method_call(
-                actor_id.to_string(),
-                plugin_id.to_string(),
-                method.to_string(),
-                capability_id.map(|s| s.to_string()),
-                json_args, // verbatim string for Blake3 footprint
-            );
-            (
-                event.event_id,
-                event.event_hash.clone(),
-                event.timestamp,
-                event.clone(),
+        let recorded = self
+            .record_method_call_audit(
+                plugin_id,
+                method,
+                json_args,
+                capability_id,
+                actor_id,
+                ChangeSource::DBus,
             )
-        };
-
-        // Durability: write the event to the timing_subvol before returning, so
-        // the audit trail survives a restart (FR-6). A failure here is logged
-        // and does not fail the dispatch (NFR-4).
-        self.persist_audit_event(&event_summary.3).await;
-
-        // Broadcast the method-call change to gRPC subscribers.
-        let change = StateChange {
-            change_id: uuid::Uuid::new_v4().to_string(),
-            event_id: event_summary.0,
-            plugin_id: plugin_id.to_string(),
-            object_path: format!("/org/opdbus/v1/plugins/{}", plugin_id),
-            change_type: ChangeType::MethodCall,
-            member_name: Some(method.to_string()),
-            old_value: None,
-            new_value: parsed_value.clone(),
-            tags_touched: vec![],
-            event_hash: event_summary.1.clone(),
-            timestamp: event_summary.2,
-            actor_id: actor_id.to_string(),
-            source: ChangeSource::DBus,
-        };
-        let _ = self.change_tx.send(change.clone());
-        // Same fan-out as process_authoritative_change: the event is already in
-        // the chain and durable, so audit subscribers can see it now.
-        let _ = self.chain_tx.send(event_summary.3);
-
-        // Same position record as the property-set path — a method call is a
-        // mutation and occupies a chain position like any other.
-        self.advance_session_record(event_summary.0, actor_id).await;
+            .await?;
+        let parsed_value = recorded.arguments;
+        let change = recorded.change;
 
         // Dispatch to appropriate backend based on plugin_id
         let method_result: serde_json::Value = match plugin_id {

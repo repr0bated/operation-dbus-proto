@@ -31,6 +31,64 @@ use crate::quota::QuotaManager;
 use crate::session::{QueryTurn, SessionManager};
 use op_mcp::tool_registry::ToolRegistry;
 
+/// Authenticated request context injected by the bridge after its
+/// Ghostbridge identity and capability checks have succeeded. The direct
+/// Cognitive service deliberately does not derive this from request fields:
+/// callers must not be able to self-assert the actor recorded in the audit
+/// chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CognitiveRequestContext {
+    pub actor_id: String,
+    pub capability_id: String,
+}
+
+/// Safe, non-content-bearing description of a cognitive write handed to the
+/// bridge's canonical mutation/audit boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CognitiveMutationAuditRequest {
+    pub actor_id: String,
+    pub capability_id: String,
+    pub operation: String,
+    pub arguments: serde_json::Value,
+}
+
+/// Immutable chain receipt returned once a cognitive write has been accepted
+/// by the bridge's audit boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CognitiveMutationAuditReceipt {
+    pub event_id: u64,
+    pub event_hash: String,
+}
+
+/// Adapter implemented by the hosting bridge. Keeping this trait in the
+/// Cognitive crate avoids a dependency cycle while making the bridge—not a
+/// raw gRPC handler—the only available mutation ingress.
+#[async_trait::async_trait]
+pub trait CognitiveMutationAuditor: Send + Sync {
+    async fn record_mutation(
+        &self,
+        request: CognitiveMutationAuditRequest,
+    ) -> Result<CognitiveMutationAuditReceipt, Status>;
+}
+
+/// Used by a Cognitive service constructed outside the bridge. Reads remain
+/// useful for diagnostics, but writes fail closed rather than bypassing the
+/// canonical event-chain path.
+#[derive(Default)]
+struct UnavailableMutationAuditor;
+
+#[async_trait::async_trait]
+impl CognitiveMutationAuditor for UnavailableMutationAuditor {
+    async fn record_mutation(
+        &self,
+        _request: CognitiveMutationAuditRequest,
+    ) -> Result<CognitiveMutationAuditReceipt, Status> {
+        Err(Status::failed_precondition(
+            "Cognitive mutations require the op-grpc-bridge canonical audit ingress.",
+        ))
+    }
+}
+
 const DEFAULT_INGEST_MAX_FILES: usize = 10_000;
 const DEFAULT_INGEST_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_INGEST_ERROR_REPORTS: usize = 100;
@@ -62,6 +120,7 @@ pub struct CognitiveGrpcService {
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
     tool_registry: Arc<ToolRegistry>,
+    mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
 }
 
 impl CognitiveGrpcService {
@@ -71,12 +130,64 @@ impl CognitiveGrpcService {
         quota_manager: Arc<QuotaManager>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
+        Self::with_mutation_auditor(
+            memory_store,
+            session_manager,
+            quota_manager,
+            tool_registry,
+            Arc::new(UnavailableMutationAuditor),
+        )
+    }
+
+    /// Construct the bridge-mounted service with an auditor that records each
+    /// accepted mutation before the authoritative Cozo write occurs.
+    pub fn with_mutation_auditor(
+        memory_store: Arc<CognitiveMemoryStore>,
+        session_manager: Arc<SessionManager>,
+        quota_manager: Arc<QuotaManager>,
+        tool_registry: Arc<ToolRegistry>,
+        mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
+    ) -> Self {
         Self {
             memory_store,
             session_manager,
             quota_manager,
             tool_registry,
+            mutation_auditor,
         }
+    }
+
+    fn mutation_context<T>(request: &Request<T>) -> Result<CognitiveRequestContext, Status> {
+        request
+            .extensions()
+            .get::<CognitiveRequestContext>()
+            .cloned()
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "Cognitive mutation request was not admitted through the canonical bridge ingress.",
+                )
+            })
+    }
+
+    async fn audit_mutation(
+        &self,
+        context: CognitiveRequestContext,
+        operation: &str,
+        arguments: serde_json::Value,
+    ) -> Result<CognitiveMutationAuditReceipt, Status> {
+        if context.capability_id != "cognitive_mcp.invoke" {
+            return Err(Status::permission_denied(
+                "Cognitive mutation requires capability cognitive_mcp.invoke.",
+            ));
+        }
+        self.mutation_auditor
+            .record_mutation(CognitiveMutationAuditRequest {
+                actor_id: context.actor_id,
+                capability_id: context.capability_id,
+                operation: operation.to_string(),
+                arguments,
+            })
+            .await
     }
 
     /// Resolve either stable UUIDs returned by `ListNotebooks`, canonical
@@ -351,6 +462,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<CreateNotebookRequest>,
     ) -> Result<Response<CreateNotebookResponse>, Status> {
+        let context = Self::mutation_context(&request)?;
         let req = request.into_inner();
         info!(title = %req.title, "CreateNotebook");
         require_at_most_bytes(
@@ -366,6 +478,17 @@ impl CognitiveToolService for CognitiveGrpcService {
         };
 
         let (name, kind) = canonical_create_notebook(&req.title, kind)?;
+        let receipt = self
+            .audit_mutation(
+                context,
+                "create_notebook",
+                serde_json::json!({
+                    "notebook": &name,
+                    "kind": kind.to_string(),
+                    "description_sha256": content_fingerprint(&req.description),
+                }),
+            )
+            .await?;
         let ns = self
             .memory_store
             .upsert_namespace(
@@ -399,6 +522,8 @@ impl CognitiveToolService for CognitiveGrpcService {
                 created_at: ns.created_at.to_rfc3339(),
                 updated_at: ns.updated_at.to_rfc3339(),
             }),
+            audit_event_id: receipt.event_id,
+            audit_event_hash: receipt.event_hash,
         }))
     }
 
@@ -409,6 +534,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<BatchCreateNotebooksRequest>,
     ) -> Result<Response<BatchCreateNotebooksResponse>, Status> {
+        let context = Self::mutation_context(&request)?;
         let req = request.into_inner();
         info!(count = req.notebooks.len(), "BatchCreateNotebooks");
         if req.notebooks.len() > MAX_BATCH_NOTEBOOKS {
@@ -416,6 +542,17 @@ impl CognitiveToolService for CognitiveGrpcService {
                 "notebooks exceeds the {MAX_BATCH_NOTEBOOKS}-item batch limit"
             )));
         }
+
+        let receipt = self
+            .audit_mutation(
+                context,
+                "batch_create_notebooks",
+                serde_json::json!({
+                    "count": req.notebooks.len(),
+                    "request_sha256": batch_request_fingerprint(&req.notebooks),
+                }),
+            )
+            .await?;
 
         let mut created_notebooks = Vec::new();
         let mut failed = 0i32;
@@ -484,6 +621,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             notebooks: created_notebooks,
             created,
             failed,
+            audit_event_id: receipt.event_id,
+            audit_event_hash: receipt.event_hash,
         }))
     }
 
@@ -494,6 +633,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<AddSourceRequest>,
     ) -> Result<Response<AddSourceResponse>, Status> {
+        let context = Self::mutation_context(&request)?;
         let req = request.into_inner();
         info!(
             notebook_id = %req.notebook_id,
@@ -501,6 +641,21 @@ impl CognitiveToolService for CognitiveGrpcService {
             "AddSource"
         );
         validate_source_request(&req)?;
+
+        let receipt = self
+            .audit_mutation(
+                context,
+                "add_source",
+                serde_json::json!({
+                    "notebook_id": &req.notebook_id,
+                    "source_type": &req.source_type,
+                    "title": &req.title,
+                    "tags": &req.tags,
+                    "content_bytes": req.content.len(),
+                    "content_sha256": content_fingerprint(&req.content),
+                }),
+            )
+            .await?;
 
         let namespace = self
             .resolve_or_create_notebook(&req.notebook_id)
@@ -523,6 +678,8 @@ impl CognitiveToolService for CognitiveGrpcService {
         Ok(Response::new(AddSourceResponse {
             source_id,
             success: true,
+            audit_event_id: receipt.event_id,
+            audit_event_hash: receipt.event_hash,
         }))
     }
 
@@ -533,6 +690,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<AddFolderRequest>,
     ) -> Result<Response<AddFolderResponse>, Status> {
+        let context = Self::mutation_context(&request)?;
         let req = request.into_inner();
         info!(
             notebook_id = %req.notebook_id,
@@ -540,6 +698,19 @@ impl CognitiveToolService for CognitiveGrpcService {
             "AddFolder"
         );
         validate_folder_patterns(&req.patterns)?;
+
+        let receipt = self
+            .audit_mutation(
+                context,
+                "add_folder",
+                serde_json::json!({
+                    "notebook_id": &req.notebook_id,
+                    "folder_path_sha256": content_fingerprint(&req.folder_path),
+                    "patterns": &req.patterns,
+                    "recursive": req.recursive,
+                }),
+            )
+            .await?;
 
         // Bulk import is intentionally opt-in. The gRPC client never gets to
         // turn an arbitrary readable host directory into retrievable notebook
@@ -664,6 +835,8 @@ impl CognitiveToolService for CognitiveGrpcService {
             sources_added: added,
             sources_skipped: skipped,
             errors,
+            audit_event_id: receipt.event_id,
+            audit_event_hash: receipt.event_hash,
         }))
     }
 
@@ -904,6 +1077,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         &self,
         request: Request<RemoveSourceRequest>,
     ) -> Result<Response<RemoveSourceResponse>, Status> {
+        let context = Self::mutation_context(&request)?;
         let req = request.into_inner();
         info!(
             notebook_id = %req.notebook_id,
@@ -912,6 +1086,16 @@ impl CognitiveToolService for CognitiveGrpcService {
         );
 
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
+        let receipt = self
+            .audit_mutation(
+                context,
+                "remove_source",
+                serde_json::json!({
+                    "notebook_id": &req.notebook_id,
+                    "source_id": &req.source_id,
+                }),
+            )
+            .await?;
 
         let deleted = self
             .memory_store
@@ -925,7 +1109,11 @@ impl CognitiveToolService for CognitiveGrpcService {
             )));
         }
 
-        Ok(Response::new(RemoveSourceResponse { success: true }))
+        Ok(Response::new(RemoveSourceResponse {
+            success: true,
+            audit_event_id: receipt.event_id,
+            audit_event_hash: receipt.event_hash,
+        }))
     }
 
     // =========================================================================
@@ -1055,6 +1243,23 @@ fn require_at_most_bytes(value: &str, field: &str, limit: usize) -> Result<(), S
         )));
     }
     Ok(())
+}
+
+fn content_fingerprint(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+fn batch_request_fingerprint(requests: &[CreateNotebookRequest]) -> String {
+    let mut hasher = Sha256::new();
+    for request in requests {
+        for value in [&request.title, &request.description, &request.kind] {
+            hasher.update(value.as_bytes());
+            // Length framing prevents distinct sequences from sharing an
+            // ambiguous concatenated representation.
+            hasher.update((value.len() as u64).to_be_bytes());
+        }
+    }
+    hex::encode(hasher.finalize())
 }
 
 fn bounded_limit(requested: i32, default: usize, max: usize) -> usize {
@@ -1341,17 +1546,52 @@ mod tests {
     use super::*;
     use crate::ingress::{MAX_CONVERSATION_ID_BYTES, MAX_QUERY_BYTES};
 
-    async fn test_service() -> (CognitiveGrpcService, Arc<CognitiveMemoryStore>) {
+    #[derive(Default)]
+    struct RecordingMutationAuditor {
+        calls: std::sync::Mutex<Vec<CognitiveMutationAuditRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CognitiveMutationAuditor for RecordingMutationAuditor {
+        async fn record_mutation(
+            &self,
+            request: CognitiveMutationAuditRequest,
+        ) -> Result<CognitiveMutationAuditReceipt, Status> {
+            let mut calls = self.calls.lock().expect("test auditor lock");
+            calls.push(request);
+            Ok(CognitiveMutationAuditReceipt {
+                event_id: calls.len() as u64,
+                event_hash: format!("test-event-{}", calls.len()),
+            })
+        }
+    }
+
+    fn admitted_mutation_request<T>(message: T) -> Request<T> {
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(CognitiveRequestContext {
+            actor_id: "test-session".to_string(),
+            capability_id: "cognitive_mcp.invoke".to_string(),
+        });
+        request
+    }
+
+    async fn test_service() -> (
+        CognitiveGrpcService,
+        Arc<CognitiveMemoryStore>,
+        Arc<RecordingMutationAuditor>,
+    ) {
         let shuttle =
             Arc::new(crate::cozo_shuttle::CozoGraphShuttle::new_in_memory().expect("cozo"));
         let store = Arc::new(CognitiveMemoryStore::new(shuttle).await.expect("store"));
-        let service = CognitiveGrpcService::new(
+        let auditor = Arc::new(RecordingMutationAuditor::default());
+        let service = CognitiveGrpcService::with_mutation_auditor(
             store.clone(),
             Arc::new(SessionManager::with_defaults()),
             Arc::new(QuotaManager::with_defaults()),
             Arc::new(ToolRegistry::new()),
+            auditor.clone(),
         );
-        (service, store)
+        (service, store, auditor)
     }
 
     #[test]
@@ -1538,7 +1778,7 @@ mod tests {
 
     #[tokio::test]
     async fn grpc_resolves_notebook_uuid_and_canonical_name_without_double_prefixing() {
-        let (service, store) = test_service().await;
+        let (service, store, _) = test_service().await;
         let namespace = store
             .upsert_namespace(
                 "project:3tched-cognative",
@@ -1603,7 +1843,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_queries_do_not_consume_quota_or_create_sessions() {
-        let (service, _) = test_service().await;
+        let (service, _, _) = test_service().await;
         let quota_before = service.quota_manager.status().await;
 
         let blank = service
@@ -1634,7 +1874,7 @@ mod tests {
 
     #[tokio::test]
     async fn deep_health_reports_checked_memory_state() {
-        let (service, _) = test_service().await;
+        let (service, _, _) = test_service().await;
 
         let health = service
             .get_health(Request::new(GetHealthRequest { deep_check: true }))
@@ -1651,11 +1891,11 @@ mod tests {
 
     #[tokio::test]
     async fn source_rpc_ids_round_trip_through_list_get_and_remove() {
-        let (service, _) = test_service().await;
+        let (service, _, auditor) = test_service().await;
         let notebook_id = "project:3tched-cognative".to_string();
 
         let added = service
-            .add_source(Request::new(AddSourceRequest {
+            .add_source(admitted_mutation_request(AddSourceRequest {
                 notebook_id: notebook_id.clone(),
                 source_type: "text".to_string(),
                 content: "Canonical ingress source content".to_string(),
@@ -1666,9 +1906,11 @@ mod tests {
             .expect("add source")
             .into_inner();
         assert!(added.success);
+        assert_eq!(added.audit_event_id, 1);
+        assert_eq!(added.audit_event_hash, "test-event-1");
 
         service
-            .add_source(Request::new(AddSourceRequest {
+            .add_source(admitted_mutation_request(AddSourceRequest {
                 notebook_id: notebook_id.clone(),
                 source_type: "text".to_string(),
                 content: "Second source".to_string(),
@@ -1702,7 +1944,7 @@ mod tests {
         assert_eq!(content.content, "Canonical ingress source content");
 
         let removed = service
-            .remove_source(Request::new(RemoveSourceRequest {
+            .remove_source(admitted_mutation_request(RemoveSourceRequest {
                 notebook_id,
                 source_id: added.source_id,
             }))
@@ -1710,11 +1952,60 @@ mod tests {
             .expect("remove source by returned id")
             .into_inner();
         assert!(removed.success);
+        assert_eq!(removed.audit_event_id, 3);
+
+        let calls = auditor.calls.lock().expect("test auditor lock");
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].actor_id, "test-session");
+        assert_eq!(calls[0].operation, "add_source");
+        assert_eq!(
+            calls[0].arguments["content_sha256"],
+            content_fingerprint("Canonical ingress source content")
+        );
+        assert!(
+            calls[0]
+                .arguments
+                .to_string()
+                .contains("Canonical ingress source content")
+                == false
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_service_cannot_bypass_canonical_mutation_ingress() {
+        let (_, store, _) = test_service().await;
+        let service = CognitiveGrpcService::new(
+            store.clone(),
+            Arc::new(SessionManager::with_defaults()),
+            Arc::new(QuotaManager::with_defaults()),
+            Arc::new(ToolRegistry::new()),
+        );
+
+        let error = service
+            .add_source(Request::new(AddSourceRequest {
+                notebook_id: "project:3tched-cognative".to_string(),
+                source_type: "text".to_string(),
+                content: "must not be written".to_string(),
+                title: "rejected source".to_string(),
+                tags: vec![],
+            }))
+            .await
+            .expect_err("standalone gRPC service must fail closed for writes");
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(error.message().contains("canonical bridge ingress"));
+        assert!(
+            store
+                .get_namespace_by_name("project:3tched-cognative")
+                .await
+                .expect("namespace query")
+                .is_none(),
+            "the rejected call must not create a namespace as a side effect"
+        );
     }
 
     #[tokio::test]
     async fn setup_auth_rejects_credentials_that_the_service_cannot_persist() {
-        let (service, _) = test_service().await;
+        let (service, _, _) = test_service().await;
         let error = service
             .setup_auth(Request::new(SetupAuthRequest {
                 auth_method: "cookie".to_string(),

@@ -7,7 +7,7 @@ use crate::code_tools::{register_code_tools, register_disabled_code_tools};
 use crate::cognitive_tools::CognitiveToolRegistry;
 use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::cozo_shuttle::CozoGraphShuttle;
-use crate::grpc_service::CognitiveGrpcService;
+use crate::grpc_service::{CognitiveGrpcService, CognitiveMutationAuditor};
 use crate::memory_store::CognitiveMemoryStore;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use crate::quota::QuotaManager;
@@ -175,12 +175,16 @@ impl CognitiveMcpServer {
     }
 
     /// Build the gRPC ingress surface for mounting on the bridge's `:50051` listener.
-    pub fn cognitive_grpc_service(&self) -> CognitiveGrpcService {
-        CognitiveGrpcService::new(
+    pub fn cognitive_grpc_service(
+        &self,
+        mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
+    ) -> CognitiveGrpcService {
+        CognitiveGrpcService::with_mutation_auditor(
             self.memory_store.clone(),
             self.session_manager.clone(),
             self.quota_manager.clone(),
             self.tool_registry.clone(),
+            mutation_auditor,
         )
     }
 }

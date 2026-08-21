@@ -12,7 +12,11 @@ use async_stream::stream;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use op_cognitive_mcp::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
-use op_cognitive_mcp::{CognitiveGrpcService, CognitiveMcpServer, QdrantSemanticShuttle};
+use op_cognitive_mcp::{
+    CognitiveGrpcService, CognitiveMcpServer, CognitiveMutationAuditReceipt,
+    CognitiveMutationAuditRequest, CognitiveMutationAuditor, CognitiveRequestContext,
+    QdrantSemanticShuttle,
+};
 use op_mcp::tool_registry::ToolRegistry;
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage};
@@ -268,9 +272,82 @@ impl CognitiveToolInterceptor {
 
 impl Interceptor for CognitiveToolInterceptor {
     fn call(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
-        let request = self.identity_gate.call(request)?;
+        let mut request = self.identity_gate.call(request)?;
         authorize_cognitive_tool_request(&request)?;
+        let (actor_id, capability_id) = {
+            let grpc_method = request
+                .extensions()
+                .get::<tonic::GrpcMethod<'_>>()
+                .ok_or_else(|| Status::internal("missing CognitiveToolService method metadata"))?;
+            let capability =
+                cognitive_tool_required_capability(grpc_method.method()).ok_or_else(|| {
+                    Status::internal("missing CognitiveToolService capability classification")
+                })?;
+            let identity = interceptor::bridge_capability_identity(request.extensions())
+                .ok_or_else(|| {
+                    Status::unauthenticated(
+                        "CognitiveToolService request has no authenticated identity",
+                    )
+                })?;
+            (
+                effective_actor_id(Some(&identity), COGNITIVE_TOOL_SERVICE),
+                capability.to_string(),
+            )
+        };
+        request.extensions_mut().insert(CognitiveRequestContext {
+            actor_id,
+            capability_id,
+        });
         Ok(request)
+    }
+}
+
+/// Native Cognitive RPCs predate generated plugin methods, but they now enter
+/// the same MutationEngine audit boundary. The Cognitive crate defines the
+/// trait so it cannot depend back on this bridge; this is the one in-process
+/// adapter that supplies the canonical implementation.
+#[derive(Clone)]
+struct BridgeCognitiveMutationAuditor {
+    mutation_engine: Arc<MutationEngine>,
+}
+
+#[async_trait::async_trait]
+impl CognitiveMutationAuditor for BridgeCognitiveMutationAuditor {
+    async fn record_mutation(
+        &self,
+        request: CognitiveMutationAuditRequest,
+    ) -> Result<CognitiveMutationAuditReceipt, Status> {
+        if !matches!(
+            request.operation.as_str(),
+            "create_notebook"
+                | "batch_create_notebooks"
+                | "add_source"
+                | "add_folder"
+                | "remove_source"
+        ) {
+            return Err(Status::invalid_argument(
+                "unknown canonical Cognitive mutation operation",
+            ));
+        }
+        let json_args = serde_json::to_string(&request.arguments).map_err(|error| {
+            Status::internal(format!("serialize Cognitive audit arguments: {error}"))
+        })?;
+        let receipt = self
+            .mutation_engine
+            .audit_cognitive_mcp_mutation(
+                &request.operation,
+                &json_args,
+                &request.capability_id,
+                &request.actor_id,
+            )
+            .await
+            .map_err(|error| {
+                Status::internal(format!("record Cognitive mutation audit event: {error:#}"))
+            })?;
+        Ok(CognitiveMutationAuditReceipt {
+            event_id: receipt.event_id,
+            event_hash: receipt.event_hash,
+        })
     }
 }
 
@@ -1105,8 +1182,11 @@ impl CognitiveMcpHandle {
         )
     }
 
-    pub fn grpc_service(&self) -> CognitiveGrpcService {
-        self.server.cognitive_grpc_service()
+    pub fn grpc_service(
+        &self,
+        mutation_auditor: Arc<dyn CognitiveMutationAuditor>,
+    ) -> CognitiveGrpcService {
+        self.server.cognitive_grpc_service(mutation_auditor)
     }
 }
 
@@ -1168,7 +1248,9 @@ pub async fn attach_cognitive_tool_service(
     let Some(handle) = handle else {
         return server;
     };
-    let grpc_service = handle.grpc_service();
+    let grpc_service = handle.grpc_service(Arc::new(BridgeCognitiveMutationAuditor {
+        mutation_engine: server.mutation_engine.clone(),
+    }));
     server
         .active_reflection()
         .register_static_service(
