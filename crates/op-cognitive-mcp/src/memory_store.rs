@@ -381,7 +381,6 @@ impl CognitiveMemoryStore {
     }
 
     pub async fn query_entries(&self, q: EntryQuery) -> Result<Vec<MemoryEntry>> {
-        let now = Utc::now().to_rfc3339();
         let limit = q.limit.unwrap_or(100) as usize;
         let offset = q.offset.unwrap_or(0) as usize;
 
@@ -389,35 +388,35 @@ impl CognitiveMemoryStore {
             Some(ns) => {
                 let mut p: Params = BTreeMap::new();
                 p.insert("ns".into(), DataValue::Str(ns.into()));
-                p.insert("now".into(), DataValue::Str(now.into()));
                 (
                     r#"
                     ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
                         := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
-                           namespace = $ns,
-                           (expires_at = "" || expires_at > $now)
+                           namespace = $ns
                     :order -updated_at
                     "#,
                     p,
                 )
             }
-            None => {
-                let mut p: Params = BTreeMap::new();
-                p.insert("now".into(), DataValue::Str(now.into()));
-                (
-                    r#"
+            None => (
+                r#"
                     ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
-                        := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
-                           (expires_at = "" || expires_at > $now)
+                        := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
                     :order -updated_at
                     "#,
-                    p,
-                )
-            }
+                BTreeMap::new(),
+            ),
         };
         let rows = self.run(script, params).context("query entries")?;
 
         let mut entries: Vec<MemoryEntry> = rows.rows.iter().map(|r| row_to_entry(r)).collect();
+
+        // Cozo evaluates both operands of an OR expression, so filtering
+        // `(expires_at = "" || expires_at > $now)` in the query raised an
+        // evaluation error for empty expiration values. Apply the same expiry
+        // rule after decoding the typed row instead.
+        let now = Utc::now();
+        entries.retain(|entry| entry.expires_at.is_none_or(|expires_at| expires_at > now));
 
         // Apply key_pattern (substring match) post-fetch.
         if let Some(pat) = &q.key_pattern {

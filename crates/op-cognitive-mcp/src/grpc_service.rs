@@ -511,11 +511,6 @@ impl CognitiveToolService for CognitiveGrpcService {
             .name;
 
         let source_id = Uuid::new_v4().to_string();
-        let key = if req.title.is_empty() {
-            source_id.clone()
-        } else {
-            req.title.clone()
-        };
 
         let value = serde_json::json!({
             "source_type": req.source_type,
@@ -524,7 +519,7 @@ impl CognitiveToolService for CognitiveGrpcService {
         });
 
         self.memory_store
-            .store_entry(&namespace, &key, value, req.tags, None)
+            .store_entry(&namespace, &source_id, value, req.tags, None)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -648,7 +643,7 @@ impl CognitiveToolService for CognitiveGrpcService {
                 offset: Some(req.offset as i64),
             })
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| Status::internal(format!("{e:#}")))?;
 
         let total = entries.len() as i32;
         let sources: Vec<SourceInfo> = entries
@@ -662,8 +657,17 @@ impl CognitiveToolService for CognitiveGrpcService {
                     .to_string();
 
                 SourceInfo {
-                    id: e.id,
-                    title: e.key,
+                    // The public source identifier is the entry key. Older
+                    // records may have title-shaped keys; preserving that
+                    // value keeps them addressable by Get/RemoveSource too.
+                    id: e.key.clone(),
+                    title: e
+                        .value
+                        .get("title")
+                        .and_then(|value| value.as_str())
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or(&e.key)
+                        .to_string(),
                     source_type,
                     tags: e.tags,
                     created_at: e.created_at.to_rfc3339(),
@@ -708,7 +712,13 @@ impl CognitiveToolService for CognitiveGrpcService {
             .and_then(|v| v.as_str())
             .unwrap_or("text")
             .to_string();
-        let title = entry.key;
+        let title = entry
+            .value
+            .get("title")
+            .and_then(|value| value.as_str())
+            .filter(|title| !title.is_empty())
+            .unwrap_or(&entry.key)
+            .to_string();
 
         Ok(Response::new(GetSourceContentResponse {
             content,
@@ -848,10 +858,17 @@ impl CognitiveToolService for CognitiveGrpcService {
 
         let namespace = self.resolve_notebook(&req.notebook_id).await?.name;
 
-        self.memory_store
+        let deleted = self
+            .memory_store
             .delete_entry(&namespace, &req.source_id)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
+        if !deleted {
+            return Err(Status::not_found(format!(
+                "Source '{}' not found",
+                req.source_id
+            )));
+        }
 
         Ok(Response::new(RemoveSourceResponse { success: true }))
     }
@@ -1170,6 +1187,59 @@ mod tests {
             .notebook
             .expect("notebook payload");
         assert_eq!(notebook.name, "project:3tched-cognative");
+    }
+
+    #[tokio::test]
+    async fn source_rpc_ids_round_trip_through_list_get_and_remove() {
+        let (service, _) = test_service().await;
+        let notebook_id = "project:3tched-cognative".to_string();
+
+        let added = service
+            .add_source(Request::new(AddSourceRequest {
+                notebook_id: notebook_id.clone(),
+                source_type: "text".to_string(),
+                content: "Canonical ingress source content".to_string(),
+                title: "Ingress design".to_string(),
+                tags: vec!["cognitive".to_string()],
+            }))
+            .await
+            .expect("add source")
+            .into_inner();
+        assert!(added.success);
+
+        let listed = service
+            .list_sources(Request::new(ListSourcesRequest {
+                notebook_id: notebook_id.clone(),
+                limit: 10,
+                offset: 0,
+            }))
+            .await
+            .expect("list sources")
+            .into_inner();
+        assert_eq!(listed.total, 1);
+        assert_eq!(listed.sources[0].id, added.source_id);
+        assert_eq!(listed.sources[0].title, "Ingress design");
+
+        let content = service
+            .get_source_content(Request::new(GetSourceContentRequest {
+                notebook_id: notebook_id.clone(),
+                source_id: added.source_id.clone(),
+            }))
+            .await
+            .expect("get source by returned id")
+            .into_inner();
+        assert_eq!(content.title, "Ingress design");
+        assert_eq!(content.content, "Canonical ingress source content");
+
+        let removed = service
+            .remove_source(Request::new(RemoveSourceRequest {
+                notebook_id,
+                source_id: added.source_id,
+            }))
+            .await
+            .expect("remove source by returned id")
+            .into_inner();
+        assert!(removed.success);
     }
 
     #[tokio::test]
