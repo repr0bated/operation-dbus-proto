@@ -3153,8 +3153,8 @@ async fn dispatch_cognitive_mcp_method(
                 .unwrap_or(30),
         );
         return tokio::time::timeout(timeout, async move {
-            let defs = reg.list(0, usize::MAX, None).await;
-            cognitive_tool_catalog_response(defs)
+            let catalog = reg.catalog(0, usize::MAX, None).await;
+            cognitive_tool_catalog_response(catalog)
         })
         .await
         .map_err(|_| {
@@ -3219,11 +3219,12 @@ async fn dispatch_cognitive_mcp_method(
 }
 
 fn cognitive_tool_catalog_response(
-    definitions: Vec<op_core::ToolDefinition>,
+    entries: Vec<op_mcp::tool_registry::ToolCatalogEntry>,
 ) -> anyhow::Result<serde_json::Value> {
-    let mut tools = definitions
+    let mut tools = entries
         .into_iter()
-        .map(|tool| {
+        .map(|entry| {
+            let tool = entry.definition;
             Ok(serde_json::json!({
                 "name": tool.name,
                 "description": tool.description,
@@ -3233,6 +3234,8 @@ fn cognitive_tool_catalog_response(
                 "input_schema": serde_json::to_value(tool.input_schema)
                     .context("serialize cognitive tool input schema")?,
                 "schema_version": tool.schema_version,
+                "readiness": entry.readiness.status(),
+                "readiness_reason": entry.readiness.reason(),
             }))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
@@ -3474,7 +3477,7 @@ mod cognitive_tool_catalog_tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use op_core::ToolDefinition;
-    use op_mcp::tool_registry::{Tool, ToolRegistry};
+    use op_mcp::tool_registry::{Tool, ToolCatalogEntry, ToolReadiness, ToolRegistry};
     use serde_json::json;
     use simd_json::OwnedValue;
     use std::sync::Arc;
@@ -3504,32 +3507,52 @@ mod cognitive_tool_catalog_tests {
         }
     }
 
-    fn definition(
+    fn catalog_entry(
         name: &str,
         category: &str,
         tags: &[&str],
         namespace: &str,
         schema_version: &str,
-    ) -> ToolDefinition {
-        ToolDefinition {
-            name: name.to_string(),
-            description: format!("{name} description"),
-            input_schema: simd_json::json!({
-                "type": "object",
-                "properties": { "query": { "type": "string" } },
-            }),
-            schema_version: schema_version.to_string(),
-            category: category.to_string(),
-            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
-            namespace: namespace.to_string(),
+        readiness: ToolReadiness,
+    ) -> ToolCatalogEntry {
+        ToolCatalogEntry {
+            definition: ToolDefinition {
+                name: name.to_string(),
+                description: format!("{name} description"),
+                input_schema: simd_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                }),
+                schema_version: schema_version.to_string(),
+                category: category.to_string(),
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                namespace: namespace.to_string(),
+            },
+            readiness,
         }
     }
 
     #[test]
     fn list_tools_is_a_stable_catalog_with_invocation_contracts() {
         let catalog = cognitive_tool_catalog_response(vec![
-            definition("zeta", "operations", &["write"], "system", "v2"),
-            definition("alpha", "retrieval", &["read", "rag"], "cognitive", "v1"),
+            catalog_entry(
+                "zeta",
+                "operations",
+                &["write"],
+                "system",
+                "v2",
+                ToolReadiness::Live,
+            ),
+            catalog_entry(
+                "alpha",
+                "retrieval",
+                &["read", "rag"],
+                "cognitive",
+                "v1",
+                ToolReadiness::Mock {
+                    reason: "awaiting a live adapter".to_string(),
+                },
+            ),
         ])
         .expect("catalog serialization");
 
@@ -3548,6 +3571,8 @@ mod cognitive_tool_catalog_tests {
                             "properties": { "query": { "type": "string" } },
                         },
                         "schema_version": "v1",
+                        "readiness": "mock",
+                        "readiness_reason": "awaiting a live adapter",
                     },
                     {
                         "name": "zeta",
@@ -3560,6 +3585,8 @@ mod cognitive_tool_catalog_tests {
                             "properties": { "query": { "type": "string" } },
                         },
                         "schema_version": "v2",
+                        "readiness": "live",
+                        "readiness_reason": null,
                     },
                 ],
             })

@@ -23,6 +23,34 @@ use tracing::debug;
 use crate::server::{ToolExecutor, ToolInfo};
 use op_core::ToolDefinition;
 
+/// Whether a registered tool is executable in this runtime.
+///
+/// The catalog is an operator-facing contract, so a schema-declared placeholder
+/// must be distinguishable from a working tool before an agent attempts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolReadiness {
+    Live,
+    Mock { reason: String },
+    Disabled { reason: String },
+}
+
+impl ToolReadiness {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Mock { .. } => "mock",
+            Self::Disabled { .. } => "disabled",
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Live => None,
+            Self::Mock { reason } | Self::Disabled { reason } => Some(reason),
+        }
+    }
+}
+
 /// Tool trait - same as op_tools::Tool but standalone
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -38,10 +66,20 @@ pub trait Tool: Send + Sync {
     fn tags(&self) -> Vec<String> {
         vec![]
     }
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Live
+    }
     async fn execute(&self, input: Value) -> Result<Value>;
 }
 
 pub type BoxedTool = Arc<dyn Tool>;
+
+/// A tool's executable contract plus its runtime readiness.
+#[derive(Debug, Clone)]
+pub struct ToolCatalogEntry {
+    pub definition: ToolDefinition,
+    pub readiness: ToolReadiness,
+}
 
 /// Simple tool registry - NO eviction, all tools always available
 pub struct ToolRegistry {
@@ -140,6 +178,31 @@ impl ToolRegistry {
         matches
     }
 
+    /// List tool definitions together with their executable readiness.
+    /// Ordering and pagination match [`Self::list`], so a catalog can be
+    /// rendered directly without accidentally marking a random page as live.
+    pub async fn catalog(
+        &self,
+        offset: usize,
+        limit: usize,
+        category: Option<&str>,
+    ) -> Vec<ToolCatalogEntry> {
+        let definitions = self.definitions.read().await;
+        let tools = self.tools.read().await;
+        let mut entries: Vec<_> = definitions
+            .values()
+            .filter(|definition| category.is_none_or(|value| definition.category == value))
+            .filter_map(|definition| {
+                tools.get(&definition.name).map(|tool| ToolCatalogEntry {
+                    definition: definition.clone(),
+                    readiness: tool.readiness(),
+                })
+            })
+            .collect();
+        entries.sort_by(|left, right| left.definition.name.cmp(&right.definition.name));
+        entries.into_iter().skip(offset).take(limit).collect()
+    }
+
     /// Total tool count
     pub async fn count(&self) -> usize {
         self.tools.read().await.len()
@@ -228,6 +291,7 @@ mod tests {
         name: &'static str,
         description: &'static str,
         category: &'static str,
+        readiness: ToolReadiness,
     }
 
     #[async_trait]
@@ -248,6 +312,10 @@ mod tests {
             self.category
         }
 
+        fn readiness(&self) -> ToolReadiness {
+            self.readiness.clone()
+        }
+
         async fn execute(&self, input: Value) -> Result<Value> {
             Ok(input)
         }
@@ -260,16 +328,21 @@ mod tests {
                 name: "zeta_query",
                 description: "Search operational state",
                 category: "operations",
+                readiness: ToolReadiness::Live,
             },
             TestTool {
                 name: "alpha_query",
                 description: "Search cognitive memory",
                 category: "cognitive",
+                readiness: ToolReadiness::Mock {
+                    reason: "requires an external adapter".to_string(),
+                },
             },
             TestTool {
                 name: "beta_status",
                 description: "Report current status",
                 category: "operations",
+                readiness: ToolReadiness::Live,
             },
         ] {
             registry
@@ -315,5 +388,20 @@ mod tests {
             .map(|definition| definition.name)
             .collect();
         assert_eq!(names, ["alpha_query", "zeta_query"]);
+    }
+
+    #[tokio::test]
+    async fn catalog_carries_readiness_for_operator_surfaces() {
+        let registry = test_registry().await;
+        let catalog = registry.catalog(0, usize::MAX, None).await;
+
+        assert_eq!(catalog[0].definition.name, "alpha_query");
+        assert_eq!(catalog[0].readiness.status(), "mock");
+        assert_eq!(
+            catalog[0].readiness.reason(),
+            Some("requires an external adapter")
+        );
+        assert_eq!(catalog[1].readiness.status(), "live");
+        assert_eq!(catalog[1].readiness.reason(), None);
     }
 }

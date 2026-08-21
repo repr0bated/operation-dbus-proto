@@ -25,7 +25,7 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 // =============================================================================
 
 const PLUGIN_NAME: &str = "cognitive_mcp";
-const PLUGIN_VERSION: &str = "3.0.0";
+const PLUGIN_VERSION: &str = "3.1.0";
 const PLUGIN_CATEGORY: &str = "service";
 const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
@@ -718,6 +718,10 @@ pub struct CognitiveToolInfo {
     pub input_schema: serde_json::Value,
     /// Tool-owned schema revision, if the registry supplies one.
     pub schema_version: String,
+    /// Runtime execution state: `live`, `mock`, or `disabled`.
+    pub readiness: String,
+    /// Human-readable reason when this is not a live tool.
+    pub readiness_reason: Option<String>,
 }
 
 /// Output for RegisterTool method
@@ -949,7 +953,7 @@ pub struct CognitiveMcpState {
 // get_health              → op-cognitive-mcp/grpc_service.rs:get_health (tonic RPC)
 // list_tools              → op-cognitive-mcp/dbus_interface.rs:list_tools (D-Bus)
 // register_tool           → op-cognitive-mcp/cognitive_tools.rs:RegisterToolTool
-//                           (stub — no dynamic tool-registration mechanism exists yet)
+//                           (explicitly catalogued as mock; dynamic registration is unsafe)
 // memory_store            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_store
 // memory_retrieve         → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_retrieve
 // memory_query            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_query
@@ -1353,6 +1357,8 @@ mod tests {
             "namespace",
             "input_schema",
             "schema_version",
+            "readiness",
+            "readiness_reason",
         ] {
             assert!(
                 fields.contains_key(field),

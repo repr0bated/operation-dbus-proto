@@ -12,7 +12,7 @@ use crate::notebooklm::register_notebooklm_tools;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use anyhow::Result;
 use async_trait::async_trait;
-use op_mcp::tool_registry::{BoxedTool, Tool, ToolRegistry};
+use op_mcp::tool_registry::{BoxedTool, Tool, ToolReadiness, ToolRegistry};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::sync::Arc;
@@ -241,11 +241,10 @@ impl Tool for MemoryTool {
     }
 }
 
-/// Stub for the `register_tool` schema method (cognitive_mcp_schema, subid
-/// mut.service.cognitive-mcp.tool.register@v1). No dynamic tool-registration
-/// mechanism exists yet — this establishes the contract as a real, reachable
-/// tool that returns a clear "not implemented" rather than a missing route.
-/// The schema is the authority; this implementation must catch up.
+/// Explicitly marked mock for the `register_tool` schema method
+/// (`mut.service.cognitive-mcp.tool.register@v1`). The registry cannot safely
+/// turn arbitrary schema text into executable code at runtime, so callers see
+/// its status before invocation rather than mistaking it for a live control.
 pub struct RegisterToolTool;
 
 #[async_trait]
@@ -255,7 +254,7 @@ impl Tool for RegisterToolTool {
     }
 
     fn description(&self) -> &str {
-        "Register a new MCP tool at runtime. Not yet implemented."
+        "MOCK: dynamic MCP tool registration is not implemented."
     }
 
     fn category(&self) -> &str {
@@ -263,7 +262,19 @@ impl Tool for RegisterToolTool {
     }
 
     fn tags(&self) -> Vec<String> {
-        vec!["tool".to_string(), "registry".to_string()]
+        vec![
+            "tool".to_string(),
+            "registry".to_string(),
+            "mock".to_string(),
+        ]
+    }
+
+    fn readiness(&self) -> ToolReadiness {
+        ToolReadiness::Mock {
+            reason:
+                "Dynamic registration cannot safely create executable tools from untrusted input."
+                    .to_string(),
+        }
     }
 
     fn input_schema(&self) -> Value {
@@ -731,4 +742,20 @@ fn identity_link_value(input: &Value, identity_id: Option<&str>) -> serde_json::
             .map(|container_id| format!("soul:user-container:{container_id}")),
         "subid": "src.software.user-container-memory.identity-link@v1"
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_tool_registration_is_loudly_catalogued_as_mock() {
+        let tool = RegisterToolTool;
+        assert_eq!(tool.readiness().status(), "mock");
+        assert!(tool
+            .readiness()
+            .reason()
+            .is_some_and(|reason| reason.contains("untrusted input")));
+        assert!(tool.description().starts_with("MOCK:"));
+    }
 }
