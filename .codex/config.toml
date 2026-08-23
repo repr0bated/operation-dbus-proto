@@ -18,7 +18,7 @@ args = [
 ]
 
 [mcp_servers.op-dbus-agents]
-url = "http://127.0.0.1:8080/mcp/agents/message"
+url = ""
 
 [mcp_servers.op-dbus-compact]
 url = ""
