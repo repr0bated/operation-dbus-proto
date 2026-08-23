@@ -40,7 +40,3 @@ url = ""
 
 [mcp_servers.cognitive-mcp.http_headers]
 X-Ghostbridge-Footprint = "mcp-client"
-
-[mcp_servers.op-cognitive-mcp]
-command = "/usr/local/bin/op-cognitive-mcp"
-args = ["--stdio"]
