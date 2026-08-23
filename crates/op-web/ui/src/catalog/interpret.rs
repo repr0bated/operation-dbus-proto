@@ -101,7 +101,7 @@ fn walk(ui: &mut Ui, spec: &Value, value: &Value) -> Result<(), RenderError> {
             Ok(())
         }
 
-"repeat" => {
+        "repeat" => {
             let bind = spec
                 .get("bind")
                 .and_then(Value::as_str)
