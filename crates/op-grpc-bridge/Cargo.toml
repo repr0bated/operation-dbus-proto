@@ -20,6 +20,7 @@ tonic-health = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }

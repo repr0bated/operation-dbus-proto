@@ -42,7 +42,7 @@ const DEFAULT_SCHEMA_PLUGIN_ID: &str = "tched_router";
 // collide with that, since 0.0.0.0 covers every interface including
 // 10.200.0.2 — confirmed live via "Address already in use (os error 98)"
 // crash-looping the service before this was narrowed).
-const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090,0.0.0.0:50051";
+const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
 /// the catalog IS the plugin); a file path is still accepted for tests and
@@ -60,8 +60,12 @@ pub struct ServerConfig {
     /// `/run/ghostbridge/container.sock`). Served with the same route set.
     /// When equal to `unix_socket`, only one listener is opened.
     pub shared_socket: PathBuf,
+    /// TCP bind addresses (comma-separated). **Always TLS** — zero-trust transport
+    /// policy forbids plaintext gRPC on TCP, even on loopback.
+    /// Set via `ZEROCLAW_BIND_ADDR` or `GRPC_BIND`; default `0.0.0.0:8090`.
     pub bind_addr: String,
-    pub tls_bind_addr: Option<String>,
+    /// TLS identity for the TCP door. `None` aborts startup with a clear error
+    /// unless `ZEROCLAW_DEV_SELF_SIGNED=1` is set (dev/CI only — never production).
     pub tls_identity: Option<Identity>,
 }
 
@@ -73,7 +77,6 @@ impl Default for ServerConfig {
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
-            tls_bind_addr: None,
             tls_identity: None,
         }
     }
@@ -99,38 +102,55 @@ impl ServerConfig {
             bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
                 .or_else(|_| std::env::var("GRPC_BIND"))
                 .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
-            tls_bind_addr: std::env::var("ZEROCLAW_TLS_BIND_ADDR").ok(),
             tls_identity: Self::load_tls_identity(),
         }
     }
 
-    /// Load TLS identity from env vars or auto-generate self-signed.
-    /// Env: `ZEROCLAW_TLS_CERT`, `ZEROCLAW_TLS_KEY` (PEM).
-    /// If both absent, generates one via rcgen (localhost, ghostbridge.tech, 3tched.com).
+    /// Load TLS identity for the TCP door.
+    ///
+    /// Priority:
+    ///   1. `ZEROCLAW_TLS_CERT` + `ZEROCLAW_TLS_KEY` env vars (PEM).
+    ///   2. Self-signed via rcgen **only** if `ZEROCLAW_DEV_SELF_SIGNED=1` is set
+    ///      (dev/CI use only — never set on production; op-web and mesh peers will
+    ///      reject an unverified cert and connections will fail at the TLS handshake).
+    ///   3. `None` — startup will abort with a clear error rather than silently
+    ///      serving unencrypted gRPC (zero-trust: TLS is mandatory on TCP).
     fn load_tls_identity() -> Option<Identity> {
         let cert_pem = std::env::var("ZEROCLAW_TLS_CERT").ok();
         let key_pem = std::env::var("ZEROCLAW_TLS_KEY").ok();
 
-        match (cert_pem, key_pem) {
-            (Some(cert), Some(key)) => {
-                tracing::info!(
-                    "TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY env vars"
-                );
-                Some(Identity::from_pem(cert, key))
-            }
-            _ => {
-                let ck = rcgen::generate_simple_self_signed(vec![
-                    "localhost".to_string(),
-                    "ghostbridge.tech".to_string(),
-                    "3tched.com".to_string(),
-                ])
-                .expect("failed to generate self-signed TLS cert");
-                let cert_pem = ck.cert.pem();
-                let key_pem = ck.key_pair.serialize_pem();
-                tracing::info!("TLS identity auto-generated (self-signed for localhost, ghostbridge.tech, 3tched.com)");
-                Some(Identity::from_pem(cert_pem, key_pem))
+        if let (Some(cert), Some(key)) = (cert_pem, key_pem) {
+            tracing::info!("TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY");
+            return Some(Identity::from_pem(cert, key));
+        }
+
+        // Dev/CI escape hatch: self-signed cert. Never set this in production.
+        if std::env::var("ZEROCLAW_DEV_SELF_SIGNED").as_deref() == Ok("1") {
+            match rcgen::generate_simple_self_signed(vec![
+                "localhost".to_string(),
+                "ghostbridge.tech".to_string(),
+                "3tched.com".to_string(),
+            ]) {
+                Ok(ck) => {
+                    tracing::warn!(
+                        "ZEROCLAW_DEV_SELF_SIGNED=1: using ephemeral self-signed TLS cert. \
+                         DO NOT USE IN PRODUCTION — peers will reject this cert."
+                    );
+                    return Some(Identity::from_pem(ck.cert.pem(), ck.key_pair.serialize_pem()));
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to generate self-signed TLS cert");
+                    return None;
+                }
             }
         }
+
+        tracing::error!(
+            "No TLS identity configured for TCP door. \
+             Set ZEROCLAW_TLS_CERT+ZEROCLAW_TLS_KEY (PEM) or ZEROCLAW_DEV_SELF_SIGNED=1 (dev only). \
+             TCP listeners will not start."
+        );
+        None
     }
 }
 
@@ -442,60 +462,48 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .serve_with_incoming(incoming)
     });
 
-    // TCP listeners for gRPC + gRPC-Web. REST is served by op-web on :8080.
-    let bind_addrs: Vec<&str> = config.bind_addr.split(',').collect();
+    // TCP door: always TLS (zero-trust transport policy).
+    // bind_addr is comma-separated; each address gets its own TLS listener.
+    let identity = config.tls_identity.ok_or_else(|| {
+        anyhow::anyhow!(
+            "TCP fabric requires TLS — set ZEROCLAW_TLS_CERT+ZEROCLAW_TLS_KEY \
+             or ZEROCLAW_DEV_SELF_SIGNED=1 (dev only)"
+        )
+    })?;
+    let bind_addrs: Vec<&str> = config
+        .bind_addr
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if bind_addrs.is_empty() {
+        anyhow::bail!("ZEROCLAW_BIND_ADDR is empty — no TCP addresses to bind");
+    }
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
-        let listener = std::net::TcpListener::bind(bind_addr)?;
-        listener.set_nonblocking(true)?;
-        let listener = tokio::net::TcpListener::from_std(listener)?;
-        info!(addr = %bind_addr, "zeroclaw gRPC/gRPC-Web listening on TCP");
-        let app = build_axum_app(loader.clone(), operation_server.clone());
-        let server = axum::serve(listener, app.into_make_service());
+        info!(addr = %bind_addr, "zeroclaw TLS gRPC/gRPC-Web listening on TCP");
+        let tls_config = ServerTlsConfig::new().identity(identity.clone());
+        let server = tonic::transport::Server::builder()
+            .accept_http1(true)
+            .tls_config(tls_config)
+            .map_err(|e| anyhow::anyhow!("invalid TLS config for {bind_addr}: {e}"))?
+            .layer(cors.clone())
+            .add_routes(build_tonic_routes(loader.clone(), operation_server.clone()))
+            .serve(bind_addr);
         tcp_tasks.push(tokio::spawn(async move { server.await }));
     }
 
-    // Optional TLS listener for gRPC-Web over TLS (GUI/public-facing).
-    let tls_server_fut = match (config.tls_bind_addr, config.tls_identity) {
-        (Some(ref tls_addr), Some(identity)) => {
-            let tls_bind: SocketAddr = tls_addr.parse()?;
-            info!(addr = %tls_bind, "zeroclaw TLS gRPC-Web listening on TCP");
-            let cors = CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any);
-            let tls_config = ServerTlsConfig::new().identity(identity);
-            let server: std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<(), tonic::transport::Error>> + Send>,
-            > = Box::pin(
-                tonic::transport::Server::builder()
-                    .accept_http1(true)
-                    .tls_config(tls_config)
-                    .expect("invalid TLS config")
-                    .layer(cors)
-                    .add_routes(build_tonic_routes(loader.clone(), operation_server))
-                    .serve(tls_bind),
-            );
-            Some(server)
-        }
-        _ => None,
-    };
-
-    // Drive all listeners concurrently. Absent optional servers are no-ops.
+    // Drive all listeners concurrently.
     let shared_fut = async {
         match shared_server {
             Some(s) => s
                 .await
                 .map_err(|e| anyhow::anyhow!("Shared container.sock: {e}")),
-            None => Ok(()),
-        }
-    };
-    let tls_fut = async {
-        match tls_server_fut {
-            Some(s) => s
-                .await
-                .map_err(|e| anyhow::anyhow!("TLS server error: {e}")),
             None => Ok(()),
         }
     };
@@ -505,22 +513,17 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Unix server error: {e}"))
     };
     let tcp_fut = async {
-        if tcp_tasks.is_empty() {
-            Ok(())
-        } else {
-            let (result, _idx, _rest) = futures::future::select_all(tcp_tasks).await;
-            match result {
-                Ok(inner) => inner.map_err(|e| anyhow::anyhow!("TCP server error: {e}")),
-                Err(join_err) => Err(anyhow::anyhow!("TCP server task panicked: {join_err}")),
-            }
+        let (result, _idx, _rest) = futures::future::select_all(tcp_tasks).await;
+        match result {
+            Ok(inner) => inner.map_err(|e| anyhow::anyhow!("TCP TLS server error: {e}")),
+            Err(join_err) => Err(anyhow::anyhow!("TCP TLS server task panicked: {join_err}")),
         }
     };
 
-    let (u, s, t, tls_r) = tokio::join!(unix_fut, shared_fut, tcp_fut, tls_fut);
+    let (u, s, t) = tokio::join!(unix_fut, shared_fut, tcp_fut);
     u?;
     s?;
     t?;
-    tls_r?;
     Ok(())
 }
 
