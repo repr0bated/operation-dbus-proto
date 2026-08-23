@@ -20,9 +20,6 @@ args = [
 [mcp_servers.op-dbus-agents]
 url = ""
 
-[mcp_servers.op-dbus-compact]
-url = ""
-
 [mcp_servers.op-web-compact]
 command = "/usr/local/bin/op-mcp-server"
 args = [
