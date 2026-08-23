@@ -40,7 +40,6 @@ url = ""
 
 [mcp_servers.cognitive-mcp.http_headers]
 X-Ghostbridge-Footprint = "mcp-client"
-X-Ghostbridge-Trace-ID = "mcp-add-project"
 
 [mcp_servers.op-cognitive-mcp]
 command = "/usr/local/bin/op-cognitive-mcp"
