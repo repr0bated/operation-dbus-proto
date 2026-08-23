@@ -5,7 +5,7 @@
 //!
 //! ## Architecture
 //!
-//! ```
+//! ```text
 //! ┌─────────────────────────────────────────────────────────────────────┐
 //! │                    Session Activity Stream                           │
 //! │  (tool calls, queries, context switches, idle patterns)            │

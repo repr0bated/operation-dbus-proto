@@ -20,6 +20,7 @@
 //! 4. Tool calls are proxied to D-Bus
 //!    - MCP tool call -> D-Bus method call -> Agent execution
 
+use crate::protocol::{JsonRpcError, McpRequest, McpResponse};
 use anyhow::{Context, Result};
 use op_core::BusType;
 use op_introspection::ServiceScanner;
@@ -310,6 +311,72 @@ impl AgentsServer {
     pub async fn refresh(&self) -> Result<()> {
         info!("Refreshing agent discovery...");
         self.discover_agents().await
+    }
+
+    /// Handle an MCP request
+    pub async fn handle_request(&self, request: McpRequest) -> McpResponse {
+        match request.method.as_str() {
+            "initialize" => McpResponse::success(
+                request.id,
+                json!({
+                    "protocolVersion": crate::PROTOCOL_VERSION,
+                    "serverInfo": {
+                        "name": "op-mcp-agents",
+                        "version": crate::SERVER_VERSION
+                    },
+                    "capabilities": {
+                        "tools": { "listChanged": true }
+                    }
+                }),
+            ),
+            "tools/list" => {
+                let tools = self.list_tools().await;
+                McpResponse::success(request.id, json!({ "tools": tools }))
+            }
+            "tools/call" => {
+                let tool_name = request
+                    .params
+                    .as_object()
+                    .and_then(|p| p.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                let arguments = request
+                    .params
+                    .as_object()
+                    .and_then(|p| p.get("arguments"))
+                    .cloned()
+                    .unwrap_or(json!({}));
+                match self.execute_tool(tool_name, arguments).await {
+                    Ok(result) => {
+                        let text = simd_json::to_string_pretty(&result).unwrap_or_default();
+                        McpResponse::success(
+                            request.id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": text
+                                }],
+                                "isError": false
+                            }),
+                        )
+                    }
+                    Err(e) => McpResponse::success(
+                        request.id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": format!("Error executing agent tool {tool_name}: {e}")
+                            }],
+                            "isError": true
+                        }),
+                    ),
+                }
+            }
+            _ => McpResponse::error(
+                request.id,
+                JsonRpcError::new(-32601, format!("Method not found: {}", request.method)),
+            ),
+        }
     }
 }
 

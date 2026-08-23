@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8082";
+const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8084";
 const DEFAULT_AGENT_ALIAS: &str = "dashboard";
 
 #[derive(Clone, Debug)]

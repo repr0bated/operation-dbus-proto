@@ -18,7 +18,7 @@ use zbus::{Connection, Proxy};
 
 use base64::Engine;
 use op_blockchain::{PluginFootprint, StreamingBlockchain};
-use op_identity::{read_sled, write_sled_full};
+use op_identity::{read_sled, write_sled_advance};
 use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::blockchain_plugin::{
@@ -97,6 +97,9 @@ pub struct MutationEngine {
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
     /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
     chat_manager: Arc<ChatManager>,
+    /// Verified session identities, keyed by session_id. Projection of the
+    /// session records for the mutation path — not a second store.
+    sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -142,7 +145,197 @@ impl op_core::state_publisher::StatePublisher for MutationEngine {
     }
 }
 
+/// Session genesis stamp used by identity_sled_dispatch.
+#[derive(Debug, Clone, Default)]
+pub struct GenesisStamp {
+    pub session_id: String,
+    pub wireguard_pubkey: String,
+    pub genesis_hex: String,
+    pub arrival_timestamp: i64,
+    pub chain_head_at_arrival: String,
+    pub catalog_hash_at_arrival: String,
+    pub head_timestamp_at_arrival: i64,
+}
+
+/// Verified session identity stamped on the mutation path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionContext {
+    pub genesis_hex: String,
+    pub session_id: String,
+    pub wireguard_pubkey: String,
+}
+
+const ANONYMOUS_ACTOR: &str = "anonymous";
+
 impl MutationEngine {
+    pub async fn session_context(&self, session_id: &str) -> Option<SessionContext> {
+        self.sessions.read().await.get(session_id).cloned()
+    }
+
+    pub async fn session_context_for_actor(&self, actor_id: &str) -> Option<SessionContext> {
+        if actor_id.is_empty() || actor_id == ANONYMOUS_ACTOR {
+            return None;
+        }
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(found) = sessions.get(actor_id) {
+                return Some(found.clone());
+            }
+            if let Some(found) = sessions
+                .values()
+                .find(|ctx| ctx.wireguard_pubkey == actor_id || ctx.genesis_hex == actor_id)
+            {
+                return Some(found.clone());
+            }
+        }
+        let record =
+            crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
+        let genesis_hex = record.genesis.clone().filter(|g| !g.is_empty())?;
+        let context = SessionContext {
+            genesis_hex,
+            session_id: record.session_id,
+            wireguard_pubkey: record.wireguard_pubkey,
+        };
+        self.register_session_context(context.clone()).await;
+        Some(context)
+    }
+
+    pub async fn ensure_session_context(&self, actor_id: &str) -> Option<SessionContext> {
+        if actor_id.is_empty() || actor_id == ANONYMOUS_ACTOR {
+            return None;
+        }
+        if let Some(found) = self.session_context_for_actor(actor_id).await {
+            return Some(found);
+        }
+        let record =
+            crate::identity_sled_dispatch::session_record_for_actor(self, actor_id).await?;
+        match self
+            .mint_and_store_genesis(&record.session_id, &record.wireguard_pubkey)
+            .await
+        {
+            Ok(_) => self.session_context(&record.session_id).await,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    session_id = %record.session_id,
+                    "session arrival could not be anchored"
+                );
+                None
+            }
+        }
+    }
+
+    pub async fn register_session_context(&self, context: SessionContext) {
+        self.sessions
+            .write()
+            .await
+            .insert(context.session_id.clone(), context);
+    }
+
+    pub async fn forget_session_context(&self, session_id: &str) {
+        self.sessions.write().await.remove(session_id);
+    }
+
+    /// Mint this session's genesis once at arrival (FR-1).
+    pub async fn mint_and_store_genesis(
+        &self,
+        session_id: &str,
+        wireguard_pubkey: &str,
+    ) -> anyhow::Result<String> {
+        if session_id.is_empty() {
+            anyhow::bail!("session genesis requires a session_id");
+        }
+        if let Some(existing) =
+            crate::identity_sled_dispatch::stored_genesis(self, session_id).await
+        {
+            self.register_session_context(SessionContext {
+                genesis_hex: existing.clone(),
+                session_id: session_id.to_string(),
+                wireguard_pubkey: wireguard_pubkey.to_string(),
+            })
+            .await;
+            return Ok(existing);
+        }
+
+        let pubkey_bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            wireguard_pubkey.trim(),
+        )
+        .ok()
+        .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!("session genesis requires a 32-byte base64 WireGuard pubkey")
+        })?;
+
+        let (chain_head_hex, head_timestamp) = {
+            let chain = self.event_chain.read().await;
+            let head_ts = chain
+                .events()
+                .last()
+                .map(|event| event.timestamp.timestamp())
+                .unwrap_or(0);
+            (chain.last_hash().to_string(), head_ts)
+        };
+        let chain_head_bytes = hex::decode(&chain_head_hex)
+            .ok()
+            .and_then(|raw| <[u8; 32]>::try_from(raw).ok())
+            .unwrap_or([0u8; 32]);
+        let catalog_hash_bytes =
+            op_identity::schema_bridge::schema_catalog_hash().unwrap_or_else(|| {
+                tracing::warn!(
+                    session_id,
+                    "no published catalog hash at arrival; the anchor binds zeros"
+                );
+                [0u8; 32]
+            });
+        let arrival_timestamp = chrono::Utc::now().timestamp();
+
+        let genesis = op_identity::session_genesis::mint_genesis(
+            &pubkey_bytes,
+            &chain_head_bytes,
+            head_timestamp,
+            &catalog_hash_bytes,
+            arrival_timestamp,
+        );
+
+        let stamp = GenesisStamp {
+            session_id: session_id.to_string(),
+            wireguard_pubkey: wireguard_pubkey.to_string(),
+            genesis_hex: hex::encode(genesis),
+            arrival_timestamp,
+            chain_head_at_arrival: chain_head_hex,
+            catalog_hash_at_arrival: hex::encode(catalog_hash_bytes),
+            head_timestamp_at_arrival: head_timestamp,
+        };
+
+        let stored = crate::identity_sled_dispatch::store_genesis(self, &stamp).await?;
+        self.register_session_context(SessionContext {
+            genesis_hex: stored.clone(),
+            session_id: session_id.to_string(),
+            wireguard_pubkey: wireguard_pubkey.to_string(),
+        })
+        .await;
+        self.record_session_arrival(session_id).await;
+        Ok(stored)
+    }
+
+    async fn record_session_arrival(&self, session_id: &str) {
+        let args = serde_json::json!({ "session_id": session_id }).to_string();
+        let event = {
+            let mut chain = self.event_chain.write().await;
+            chain
+                .record_method_call(
+                    session_id.to_string(),
+                    "identity_sled".to_string(),
+                    "session_arrival".to_string(),
+                    Some("identity_sled.write".to_string()),
+                    &args,
+                )
+                .clone()
+        };
+        self.persist_audit_event(&event).await;
+    }
+
     /// Create a new authoritative Mutation Engine
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
@@ -158,6 +351,7 @@ impl MutationEngine {
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -234,16 +428,44 @@ impl MutationEngine {
             }
         };
 
-        // (event_id, event_json) — sorted before replay so linkage is exact.
-        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
-        let mut skipped = 0usize;
+        let max_replay: usize = std::env::var("OPDBUS_AUDIT_REPLAY_LIMIT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000);
 
+        let mut candidate_paths = Vec::new();
         while let Ok(Some(entry)) = dir.next_entry().await {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let bytes = match tokio::fs::read(&path).await {
+            let block_num = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(op_blockchain::parse_block_number);
+            candidate_paths.push((block_num, path));
+        }
+
+        candidate_paths.sort_by(|(a_num, a_path), (b_num, b_path)| match (a_num, b_num) {
+            (Some(a), Some(b)) => a.cmp(b),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => a_path.cmp(b_path),
+        });
+
+        let total_candidates = candidate_paths.len();
+        let target_paths = if total_candidates > max_replay {
+            &candidate_paths[total_candidates - max_replay..]
+        } else {
+            &candidate_paths[..]
+        };
+
+        // (event_id, event_json) — sorted before replay so linkage is exact.
+        let mut records: Vec<(u64, serde_json::Value)> = Vec::new();
+        let mut skipped = 0usize;
+
+        for (_, path) in target_paths {
+            let bytes = match tokio::fs::read(path).await {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     tracing::warn!(%error, path = %path.display(), "unreadable audit record");
@@ -961,12 +1183,11 @@ impl MutationEngine {
                 }
             }
         } else if plugin_id == "unix_socket" && change_type == ChangeType::MethodCall {
-            // unix_socket plugin dispatch: createunixsocket <name> <ports csv/vec>.
-            // The method registers the name+ports routing tag against the
-            // shared container.sock transport; the transport owner is not
-            // replaced during registration.
+            // Schema method is `bind` (MMID BindService). `createunixsocket` is
+            // the legacy CallMethod name. Both register (name, ports) against
+            // the shared container.sock; Bind.path is accepted and ignored.
             if let Some(method) = &member_name {
-                if method == "createunixsocket" {
+                if is_unix_socket_bind_method(method) {
                     let (name, ports) = parse_socket_args(&value);
                     let result = self
                         .unix_socket
@@ -1097,7 +1318,12 @@ impl MutationEngine {
                 (String::new(), String::new())
             };
             if let Err(e) =
-                write_sled_full(&existing_pubkey_b64, change.event_id, &existing_trace_hex)
+                write_sled_advance(
+                    &existing_pubkey_b64,
+                    change.event_id,
+                    &existing_trace_hex,
+                    0,
+                )
             {
                 tracing::warn!("sled write after mutation failed: {}", e);
             }
@@ -1294,13 +1520,12 @@ impl MutationEngine {
                         op_plugins::state_plugins::tched_router::ChatInput,
                     >(serde_json::to_value(&parsed_value)?)
                     .context("invalid tched_router.Chat arguments")?;
+                    // Selected model on tched-router (:8084). Tools are compact
+                    // MCP on that agent — not deprecated op-llm.
                     serde_json::to_value(
-                        crate::chat_service::dispatch_schema_chat(
-                            self.chat_manager.as_ref(),
-                            &state,
-                            args,
-                        )
-                        .await?,
+                        crate::zeroclaw_runtime::ZeroclawRuntimeClient::from_env()
+                            .chat(&state, args)
+                            .await?,
                     )?
                 } else {
                     match op_plugins::state_plugins::tched_router::dispatch_tched_router_method(
@@ -1424,7 +1649,7 @@ impl MutationEngine {
         result: &serde_json::Value,
     ) -> anyhow::Result<()> {
         match method {
-            "SetProvider" | "SetModel" => {
+            "SetProvider" | "SetModel" | "SetSelection" => {
                 self.merge_into_state_cache("tched_router", result).await;
             }
             "SetOvsRoutingModel"
@@ -2404,7 +2629,15 @@ fn mcp_needs_initialize(envelope: &serde_json::Value) -> bool {
         .is_some_and(|m| m.contains("not initialized"))
 }
 
-/// Parse createunixsocket arguments. Accepts either a JSON array
+/// True for the live `unix_socket` registration method and its aliases.
+fn is_unix_socket_bind_method(method: &str) -> bool {
+    matches!(
+        method,
+        "bind" | "Bind" | "createunixsocket" | "create_unix_socket"
+    )
+}
+
+/// Parse createunixsocket / bind arguments. Accepts either a JSON array
 /// `[name, [ports...]]` or an object `{ "name": "...", "ports": [...] }`.
 /// `ports` may be a JSON array of numbers or a CSV string ("6334" / "6334,8080").
 fn parse_socket_args(value: &simd_json::OwnedValue) -> (String, Vec<u16>) {

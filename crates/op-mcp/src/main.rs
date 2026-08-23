@@ -11,6 +11,8 @@
 //!   op-mcp-server                           # stdio, compact mode
 //!   op-mcp-server --mode agents             # stdio, agents mode
 //!   op-mcp-server --http 0.0.0.0:3001       # HTTP+SSE
+//!   op-mcp-server --unix /run/opdbus/mcp-compact.sock
+//!   op-mcp-server --mode blob-schema --unix /run/opdbus/mcp-blob-schema.sock
 //!   op-mcp-server --ws 0.0.0.0:3002         # WebSocket
 //!   op-mcp-server --grpc 0.0.0.0:50051      # gRPC transport
 //!   op-mcp-server --all                     # All transports
@@ -18,7 +20,7 @@
 use anyhow::Result;
 use clap::Parser;
 use op_core::BusType;
-use op_identity::{write_sled_from_wg, WireGuardIdentity};
+use op_identity::WireGuardIdentity;
 #[cfg(feature = "grpc")]
 use op_mcp::grpc::{GrpcConfig, GrpcTransport};
 use op_mcp::{
@@ -34,7 +36,7 @@ use tracing_subscriber::FmtSubscriber;
 #[command(name = "op-mcp-server")]
 #[command(about = "Unified MCP Protocol Server")]
 struct Cli {
-    /// Server mode: compact (5 lazy meta-tools), agents (always-on), full (all tools), grpc, grpc-agents
+    /// Server mode: compact, agents, full, blob-schema, grpc, grpc-agents
     #[arg(long, short, default_value = "compact")]
     mode: String,
 
@@ -45,6 +47,10 @@ struct Cli {
     /// Run HTTP+SSE transport on specified address
     #[arg(long, value_name = "ADDR")]
     http: Option<String>,
+
+    /// Run HTTP+SSE on a Unix domain socket (socket ACL is auth)
+    #[arg(long, value_name = "PATH")]
+    unix: Option<std::path::PathBuf>,
 
     /// Run SSE-only transport on specified address
     #[arg(long, value_name = "ADDR")]
@@ -110,16 +116,12 @@ async fn main() -> Result<()> {
 
     match wg_id.get_local_pubkey() {
         Ok(pubkey) => {
-            if let Err(e) = write_sled_from_wg(&pubkey) {
-                tracing::warn!(error = %e, "Failed to write WG identity sled to /dev/shm");
-            } else {
-                info!(
-                    interface = %cli.wg_interface,
-                    pubkey = %pubkey,
-                    wg_ip = ?wg_ip,
-                    "WG identity sled written"
-                );
-            }
+            info!(
+                interface = %cli.wg_interface,
+                pubkey = %pubkey,
+                wg_ip = ?wg_ip,
+                "WG identity resolved"
+            );
         }
         Err(e) => {
             tracing::warn!(
@@ -165,15 +167,20 @@ async fn main() -> Result<()> {
     // Parse server mode for non-gRPC modes
     let mode: ServerMode = cli.mode.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
-    info!(mode = %mode, "Starting op-mcp-server");
+    if cli.stdio {
+        anyhow::bail!(
+            "stdio transport has been removed; all MCP interactions must use a socket (--unix <path>, --http <addr>, --ws <addr>, or default /run/opdbus/mcp-*.sock)"
+        );
+    }
 
-    // Determine transports.
-    // When --all is used the default ports bind to the WG interface IP (or
-    // 0.0.0.0 if the interface is not up). Explicit --http/--ws/--grpc flags
-    // always win regardless of the WG interface state.
-    let run_stdio = cli.stdio
-        || cli.all
-        || (cli.http.is_none() && cli.sse.is_none() && cli.ws.is_none() && cli.grpc.is_none());
+    // Determine transports: all communication goes through sockets.
+    let unix_path = cli.unix.or_else(|| {
+        if cli.http.is_none() && cli.sse.is_none() && cli.ws.is_none() && cli.grpc.is_none() && !cli.all {
+            Some(default_unix_socket_for_mode(mode))
+        } else {
+            None
+        }
+    });
     let all_ip = wg_ip.as_deref().unwrap_or("0.0.0.0");
     let http_addr = cli.http.or(cli.sse).or(if cli.all {
         Some(format!("{all_ip}:3001"))
@@ -194,14 +201,14 @@ async fn main() -> Result<()> {
     // Create and run server based on mode
     match mode {
         ServerMode::Compact => {
-            let executor: Arc<dyn ToolExecutor> = Arc::new(LazyOpToolsExecutor);
+            let executor: Arc<dyn ToolExecutor> =
+                Arc::new(op_mcp::compact::PrewarmedOpToolsExecutor::new().await?);
             let server = Arc::new(CompactServer::new(executor));
-            info!("Compact MCP server initialized with lazy op-tools registry");
-
+            info!("Compact MCP server initialized with pre-warmed op-tools registry");
             run_transports(
                 server,
-                run_stdio,
                 http_addr,
+                unix_path,
                 ws_addr,
                 grpc_addr,
                 Some("/mcp/compact"),
@@ -219,7 +226,39 @@ async fn main() -> Result<()> {
             let server = McpServer::new(config).await?;
             info!(mode = %mode, "MCP server initialized");
 
-            run_transports(server, run_stdio, http_addr, ws_addr, grpc_addr, None).await
+            run_transports(
+                server,
+                http_addr,
+                unix_path,
+                ws_addr,
+                grpc_addr,
+                None,
+            )
+            .await
+        }
+
+        ServerMode::BlobSchema => {
+            let executor: Arc<dyn ToolExecutor> =
+                Arc::new(op_mcp::blob_schema::BlobSchemaExecutor::shm());
+            let config = McpServerConfig {
+                name: cli.name.or(Some("op-blob-schema".to_string())),
+                compact_mode: false,
+                blocked_patterns: Vec::new(),
+                ..Default::default()
+            };
+            let server = Arc::new(
+                McpServer::with_executor(config, executor).with_blob_schema_resources(),
+            );
+            info!("Blob-schema MCP server initialized (sealed catalog, read-only)");
+            run_transports(
+                server,
+                http_addr,
+                unix_path,
+                ws_addr,
+                grpc_addr,
+                Some("/mcp/blob-schema"),
+            )
+            .await
         }
 
         ServerMode::Cognitive => {
@@ -243,8 +282,8 @@ async fn main() -> Result<()> {
 
             run_transports(
                 server,
-                run_stdio,
                 http_addr,
+                unix_path,
                 ws_addr,
                 grpc_addr,
                 Some("/mcp/cognitive"),
@@ -275,15 +314,23 @@ async fn main() -> Result<()> {
                 "Agents MCP server initialized"
             );
 
-            run_transports(server, run_stdio, http_addr, ws_addr, grpc_addr, None).await
+            run_transports(
+                server,
+                http_addr,
+                unix_path,
+                ws_addr,
+                grpc_addr,
+                None,
+            )
+            .await
         }
     }
 }
 
 async fn run_transports<H>(
     server: Arc<H>,
-    run_stdio: bool,
     http_addr: Option<String>,
+    unix_path: Option<std::path::PathBuf>,
     ws_addr: Option<String>,
     _grpc_addr: Option<String>,
     base_path: Option<&'static str>,
@@ -293,12 +340,14 @@ where
 {
     let mut handles = Vec::new();
 
-    // Spawn HTTP+SSE transport
-    if let Some(addr) = http_addr {
+    // Spawn HTTP+SSE transport (TCP and/or Unix Domain Socket)
+    if http_addr.is_some() || unix_path.is_some() {
         let server = server.clone();
         handles.push(tokio::spawn(async move {
-            info!(addr = %addr, "Starting HTTP+SSE transport");
-            let mut transport = HttpSseTransport::new(addr);
+            let mut transport = HttpSseTransport::new(http_addr.unwrap_or_default());
+            if let Some(path) = unix_path {
+                transport = transport.with_unix_path(path);
+            }
             if let Some(base_path) = base_path {
                 transport = transport.with_base_path(base_path);
             }
@@ -315,18 +364,23 @@ where
         }));
     }
 
-    // gRPC transport would be spawned here if needed with the generic handler
-    // For now, gRPC is handled separately with --mode grpc
+    if handles.is_empty() {
+        anyhow::bail!("No socket listener configured (needs --unix, --http, --ws, or default unix socket)");
+    }
 
-    // Run stdio in main thread if enabled
-    if run_stdio {
-        info!("Starting stdio transport");
-        StdioTransport::new().serve(server).await?;
-    } else {
-        for handle in handles {
-            handle.await??;
-        }
+    for handle in handles {
+        handle.await??;
     }
 
     Ok(())
+}
+
+fn default_unix_socket_for_mode(mode: ServerMode) -> std::path::PathBuf {
+    match mode {
+        ServerMode::Compact => std::path::PathBuf::from("/run/opdbus/mcp-compact.sock"),
+        ServerMode::Cognitive => std::path::PathBuf::from("/run/opdbus/mcp-cognitive.sock"),
+        ServerMode::BlobSchema => std::path::PathBuf::from("/run/opdbus/mcp-blob-schema.sock"),
+        ServerMode::Agents => std::path::PathBuf::from("/run/opdbus/mcp-agents.sock"),
+        ServerMode::Full => std::path::PathBuf::from("/run/opdbus/mcp-full.sock"),
+    }
 }

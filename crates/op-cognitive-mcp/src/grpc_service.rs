@@ -600,23 +600,26 @@ impl CognitiveToolService for CognitiveGrpcService {
         info!(notebook_id = %req.notebook_id, "ListSources");
 
         let namespace = format!("project:{}", req.notebook_id);
-        let limit = if req.limit > 0 { req.limit as i64 } else { 100 };
+        let limit = if req.limit > 0 { req.limit as usize } else { 100 };
+        let offset = req.offset.max(0) as usize;
 
-        let entries = self
+        let all_entries = self
             .memory_store
             .query_entries(crate::memory_store::EntryQuery {
                 namespace_id: Some(namespace),
                 key_pattern: None,
                 tags: None,
-                limit: Some(limit),
-                offset: Some(req.offset as i64),
+                limit: None,
+                offset: None,
             })
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let total = entries.len() as i32;
-        let sources: Vec<SourceInfo> = entries
+        let total = all_entries.len() as i32;
+        let sources: Vec<SourceInfo> = all_entries
             .into_iter()
+            .skip(offset)
+            .take(limit)
             .map(|e| {
                 let source_type = e
                     .value
@@ -739,14 +742,13 @@ impl CognitiveToolService for CognitiveGrpcService {
             .map_err(|e| Status::internal(format!("Data extraction failed: {}", e)))?;
 
         // Step 3: Clean up Markdown code blocks if any
-        let mut json_str = result.answer.trim().to_string();
-        if json_str.starts_with("```json") {
-            json_str = json_str.trim_start_matches("```json").to_string();
-            json_str = json_str.trim_end_matches("```").trim().to_string();
-        } else if json_str.starts_with("```") {
-            json_str = json_str.trim_start_matches("```").to_string();
-            json_str = json_str.trim_end_matches("```").trim().to_string();
+        let mut raw_str = result.answer.trim();
+        if let Some(rest) = raw_str.strip_prefix("```json") {
+            raw_str = rest.strip_suffix("```").unwrap_or(rest).trim();
+        } else if let Some(rest) = raw_str.strip_prefix("```") {
+            raw_str = rest.strip_suffix("```").unwrap_or(rest).trim();
         }
+        let json_str = raw_str.to_string();
 
         // Count rows roughly by parsing
         let row_count = if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&json_str) {

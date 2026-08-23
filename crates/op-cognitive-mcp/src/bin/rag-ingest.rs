@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
     // Expand ~ in zip path
     if let Some(home) = std::env::var_os("HOME") {
         let zip_str = cli.zip.to_string_lossy();
-        if zip_str.starts_with('~') {
+        if zip_str.starts_with("~/") {
             cli.zip = PathBuf::from(home).join(zip_str.trim_start_matches("~/"));
         }
     }

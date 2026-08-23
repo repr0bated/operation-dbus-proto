@@ -285,3 +285,36 @@ impl OptimizedBlockchain {
         self.cache.stats()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_optimized_blockchain_creation_and_caching() {
+        let temp_bc = tempdir().unwrap();
+        let temp_cache = tempdir().unwrap();
+
+        let opt_bc = OptimizedBlockchain::new(temp_bc.path(), temp_cache.path()).await;
+        assert!(opt_bc.is_ok(), "Failed to create OptimizedBlockchain");
+        let opt_bc = opt_bc.unwrap();
+
+        let footprint = PluginFootprint::new(
+            "systemd",
+            "unit_started",
+            &simd_json::json!({"unit": "nginx.service"}),
+        );
+        let hash_result = opt_bc.add_footprint(footprint).await;
+        assert!(hash_result.is_ok(), "Failed to add footprint with NUMA");
+        let hash = hash_result.unwrap();
+
+        let cached = opt_bc.get_cached_block(&hash).await;
+        assert!(cached.is_ok(), "Failed to get cached block");
+        let cached = cached.unwrap();
+        assert!(cached.is_some(), "Block should be found in cache");
+        let cached_footprint = cached.unwrap();
+        assert_eq!(cached_footprint.plugin_id, "systemd");
+        assert_eq!(cached_footprint.operation, "unit_started");
+    }
+}

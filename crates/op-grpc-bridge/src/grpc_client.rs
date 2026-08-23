@@ -411,6 +411,7 @@ impl RemoteOperationClient {
             path_patterns: path_filters,
             tags: tag_filters,
             include_initial_state: false,
+            include_schema: false,
         });
         attach_ghostbridge_metadata(&mut request)?;
 

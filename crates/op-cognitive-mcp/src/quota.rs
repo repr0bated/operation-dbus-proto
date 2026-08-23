@@ -89,8 +89,11 @@ impl QuotaManager {
         let last = *self.last_reset.read().await;
 
         if now.date_naive() != last.date_naive() {
-            self.queries_today.store(0, Ordering::Relaxed);
-            *self.last_reset.write().await = now;
+            let mut write_guard = self.last_reset.write().await;
+            if now.date_naive() != write_guard.date_naive() {
+                self.queries_today.store(0, Ordering::Relaxed);
+                *write_guard = now;
+            }
         }
     }
 }

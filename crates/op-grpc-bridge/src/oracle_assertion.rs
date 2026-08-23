@@ -28,6 +28,7 @@ pub struct HumanPrincipalIdentity {
     pub human_pubkey: String,
     pub footprint: [u8; 32],
     pub expires_at: i64,
+    pub session_genesis: String,
 }
 
 /// Fail-closed rejection reasons for the assertion pipeline.
@@ -334,6 +335,7 @@ impl AssertionValidator {
                     human_pubkey: human_pubkey.to_string(),
                     footprint: derive_human_footprint(human_pubkey),
                     expires_at,
+                    session_genesis: String::new(),
                 });
             }
             return Err(AssertionRejection::UnknownPrincipal);
@@ -347,6 +349,7 @@ impl AssertionValidator {
             human_pubkey: human_pubkey.to_string(),
             footprint: derive_human_footprint(human_pubkey),
             expires_at,
+            session_genesis: String::new(),
         })
     }
 }

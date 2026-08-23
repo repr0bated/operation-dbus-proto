@@ -8,6 +8,8 @@ use op_grpc_bridge::server::{run_zeroclaw_server, ServerConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -22,8 +24,8 @@ async fn main() -> anyhow::Result<()> {
         unix_socket = %config.unix_socket.display(),
         shared_socket = %config.shared_socket.display(),
         bind_addr = %config.bind_addr,
-        tls_enabled = config.tls_bind_addr.is_some(),
-        "Consolidated Operation gRPC bridge starting"
+        tls = config.tls_identity.is_some(),
+        "Consolidated Operation gRPC bridge starting (tonic TLS MQTT/gRPC demux)"
     );
     run_zeroclaw_server(config).await
 }

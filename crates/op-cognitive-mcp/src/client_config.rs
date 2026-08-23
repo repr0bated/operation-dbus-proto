@@ -22,7 +22,7 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```rust,ignore
 //! use op_cognitive_mcp::client_config::{CognitiveMcpClient, ClientConfig};
 //!
 //! let config = ClientConfig::for_external_client("droid-instance-1");

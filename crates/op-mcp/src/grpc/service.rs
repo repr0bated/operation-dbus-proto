@@ -139,6 +139,7 @@ impl McpGrpcService {
             ServerMode::Agents => 2,
             ServerMode::Full => 3,
             ServerMode::Cognitive => 4,
+            ServerMode::BlobSchema => 5,
         }
     }
 

@@ -478,6 +478,23 @@ pub struct GetConfigSchemaOutput {
     pub config_schema: ConfigSchema,
 }
 
+/// Input for sealed CLI config methods (`config_list` / `config_set` / …).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigCliInput {
+    /// String-valued CLI options (`path`, `value`, `filter`, `no_interactive`).
+    #[serde(default)]
+    pub options: std::collections::BTreeMap<String, String>,
+}
+
+/// Output for sealed CLI config methods.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigCliOutput {
+    /// Human-readable CLI stdout (or structured payload).
+    pub message: String,
+    /// Whether the command mutated config.
+    pub changed: bool,
+}
+
 /// Output for the UI surfaces accessor.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "obs.service.3tched-router.ui-surfaces.result@v1"))]
@@ -537,6 +554,20 @@ pub struct SetProviderOutput {
 #[schemars(extend("x-oscal-subid" = "mut.service.3tched-router.selected-model.result@v1"))]
 pub struct SetModelOutput {
     /// Selected model identifier.
+    pub selected_model: String,
+}
+
+/// Input for selecting provider and model together (dashboard picker).
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetSelectionInput {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "mut.service.tched-router.selection.set.result@v1"))]
+pub struct SetSelectionOutput {
+    pub selected_provider: String,
     pub selected_model: String,
 }
 
@@ -606,7 +637,7 @@ impl Default for TchedRouterPlugin {
 impl TchedRouterPlugin {
     const DBUS_OBJECT: &'static str = "/org/opdbus/v1/plugins/tched_router";
     const OSCAL_SUBID_REGISTRY_OBJECT: &'static str = "/org/opdbus/v1/plugins/oscal_subid_registry";
-    const DEFAULT_CHAT_MODEL: &'static str = "deepseek-v4-flash-free";
+    const DEFAULT_CHAT_MODEL: &'static str = "x-preview-f-free";
 
     pub fn new() -> Self {
         Self
@@ -1416,7 +1447,7 @@ impl TchedRouterPlugin {
                 ],
                 container_id_template: "ws-{username}".to_string(),
                 image: "images:debian/12".to_string(),
-                cognitive_mcp_endpoint: "http://100.90.37.254:3003/mcp".to_string(),
+                cognitive_mcp_endpoint: "unix:path=/run/opdbus/session-bus.sock".to_string(),
                 feature_flags: vec!["ghostbridge".to_string(), "semantic_search".to_string()],
             },
             identity_chain: IdentityOptions {
@@ -1721,6 +1752,16 @@ fn tched_router_schema_from_state(state: TchedRouterState) -> PluginSchema {
         ),
     );
     schema.methods.insert(
+        "SetSelection".to_string(),
+        method_decl_from_schemars_with_output::<SetSelectionInput, SetSelectionOutput>(
+            "SetSelection",
+            op_state_store::SideEffect::Mutation,
+            false,
+            "cap.software.tched-router.selection.set@v1",
+            "mut.service.tched-router.selection.set@v1",
+        ),
+    );
+    schema.methods.insert(
         "SetOvsRoutingModel".to_string(),
         method_decl_from_schemars_with_output::<SetOvsRoutingModelInput, SetOvsRoutingModelOutput>(
             "SetOvsRoutingModel",
@@ -1797,7 +1838,98 @@ fn tched_router_schema_from_state(state: TchedRouterState) -> PluginSchema {
     // real types, the single source of truth for configuration.
     super::tched_router_config_surface::register_config_methods(&mut schema);
 
+    register_cli_config_methods(&mut schema);
+    schema.capability_grants.insert(
+        "*".to_string(),
+        vec![
+            "tched-router.read".to_string(),
+            "tched-router.write".to_string(),
+            "cap.software.tched-router.router.read@v1".to_string(),
+            "cap.software.tched-router.router.write@v1".to_string(),
+            "cap.software.tched-router.selection.set@v1".to_string(),
+        ],
+    );
+
     schema
+}
+
+fn register_cli_config_methods(schema: &mut PluginSchema) {
+    let reads = [
+        (
+            "config_list",
+            "obs.software.tched-router.config-list@v1",
+            "List every zeroclaw config property.",
+        ),
+        (
+            "config_get",
+            "obs.software.tched-router.config-get@v1",
+            "Get one zeroclaw config property.",
+        ),
+    ];
+    let writes = [
+        (
+            "config_set",
+            "mut.software.tched-router.config-set@v1",
+            "Set one zeroclaw config property.",
+        ),
+        (
+            "config_patch",
+            "mut.software.tched-router.config-patch@v1",
+            "Apply a JSON Patch to zeroclaw config.",
+        ),
+        (
+            "config_init",
+            "mut.software.tched-router.config-init@v1",
+            "Initialize a zeroclaw config section.",
+        ),
+        (
+            "config_migrate",
+            "mut.software.tched-router.config-migrate@v1",
+            "Migrate zeroclaw config.toml to the current schema.",
+        ),
+    ];
+    for (name, subid, description) in reads {
+        schema.methods.insert(
+            name.to_string(),
+            method_decl_from_schemars_with_output::<ConfigCliInput, ConfigCliOutput>(
+                name,
+                op_state_store::SideEffect::Read,
+                true,
+                "cap.software.tched-router.router.read@v1",
+                subid,
+            ),
+        );
+        let _ = description;
+    }
+    for (name, subid, description) in writes {
+        schema.methods.insert(
+            name.to_string(),
+            method_decl_from_schemars_with_output::<ConfigCliInput, ConfigCliOutput>(
+                name,
+                op_state_store::SideEffect::Mutation,
+                false,
+                "cap.software.tched-router.router.write@v1",
+                subid,
+            ),
+        );
+        let _ = description;
+    }
+    schema.capabilities.insert(
+        "tched-router.read".to_string(),
+        CapabilityDecl {
+            id: "tched-router.read".to_string(),
+            description: "Read ZeroClaw / 3tched Router configuration via config_list/get."
+                .to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "tched-router.write".to_string(),
+        CapabilityDecl {
+            id: "tched-router.write".to_string(),
+            description: "Mutate ZeroClaw / 3tched Router configuration via config_set/patch."
+                .to_string(),
+        },
+    );
 }
 
 /// Capabilities gated by the hand-carried (non-generated) methods.
@@ -1853,6 +1985,18 @@ const CARRIED_CAPABILITIES: &[(&str, &str)] = &[
     (
         "cap.software.3tched-router.chat@v1",
         "Send a chat turn through the bridge-owned dispatcher.",
+    ),
+    (
+        "cap.software.tched-router.router.read@v1",
+        "Read ZeroClaw / tched_router configuration via config_list/get.",
+    ),
+    (
+        "cap.software.tched-router.selection.set@v1",
+        "Select the active provider and model together.",
+    ),
+    (
+        "cap.software.tched-router.router.write@v1",
+        "Mutate ZeroClaw / tched_router configuration via config_set/patch.",
     ),
     (
         "cap.software.3tched-router.model-assignments.ovs-routing.set@v1",
@@ -1942,11 +2086,14 @@ pub fn dispatch_tched_router_method(
         "ListModels" => list_models(json_args, state).map(DispatchOutcome::plain),
         "SetProvider" => set_provider_handler(json_args, state),
         "SetModel" => set_model_handler(json_args, state),
+        "SetSelection" => set_selection_handler(json_args, state),
         "SetOvsRoutingModel" => set_role_model_handler(json_args, state, "ovs_routing"),
         "SetObfuscationModel" => set_role_model_handler(json_args, state, "obfuscation"),
         "SetVectorizationModel" => set_role_model_handler(json_args, state, "vectorization"),
         "SetQdrantRetrievalModel" => set_role_model_handler(json_args, state, "qdrant_retrieval"),
         "SetCozoRetrievalModel" => set_role_model_handler(json_args, state, "cozo_retrieval"),
+        "config_list" | "config_get" | "config_set" | "config_patch" | "config_init"
+        | "config_migrate" => run_zeroclaw_config(method, json_args),
         other => {
             super::tched_router_config_surface::dispatch_config_method(other, json_args, state)
                 .unwrap_or_else(|| {
@@ -1955,6 +2102,122 @@ pub fn dispatch_tched_router_method(
                     })
                 })
         }
+    }
+}
+
+fn run_zeroclaw_config(
+    method: &str,
+    json_args: &str,
+) -> std::result::Result<DispatchOutcome, TchedRouterError> {
+    let args: JsonValue = serde_json::from_str(json_args).unwrap_or_else(|_| serde_json::json!({}));
+    let options = args.get("options").cloned().unwrap_or(serde_json::json!({}));
+    let path = args
+        .get("path")
+        .and_then(JsonValue::as_str)
+        .or_else(|| options.get("path").and_then(JsonValue::as_str))
+        .unwrap_or("");
+    let value_raw = args
+        .get("value")
+        .or_else(|| options.get("value"));
+    let value_str = match value_raw {
+        Some(JsonValue::String(s)) => Some(s.clone()),
+        Some(JsonValue::Null) | None => None,
+        Some(other) => Some(other.to_string()),
+    };
+    let sub = method.strip_prefix("config_").unwrap_or(method);
+    if matches!(sub, "set" | "get") && path.is_empty() {
+        return Err(TchedRouterError::ExecutionDenied {
+            reason: format!("{method} requires a nonempty string path"),
+        });
+    }
+    let mut command = std::process::Command::new("zeroclaw");
+    command.arg("config").arg(sub);
+    if let Some(filter) = options.get("filter").and_then(JsonValue::as_str) {
+        command.args(["--filter", filter]);
+    }
+    if options.get("secrets").and_then(JsonValue::as_bool) == Some(true)
+        || options.get("secrets").and_then(JsonValue::as_str) == Some("true")
+    {
+        command.arg("--secrets");
+    }
+    if !path.is_empty() {
+        command.arg(path);
+    }
+    if let Some(val) = &value_str {
+        command.arg(val);
+    }
+    let is_no_interactive = options.get("no_interactive").and_then(JsonValue::as_bool) == Some(true)
+        || options.get("no_interactive").and_then(JsonValue::as_str) == Some("true")
+        || options.get("no-interactive").and_then(JsonValue::as_bool) == Some(true)
+        || options.get("no-interactive").and_then(JsonValue::as_str) == Some("true");
+    if is_no_interactive {
+        command.arg("--no-interactive");
+    }
+    let patch_body = if sub == "patch" {
+        if let Some(operations) = args.get("operations").and_then(JsonValue::as_array) {
+            Some(serde_json::to_string(operations).unwrap_or_else(|_| "[]".to_string()))
+        } else {
+            Some(
+                args.get("input")
+                    .and_then(JsonValue::as_str)
+                    .or(value_str.as_deref())
+                    .unwrap_or("[]")
+                    .to_string(),
+            )
+        }
+    } else {
+        None
+    };
+    if patch_body.is_some() && path.is_empty() {
+        command.arg("-");
+    }
+    let output = if let Some(body) = patch_body {
+        use std::io::Write;
+        use std::process::Stdio;
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| TchedRouterError::ExecutionDenied {
+            reason: format!("zeroclaw {method}: {error}"),
+        })?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(body.as_bytes()).map_err(|error| {
+                TchedRouterError::ExecutionDenied {
+                    reason: format!("zeroclaw {method} stdin: {error}"),
+                }
+            })?;
+        }
+        child.wait_with_output().map_err(|error| TchedRouterError::ExecutionDenied {
+            reason: format!("zeroclaw {method}: {error}"),
+        })?
+    } else {
+        command.output().map_err(|error| TchedRouterError::ExecutionDenied {
+            reason: format!("zeroclaw {method}: {error}"),
+        })?
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        return Err(TchedRouterError::ExecutionDenied {
+            reason: format!(
+                "zeroclaw {method} failed: {}",
+                stderr.trim().if_empty(stdout.trim())
+            ),
+        });
+    }
+    Ok(DispatchOutcome::plain(serde_json::json!({
+        "message": stdout,
+        "changed": method != "config_list" && method != "config_get",
+    })))
+}
+
+trait IfEmpty {
+    fn if_empty(self, fallback: Self) -> Self;
+}
+
+impl IfEmpty for &str {
+    fn if_empty(self, fallback: Self) -> Self {
+        if self.is_empty() { fallback } else { self }
     }
 }
 
@@ -2039,6 +2302,55 @@ fn set_provider_handler(
         signal: Some(DispatchSignal {
             name: "ProviderChanged".to_string(),
             payload: serde_json::json!({ "old": old, "new": provider_id, "reason": "explicit set" }),
+        }),
+    })
+}
+
+fn set_selection_handler(
+    json_args: &str,
+    state: &TchedRouterState,
+) -> std::result::Result<DispatchOutcome, TchedRouterError> {
+    let args = parse_args("SetSelection", json_args)?;
+    let provider_id = args
+        .get("provider_id")
+        .or_else(|| args.get("providerId"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| TchedRouterError::ExecutionDenied {
+            reason: "SetSelection requires string field 'provider_id'".to_string(),
+        })?;
+    let model_id = args
+        .get("model_id")
+        .or_else(|| args.get("modelId"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| TchedRouterError::ExecutionDenied {
+            reason: "SetSelection requires string field 'model_id'".to_string(),
+        })?;
+    if !state.catalog.providers.iter().any(|p| p.id == provider_id) {
+        return Err(TchedRouterError::ProviderNotDeclared {
+            provider: provider_id,
+        });
+    }
+    if !state
+        .catalog
+        .model_routes
+        .iter()
+        .any(|r| r.model == model_id)
+    {
+        return Err(TchedRouterError::ModelNotDeclared { model: model_id });
+    }
+    Ok(DispatchOutcome {
+        result: serde_json::json!({
+            "selected_provider": provider_id,
+            "selected_model": model_id,
+        }),
+        signal: Some(DispatchSignal {
+            name: "SelectionChanged".to_string(),
+            payload: serde_json::json!({
+                "provider": provider_id,
+                "model": model_id,
+            }),
         }),
     })
 }

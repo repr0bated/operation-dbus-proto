@@ -1,8 +1,18 @@
 #!/bin/sh
+# Cognitive MCP service via D-Bus session bridge (zero Cozo lock contention)
 exec 2>&1
-# Phase 2: no network listeners. Stdio mode only.
-# Tool execution is now in-process in op-grpc-bridge.
-# NOTE: CozoDB concurrent access — bridge is primary writer; stdio is read-mostly.
-export COGNITIVE_MCP_DB_PATH=/var/lib/op-cognitive-mcp/memory.db
-[ -r /etc/op-dbus/secrets/notebooklm-cookie ] && export NOTEBOOKLM_COOKIE="$(cat /etc/op-dbus/secrets/notebooklm-cookie)"
-exec /usr/local/bin/op-cognitive-mcp --stdio
+set -a
+for entry in /etc/runit/sv/op-cognitive-mcp/env/*; do
+  [ -f "$entry" ] || continue
+  key=${entry##*/}
+  IFS= read -r value < "$entry" || value=
+  export "$key=$value"
+done
+set +a
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/opdbus/session-bus.sock}"
+install -d -m 0755 /run/opdbus
+exec /usr/local/bin/op-mcp-server \
+  --mode cognitive \
+  --unix "${OP_MCP_UNIX:-/run/opdbus/mcp-cognitive.sock}" \
+  --wg-interface "${WG_INTERFACE:-netmaker}" \
+  --log-level "${OP_MCP_LOG_LEVEL:-info}"

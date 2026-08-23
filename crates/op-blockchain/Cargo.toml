@@ -23,5 +23,8 @@ gethostname = { workspace = true }
 qdrant-client = { workspace = true }
 tonic = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [features]
 default = []

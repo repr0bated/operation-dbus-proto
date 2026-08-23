@@ -22,6 +22,7 @@
 //! ```
 
 pub mod chat_service;
+pub mod zeroclaw_runtime;
 pub mod dynamic_reflection;
 pub mod emqx_hook_provider;
 pub mod grpc_client;

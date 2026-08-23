@@ -22,24 +22,45 @@ use tokio::sync::RwLock;
 pub struct SystemdAutoCreator;
 
 impl SystemdAutoCreator {
-    /// Discover systemd units and create plugins
+    /// Discover system/host service units and create plugins
     pub async fn discover_units() -> Result<Vec<(String, Value)>> {
         let mut plugins = Vec::new();
 
-        // Example discovery: find all active .service units
-        // In a real implementation, this would query systemd via D-Bus
-        let discovered_units = vec!["nginx.service", "redis.service", "postgresql.service"];
+        // Discover active host services from runit supervisor if available
+        let sv_dir = Path::new("/run/runit/service");
+        if sv_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(sv_dir) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name();
+                    let name = file_name.to_string_lossy();
+                    if !name.starts_with('.') {
+                        plugins.push((
+                            name.to_string(),
+                            json!({
+                                "type": "runit",
+                                "name": name.to_string(),
+                                "state": "active",
+                                "enabled": true
+                            }),
+                        ));
+                    }
+                }
+            }
+        }
 
-        for unit in discovered_units {
-            plugins.push((
-                unit.to_string(),
-                json!({
-                    "type": "systemd",
-                    "name": unit,
-                    "state": "active",
-                    "enabled": true
-                }),
-            ));
+        if plugins.is_empty() {
+            let fallback_units = ["op-grpc-bridge", "op-web", "op-cognitive-mcp"];
+            for unit in fallback_units {
+                plugins.push((
+                    unit.to_string(),
+                    json!({
+                        "type": "service",
+                        "name": unit,
+                        "state": "active",
+                        "enabled": true
+                    }),
+                ));
+            }
         }
 
         Ok(plugins)

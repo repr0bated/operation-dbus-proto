@@ -216,29 +216,17 @@ impl CognitiveMemoryStore {
         if self.get_namespace_by_name(name).await?.is_none() {
             return Ok(false);
         }
-        // Cascade: remove all entries in this namespace first.
-        let entries_q = r#"
-            ?[ns, key]
-                := *memory_entries[ns, key, _, _, _, _, _, _, _, _],
-                   ns = $ns
-        "#;
+        // Cascade: remove all entries in this namespace atomically in a single query.
         let mut p: Params = BTreeMap::new();
         p.insert("ns".into(), DataValue::Str(name.into()));
-        let entry_rows = self
-            .run(entries_q, p)
-            .context("collect entries to cascade")?;
-        for row in &entry_rows.rows {
-            let ns = dv_as_str(&row[0]).unwrap_or("").to_string();
-            let key = dv_as_str(&row[1]).unwrap_or("").to_string();
-            let mut pe: Params = BTreeMap::new();
-            pe.insert("ns".into(), DataValue::Str(ns.into()));
-            pe.insert("key".into(), DataValue::Str(key.into()));
-            self.run(
-                "?[namespace, key] <- [[$ns, $key]] :rm memory_entries { namespace, key }",
-                pe,
-            )
-            .context("cascade delete entry")?;
-        }
+        let cascade_q = r#"
+            ?[namespace, key]
+                := *memory_entries[namespace, key, _, _, _, _, _, _, _, _],
+                   namespace = $ns
+            :rm memory_entries { namespace, key }
+        "#;
+        self.run(cascade_q, p).context("cascade delete entries")?;
+
         // Remove namespace row.
         let mut pn: Params = BTreeMap::new();
         pn.insert("name".into(), DataValue::Str(name.into()));

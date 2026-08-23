@@ -1,7 +1,5 @@
 #!/bin/sh
-# Keep the netclient WireGuard interface in the host routing stack.  Enslaving
-# it to OVS diverts decrypted traffic before local listeners (including :8080)
-# can receive it.  The legacy service name is retained for dependency stability.
+# Put the netclient WireGuard iface on ovsbr0. Name kept for dependency stability.
 exec 2>&1
 export PATH="/usr/local/bin:/usr/bin:/usr/sbin:${PATH:-}"
 
@@ -29,8 +27,8 @@ until [ -d "/sys/class/net/$IFACE" ]; do
     sleep 1
 done
 
-/usr/local/libexec/3tched/ovsdb-port del-port "$IFACE"
+/usr/local/libexec/3tched/ovsdb-port add-port "$BRIDGE" "$IFACE"
 ip link set dev "$IFACE" up
 /usr/local/libexec/3tched/runit-ready-signal netmaker-ovs-attach
-echo "netmaker-ovs-attach: $IFACE kept host-routed (detached from $BRIDGE)"
+echo "netmaker-ovs-attach: added $IFACE to $BRIDGE"
 exec pause

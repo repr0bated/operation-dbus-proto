@@ -81,6 +81,8 @@ pub struct AppState {
     pub broadcast_tx: broadcast::Sender<String>,
     /// SSE event broadcaster
     pub sse_broadcaster: Arc<SseEventBroadcaster>,
+    /// Replayable hydration cache for fresh dashboard connections
+    pub hydration: Arc<crate::sse::HydrationCache>,
     /// Server start time
     pub start_time: std::time::Instant,
     /// Conversation history — JSON flat file, no SQLite, no drift.
@@ -186,6 +188,7 @@ impl AppState {
 
         // Create SSE broadcaster
         let sse_broadcaster = Arc::new(SseEventBroadcaster::new());
+        let hydration = Arc::new(crate::sse::HydrationCache::default());
 
         // Initialize privacy router components
         // User database in CozoDB — graph-native, no JSON drift.
@@ -259,6 +262,7 @@ impl AppState {
             provider_name,
             broadcast_tx,
             sse_broadcaster,
+            hydration,
             start_time: std::time::Instant::now(),
             conversations: Arc::new(crate::chat_store::ChatSessionStore::default_store().await?),
             user_store,

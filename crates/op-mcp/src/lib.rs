@@ -1,9 +1,10 @@
 //! op-mcp: Unified MCP Protocol Server
 //!
-//! Supports three server modes:
+//! Supports server modes:
 //! - **Compact**: 5 meta-tools with per-request lazy tool loading (recommended for LLMs)
 //! - **Agents**: Always-on cognitive agents (memory, sequential_thinking, etc.)
 //! - **Full**: All tools directly exposed (may hit client limits)
+//! - **BlobSchema**: sealed plugin-blob catalog (schema/manifest/methods)
 //!
 //! Supports multiple transports:
 //! - Stdio (standard MCP transport)
@@ -14,6 +15,7 @@
 //! - gRPC (high-performance RPC)
 
 pub mod agents_server;
+pub mod blob_schema;
 pub mod cognitive_bridge;
 pub mod compact;
 pub mod external_client;
@@ -29,7 +31,11 @@ pub mod grpc;
 
 // Re-exports
 pub use agents_server::AgentsServer;
-pub use compact::{run_compact_stdio_server, CompactServer, SessionContext};
+pub use blob_schema::BlobSchemaExecutor;
+pub use compact::{
+    run_compact_stdio_server, run_compact_unix_server, CompactServer, PrewarmedOpToolsExecutor,
+    SessionContext,
+};
 pub use external_client::{
     AuthMethod, ExternalMcpClient, ExternalMcpConfig, ExternalMcpManager, ExternalTool,
 };
@@ -66,6 +72,8 @@ pub enum ServerMode {
     /// One authenticated caller fronting the bridge, so MCP clients need no
     /// credential and the cognitive store keeps a single writer.
     Cognitive,
+    /// Read-only sealed blob catalog: PluginSchema, manifest, methods.
+    BlobSchema,
 }
 
 impl std::fmt::Display for ServerMode {
@@ -75,6 +83,7 @@ impl std::fmt::Display for ServerMode {
             ServerMode::Agents => write!(f, "agents"),
             ServerMode::Full => write!(f, "full"),
             ServerMode::Cognitive => write!(f, "cognitive"),
+            ServerMode::BlobSchema => write!(f, "blob-schema"),
         }
     }
 }
@@ -88,6 +97,7 @@ impl std::str::FromStr for ServerMode {
             "agents" => Ok(ServerMode::Agents),
             "full" | "standard" => Ok(ServerMode::Full),
             "cognitive" | "bridge" => Ok(ServerMode::Cognitive),
+            "blob" | "blob-schema" | "schema" => Ok(ServerMode::BlobSchema),
             _ => Err(format!("Unknown server mode: {}", s)),
         }
     }

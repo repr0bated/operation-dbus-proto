@@ -315,11 +315,13 @@ impl RagPipeline {
 
         let mut stats = IngestStats::default();
         let mut batch: Vec<PointStruct> = Vec::new();
+        let mut seen_files = std::collections::HashSet::new();
 
         for chunk in parse_and_chunk(reader, &repo) {
-            stats.files_parsed += 1;
-            let total = chunk.total_chunks;
-            stats.chunks_created += total;
+            if seen_files.insert(chunk.file_path.clone()) {
+                stats.files_parsed += 1;
+            }
+            stats.chunks_created += 1;
 
             // Embed
             let vector = match self.embed_document(&chunk.embed_text).await {
@@ -698,17 +700,36 @@ impl RagPipeline {
         batch: &mut Vec<PointStruct>,
         stats: &mut IngestStats,
     ) {
+        if batch.is_empty() {
+            return;
+        }
         let count = batch.len();
-        match self
-            .qdrant
-            .upsert_points(UpsertPointsBuilder::new(collection, std::mem::take(batch)))
-            .await
-        {
-            Ok(_) => stats.chunks_upserted += count,
-            Err(e) => {
-                warn!(error = %e, "Qdrant upsert failed");
-                stats.errors += 1;
+        let points = std::mem::take(batch);
+
+        // Attempt upsert with 1 retry on transient error
+        let mut last_err = None;
+        for attempt in 0..2 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
+            match self
+                .qdrant
+                .upsert_points(UpsertPointsBuilder::new(collection, points.clone()))
+                .await
+            {
+                Ok(_) => {
+                    stats.chunks_upserted += count;
+                    return;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        if let Some(e) = last_err {
+            warn!(error = %e, count, "Qdrant upsert failed after retry");
+            stats.errors += 1;
         }
     }
 

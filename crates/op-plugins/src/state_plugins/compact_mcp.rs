@@ -17,7 +17,7 @@ const RUNIT_SERVICE_PATH: &str = "/etc/runit/sv/op-mcp-compact";
 const RUNIT_ACTIVE_PATH: &str = "/etc/runit/runsvdir/default/op-mcp-compact";
 const ENV_DIR: &str = "/etc/runit/sv/op-mcp-compact/env";
 const DEFAULT_MODE: &str = "compact";
-const DEFAULT_HTTP: &str = "127.0.0.1:11436";
+const DEFAULT_HTTP: &str = "";
 const DEFAULT_WG: &str = "netmaker";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -46,7 +46,7 @@ fn default_mode() -> String {
     DEFAULT_MODE.into()
 }
 fn default_http() -> Option<String> {
-    Some(DEFAULT_HTTP.into())
+    None
 }
 fn default_wg() -> String {
     DEFAULT_WG.into()

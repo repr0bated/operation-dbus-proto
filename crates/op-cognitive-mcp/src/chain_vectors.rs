@@ -434,11 +434,19 @@ impl ChainVectorIndex {
             let present: HashSet<String> = found
                 .result
                 .into_iter()
-                .filter_map(|point| point.id.map(|id| format!("{id:?}")))
+                .filter_map(|point| {
+                    point.id.and_then(|id| match id.point_id_options {
+                        Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(u)) => Some(u),
+                        Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => {
+                            Some(n.to_string())
+                        }
+                        None => None,
+                    })
+                })
                 .collect();
             for block in chunk {
-                let id = format!("{:?}", PointId::from(point_id(block.block_num).to_string()));
-                if !present.contains(&id) {
+                let id_str = point_id(block.block_num).to_string();
+                if !present.contains(&id_str) {
                     missing.push(block.block_num);
                 }
             }
@@ -615,10 +623,10 @@ mod tests {
     #[test]
     fn already_exists_detection_matches_qdrant_wording() {
         assert!(super::is_already_exists(&QdrantError::ResponseError {
-            status: tonic_qdrant::Status::already_exists("Collection `x` already exists!"),
+            status: tonic::Status::already_exists("Collection `x` already exists!"),
         }));
         assert!(!super::is_already_exists(&QdrantError::ResponseError {
-            status: tonic_qdrant::Status::internal("some other failure"),
+            status: tonic::Status::internal("some other failure"),
         }));
     }
 

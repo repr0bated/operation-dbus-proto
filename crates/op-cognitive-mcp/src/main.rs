@@ -44,7 +44,7 @@
 
 use clap::Parser;
 use op_cognitive_mcp::CognitiveMcpServer;
-use op_identity::{write_sled_from_wg, WireGuardIdentity};
+use op_identity::WireGuardIdentity;
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -64,12 +64,8 @@ struct Cli {
     #[arg(long, env = "COGNITIVE_MCP_GRPC_BIND", default_value = "0.0.0.0:50052")]
     grpc: String,
 
-    /// CozoDB database path
-    #[arg(
-        long,
-        env = "COGNITIVE_MCP_DB_PATH",
-        default_value = "/var/lib/op-cognitive-mcp/memory.db"
-    )]
+    /// CozoDB database path (defaults to :memory: to prevent direct RocksDB lock contention with op-grpc-bridge)
+    #[arg(long, env = "COGNITIVE_MCP_DB_PATH", default_value = ":memory:")]
     db: String,
 
     /// WireGuard interface to read identity from
@@ -109,9 +105,10 @@ fn resolve_bind(addr: &str, wg_ip: Option<&str>) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    let level = match cli.log_level.as_str() {
+    let level = match cli.log_level.to_lowercase().as_str() {
         "trace" => Level::TRACE,
         "debug" => Level::DEBUG,
+        "info" => Level::INFO,
         "warn" => Level::WARN,
         "error" => Level::ERROR,
         _ => Level::INFO,
@@ -133,7 +130,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── WireGuard identity ────────────────────────────────────────────────────
     // 1. Detect local WG IP for bind address resolution.
-    // 2. Write canonical IdentitySled to /dev/shm for Ghostbridge auth.
     let wg_id = WireGuardIdentity::with_interface(&cli.wg_interface);
     let wg_ip = wg_id.get_local_ip();
 
@@ -143,21 +139,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 interface = %cli.wg_interface,
                 pubkey = %pubkey,
                 wg_ip = ?wg_ip,
-                "Writing WireGuard identity sled to /dev/shm/plugin_schema.dat"
+                "WG identity resolved"
             );
-            if let Err(e) = write_sled_from_wg(&pubkey) {
-                warn!(
-                    error = %e,
-                    "Failed to write identity sled — gRPC Ghostbridge auth will not work"
-                );
-            }
         }
         Err(e) => {
             warn!(
                 interface = %cli.wg_interface,
                 error = %e,
-                "Could not read WireGuard public key — identity sled not written; \
-                 set WG_PUBKEY env var to override"
+                "Could not read WireGuard public key; set WG_PUBKEY env var to override"
             );
         }
     }

@@ -1694,6 +1694,9 @@ fn proto_state_change(change: &crate::mutation_engine::StateChange) -> ProtoStat
         event_hash: change.event_hash.clone(),
         timestamp: Some(proto_timestamp(change.timestamp)),
         actor_id: change.actor_id.clone(),
+        frame_kind: 0,
+        schema_hash: String::new(),
+        catalog_hash: String::new(),
     }
 }
 
@@ -2809,6 +2812,28 @@ impl RuntimeMirror for OperationGrpcServer {
         }
 
         Ok(Response::new(RuntimeGetNumaTopologyResponse { nodes }))
+    }
+
+    async fn check_unix_sockets(
+        &self,
+        request: Request<crate::proto::RuntimeCheckUnixSocketsRequest>,
+    ) -> Result<Response<crate::proto::RuntimeCheckUnixSocketsResponse>, Status> {
+        let mut sockets = Vec::new();
+        for path in request.into_inner().paths {
+            let exists = std::path::Path::new(&path).exists();
+            let connectable = exists
+                && std::os::unix::net::UnixStream::connect(&path).is_ok();
+            sockets.push(crate::proto::RuntimeUnixSocketStatus {
+                path,
+                exists,
+                connectable,
+                detail: String::new(),
+            });
+        }
+        Ok(Response::new(crate::proto::RuntimeCheckUnixSocketsResponse {
+            sockets,
+            queried_at: Some(proto_timestamp(Utc::now())),
+        }))
     }
 }
 

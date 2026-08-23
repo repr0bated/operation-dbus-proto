@@ -106,7 +106,14 @@ fn patch_config(json_args: &str) -> std::result::Result<DispatchOutcome, TchedRo
             ),
         });
     }
-    if contains_masked_placeholder(&args.value) {
+    let mut incoming = args.value;
+    if contains_masked_placeholder(&incoming) {
+        let existing_root = load_upstream_value()?;
+        if let Some(existing_section) = existing_root.get(&args.section) {
+            restore_masked_leaves(&mut incoming, existing_section);
+        }
+    }
+    if contains_masked_placeholder(&incoming) {
         return Err(TchedRouterError::ExecutionDenied {
             reason: "PatchConfig: value contains \"***MASKED***\" — masked \
                      placeholders cannot be written"
@@ -127,7 +134,7 @@ fn patch_config(json_args: &str) -> std::result::Result<DispatchOutcome, TchedRo
             reason: "config root is not a table".to_string(),
         })?;
     let new_toml: toml::Value =
-        serde_json::from_value(args.value.clone()).map_err(|e| {
+        serde_json::from_value(incoming.clone()).map_err(|e| {
             TchedRouterError::ExecutionDenied {
                 reason: format!("section value is not TOML-representable: {e}"),
             }
@@ -144,7 +151,7 @@ fn patch_config(json_args: &str) -> std::result::Result<DispatchOutcome, TchedRo
     write_config_atomically(&path, &serialized)?;
     Ok(DispatchOutcome::plain(serde_json::json!({
         "section": args.section,
-        "value": args.value,
+        "value": incoming,
     })))
 }
 
@@ -270,6 +277,33 @@ fn mask_secrets(value: &mut JsonValue) {
             }
         }
         JsonValue::Array(items) => items.iter_mut().for_each(mask_secrets),
+        _ => {}
+    }
+}
+
+fn restore_masked_leaves(incoming: &mut JsonValue, existing: &JsonValue) {
+    match incoming {
+        JsonValue::String(value) if value == "***MASKED***" => {
+            *incoming = existing.clone();
+        }
+        JsonValue::Object(map) => {
+            if let JsonValue::Object(prior) = existing {
+                for (key, value) in map.iter_mut() {
+                    if let Some(previous) = prior.get(key) {
+                        restore_masked_leaves(value, previous);
+                    }
+                }
+            }
+        }
+        JsonValue::Array(items) => {
+            if let JsonValue::Array(prior) = existing {
+                for (index, value) in items.iter_mut().enumerate() {
+                    if let Some(previous) = prior.get(index) {
+                        restore_masked_leaves(value, previous);
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }

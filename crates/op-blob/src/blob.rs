@@ -346,10 +346,17 @@ impl<'a> BlobRef<'a> {
         }
         let blob = Self { bytes, sections };
 
-        // Verify schema hash (blob-drift guard).
+        // Verify schema and manifest sections and UTF-8 validity.
         let schema = blob
             .section(SECTION_SCHEMA_JSON)
             .ok_or("missing schema section")?;
+        std::str::from_utf8(schema).map_err(|e| format!("schema section is not valid UTF-8: {e}"))?;
+
+        let manifest = blob
+            .section(SECTION_MANIFEST_JSON)
+            .ok_or("missing manifest section")?;
+        std::str::from_utf8(manifest).map_err(|e| format!("manifest section is not valid UTF-8: {e}"))?;
+
         let mut h = Sha256::new();
         h.update(schema);
         if h.finalize().as_slice() != &bytes[16..48] {
@@ -367,13 +374,15 @@ impl<'a> BlobRef<'a> {
 
     /// Canonical `PluginSchema` JSON — borrowed, zero-copy.
     pub fn schema_json(&self) -> &'a str {
-        std::str::from_utf8(self.section(SECTION_SCHEMA_JSON).unwrap())
-            .expect("schema section is UTF-8")
+        self.section(SECTION_SCHEMA_JSON)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .unwrap_or("")
     }
 
     pub fn manifest_json(&self) -> &'a str {
-        std::str::from_utf8(self.section(SECTION_MANIFEST_JSON).unwrap())
-            .expect("manifest section is UTF-8")
+        self.section(SECTION_MANIFEST_JSON)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .unwrap_or("")
     }
 
     /// Encoded `FileDescriptorSet` — borrowed, zero-copy; slices of this can

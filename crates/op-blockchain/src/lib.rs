@@ -24,6 +24,7 @@ pub use blockchain::{
     ReplicationReport, StreamingBlockchain, SNAPSHOT_LABELS,
 };
 pub use btrfs_delta::{find_new_since, generation, received_uuid, FindNewDelta};
+pub use btrfs_numa_integration::OptimizedBlockchain;
 pub use footprint::{BlockEvent, PluginFootprint};
 pub use retention::RetentionPolicy;
 pub use snapshot::SnapshotInterval;

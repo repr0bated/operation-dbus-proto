@@ -13,6 +13,12 @@ pub struct SubscribeRequest {
     /// Include initial state snapshot
     #[prost(bool, tag = "4")]
     pub include_initial_state: bool,
+    /// Include the running plugin contracts at hydration. Each arrives as a frame
+    /// with change_type CHANGE_TYPE_SCHEMA_MIGRATION, member_name = schema hash,
+    /// and new_value = the sealed PluginSchema JSON. Independent of
+    /// include_initial_state: a consumer may want contracts without present state.
+    #[prost(bool, tag = "5")]
+    pub include_schema: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StateChange {
@@ -52,6 +58,21 @@ pub struct StateChange {
     /// Actor who made the change
     #[prost(string, tag = "12")]
     pub actor_id: ::prost::alloc::string::String,
+    /// Stream framing: initial static-tree state, a live update, or keepalive.
+    #[prost(enumeration = "StateFrameKind", tag = "13")]
+    pub frame_kind: i32,
+    /// Hash of the contract this frame's plugin is currently published under.
+    /// Empty only when the frame names no plugin (keepalives). A subscriber
+    /// compares it against the contract it is holding: a mismatch means it
+    /// missed a schema frame and must re-hydrate.
+    #[prost(string, tag = "14")]
+    pub schema_hash: ::prost::alloc::string::String,
+    /// Identity of the whole published catalog — blake3 over the sorted
+    /// (plugin_id, schema_hash) pairs. Present on EVERY frame, keepalives
+    /// included, so an otherwise idle subscriber still has something to compare
+    /// against and can detect drift it never received an event for.
+    #[prost(string, tag = "15")]
+    pub catalog_hash: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MutateRequest {
@@ -633,6 +654,67 @@ pub struct OvsdbGetBridgeStateResponse {
     #[prost(message, repeated, tag = "1")]
     pub bridges: ::prost::alloc::vec::Vec<OvsdbBridge>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbGetDatapathHealthRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbGetDatapathHealthResponse {
+    #[prost(string, tag = "1")]
+    pub bridge: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub fail_mode: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "3")]
+    pub controllers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bool, tag = "4")]
+    pub fallback_normal: bool,
+    #[prost(uint32, tag = "5")]
+    pub fallback_priority: u32,
+    #[prost(string, tag = "6")]
+    pub detail_json: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbAttachControllerSafeRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+    /// e.g. tcp:10.200.0.1:6653
+    #[prost(string, tag = "2")]
+    pub endpoint: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbAttachControllerSafeResponse {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub health: ::core::option::Option<OvsdbGetDatapathHealthResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbEnsureFallbackNormalRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbEnsureFallbackNormalResponse {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbDelControllerRequest {
+    #[prost(string, tag = "1")]
+    pub bridge_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OvsdbDelControllerResponse {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
 /// RFC 7047 Bridge table — hierarchical view
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OvsdbBridge {
@@ -653,6 +735,12 @@ pub struct OvsdbBridge {
     >,
     #[prost(message, repeated, tag = "7")]
     pub ports: ::prost::alloc::vec::Vec<OvsdbPort>,
+    /// OVS design: priority=0 NORMAL must remain while controller is attached
+    /// (async PACKET_IN / in-band control). See docs.openvswitch.org topics/design.
+    #[prost(bool, tag = "8")]
+    pub fallback_normal: bool,
+    #[prost(string, repeated, tag = "9")]
+    pub controllers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// RFC 7047 Port table
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -826,6 +914,29 @@ pub struct RuntimeGetNumaTopologyResponse {
     pub nodes: ::prost::alloc::vec::Vec<NumaNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeCheckUnixSocketsRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeUnixSocketStatus {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(bool, tag = "2")]
+    pub exists: bool,
+    #[prost(bool, tag = "3")]
+    pub connectable: bool,
+    #[prost(string, tag = "4")]
+    pub detail: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RuntimeCheckUnixSocketsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub sockets: ::prost::alloc::vec::Vec<RuntimeUnixSocketStatus>,
+    #[prost(message, optional, tag = "2")]
+    pub queried_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NumaNode {
     #[prost(uint32, tag = "1")]
     pub node_id: u32,
@@ -975,6 +1086,38 @@ pub struct ZeroclawProjection {
     pub model_routes: ::prost::alloc::vec::Vec<ModelRouteProto>,
     #[prost(message, repeated, tag = "3")]
     pub providers: ::prost::alloc::vec::Vec<ProviderProto>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StateFrameKind {
+    Unspecified = 0,
+    InitialState = 1,
+    Update = 2,
+    Heartbeat = 3,
+}
+impl StateFrameKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STATE_FRAME_KIND_UNSPECIFIED",
+            Self::InitialState => "STATE_FRAME_KIND_INITIAL_STATE",
+            Self::Update => "STATE_FRAME_KIND_UPDATE",
+            Self::Heartbeat => "STATE_FRAME_KIND_HEARTBEAT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STATE_FRAME_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "STATE_FRAME_KIND_INITIAL_STATE" => Some(Self::InitialState),
+            "STATE_FRAME_KIND_UPDATE" => Some(Self::Update),
+            "STATE_FRAME_KIND_HEARTBEAT" => Some(Self::Heartbeat),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2135,6 +2278,110 @@ pub mod ovsdb_mirror_client {
                 .insert(GrpcMethod::new("operation.v1.OvsdbMirror", "GetBridgeState"));
             self.inner.unary(req, path, codec).await
         }
+        /// Safe datapath health: fail_mode + controller list + fallback NORMAL present
+        pub async fn get_datapath_health(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbGetDatapathHealthRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbGetDatapathHealthResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/GetDatapathHealth",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.OvsdbMirror", "GetDatapathHealth"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Plugin-first attach: never bare set-controller (rollback on unhealthy)
+        pub async fn attach_controller_safe(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbAttachControllerSafeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbAttachControllerSafeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/AttachControllerSafe",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.OvsdbMirror", "AttachControllerSafe"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn ensure_fallback_normal(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbEnsureFallbackNormalRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbEnsureFallbackNormalResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/EnsureFallbackNormal",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.OvsdbMirror", "EnsureFallbackNormal"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn del_controller(
+            &mut self,
+            request: impl tonic::IntoRequest<super::OvsdbDelControllerRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::OvsdbDelControllerResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.OvsdbMirror/DelController",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("operation.v1.OvsdbMirror", "DelController"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated client implementations.
@@ -2379,6 +2626,34 @@ pub mod runtime_mirror_client {
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new("operation.v1.RuntimeMirror", "GetNumaTopology"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Probe Unix domain socket paths from the bridge host (tonic-web clients cannot
+        /// open UDS directly — this is the supported health path for socket pills).
+        pub async fn check_unix_sockets(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RuntimeCheckUnixSocketsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RuntimeCheckUnixSocketsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/operation.v1.RuntimeMirror/CheckUnixSockets",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("operation.v1.RuntimeMirror", "CheckUnixSockets"),
                 );
             self.inner.unary(req, path, codec).await
         }

@@ -178,6 +178,12 @@ impl McpServer {
         }
     }
 
+    /// Serve sealed blob schemas as `blob://<plugin_id>` MCP resources.
+    pub fn with_blob_schema_resources(mut self) -> Self {
+        self.resources = ResourceRegistry::with_blob_catalog();
+        self
+    }
+
     /// Handle an MCP request
     pub async fn handle_request(&self, request: McpRequest) -> McpResponse {
         debug!(method = %request.method, "Handling MCP request");
@@ -443,16 +449,23 @@ impl McpServer {
         }
 
         match self.resources.read_resource(uri).await {
-            Some(content) => McpResponse::success(
-                request.id,
-                json!({
-                    "contents": [{
-                        "uri": uri,
-                        "mimeType": "text/plain",
-                        "text": content
-                    }]
-                }),
-            ),
+            Some(content) => {
+                let mime = if uri.starts_with("blob://") {
+                    "application/json"
+                } else {
+                    "text/plain"
+                };
+                McpResponse::success(
+                    request.id,
+                    json!({
+                        "contents": [{
+                            "uri": uri,
+                            "mimeType": mime,
+                            "text": content
+                        }]
+                    }),
+                )
+            }
             None => McpResponse::error(
                 request.id,
                 JsonRpcError::new(-32002, format!("Resource not found: {}", uri)),

@@ -85,7 +85,7 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         interface: sled.interface.clone(),
         peer_ip: sled.peer_ip.clone().unwrap_or_default(),
         mutation_index: sled.mutation_index as i64,
-        genesis: sled.genesis.clone().unwrap_or_default(),
+        hashed_footprint: sled.genesis.clone().unwrap_or_default(),
         trace_id: sled.trace_id.clone(),
         schema_version: sled.schema_version as i64,
         vector_id: sled.vector_id.clone(),
@@ -107,24 +107,6 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         // own); otherwise unix seconds a temporary/consumer identity
         // (e.g. Lovable) stops being valid.
         expires_at: sled.expires_at.unwrap_or(0),
-        arrival_timestamp: sled.arrival_timestamp,
-        chain_head_at_arrival: sled.chain_head_at_arrival.clone(),
-        catalog_hash_at_arrival: sled.catalog_hash_at_arrival.clone(),
-        head_timestamp_at_arrival: sled.head_timestamp_at_arrival,
-    }
-}
-
-/// The genesis inputs of one sled, for the `identity_genesis` relation.
-fn sled_to_genesis_inputs(sled: &ContainerIdentitySled) -> GenesisInputsRecord {
-    GenesisInputsRecord {
-        session_id: sled.session_id.clone(),
-        arrival_timestamp: sled.arrival_timestamp,
-        chain_head_at_arrival: sled.chain_head_at_arrival.clone(),
-        catalog_hash_at_arrival: sled.catalog_hash_at_arrival.clone(),
-        head_timestamp_at_arrival: sled.head_timestamp_at_arrival,
-        schema_content_hash: op_plugins::state_plugins::identity_sled::SCHEMA_CONTENT_HASH
-            .trim()
-            .to_string(),
     }
 }
 
@@ -151,7 +133,7 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         interface: rec.interface.clone(),
         peer_ip: (!rec.peer_ip.is_empty()).then(|| rec.peer_ip.clone()),
         mutation_index: rec.mutation_index.max(0) as u64,
-        genesis: (!rec.genesis.is_empty()).then(|| rec.genesis.clone()),
+        genesis: (!rec.hashed_footprint.is_empty()).then(|| rec.hashed_footprint.clone()),
         trace_id: rec.trace_id.clone(),
         schema_version: rec.schema_version.max(0) as u32,
         vector_id: rec.vector_id.clone(),
@@ -164,10 +146,10 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         last_seen_at: rec.last_seen_at,
         active: rec.active,
         expires_at: (rec.expires_at != 0).then_some(rec.expires_at),
-        arrival_timestamp: rec.arrival_timestamp,
-        chain_head_at_arrival: rec.chain_head_at_arrival.clone(),
-        catalog_hash_at_arrival: rec.catalog_hash_at_arrival.clone(),
-        head_timestamp_at_arrival: rec.head_timestamp_at_arrival,
+        arrival_timestamp: 0,
+        chain_head_at_arrival: String::new(),
+        catalog_hash_at_arrival: String::new(),
+        head_timestamp_at_arrival: 0,
     }
 }
 
@@ -200,12 +182,12 @@ async fn ensure_hydrated(engine: &MutationEngine) {
             if rows.is_empty() {
                 return;
             }
-            join_genesis_inputs(&mut rows, &genesis_rows);
             let mut cache = read_cache(engine).await;
             if !cache.sleds.is_empty() {
                 return;
             }
             cache.sleds = rows.iter().map(record_to_sled).collect();
+            join_genesis_inputs(&mut cache.sleds, &genesis_rows);
             cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
             if let Err(e) = write_cache(engine, &cache).await {
                 tracing::warn!(error = %e, "identity sled hydration cache write failed");
@@ -214,12 +196,20 @@ async fn ensure_hydrated(engine: &MutationEngine) {
         .await;
 }
 
-/// Fold the durable genesis inputs onto their sled rows.
-///
-/// A row whose stored shape hash is not the shape this build compiles against
-/// keeps its genesis but loses the inputs, and is logged: a record misread
-/// against a stale shape is worse than one that has to be re-minted (§8).
-fn join_genesis_inputs(sleds: &mut [IdentitySledRecord], inputs: &[GenesisInputsRecord]) {
+fn sled_to_genesis_inputs(sled: &ContainerIdentitySled) -> GenesisInputsRecord {
+    GenesisInputsRecord {
+        session_id: sled.session_id.clone(),
+        arrival_timestamp: sled.arrival_timestamp,
+        chain_head_at_arrival: sled.chain_head_at_arrival.clone(),
+        catalog_hash_at_arrival: sled.catalog_hash_at_arrival.clone(),
+        head_timestamp_at_arrival: sled.head_timestamp_at_arrival,
+        schema_content_hash: op_plugins::state_plugins::identity_sled::SCHEMA_CONTENT_HASH
+            .trim()
+            .to_string(),
+    }
+}
+
+fn join_genesis_inputs(sleds: &mut [ContainerIdentitySled], inputs: &[GenesisInputsRecord]) {
     let expected_shape = op_plugins::state_plugins::identity_sled::SCHEMA_CONTENT_HASH.trim();
     for sled in sleds.iter_mut() {
         let Some(found) = inputs
@@ -233,8 +223,7 @@ fn join_genesis_inputs(sleds: &mut [IdentitySledRecord], inputs: &[GenesisInputs
                 session_id = %sled.session_id,
                 stored = %found.schema_content_hash,
                 expected = %expected_shape,
-                "identity record shape drift; genesis inputs skipped and the \
-                 session must re-authenticate"
+                "identity record shape drift; genesis inputs skipped"
             );
             continue;
         }

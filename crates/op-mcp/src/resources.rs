@@ -62,6 +62,31 @@ impl ResourceRegistry {
         }
     }
 
+    /// Advertise every sealed plugin as `blob://<plugin_id>`.
+    pub fn with_blob_catalog() -> Self {
+        let mut registry = Self::new();
+        let dir = std::env::var("OP_BLOB_CATALOG_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
+        if let Some(ids) = op_blob::catalog::read_manifest_plugin_ids(&dir) {
+            for id in ids {
+                registry.add_resource(ResourceInfo {
+                    uri: format!("blob://{id}"),
+                    name: format!("{id} schema"),
+                    description: Some(format!("Sealed PluginSchema JSON for {id}")),
+                    mime_type: Some("application/json".to_string()),
+                });
+            }
+        }
+        registry.templates.push(ResourceTemplateInfo {
+            uri_template: "blob://{plugin_id}".to_string(),
+            name: "Sealed plugin schema".to_string(),
+            description: Some("Read PluginSchema JSON from the SHM blob catalog".to_string()),
+            mime_type: Some("application/json".to_string()),
+        });
+        registry
+    }
+
     pub fn add_resource(&mut self, resource: ResourceInfo) {
         self.resources.push(resource);
     }
@@ -82,6 +107,13 @@ impl ResourceRegistry {
         match uri {
             "docs://system-prompt" => Some(self.generate_system_prompt().await),
             "docs://architecture" => Some(ARCHITECTURE_DOC.to_string()),
+            blob if blob.starts_with("blob://") => {
+                let plugin_id = blob.trim_start_matches("blob://").trim();
+                let dir = std::env::var("OP_BLOB_CATALOG_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
+                crate::blob_schema::read_schema_resource(&dir, plugin_id)
+            }
             _ => None,
         }
     }

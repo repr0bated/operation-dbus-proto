@@ -88,6 +88,18 @@ pub struct IdentitySledRecord {
     pub expires_at: i64,
 }
 
+/// The genesis inputs stored beside a session's sled row (version 3 records).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GenesisInputsRecord {
+    pub session_id: String,
+    pub arrival_timestamp: i64,
+    pub chain_head_at_arrival: String,
+    pub catalog_hash_at_arrival: String,
+    pub head_timestamp_at_arrival: i64,
+    /// `SCHEMA_CONTENT_HASH` of the record shape this row was written against.
+    pub schema_content_hash: String,
+}
+
 /// One row of a session's append-only "snowball" event ledger.
 #[derive(Debug, Clone)]
 pub struct SessionEventRecord {
@@ -373,6 +385,15 @@ impl CozoGraphShuttle {
                 last_seen_at: Int default 0,
                 active: Bool default false,
                 expires_at: Int default 0
+            }"#,
+            r#":create identity_genesis {
+                session_id: String
+                =>
+                arrival_timestamp: Int default 0,
+                chain_head_at_arrival: String default "",
+                catalog_hash_at_arrival: String default "",
+                head_timestamp_at_arrival: Int default 0,
+                schema_content_hash: String default ""
             }"#,
             // append-only per-session "snowball" event ledger archive
             // (the immutable event chain is the proof; this is the queryable copy)
@@ -1401,6 +1422,58 @@ impl CozoGraphShuttle {
         Ok(())
     }
 
+    /// Written once at arrival. Without `arrival_timestamp` the genesis cannot
+    /// be recomputed, so this write is the durability of the anchor.
+    pub fn put_identity_genesis(
+        &self,
+        rec: &GenesisInputsRecord,
+    ) -> std::result::Result<(), CozoError> {
+        let query = r#"
+            ?[session_id, arrival_timestamp, chain_head_at_arrival,
+              catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash]
+                <- [[$sid, $arrival, $head, $catalog, $head_ts, $shape]]
+            :put identity_genesis {
+                session_id => arrival_timestamp, chain_head_at_arrival,
+                catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash
+            }
+        "#;
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(rec.session_id.as_str().into()));
+        p.insert("arrival".into(), dv_int(rec.arrival_timestamp));
+        p.insert(
+            "head".into(),
+            DataValue::Str(rec.chain_head_at_arrival.as_str().into()),
+        );
+        p.insert(
+            "catalog".into(),
+            DataValue::Str(rec.catalog_hash_at_arrival.as_str().into()),
+        );
+        p.insert("head_ts".into(), dv_int(rec.head_timestamp_at_arrival));
+        p.insert(
+            "shape".into(),
+            DataValue::Str(rec.schema_content_hash.as_str().into()),
+        );
+        cozo_run(&self.db, query, p)
+            .map_err(|e| CozoError::Other(format!("put identity genesis: {e}")))?;
+        Ok(())
+    }
+
+    /// Every stored genesis-input row, for the one hydration read.
+    pub fn list_identity_genesis(
+        &self,
+    ) -> std::result::Result<Vec<GenesisInputsRecord>, CozoError> {
+        let r = cozo_run(
+            &self.db,
+            "?[session_id, arrival_timestamp, chain_head_at_arrival, \
+             catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash] := \
+             *identity_genesis[session_id, arrival_timestamp, chain_head_at_arrival, \
+             catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash]",
+            BTreeMap::new(),
+        )
+        .map_err(|e| CozoError::Other(format!("list identity genesis: {e}")))?;
+        Ok(r.rows.iter().map(|r| row_to_genesis_inputs(r)).collect())
+    }
+
     /// Fetch a single identity sled row by session_id.
     pub fn get_identity_sled(
         &self,
@@ -1813,6 +1886,18 @@ fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
         last_seen_at: dv_as_int(&row[13]),
         active: dv_as_bool(&row[14]),
         expires_at: dv_as_int(&row[15]),
+    }
+}
+
+fn row_to_genesis_inputs(row: &[DataValue]) -> GenesisInputsRecord {
+    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
+    GenesisInputsRecord {
+        session_id: s(0),
+        arrival_timestamp: dv_as_int(&row[1]),
+        chain_head_at_arrival: s(2),
+        catalog_hash_at_arrival: s(3),
+        head_timestamp_at_arrival: dv_as_int(&row[4]),
+        schema_content_hash: s(5),
     }
 }
 

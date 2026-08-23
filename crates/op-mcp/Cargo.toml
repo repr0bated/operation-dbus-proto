@@ -28,6 +28,10 @@ prost-types = { workspace = true }
 
 # HTTP/WebSocket
 axum = { version = "0.7", features = ["ws"] }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+libc = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 tower-http = { version = "0.5", features = ["cors"] }
 reqwest.workspace = true
 
@@ -45,6 +49,7 @@ tonic-health = { workspace = true, optional = true }
 tonic-web = { workspace = true, optional = true }
 
 # Internal crates
+op-blob = { path = "../op-blob" }
 op-core = { path = "../op-core" }
 op-identity = { path = "../op-identity" }
 op-tools = { path = "../op-tools" }

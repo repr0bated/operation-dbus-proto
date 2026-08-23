@@ -35,10 +35,37 @@ pub struct CognitiveMcpServer {
 }
 
 impl CognitiveMcpServer {
-    /// `db_path` is the CozoDB directory backing every persistent relation
-    /// (memory namespaces/entries, users, sessions, compliance graph, audit log).
+    /// Create a new in-memory Cognitive MCP server.
+    pub async fn new_in_memory() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new(":memory:").await
+    }
+
+    /// `db_path` is the CozoDB directory backing relations, or `":memory:"` for ephemeral mode.
+    /// If opening a persistent path fails (e.g. `op-grpc-bridge` holds the RocksDB write lock),
+    /// this gracefully falls back to in-memory mode rather than crashing.
     pub async fn new(db_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let cozo_shuttle = Arc::new(CozoGraphShuttle::new_persistent(PathBuf::from(db_path))?);
+        let cozo_shuttle = if db_path == ":memory:" || db_path.is_empty() || db_path == "memory" {
+            Arc::new(CozoGraphShuttle::new_in_memory()?)
+        } else {
+            match CozoGraphShuttle::new_persistent(PathBuf::from(db_path)) {
+                Ok(shuttle) => Arc::new(shuttle),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %db_path,
+                        "Could not open persistent CozoDB (likely locked by op-grpc-bridge). Falling back to in-memory store."
+                    );
+                    Arc::new(CozoGraphShuttle::new_in_memory()?)
+                }
+            }
+        };
+        Self::new_with_shuttle(cozo_shuttle).await
+    }
+
+    /// Create a Cognitive MCP server with a pre-configured CozoGraphShuttle.
+    pub async fn new_with_shuttle(
+        cozo_shuttle: Arc<CozoGraphShuttle>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let memory_store = Arc::new(CognitiveMemoryStore::new(cozo_shuttle.clone()).await?);
 
         let tool_registry = Arc::new(ToolRegistry::new());

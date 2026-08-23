@@ -3,8 +3,7 @@
 // against the 1:1 IdentitySled in shared memory and handles the "Snowball" session.
 
 use chrono::Utc;
-use memmap2::MmapOptions;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 
 use crate::IdentitySled;
@@ -47,15 +46,8 @@ impl AnnaScribe {
     /// Uses Blake3 per the spec for all Strike/Etch operations.
     pub fn notarize_arrival(wg_pubkey: &str) -> Result<SessionLedger, String> {
         // 1:1 Direct Read from the SchemaEngine's shared memory (No SQL, No Polling)
-        let file = File::open("/dev/shm/plugin_schema.dat")
-            .map_err(|_| "A.N.N.A. Scribe: Missing Schema. Connection Rejected.".to_string())?;
-
-        let mmap = unsafe {
-            MmapOptions::new()
-                .map(&file)
-                .map_err(|_| "Memory map failed".to_string())?
-        };
-        let sled_ptr = mmap.as_ptr() as *const IdentitySled;
+        let (sled_ptr, _mmap) = crate::schema_bridge::read_sled()
+            .map_err(|e| format!("A.N.N.A. Scribe: Missing Schema or Invalid Sled ({e}). Connection Rejected."))?;
         let sled = unsafe { &*sled_ptr };
 
         // The Absolute Base: No valid schema, does not exist.

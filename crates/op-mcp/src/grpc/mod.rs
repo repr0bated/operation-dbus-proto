@@ -30,7 +30,7 @@ pub use service::{GrpcInfrastructure, McpGrpcService};
 // Include generated protobuf code
 #[cfg(feature = "grpc")]
 pub mod proto {
-    include!("generated/op.mcp.v1.rs");
+    tonic::include_proto!("op.mcp.v1");
 
     /// Combined FileDescriptorSet for reflection.
     pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("mcp_descriptor");

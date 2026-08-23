@@ -130,15 +130,26 @@ async fn sse_push_stream(
                 "timestamp": chrono::Utc::now().to_rfc3339()
             }).to_string()));
 
-        // Forward relevant pushes to this client
-        while let Ok(push) = push_rx.recv().await {
-            if push.session_id == session_id {
-                let event = Event::default()
-                    .event("knowledge_push")
-                    .id(&push.id)
-                    .data(serde_json::to_string(&push).unwrap_or_default());
+        // Forward relevant pushes to this client, tolerating broadcast lag
+        loop {
+            match push_rx.recv().await {
+                Ok(push) => {
+                    if push.session_id == session_id {
+                        let event = Event::default()
+                            .event("knowledge_push")
+                            .id(&push.id)
+                            .data(serde_json::to_string(&push).unwrap_or_default());
 
-                yield Ok(event);
+                        yield Ok(event);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                    tracing::warn!(session_id = %session_id, count, "SSE stream lagged, resuming stream");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
             }
         }
 

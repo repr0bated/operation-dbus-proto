@@ -79,14 +79,19 @@ pub fn derive_significance(
 
     if let Some(field_name) = field {
         // Field in immutable_paths — write is Signal
-        let field_path = format!("/tunable/{field_name}");
-        if is_write && schema.immutable_paths.contains(&field_path) {
+        let raw_name = field_name.trim_start_matches('/');
+        let matches_immutable = schema.immutable_paths.iter().any(|p| {
+            p == field_name
+                || p.trim_start_matches('/') == raw_name
+                || p == &format!("/tunable/{raw_name}")
+        });
+        if is_write && matches_immutable {
             return Significance::Signal;
         }
 
         // read_only field write — this is a violation attempt, always Signal
         if is_write {
-            if let Some(field_schema) = schema.fields.get(field_name) {
+            if let Some(field_schema) = schema.fields.get(raw_name).or_else(|| schema.fields.get(field_name)) {
                 if field_schema.read_only {
                     return Significance::Signal;
                 }

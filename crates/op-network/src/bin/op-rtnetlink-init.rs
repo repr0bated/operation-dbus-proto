@@ -83,7 +83,7 @@ async fn configure_public() -> Result<()> {
     if Path::new("/sys/class/net").join(&grpc).exists() {
         add_address(&grpc, &grpc_address).await?;
     }
-    rtnetlink::replace_default_route_onlink(&public, &public_gateway)
+    rtnetlink::add_default_route_onlink(&public, &public_gateway)
         .await
         .with_context(|| format!("move default route to {public} via {public_gateway}"))?;
 

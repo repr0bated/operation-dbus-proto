@@ -1,0 +1,7 @@
+#!/bin/sh
+exec 2>&1
+# Compact MCP is a D-Bus plugin, not an HTTP listener.
+#   unix:path=/run/opdbus/session-bus.sock
+#   org.opdbus.v1.plugins /org/opdbus/v1/plugins/compact_mcp PluginV1.Call
+echo "op-mcp-compact: refuse HTTP; use zcall compact_mcp" >&2
+exec pause

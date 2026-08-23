@@ -17,21 +17,25 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
-pub struct LazyOpToolsExecutor;
+pub struct PrewarmedOpToolsExecutor {
+    registry: Arc<op_tools::ToolRegistry>,
+}
 
-impl LazyOpToolsExecutor {
-    async fn load_registry() -> Result<op_tools::ToolRegistry> {
-        let registry = op_tools::ToolRegistry::new();
+impl PrewarmedOpToolsExecutor {
+    pub async fn new() -> Result<Self> {
+        let registry = Arc::new(op_tools::ToolRegistry::new());
         op_tools::register_builtin_tools(&registry).await?;
-        Ok(registry)
+        Ok(Self { registry })
     }
 }
 
+pub type LazyOpToolsExecutor = PrewarmedOpToolsExecutor;
+
 #[async_trait::async_trait]
-impl ToolExecutor for LazyOpToolsExecutor {
+impl ToolExecutor for PrewarmedOpToolsExecutor {
     async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
-        let registry = Self::load_registry().await?;
-        Ok(registry
+        Ok(self
+            .registry
             .list()
             .await
             .into_iter()
@@ -45,8 +49,8 @@ impl ToolExecutor for LazyOpToolsExecutor {
     }
 
     async fn execute_tool(&self, name: &str, arguments: Value) -> Result<Value> {
-        let registry = Self::load_registry().await?;
-        let tool = registry
+        let tool = self
+            .registry
             .get(name)
             .await
             .ok_or_else(|| anyhow::anyhow!("Tool not found: {}", name))?;
@@ -54,36 +58,24 @@ impl ToolExecutor for LazyOpToolsExecutor {
     }
 
     async fn get_tool_schema(&self, name: &str) -> Result<Option<Value>> {
-        let registry = Self::load_registry().await?;
-        Ok(registry
+        Ok(self
+            .registry
             .get_definition(name)
             .await
-            .map(|definition| definition.input_schema))
+            .map(|d| d.input_schema))
     }
 
     async fn search_tools(&self, query: &str, limit: usize) -> Result<Vec<ToolInfo>> {
-        let query = query.to_lowercase();
-        let registry = Self::load_registry().await?;
-        Ok(registry
-            .list()
-            .await
+        let needle = query.to_lowercase();
+        Ok(self
+            .list_tools()
+            .await?
             .into_iter()
             .filter(|tool| {
-                tool.name.to_lowercase().contains(&query)
-                    || tool.description.to_lowercase().contains(&query)
-                    || tool.category.to_lowercase().contains(&query)
-                    || tool
-                        .tags
-                        .iter()
-                        .any(|tag| tag.to_lowercase().contains(&query))
+                tool.name.to_lowercase().contains(&needle)
+                    || tool.description.to_lowercase().contains(&needle)
             })
             .take(limit)
-            .map(|tool| ToolInfo {
-                name: tool.name,
-                description: tool.description,
-                input_schema: tool.input_schema,
-                annotations: None,
-            })
             .collect())
     }
 }
@@ -575,6 +567,38 @@ pub async fn run_compact_stdio_server() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
+    let wg_iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
+    let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
+    let peer_pubkey = match wg_id.get_local_pubkey() {
+        Ok(pubkey) => {
+            info!(interface = %wg_iface, pubkey = %pubkey, "WG identity resolved");
+            Some(pubkey)
+        }
+        Err(e) => {
+            tracing::warn!(interface = %wg_iface, error = %e, "Could not read WG public key; set WG_PUBKEY env var to override");
+            None
+        }
+    };
+
+    let executor: Arc<dyn ToolExecutor> = Arc::new(PrewarmedOpToolsExecutor::new().await?);
+    let server = Arc::new(CompactServer::new(executor));
+
+    server
+        .set_session(SessionContext {
+            peer_pubkey,
+            ..Default::default()
+        })
+        .await;
+
+    info!("Starting compact MCP server (stdio)");
+
+    StdioTransport::new().serve(server).await
+}
+
+/// Run compact server on a Unix domain socket
+pub async fn run_compact_unix_server(unix_path: &std::path::Path) -> Result<()> {
+    use crate::transport::{HttpSseTransport, Transport};
+
     // ── WireGuard identity ────────────────────────────────────────────────────
     // Read the local WG pubkey, write the canonical IdentitySled to /dev/shm,
     // and stamp peer_pubkey into the session so tools can use it for auth.
@@ -582,11 +606,7 @@ pub async fn run_compact_stdio_server() -> Result<()> {
     let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
     let peer_pubkey = match wg_id.get_local_pubkey() {
         Ok(pubkey) => {
-            if let Err(e) = op_identity::write_sled_from_wg(&pubkey) {
-                tracing::warn!(error = %e, "Failed to write identity sled to /dev/shm");
-            } else {
-                info!(interface = %wg_iface, pubkey = %pubkey, "WG identity sled written");
-            }
+            info!(interface = %wg_iface, pubkey = %pubkey, "WG identity resolved");
             Some(pubkey)
         }
         Err(e) => {
@@ -598,7 +618,7 @@ pub async fn run_compact_stdio_server() -> Result<()> {
     // Load the authoritative op-tools registry lazily per request so the
     // chatbot sees five stable meta-tools while retaining access to every
     // live system, D-Bus, OVS, and PluginSchema projection tool.
-    let executor: Arc<dyn ToolExecutor> = Arc::new(LazyOpToolsExecutor);
+    let executor: Arc<dyn ToolExecutor> = Arc::new(PrewarmedOpToolsExecutor::new().await?);
     let server = Arc::new(CompactServer::new(executor));
 
     // Stamp the WG identity into the session context.
@@ -609,9 +629,12 @@ pub async fn run_compact_stdio_server() -> Result<()> {
         })
         .await;
 
-    info!("Starting compact MCP server (stdio)");
+    info!(path = %unix_path.display(), "Starting compact MCP server (unix socket)");
 
-    StdioTransport::new().serve(server).await
+    let transport = HttpSseTransport::new(String::new())
+        .with_unix_path(unix_path.to_path_buf())
+        .with_base_path("/mcp/compact");
+    transport.serve(server).await
 }
 
 // Implement McpHandler for CompactServer

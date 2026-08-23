@@ -316,6 +316,11 @@ pub struct PluginSchema {
     /// legacy schema that predates the declaration point).
     #[serde(default)]
     pub capabilities: HashMap<String, CapabilityDecl>,
+    /// Per-footprint grants sealed with the plugin. The gRPC gate prefers
+    /// this over `/dev/shm/opdbus/capability-grants.json` when present.
+    /// Keys are footprint hex or `"*"`. Values are capability ids.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub capability_grants: HashMap<String, Vec<String>>,
     /// Declared signals emitted by the plugin.
     #[serde(default)]
     pub signals: Vec<SignalDecl>,
@@ -1141,6 +1146,7 @@ impl PluginSchemaBuilder {
             capabilities: self.capabilities,
             signals: self.signals,
             guarantees: self.guarantees,
+            capability_grants: HashMap::new(),
         }
     }
 }

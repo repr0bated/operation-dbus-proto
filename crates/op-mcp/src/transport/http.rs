@@ -213,6 +213,9 @@ async fn wireguard_auth_middleware(
         if is_loopback_addr(&peer) {
             return Ok(next.run(request).await);
         }
+    } else {
+        // Unix-domain listener: no TCP peer. The socket ACL is the auth.
+        return Ok(next.run(request).await);
     }
 
     // WireGuard identity: presence of both xraqy-injected headers is the gate.
@@ -401,6 +404,7 @@ impl Transport for SseTransport {
 /// HTTP+SSE bidirectional transport (recommended)
 pub struct HttpSseTransport {
     bind_addr: String,
+    unix_path: Option<std::path::PathBuf>,
     base_path: String,
     validator: Arc<dyn AuthValidator>,
     extra_router: Option<axum::Router>,
@@ -410,10 +414,17 @@ impl HttpSseTransport {
     pub fn new(bind_addr: impl Into<String>) -> Self {
         Self {
             bind_addr: bind_addr.into(),
+            unix_path: None,
             base_path: String::new(),
             validator: default_validator(),
             extra_router: None,
         }
+    }
+
+    /// Serve HTTP+SSE on a Unix domain socket. Peer cred / socket mode is auth.
+    pub fn with_unix_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.unix_path = Some(path.into());
+        self
     }
 
     pub fn with_base_path(mut self, path: impl Into<String>) -> Self {
@@ -493,6 +504,22 @@ impl Transport for HttpSseTransport {
             )
             .with_state(state);
 
+        if let Some(unix_path) = self.unix_path.clone() {
+            if self.bind_addr.is_empty() {
+                return serve_unix(app, unix_path).await;
+            }
+            let unix_app = app.clone();
+            tokio::spawn(async move {
+                if let Err(error) = serve_unix(unix_app, unix_path).await {
+                    tracing::error!(%error, "UDS MCP serve failed");
+                }
+            });
+        }
+
+        if self.bind_addr.is_empty() {
+            anyhow::bail!("HTTP+SSE transport needs --http ADDR or --unix PATH");
+        }
+
         let listener = tokio::net::TcpListener::bind(&self.bind_addr).await?;
         info!(addr = %self.bind_addr, "HTTP+SSE transport listening");
 
@@ -502,6 +529,69 @@ impl Transport for HttpSseTransport {
         )
         .await?;
         Ok(())
+    }
+}
+
+async fn serve_unix(app: Router, path: std::path::PathBuf) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    if let Err(error) = tokio::fs::remove_file(&path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error.into());
+        }
+    }
+
+    let listener = tokio::net::UnixListener::bind(&path)?;
+    apply_socket_acl(&path)?;
+    info!(path = %path.display(), "HTTP+SSE transport listening on unix socket");
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let app = app.clone();
+        tokio::spawn(async move {
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let service = hyper_util::service::TowerToHyperService::new(app);
+            if let Err(error) = hyper::server::conn::http1::Builder::new()
+                .serve_connection(io, service)
+                .await
+            {
+                tracing::debug!(%error, "UDS MCP connection closed");
+            }
+        });
+    }
+}
+
+fn apply_socket_acl(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{chown, PermissionsExt};
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+    let owner = std::env::var("OP_MCP_SOCK_OWNER").unwrap_or_else(|_| "jeremy:jeremy".into());
+    let (user, group) = owner.split_once(':').unwrap_or((owner.as_str(), owner.as_str()));
+    let uid = lookup_uid(user);
+    let gid = lookup_gid(group);
+    if uid.is_some() || gid.is_some() {
+        let _ = chown(path, uid, gid);
+    }
+    Ok(())
+}
+
+fn lookup_uid(name: &str) -> Option<u32> {
+    let cstr = std::ffi::CString::new(name).ok()?;
+    let pwd = unsafe { libc::getpwnam(cstr.as_ptr()) };
+    if pwd.is_null() {
+        None
+    } else {
+        Some(unsafe { (*pwd).pw_uid })
+    }
+}
+
+fn lookup_gid(name: &str) -> Option<u32> {
+    let cstr = std::ffi::CString::new(name).ok()?;
+    let grp = unsafe { libc::getgrnam(cstr.as_ptr()) };
+    if grp.is_null() {
+        None
+    } else {
+        Some(unsafe { (*grp).gr_gid })
     }
 }
 
