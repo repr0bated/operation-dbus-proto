@@ -39,7 +39,7 @@ args = [
 ]
 
 [mcp_servers.cognitive-mcp]
-url = "http://10.200.0.2:3003/mcp"
+url = ""
 
 [mcp_servers.cognitive-mcp.http_headers]
 X-Ghostbridge-Footprint = "mcp-client"
