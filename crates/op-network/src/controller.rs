@@ -1,6 +1,6 @@
-//! OpenFlow 1.3 controller server (passive mode)
+//! OpenFlow 1.5 controller server (passive mode)
 //!
-//! Listens for OVS to connect (passive mode), performs the OF1.3 handshake,
+//! Listens for OVS to connect (passive mode), performs the OpenFlow handshake,
 //! enables async delivery (`OFPT_SET_CONFIG` miss_send_len=128), discovers
 //! ports, clears flows, immediately re-installs priority=0 NORMAL, then
 //! installs configured forwarding rules.
@@ -33,6 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::datapath_safe::{FALLBACK_COOKIE, MANAGED_COOKIE};
 use crate::openflow_translate::{json_flow_to_add, json_flow_to_delete};
+use crate::unixctl::{ensure_static_fdb_entries, static_fdb_from_env, StaticFdbEntry};
 
 /// A request to install or delete a schema-driven flow on the currently
 /// connected switch, submitted via `OpenFlowControllerHandle::send_flow`.
@@ -42,18 +43,30 @@ struct FlowRequest {
     reply: oneshot::Sender<Result<String>>,
 }
 
-// ── OF1.3 constants ────────────────────────────────────────────────────────────
+// ── OpenFlow constants ─────────────────────────────────────────────────────────
+
+/// Wire version used for every message this controller emits.
+///
+/// OF1.5 is required, not cosmetic: `packet_type` matches and the
+/// `encap(ethernet)` action that give the L3-only `netmaker` WireGuard port an
+/// Ethernet header exist only from OF1.5 onwards. It is deliberately a single
+/// constant so the whole controller can be moved back to `Version::Of13` with
+/// one edit if a bridge is pinned to an older protocol set.
+const OF_VERSION: Version = Version::Of15;
 
 /// Multipart type: port description.
 const OFPMP_PORT_DESC: u16 = 13;
 /// "All" output port — used when out_port is not restricted.
 const OFPP_ANY: u32 = 0xFFFF_FFFF;
+/// Fixed part of `ofp_port` (OF1.4+): port_no(4) length(2) pad(2) hw_addr(6)
+/// pad(2) name(16) config(4) state(4). Port properties follow.
+const OFP_PORT_HDR_LEN: usize = 40;
 
 // ── Wire helpers ──────────────────────────────────────────────────────────────
 
-/// Build a raw OF1.3 message with an 8-byte header and `body`.
+/// Build a raw OpenFlow message with an 8-byte header and `body`.
 fn build_raw_msg(msg_type: MessageType, xid: u32, body: &[u8]) -> Vec<u8> {
-    let msg = Message::new(Version::Of13, msg_type, xid, Bytes::copy_from_slice(body));
+    let msg = Message::new(OF_VERSION, msg_type, xid, Bytes::copy_from_slice(body));
     msg.encode().to_vec()
 }
 
@@ -80,16 +93,32 @@ fn build_set_config(xid: u32) -> Vec<u8> {
     build_raw_msg(MessageType::SetConfig, xid, &body)
 }
 
-/// Build an OF1.3 PortDesc multipart request.
+/// Build a PortDesc multipart request.
 ///
-/// Body: type(2) + flags(2) + pad(4) = 8 bytes.
+/// Body: `ofp_multipart_request` type(2) + flags(2) + pad(4), followed by the
+/// OF1.5-only `ofp15_port_desc_request` port_no(4) + pad(4) = 16 bytes
+/// (24-byte message).
+///
+/// OF1.5 added the `port_no` body that OF1.3 does not have (`openflow-1.5.h`:
+/// "All ports if OFPP_ANY"). Leaving it zeroed asks for port 0, which is not a
+/// valid port: OVS answers with an empty list and **no error**, so every
+/// symbolic port name silently fails to resolve, every configured flow is
+/// skipped, and `actions=NORMAL` floods gateway-bound frames to every port.
 fn build_port_desc_request(xid: u32) -> Vec<u8> {
-    let mut body = [0u8; 8];
+    let mut body = [0u8; 16];
     body[0..2].copy_from_slice(&OFPMP_PORT_DESC.to_be_bytes());
+    body[8..12].copy_from_slice(&OFPP_ANY.to_be_bytes());
     build_raw_msg(MessageType::MultipartRequest, xid, &body)
 }
 
-/// Build an OF1.3 EchoReply that mirrors the request payload.
+/// Build a BarrierRequest — forces the switch to finish (and error on) every
+/// preceding FlowMod before it replies, so flow acceptance is deterministic
+/// instead of "we wrote bytes to a socket".
+fn build_barrier_request(xid: u32) -> Vec<u8> {
+    build_raw_msg(MessageType::BarrierRequest, xid, &[])
+}
+
+/// Build an EchoReply that mirrors the request payload.
 fn build_echo_reply(xid: u32, payload: &[u8]) -> Vec<u8> {
     build_raw_msg(MessageType::EchoReply, xid, payload)
 }
@@ -104,14 +133,14 @@ fn build_flow_mod_delete_managed(xid: u32) -> Vec<u8> {
     let mut flow = Flow::delete();
     flow.cookie = MANAGED_COOKIE;
     flow.cookie_mask = u64::MAX; // match this cookie exactly
-    let msg = flow.to_message(Version::Of13, xid);
+    let msg = flow.to_message(OF_VERSION, xid);
     msg.encode().to_vec()
 }
 
 /// Legacy wipe of all tables (avoid on live host bridges).
 fn build_flow_mod_delete_all(xid: u32) -> Vec<u8> {
     let flow = Flow::delete();
-    let msg = flow.to_message(Version::Of13, xid);
+    let msg = flow.to_message(OF_VERSION, xid);
     msg.encode().to_vec()
 }
 
@@ -124,7 +153,7 @@ pub fn build_flow_mod_add(in_port: u32, out_port: u32, priority: u16, xid: u32) 
         .cookie(MANAGED_COOKIE)
         .match_fields(match_fields)
         .actions(actions);
-    let msg = flow.to_message(Version::Of13, xid);
+    let msg = flow.to_message(OF_VERSION, xid);
     msg.encode().to_vec()
 }
 
@@ -143,7 +172,7 @@ pub fn build_flow_mod_normal(priority: u16, xid: u32) -> Vec<u8> {
     // Host-safety fallback: skip per-flow counters (OF1.3 OFPFF_NO_*).
     flow.flags.no_pkt_counts = true;
     flow.flags.no_byte_counts = true;
-    let msg = flow.to_message(Version::Of13, xid);
+    let msg = flow.to_message(OF_VERSION, xid);
     msg.encode().to_vec()
 }
 
@@ -191,11 +220,20 @@ async fn send_msg(stream: &mut TcpStream, bytes: &[u8]) -> Result<()> {
 
 // ── Port discovery ─────────────────────────────────────────────────────────────
 
-/// Send a PortDesc request and parse all replies into `{port_name → ofport_no}`.
-async fn discover_ports(stream: &mut TcpStream, xid: u32) -> Result<HashMap<String, u32>> {
+/// Send a PortDesc request and parse all replies into `{port_name → ofport_no}`
+/// plus `{port_name → hw_addr}`.
+///
+/// The MAC map is what lets a static flow say `"eth_dst": "port_mac:ovsbr0"`
+/// instead of hard-coding the bridge's MAC in config — it comes free with the
+/// reply we already have to parse, with no OVSDB round trip.
+async fn discover_ports(
+    stream: &mut TcpStream,
+    xid: u32,
+) -> Result<(HashMap<String, u32>, HashMap<String, [u8; 6]>)> {
     send_msg(stream, &build_port_desc_request(xid)).await?;
 
     let mut ports: HashMap<String, u32> = HashMap::new();
+    let mut port_macs: HashMap<String, [u8; 6]> = HashMap::new();
 
     loop {
         let msg = recv_msg(stream).await?;
@@ -213,19 +251,37 @@ async fn discover_ports(stream: &mut TcpStream, xid: u32) -> Result<HashMap<Stri
                 let flags = u16::from_be_bytes([msg.payload[2], msg.payload[3]]);
 
                 if reply_type == OFPMP_PORT_DESC {
-                    // OF1.3 ofp_port = 64 bytes:
-                    // port_no(4) pad(4) hw_addr(6) pad(2) name(16) config(4) state(4)
-                    // curr(4) advertised(4) supported(4) peer(4) curr_speed(4) max_speed(4)
+                    // From OF1.4 `ofp_port` is variable length — a 40-byte
+                    // fixed part followed by port properties — so stride on the
+                    // entry's own `length` field instead of the OF1.3 64-byte
+                    // stride, which would mis-slice every port after the first.
+                    // port_no(4) length(2) pad(2) hw_addr(6) pad(2) name(16)
+                    // config(4) state(4) properties...
                     let body = &msg.payload[8..];
-                    for chunk in body.chunks_exact(64) {
+                    let mut off = 0usize;
+                    while off + OFP_PORT_HDR_LEN <= body.len() {
+                        let entry = &body[off..];
                         let port_no =
-                            u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                        let name = String::from_utf8_lossy(&chunk[16..32])
+                            u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
+                        let entry_len = u16::from_be_bytes([entry[4], entry[5]]) as usize;
+                        let name = String::from_utf8_lossy(&entry[16..32])
                             .trim_end_matches('\0')
                             .to_string();
                         if !name.is_empty() && port_no < OFPP_ANY {
-                            ports.insert(name, port_no);
+                            let mut hw_addr = [0u8; 6];
+                            hw_addr.copy_from_slice(&entry[8..14]);
+                            ports.insert(name.clone(), port_no);
+                            port_macs.insert(name, hw_addr);
                         }
+                        // A length that cannot advance us would spin forever.
+                        if entry_len < OFP_PORT_HDR_LEN {
+                            log::warn!(
+                                "OF controller: malformed ofp_port length {entry_len} at offset {off}, \
+                                 stopping port parse"
+                            );
+                            break;
+                        }
+                        off += entry_len;
                     }
                     // bit 0 of flags = OFPMPF_REPLY_MORE
                     if flags & 1 == 0 {
@@ -239,7 +295,7 @@ async fn discover_ports(stream: &mut TcpStream, xid: u32) -> Result<HashMap<Stri
         }
     }
 
-    Ok(ports)
+    Ok((ports, port_macs))
 }
 
 // ── Connection handler ────────────────────────────────────────────────────────
@@ -249,6 +305,7 @@ async fn handle_connection(
     mut stream: TcpStream,
     flows: Arc<Vec<(String, String, u16)>>,
     static_flows: Arc<Vec<String>>,
+    static_fdb: Arc<Vec<StaticFdbEntry>>,
     active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
 ) -> Result<()> {
     let mut xid: u32 = 1;
@@ -284,7 +341,7 @@ async fn handle_connection(
     log::info!("OF controller: SET_CONFIG miss_send_len=128 (async PACKET_IN enabled)");
 
     // 4. Discover ports via PortDesc multipart.
-    let port_map = discover_ports(&mut stream, xid).await?;
+    let (port_map, port_macs) = discover_ports(&mut stream, xid).await?;
     xid += 1;
 
     log::info!(
@@ -341,19 +398,94 @@ async fn handle_connection(
         }
     }
 
+    // 5b. Re-assert static FDB pins BEFORE any symbolic-port work. These live
+    // in ovs-vswitchd's L2 table, not in OVSDB or the flow table, so a vswitchd
+    // restart silently drops them — and the ISP filters VRRP off customer
+    // ports, so the gateway's virtual MAC can never be learned. Without the pin
+    // `actions=NORMAL` floods every gateway-bound frame to every port. L2
+    // reachability must never be gated on a static flow resolving a port name,
+    // which is why this runs ahead of the loop below and its barrier.
+    if !static_fdb.is_empty() {
+        let added = ensure_static_fdb_entries(&static_fdb).await;
+        log::info!(
+            "OF controller: {} static FDB pin(s) configured, {} (re)added",
+            static_fdb.len(),
+            added
+        );
+    }
+
     // 6b. Install durable static flows (rich match) — reinstalled every
     // reconnect, after delete_managed so the fallback/managed set is clean.
+    //
+    // A flow that cannot be translated (typically an `in_port` naming a port
+    // that is not currently attached to the bridge — `netmaker` while
+    // netmaker-ovs-attach is broken) is skipped, not fatal: the plugin declares
+    // `atomic_operations: false`, so one unresolvable flow must not tear down
+    // the connection and take every other flow, the NORMAL fallback and the FDB
+    // pins with it.
     let mut static_installed = 0u32;
+    let mut static_skipped = 0u32;
     for flow_json in static_flows.iter() {
-        match push_flow_add(&mut stream, flow_json, &port_map, &mut xid).await {
+        match push_flow_add(&mut stream, flow_json, &port_map, &port_macs, &mut xid).await {
             Ok(_) => static_installed += 1,
-            Err(e) => log::warn!(
-                "OF controller: static flow install failed ({e:#}): {flow_json}"
-            ),
+            Err(e) => {
+                static_skipped += 1;
+                log::warn!("OF controller: skipping static flow ({e:#}): {flow_json}");
+            }
         }
     }
-    if static_installed > 0 {
-        log::info!("OF controller: {static_installed} static flow(s) installed");
+    if static_installed > 0 || static_skipped > 0 {
+        log::info!(
+            "OF controller: {static_installed} static flow(s) installed, {static_skipped} skipped"
+        );
+    }
+
+    // 6c. A barrier makes static-flow acceptance deterministic: the switch must
+    // process every preceding FlowMod (and report any it rejected) before it
+    // replies. Errors are reported, never fatal — one rejected FlowMod must not
+    // cost us the fallback, the pins and every other flow. Three exits so a
+    // switch that never sends BarrierReply cannot hang the session: the reply,
+    // an error carrying our own barrier xid, and a hard timeout.
+    let barrier_xid = xid;
+    send_msg(&mut stream, &build_barrier_request(barrier_xid)).await?;
+    xid += 1;
+    loop {
+        let msg = match tokio::time::timeout(Duration::from_secs(10), recv_msg(&mut stream)).await {
+            Ok(msg) => msg?,
+            Err(_) => {
+                log::warn!(
+                    "OF controller: no BarrierReply within 10s (xid={barrier_xid}); \
+                     continuing to keepalive"
+                );
+                break;
+            }
+        };
+        match msg.msg_type {
+            21 /* BarrierReply */ => break,
+            1 /* Error */ => {
+                let error_type = msg
+                    .payload
+                    .get(0..2)
+                    .map(|v| u16::from_be_bytes([v[0], v[1]]));
+                let error_code = msg
+                    .payload
+                    .get(2..4)
+                    .map(|v| u16::from_be_bytes([v[0], v[1]]));
+                log::warn!(
+                    "OF controller: switch rejected OpenFlow programming: \
+                     type={error_type:?} code={error_code:?} xid={}",
+                    msg.xid
+                );
+                // If the barrier itself errored there will be no reply at all.
+                if msg.xid == barrier_xid {
+                    break;
+                }
+            }
+            2 /* EchoRequest */ => {
+                send_msg(&mut stream, &build_echo_reply(msg.xid, &msg.payload)).await?;
+            }
+            _ => {}
+        }
     }
 
     log::info!(
@@ -403,9 +535,9 @@ async fn handle_connection(
             }
             Some(req) = cmd_rx.recv() => {
                 let outcome = if req.delete {
-                    push_flow_delete(&mut stream, &req.flow_json, &port_map, &mut xid).await
+                    push_flow_delete(&mut stream, &req.flow_json, &port_map, &port_macs, &mut xid).await
                 } else {
-                    push_flow_add(&mut stream, &req.flow_json, &port_map, &mut xid).await
+                    push_flow_add(&mut stream, &req.flow_json, &port_map, &port_macs, &mut xid).await
                 };
                 let _ = req.reply.send(outcome);
             }
@@ -421,10 +553,11 @@ async fn push_flow_add(
     stream: &mut TcpStream,
     flow_json: &str,
     port_map: &HashMap<String, u32>,
+    port_macs: &HashMap<String, [u8; 6]>,
     xid: &mut u32,
 ) -> Result<String> {
-    let flow = json_flow_to_add(flow_json, port_map)?;
-    let msg = flow.to_message(Version::Of13, *xid);
+    let flow = json_flow_to_add(flow_json, port_map, port_macs)?;
+    let msg = flow.to_message(OF_VERSION, *xid);
     *xid += 1;
     send_msg(stream, &msg.encode().to_vec()).await?;
     Ok(serde_json::json!({"ok": true, "action": "add"}).to_string())
@@ -435,10 +568,11 @@ async fn push_flow_delete(
     stream: &mut TcpStream,
     flow_json: &str,
     port_map: &HashMap<String, u32>,
+    port_macs: &HashMap<String, [u8; 6]>,
     xid: &mut u32,
 ) -> Result<String> {
-    let flow = json_flow_to_delete(flow_json, port_map)?;
-    let msg = flow.to_message(Version::Of13, *xid);
+    let flow = json_flow_to_delete(flow_json, port_map, port_macs)?;
+    let msg = flow.to_message(OF_VERSION, *xid);
     *xid += 1;
     send_msg(stream, &msg.encode().to_vec()).await?;
     Ok(serde_json::json!({"ok": true, "action": "delete"}).to_string())
@@ -457,6 +591,9 @@ pub struct OpenFlowController {
     /// Durable schema-driven flows (JSON FlowEntry), reinstalled on every
     /// OVS reconnect via the same translator as SendFlow.
     static_flows: Vec<String>,
+    /// Static FDB pins (`bridge:port:vlan:mac`) re-asserted on every reconnect
+    /// via unixctl, sourced from `OF_STATIC_FDB`.
+    static_fdb: Vec<StaticFdbEntry>,
     active_conn: Arc<Mutex<Option<mpsc::UnboundedSender<FlowRequest>>>>,
     installed_flows: Arc<Mutex<Vec<serde_json::Value>>>,
 }
@@ -468,6 +605,10 @@ impl OpenFlowController {
             listen_addr,
             flows: Vec::new(),
             static_flows: Vec::new(),
+            static_fdb: static_fdb_from_env().unwrap_or_else(|e| {
+                log::warn!("OF controller: OF_STATIC_FDB parse failed, no pins: {e:#}");
+                Vec::new()
+            }),
             active_conn: Arc::new(Mutex::new(None)),
             installed_flows: Arc::new(Mutex::new(Vec::new())),
         }
@@ -520,12 +661,14 @@ impl OpenFlowController {
 
         let flows = Arc::new(self.flows);
         let static_flows = Arc::new(self.static_flows);
+        let static_fdb = Arc::new(self.static_fdb);
         let active_conn = self.active_conn;
 
         loop {
             let (stream, peer) = listener.accept().await?;
             let flows = flows.clone();
             let static_flows = static_flows.clone();
+            let static_fdb = static_fdb.clone();
             let active_conn = active_conn.clone();
             log::info!("OpenFlow controller: OVS connected from {}", peer);
 
@@ -537,7 +680,7 @@ impl OpenFlowController {
                 reconnect.set_max_backoff(Duration::from_secs(30));
                 reconnect.connecting();
 
-                match handle_connection(stream, flows, static_flows, active_conn).await {
+                match handle_connection(stream, flows, static_flows, static_fdb, active_conn).await {
                     Ok(()) => {
                         // Clean close — mark disconnected so next accept starts fresh.
                         reconnect.disconnected();
@@ -630,10 +773,36 @@ mod tests {
         let msg = build_flow_mod_add(6, 7, 100, 1);
         let declared_len = u16::from_be_bytes([msg[2], msg[3]]) as usize;
         assert_eq!(declared_len, msg.len(), "declared length must match actual");
-        // OF1.3 version byte
-        assert_eq!(msg[0], 0x04);
+        // OpenFlow version byte (OF1.5)
+        assert_eq!(msg[0], 0x06);
         // FlowMod type = 14
         assert_eq!(msg[1], 14);
+    }
+
+    /// OF1.5 PORT_DESC carries a request body; `port_no` must be `OFPP_ANY` to
+    /// mean "all ports". A zeroed body asks for port 0 and OVS answers with an
+    /// empty list and no error, which silently breaks all name resolution and
+    /// leaves every frame on `actions=NORMAL` flooding.
+    #[test]
+    fn test_port_desc_request_asks_for_all_ports() {
+        let msg = build_port_desc_request(4);
+        assert_eq!(msg.len(), 24, "OF1.5 PORT_DESC request is 8 + 16 bytes");
+        let declared_len = u16::from_be_bytes([msg[2], msg[3]]) as usize;
+        assert_eq!(declared_len, msg.len(), "declared length must match actual");
+        assert_eq!(msg[0], 0x06); // OpenFlow 1.5
+        assert_eq!(msg[1], 18); // MultipartRequest
+
+        // ofp_multipart_request: type(2) + flags(2) + pad(4)
+        let body = &msg[8..];
+        assert_eq!(u16::from_be_bytes([body[0], body[1]]), OFPMP_PORT_DESC);
+        assert_eq!(u16::from_be_bytes([body[2], body[3]]), 0, "flags");
+
+        // ofp15_port_desc_request: port_no(4) + pad(4)
+        let port_no = u32::from_be_bytes([body[8], body[9], body[10], body[11]]);
+        assert_eq!(
+            port_no, OFPP_ANY,
+            "port_no must be OFPP_ANY, not 0 (port 0 returns an empty reply)"
+        );
     }
 
     #[test]
@@ -641,7 +810,7 @@ mod tests {
         let msg = build_flow_mod_delete_all(1);
         let declared_len = u16::from_be_bytes([msg[2], msg[3]]) as usize;
         assert_eq!(declared_len, msg.len(), "declared length must match actual");
-        assert_eq!(msg[0], 0x04); // OF1.3
+        assert_eq!(msg[0], 0x06); // OF1.5
         assert_eq!(msg[1], 14); // FlowMod
     }
 }

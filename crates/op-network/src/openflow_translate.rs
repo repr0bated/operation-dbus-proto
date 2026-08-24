@@ -41,6 +41,14 @@ pub enum JsonFlowAction {
     Normal,
     Controller { max_len: Option<u16> },
     ArpResponder { mac: String, ip: String },
+    /// OF1.5 `encap(<header>)`. Only `ethernet` is meaningful here: it gives a
+    /// packet arriving on an L3-only port (WireGuard, which has no Ethernet
+    /// header at all) the Ethernet header the rest of the bridge assumes,
+    /// so it can be unicast instead of being undeliverable.
+    Encap {
+        #[serde(alias = "ethertype")]
+        header: String,
+    },
 }
 
 /// Resolve a port token: a bare port number, `LOCAL`, or a symbolic name
@@ -69,6 +77,46 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
         out[i] = u8::from_str_radix(p, 16).with_context(|| format!("invalid MAC octet '{p}'"))?;
     }
     Ok(out)
+}
+
+/// Resolve a MAC token: either a literal `aa:bb:cc:dd:ee:ff` or
+/// `port_mac:<port name>`, looked up in the hw_addr map harvested from the
+/// switch's own PortDesc reply.
+///
+/// The indirection exists so a static flow can target the bridge's own MAC
+/// (`port_mac:ovsbr0`) without baking a host-specific address into config that
+/// silently goes stale when the bridge is recreated.
+fn resolve_mac(token: &str, port_macs: &HashMap<String, [u8; 6]>) -> Result<[u8; 6]> {
+    match token.strip_prefix("port_mac:") {
+        Some(name) => port_macs.get(name).copied().with_context(|| {
+            format!("unknown port '{name}' in 'port_mac:{name}' (not in the discovered port map)")
+        }),
+        None => parse_mac(token),
+    }
+}
+
+/// Parse an OVS `packet_type` token: `(ns,type)`, e.g. `(1,0x800)` meaning
+/// namespace 1 (Ethertype) / type 0x0800 (IPv4) — a bare IPv4 packet with no
+/// Ethernet header, which is what arrives on an L3-only WireGuard port.
+fn parse_packet_type(s: &str) -> Result<(u16, u16)> {
+    let inner = s
+        .trim()
+        .strip_prefix('(')
+        .and_then(|v| v.strip_suffix(')'))
+        .with_context(|| format!("packet_type must be '(ns,type)', got '{s}'"))?;
+    let (ns, ty) = inner
+        .split_once(',')
+        .with_context(|| format!("packet_type must be '(ns,type)', got '{s}'"))?;
+    Ok((parse_u16(ns.trim())?, parse_u16(ty.trim())?))
+}
+
+/// Parse a `0x`-prefixed hex or plain decimal u16.
+fn parse_u16(s: &str) -> Result<u16> {
+    match s.strip_prefix("0x") {
+        Some(hex) => u16::from_str_radix(hex, 16),
+        None => s.parse(),
+    }
+    .with_context(|| format!("invalid 16-bit value '{s}'"))
 }
 
 fn mac_to_u64(mac: [u8; 6]) -> u64 {
@@ -209,6 +257,19 @@ fn parse_match(fields: &HashMap<String, String>, port_map: &HashMap<String, u32>
                     .with_context(|| format!("invalid dl_vlan '{v}'"))?,
             ),
             "dl_src" => m.eth_src(parse_mac(v)?),
+            // Parsed and validated, then refused with the precise reason: this
+            // is the OF1.5 PTAP match that gives the L3-only `netmaker` port a
+            // usable flow, and it is the one field we cannot encode.
+            "packet_type" => {
+                let (ns, ptype) = parse_packet_type(v)?;
+                bail!(
+                    "match field 'packet_type' ({ns},{ptype:#06x}) cannot be encoded: \
+                     rovs-openflow 0.2.0's Match has no packet_type field and no raw-OXM \
+                     escape hatch (needs OXM_OF_PACKET_TYPE, class 0x8000 field 44). \
+                     Until the crate gains it, install this flow out of band with \
+                     `ovs-ofctl -O OpenFlow15 add-flow`"
+                )
+            }
             "tcp_flags" => {
                 let mut m2 = m;
                 m2.tcp_flags = Some(parse_tcp_flags(v)?);
@@ -260,6 +321,7 @@ fn parse_match(fields: &HashMap<String, String>, port_map: &HashMap<String, u32>
 fn build_actions(
     actions: &[JsonFlowAction],
     port_map: &HashMap<String, u32>,
+    port_macs: &HashMap<String, [u8; 6]>,
     ip_proto: Option<u8>,
 ) -> Result<ActionList> {
     let mut list = ActionList::new();
@@ -299,8 +361,8 @@ fn build_actions(
                 list.load_field(field, 0, 32, *value)
             }
             JsonFlowAction::SetField { field, value } => match field.as_str() {
-                "dl_dst" | "eth_dst" => list.set_eth_dst(parse_mac(value)?),
-                "dl_src" | "eth_src" => list.set_eth_src(parse_mac(value)?),
+                "dl_dst" | "eth_dst" => list.set_eth_dst(resolve_mac(value, port_macs)?),
+                "dl_src" | "eth_src" => list.set_eth_src(resolve_mac(value, port_macs)?),
                 "dl_vlan" | "vlan_vid" => {
                     let vid: u16 = value
                         .parse()
@@ -360,6 +422,15 @@ fn build_actions(
                     .set_arp_spa(ip_to_u32(ip_addr))
                     .in_port()
             }
+            JsonFlowAction::Encap { header } => {
+                let header = header.to_ascii_lowercase();
+                bail!(
+                    "action 'encap({header})' cannot be encoded: rovs-openflow 0.2.0's Action \
+                     enum has no Encap variant (needs OFPAT_ENCAP = 29) and ActionList exposes \
+                     no raw-action escape hatch. Until the crate gains it, install the PTAP \
+                     flow out of band with `ovs-ofctl -O OpenFlow15 add-flow`"
+                )
+            }
         };
     }
     Ok(list)
@@ -368,12 +439,16 @@ fn build_actions(
 /// Translate a JSON-encoded `FlowEntry` (the openflow plugin's schema shape)
 /// into a `rovs_openflow::Flow` ADD, resolving symbolic port names via
 /// `port_map` (as discovered from the switch's own PortDesc reply).
-pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
+pub fn json_flow_to_add(
+    flow_json: &str,
+    port_map: &HashMap<String, u32>,
+    port_macs: &HashMap<String, [u8; 6]>,
+) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
     validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
     let ip_proto = m.ip_proto;
-    let actions = build_actions(&entry.actions, port_map, ip_proto)?;
+    let actions = build_actions(&entry.actions, port_map, port_macs, ip_proto)?;
 
     let mut flow = Flow::add()
         .table(entry.table)
@@ -390,7 +465,11 @@ pub fn json_flow_to_add(flow_json: &str, port_map: &HashMap<String, u32>) -> Res
 
 /// Translate a JSON-encoded `FlowEntry` into a `rovs_openflow::Flow` DELETE
 /// (matches on the same fields, no actions needed).
-pub fn json_flow_to_delete(flow_json: &str, port_map: &HashMap<String, u32>) -> Result<Flow> {
+pub fn json_flow_to_delete(
+    flow_json: &str,
+    port_map: &HashMap<String, u32>,
+    _port_macs: &HashMap<String, [u8; 6]>,
+) -> Result<Flow> {
     let entry: JsonFlowEntry = serde_json::from_str(flow_json).context("invalid FlowEntry JSON")?;
     validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
@@ -431,6 +510,32 @@ mod tests {
         HashMap::from([("uplink".to_string(), 9)])
     }
 
+    fn port_macs() -> HashMap<String, [u8; 6]> {
+        HashMap::from([(
+            "ovsbr0".to_string(),
+            [0x02, 0x00, 0x64, 0x45, 0x00, 0x0a],
+        )])
+    }
+
+    /// The prio-200 netmaker flow from openflow-static-flows.json.
+    fn netmaker_ptap_flow() -> String {
+        serde_json::json!({
+            "table": 0,
+            "priority": 200,
+            "match_fields": { "in_port": "netmaker", "packet_type": "(1,0x800)" },
+            "actions": [
+                {"type": "encap", "header": "ethernet"},
+                {"type": "set_field", "field": "eth_src", "value": "02:00:64:45:00:01"},
+                {"type": "set_field", "field": "eth_dst", "value": "port_mac:ovsbr0"},
+                {"type": "output", "port": "LOCAL"}
+            ],
+            "cookie": 3694151570867355650u64,
+            "idle_timeout": 0,
+            "hard_timeout": 0
+        })
+        .to_string()
+    }
+
     fn flow_json_without_cookie() -> String {
         let mut flow: serde_json::Value =
             serde_json::from_str(&flow_json(serde_json::json!(42))).unwrap();
@@ -440,14 +545,14 @@ mod tests {
 
     #[test]
     fn add_uses_the_declared_table() {
-        let flow = json_flow_to_add(&flow_json(serde_json::json!(42)), &ports()).unwrap();
+        let flow = json_flow_to_add(&flow_json(serde_json::json!(42)), &ports(), &port_macs()).unwrap();
 
         assert_eq!(flow.table_id, 7);
     }
 
     #[test]
     fn delete_is_strict_and_scoped_to_the_exact_flow() {
-        let flow = json_flow_to_delete(&flow_json(serde_json::json!(42)), &ports()).unwrap();
+        let flow = json_flow_to_delete(&flow_json(serde_json::json!(42)), &ports(), &port_macs()).unwrap();
 
         assert_eq!(flow.command, FlowCommand::DeleteStrict);
         assert_eq!(flow.table_id, 7);
@@ -458,7 +563,7 @@ mod tests {
 
     #[test]
     fn delete_without_cookie_does_not_filter_by_cookie() {
-        let flow = json_flow_to_delete(&flow_json_without_cookie(), &ports()).unwrap();
+        let flow = json_flow_to_delete(&flow_json_without_cookie(), &ports(), &port_macs()).unwrap();
 
         assert_eq!(flow.cookie, 0);
         assert_eq!(flow.cookie_mask, 0);
@@ -471,7 +576,68 @@ mod tests {
         entry["table"] = serde_json::json!(u8::MAX);
         let entry = entry.to_string();
 
-        assert!(json_flow_to_add(&entry, &ports()).is_err());
-        assert!(json_flow_to_delete(&entry, &ports()).is_err());
+        assert!(json_flow_to_add(&entry, &ports(), &port_macs()).is_err());
+        assert!(json_flow_to_delete(&entry, &ports(), &port_macs()).is_err());
+    }
+
+    #[test]
+    fn port_mac_resolves_from_the_discovered_hw_addr_map() {
+        let entry = serde_json::json!({
+            "table": 0,
+            "priority": 100,
+            "match_fields": { "in_port": "uplink" },
+            "actions": [
+                {"type": "set_field", "field": "eth_dst", "value": "port_mac:ovsbr0"},
+                {"type": "output", "port": "LOCAL"}
+            ]
+        })
+        .to_string();
+
+        let flow = json_flow_to_add(&entry, &ports(), &port_macs()).unwrap();
+
+        // `Action` does not implement PartialEq in rovs-openflow 0.2.0.
+        assert!(flow.actions.actions().iter().any(|a| matches!(
+            a,
+            rovs_openflow::Action::SetEthDst([0x02, 0x00, 0x64, 0x45, 0x00, 0x0a])
+        )));
+    }
+
+    #[test]
+    fn unknown_port_mac_is_an_error_not_a_looser_flow() {
+        let entry = serde_json::json!({
+            "table": 0,
+            "priority": 100,
+            "match_fields": { "in_port": "uplink" },
+            "actions": [{"type": "set_field", "field": "eth_dst", "value": "port_mac:nope"}]
+        })
+        .to_string();
+
+        let err = json_flow_to_add(&entry, &ports(), &port_macs()).unwrap_err();
+        assert!(format!("{err:#}").contains("port_mac:nope"));
+    }
+
+    /// The PTAP flow is recognised and refused with an actionable reason —
+    /// never silently dropped, and never turned into a wildcard flow.
+    #[test]
+    fn netmaker_ptap_flow_reports_the_missing_crate_support() {
+        // netmaker must resolve, or the in_port error masks the real blocker.
+        let mut ports = ports();
+        ports.insert("netmaker".to_string(), 4);
+        let err = json_flow_to_add(&netmaker_ptap_flow(), &ports, &port_macs()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("packet_type") || msg.contains("encap"),
+            "error must name the unencodable field/action, got: {msg}"
+        );
+        assert!(msg.contains("ovs-ofctl"), "error must state the workaround");
+    }
+
+    #[test]
+    fn packet_type_syntax_is_validated_before_it_is_refused() {
+        assert_eq!(parse_packet_type("(1,0x800)").unwrap(), (1, 0x0800));
+        assert_eq!(parse_packet_type("(0,0)").unwrap(), (0, 0));
+        assert!(parse_packet_type("1,0x800").is_err());
+        assert!(parse_packet_type("(1)").is_err());
+        assert!(parse_packet_type("(x,0x800)").is_err());
     }
 }
