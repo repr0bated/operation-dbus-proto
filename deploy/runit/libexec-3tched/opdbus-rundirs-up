@@ -34,7 +34,16 @@ install -d -m 0755 -o svlog -g svlog /var/log/op-dbus
 # last deliberate `opblob seal-shm && opblob persist` (a build-time act), and
 # falls back to a one-time seal only when nothing has been persisted yet.
 if [ -x /usr/local/bin/opblob ]; then
-    /usr/local/bin/opblob stage-shm >/dev/null
+    # 2026-08-24: installed opblob lost stage-shm/persist (regressed out of
+    # opblob.rs after c4db14ae). Until the binary is rebuilt, fall back to the
+    # same operation by hand: copy the last persisted catalog into tmpfs.
+    if ! /usr/local/bin/opblob stage-shm >/dev/null 2>&1; then
+        SNAP=/var/lib/opdbus/shm-snapshot
+        if [ -d "$SNAP/plugin-blobs" ] && [ -n "$(ls -A "$SNAP/plugin-blobs" 2>/dev/null)" ]; then
+            cp -a "$SNAP/plugin-blobs/." /dev/shm/opdbus/plugin-blobs/
+            [ -d "$SNAP/state" ] && cp -a "$SNAP/state" /dev/shm/opdbus/state
+        fi
+    fi
     find /dev/shm/opdbus/plugin-blobs -maxdepth 1 -type f \
         \( -name '*.blob' -o -name '.manifest.json' \) \
         -exec chmod 0644 {} +
