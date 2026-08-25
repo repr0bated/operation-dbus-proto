@@ -257,18 +257,12 @@ fn parse_match(fields: &HashMap<String, String>, port_map: &HashMap<String, u32>
                     .with_context(|| format!("invalid dl_vlan '{v}'"))?,
             ),
             "dl_src" => m.eth_src(parse_mac(v)?),
-            // Parsed and validated, then refused with the precise reason: this
-            // is the OF1.5 PTAP match that gives the L3-only `netmaker` port a
-            // usable flow, and it is the one field we cannot encode.
+            // OF1.5 PTAP match: gives the L3-only `netmaker` port a usable
+            // flow. Encoded as OXM_OF_PACKET_TYPE (class 0x8000, field 44).
             "packet_type" => {
                 let (ns, ptype) = parse_packet_type(v)?;
-                bail!(
-                    "match field 'packet_type' ({ns},{ptype:#06x}) cannot be encoded: \
-                     rovs-openflow 0.2.0's Match has no packet_type field and no raw-OXM \
-                     escape hatch (needs OXM_OF_PACKET_TYPE, class 0x8000 field 44). \
-                     Until the crate gains it, install this flow out of band with \
-                     `ovs-ofctl -O OpenFlow15 add-flow`"
-                )
+                m.packet_type = Some((ns, ptype));
+                m
             }
             "tcp_flags" => {
                 let mut m2 = m;
@@ -424,12 +418,13 @@ fn build_actions(
             }
             JsonFlowAction::Encap { header } => {
                 let header = header.to_ascii_lowercase();
-                bail!(
-                    "action 'encap({header})' cannot be encoded: rovs-openflow 0.2.0's Action \
-                     enum has no Encap variant (needs OFPAT_ENCAP = 29) and ActionList exposes \
-                     no raw-action escape hatch. Until the crate gains it, install the PTAP \
-                     flow out of band with `ovs-ofctl -O OpenFlow15 add-flow`"
-                )
+                if header != "ethernet" {
+                    bail!(
+                        "unsupported encap header '{header}' — only 'ethernet' \
+                         (OFPAT_ENCAP new_header_len = 16) is supported"
+                    );
+                }
+                list.encap(16)
             }
         };
     }
@@ -616,20 +611,25 @@ mod tests {
         assert!(format!("{err:#}").contains("port_mac:nope"));
     }
 
-    /// The PTAP flow is recognised and refused with an actionable reason —
-    /// never silently dropped, and never turned into a wildcard flow.
+    /// The PTAP flow translates fully now that rovs-openflow encodes
+    /// OXM_OF_PACKET_TYPE and OFPAT_ENCAP: the exact shape the watchdog
+    /// stopgap used to install by hand must come out of the translator.
     #[test]
-    fn netmaker_ptap_flow_reports_the_missing_crate_support() {
-        // netmaker must resolve, or the in_port error masks the real blocker.
+    fn netmaker_ptap_flow_translates_to_encap_flow() {
+        // netmaker must resolve, or the in_port error masks the real result.
         let mut ports = ports();
         ports.insert("netmaker".to_string(), 4);
-        let err = json_flow_to_add(&netmaker_ptap_flow(), &ports, &port_macs()).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("packet_type") || msg.contains("encap"),
-            "error must name the unencodable field/action, got: {msg}"
-        );
-        assert!(msg.contains("ovs-ofctl"), "error must state the workaround");
+        let flow = json_flow_to_add(&netmaker_ptap_flow(), &ports, &port_macs()).unwrap();
+
+        assert_eq!(flow.match_fields.packet_type, Some((1, 0x0800)));
+        assert_eq!(flow.match_fields.in_port, Some(4));
+
+        let rendered = format!("{:?}", flow.actions);
+        assert!(rendered.contains("Encap { new_header_len: 16 }"), "{rendered}");
+        assert!(rendered.contains("SetEthSrc"), "{rendered}");
+        assert!(rendered.contains("SetEthDst"), "{rendered}");
+        assert!(rendered.contains("Local"), "{rendered}");
+        assert!(!rendered.contains("Normal"), "must not fall back to NORMAL");
     }
 
     #[test]

@@ -56,10 +56,25 @@ run (design rules). Each item cites the incident that earned it.
 
 ## Open items that keep biting
 
-- `opblob` binary lacks `stage-shm`/`persist` — next reboot repeats the blob
-  outage until rebuilt/redeployed from the workspace.
-- netclient v1.5 client vs v1.6 server (decoy) — version-mismatch warnings on
-  every pull.
-- Stale self-referential WG peers on both boxes (decoy lists its own keys as
-  peers; VPS carries dead `qDDvV3S…`/`6mx4y…` entries). Cosmetic until netmaker
-  egress for `10.0.0.x` is configured properly — then they become routing traps.
+- ~~`opblob` binary lacks `stage-shm`/`persist`~~ FIXED 2026-08-25 (commit
+  `22f44859`): subcommands restored from c4db14ae, binary rebuilt+deployed,
+  persist→stage round trip verified. The hand-copy fallback in
+  `opdbus-rundirs-up` remains as belt-and-suspenders.
+- netclient v1.5 client vs v1.6 server (decoy) — MOOT for the mesh: netmaker
+  broker retired 2026-08-25, both WG links are static confs now. Decoy's own
+  egress is its self-contained wgcf-ingress (WARP), policy asserted by
+  `mesh-policy.service`; its underlay to Cloudflare rides the VPS link
+  (mark `0x7777` → table 51822 → MASQ out pub0).
+- PTAP flow ownership: capability landed — vendored `rovs-openflow`
+  (`vendor/rovs-openflow`, `[patch.crates-io]`) now encodes OXM_OF_PACKET_TYPE
+  and OFPAT_ENCAP; translator installs via controller. RUNTIME BLOCKER left:
+  OVS rejects the rovs-encoded FlowMod with error type=2 code=10 (BAD_ACTION)
+  while identical semantics via `ovs-ofctl -O15 add-flow` install fine.
+  Until that wire delta is root-caused (capture 6653 during a controller
+  restart), the watchdog-owned flow stays authoritative: `ensure-ptap-flow.sh`
+  + `ptap-watch`, and `openflow-static-flows.json` keeps the entry so the
+  moment encoding matches, the controller takes over with no further change.
+- Router (wrt-router) intentionally disconnected from this host: peer removed
+  from static conf; its rc.local still dials a dead endpoint (harmless failed
+  keepalives). Reconnect = re-add peer entry with pubkey
+  `ppaYyM0y…`, or wipe its `/etc/rc.local` netmaker block.
