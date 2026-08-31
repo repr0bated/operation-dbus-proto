@@ -1,0 +1,356 @@
+{
+  "session_id": "77ba2d8a-e814-4b0d-939b-d573912f56db",
+  "cwd": "/home/jeremy",
+  "created_at": "2026-08-08T21:57:26.457503881Z",
+  "updated_at": "2026-08-16T02:59:16.458875463Z",
+  "title": ".cursor/projects/srv-git-operation-dbus-proto/agent-transcripts/8e6f6cba-17cb-4f30896981f00eb06b86/8e6f6cba-17cb-4f30-8969-81f00eb06b86.jsonl .clau...",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 1073522283
+          },
+          "result": {
+            "Ok": {
+              "id": "6413cd00-a70c-494e-b577-c86ebd0070b6",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "thinking",
+                  "data": {
+                    "text": "",
+                    "signature": null,
+                    "redactedContent": [
+                      46,
+                      75,
+                      84,
+                      82,
+                      126,
+                      126,
+                      101,
+                      121,
+                      74,
+                      108,
+                      98,
+                      109,
+                      78,
+                      121,
+                      101,
+                      88,
+                      66,
+                      48,
+                      97,
+                      87,
+                      57,
+                      117,
+                      85,
+                      109,
+                      86,
+                      110,
+                      97,
+                      87,
+                      57,
+                      117,
+                      73,
+                      106,
+                      112,
+                      117,
+                      100,
+                      87,
+                      120,
+                      115,
+                      76,
+                      67,
+                      74,
+                      116,
+                      98,
+                      50,
+                      82,
+                      108,
+                      98,
+                      69,
+                      104,
+                      104,
+                      99,
+                      50,
+                      103,
+                      105,
+                      79,
+                      105,
+                      74,
+                      108,
+                      89,
+                      87,
+                      120,
+                      89,
+                      81,
+                      85,
+                      70,
+                      88,
+                      86,
+                      70,
+                      70,
+                      106,
+                      85,
+                      87,
+                      73,
+                      105,
+                      76,
+                      67,
+                      74,
+                      122,
+                      98,
+                      71,
+                      57,
+                      48,
+                      99,
+                      121,
+                      73,
+                      54,
+                      87,
+                      49,
+                      48,
+                      115,
+                      73,
+                      110,
+                      89,
+                      105,
+                      79,
+                      106,
+                      70,
+                      57
+                    ],
+                    "modelId": "auto"
+                  }
+                },
+                {
+                  "kind": "text",
+                  "data": "I wasn't able to read those files in our previous conversation — the file paths didn't resolve and my attempt to search for them was cancelled. So I don't have any context about what was in those two conversations.\n\nCould you either:\n1. Paste the correct paths (maybe from a different base directory?)\n2. Give me a brief reminder of what the conversations were about?\n\nThen I can help you summarize your vision. Was it related to vectorization of something specific?"
+                }
+              ],
+              "meta": {
+                "timestamp": 1786849131
+              }
+            }
+          },
+          "message_ids": [
+            "522c22fc-ffb9-4859-8ccf-a809656faf81",
+            "9dc251a4-cc74-4e09-a394-b1d43d0da26e"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 4,
+            "nanos": 719893620
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-08-16T02:58:51.093196401Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": "auto",
+          "assistant_response_length": 468,
+          "request_attempts": 1,
+          "context_usage_percentage": 1.3798001,
+          "metering_usage": [],
+          "user_prompt_length": 27
+        },
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 2646849227
+          },
+          "result": {
+            "Ok": {
+              "id": "4fcf1db7-8f2c-4d8e-8295-d7f341e009b6",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "thinking",
+                  "data": {
+                    "text": "",
+                    "signature": null,
+                    "redactedContent": [
+                      46,
+                      75,
+                      84,
+                      82,
+                      126,
+                      126,
+                      101,
+                      121,
+                      74,
+                      108,
+                      98,
+                      109,
+                      78,
+                      121,
+                      101,
+                      88,
+                      66,
+                      48,
+                      97,
+                      87,
+                      57,
+                      117,
+                      85,
+                      109,
+                      86,
+                      110,
+                      97,
+                      87,
+                      57,
+                      117,
+                      73,
+                      106,
+                      112,
+                      117,
+                      100,
+                      87,
+                      120,
+                      115,
+                      76,
+                      67,
+                      74,
+                      116,
+                      98,
+                      50,
+                      82,
+                      108,
+                      98,
+                      69,
+                      104,
+                      104,
+                      99,
+                      50,
+                      103,
+                      105,
+                      79,
+                      105,
+                      74,
+                      108,
+                      89,
+                      87,
+                      120,
+                      89,
+                      81,
+                      85,
+                      70,
+                      88,
+                      86,
+                      70,
+                      70,
+                      106,
+                      85,
+                      87,
+                      73,
+                      105,
+                      76,
+                      67,
+                      74,
+                      122,
+                      98,
+                      71,
+                      57,
+                      48,
+                      99,
+                      121,
+                      73,
+                      54,
+                      87,
+                      49,
+                      48,
+                      115,
+                      73,
+                      110,
+                      89,
+                      105,
+                      79,
+                      106,
+                      70,
+                      57
+                    ],
+                    "modelId": "auto"
+                  }
+                },
+                {
+                  "kind": "text",
+                  "data": "I don't have any prior context from this chat to summarize — this appears to be a fresh session from my perspective. The previous attempt to read your conversation files failed (paths didn't resolve), and no content from them was loaded.\n\nIf you can point me to the correct file paths or paste the relevant content, I'm happy to summarize your vision. Otherwise, could you give me a quick refresher on what the project is about?"
+                }
+              ],
+              "meta": {
+                "timestamp": 1786849156
+              }
+            }
+          },
+          "message_ids": [
+            "195bb7e9-0de8-4de3-b77a-42974e4b25b4",
+            "360319fd-90bc-48a8-9a01-ddd18fcb3572"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 3,
+            "nanos": 807845603
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-08-16T02:59:16.458499150Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": "auto",
+          "assistant_response_length": 430,
+          "request_attempts": 1,
+          "context_usage_percentage": 1.3953999,
+          "metering_usage": [],
+          "user_prompt_length": 29
+        }
+      ],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "77ba2d8a-e814-4b0d-939b-d573912f56db",
+      "model_info": {
+        "model_name": "auto",
+        "description": "Models chosen by task for optimal usage and consistent quality",
+        "model_id": "auto",
+        "context_window_tokens": 1000000,
+        "rate_multiplier": 1.0,
+        "rate_unit": "Credit"
+      },
+      "context_usage_percentage": 1.3953999
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/home/jeremy"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}

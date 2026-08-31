@@ -1,0 +1,7 @@
+based on files in docs/conversation-recovery/gallery-ui-generation/ give me what your interpretaion of my vision is
+focuds on just the gallery and ui generation and give me detaile  description of waht i want in the ui and the overall fintionality
+so it needs to be model agostic, whatever infrence model is loaded. the fenderd ui needs to be the antigravity chat ui not tied to gemini. baseline is just the blobs, instructions how to access data, the docs from json-render.dev and the prompt "mke theis dataset as accesble to as many peope,industries,causes as possible" then have ui optionss to add mcp as unufied datas source for cross blob discovery, aanoter choice to asdd qdrant. the chat interface allows you to give additional info. each run is siloed, mormry is reset every time. write spec workflow
+/model
+implement. there are two repos the one we are in and the acutal ui is not a submodole it is in /srv/git/operation-dashboard-ui=-07
+/effort
+continue

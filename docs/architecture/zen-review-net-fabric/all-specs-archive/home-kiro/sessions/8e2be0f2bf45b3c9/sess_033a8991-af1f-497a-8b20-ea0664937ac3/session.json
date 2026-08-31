@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_033a8991-af1f-497a-8b20-ea0664937ac3",
+  "title": "New Session",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/operation-dashboard-ui-07"
+  ],
+  "createdAt": "2026-08-02T21:53:55.539Z",
+  "lastModifiedAt": "2026-08-02T21:53:55.658Z",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  },
+  "autopilot": true
+}

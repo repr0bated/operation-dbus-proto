@@ -1,11 +1,9 @@
 //! Ghostbridge identity extraction and authentication middleware.
 //!
-//! Requires `x-ghostbridge-footprint` plus either `x-ghostbridge-trace-id` or
-//! `x-wireguard-pubkey`, then verifies the footprint against the live
-//! IdentitySled via `op_identity::verify_ghostbridge_footprint` — the same
-//! gate as `op-cognitive-mcp`.
+//! Requires a session genesis plus either `x-ghostbridge-trace-id` or
+//! `x-wireguard-pubkey`, then verifies both against the per-session identity
+//! projection.
 
-use op_identity::FootprintVerifyError;
 use tonic::{Request, Status};
 
 pub const WIREGUARD_PUBKEY_HEADER: &str = "x-wireguard-pubkey";
@@ -23,7 +21,11 @@ pub struct WireGuardIdentity {
 /// Returns `Unauthenticated` when identity headers are missing.
 #[allow(clippy::result_large_err)]
 pub fn wireguard_auth_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
+    let footprint_value = req
+        .metadata()
+        .get("x-ghostbridge-genesis")
+        .or_else(|| req.metadata().get("x-ghostbridge-footprint"))
+        .cloned();
     let trace_value = req
         .metadata()
         .get("x-ghostbridge-trace-id")
@@ -32,7 +34,7 @@ pub fn wireguard_auth_interceptor(mut req: Request<()>) -> Result<Request<()>, S
 
     if footprint_value.is_none() || trace_value.is_none() {
         return Err(Status::unauthenticated(
-            "Missing Ghostbridge Identity Sled.",
+            "Missing Ghostbridge session identity.",
         ));
     }
 
@@ -42,24 +44,18 @@ pub fn wireguard_auth_interceptor(mut req: Request<()>) -> Result<Request<()>, S
         .to_str()
         .map_err(|_| Status::invalid_argument("Invalid footprint header encoding"))?;
 
-    op_identity::verify_ghostbridge_footprint(request_footprint).map_err(|error| match error {
-        FootprintVerifyError::SledUnreachable => {
-            Status::internal("MutationEngine Memory Unreachable")
-        }
-        FootprintVerifyError::InvalidSled => {
-            Status::failed_precondition("Invalid Schema State. Cease and Desist.")
-        }
-        FootprintVerifyError::Mismatch => Status::permission_denied(
-            "Temporal Hash Mismatch. Session footprint is out of sync with current mutation.",
-        ),
-    })?;
-
-    let session_id = trace_value
-        .as_ref()
-        .expect("trace checked above")
-        .to_str()
-        .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?
-        .to_string();
+    let trace = req
+        .metadata()
+        .get("x-ghostbridge-trace-id")
+        .and_then(|value| value.to_str().ok());
+    let pubkey = req
+        .metadata()
+        .get(WIREGUARD_PUBKEY_HEADER)
+        .and_then(|value| value.to_str().ok());
+    let identity = op_identity::resolve_verified_session(request_footprint, trace, pubkey)
+        .map_err(|_| {
+            Status::permission_denied("Session genesis does not match a current identity")
+        })?;
     let pubkey = req
         .metadata()
         .get(WIREGUARD_PUBKEY_HEADER)
@@ -69,7 +65,7 @@ pub fn wireguard_auth_interceptor(mut req: Request<()>) -> Result<Request<()>, S
     req.extensions_mut().insert(WireGuardIdentity {
         pubkey,
         footprint: request_footprint.to_string(),
-        session_id,
+        session_id: identity.session_id,
     });
 
     Ok(req)
@@ -78,19 +74,9 @@ pub fn wireguard_auth_interceptor(mut req: Request<()>) -> Result<Request<()>, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use op_identity::IdentitySled;
-    use std::io::Write;
     use tonic::metadata::MetadataValue;
 
     const FOOTPRINT_HEADER: &str = "x-ghostbridge-footprint";
-
-    fn write_raw_sled(path: &std::path::Path, sled: &IdentitySled) {
-        let bytes = unsafe {
-            std::slice::from_raw_parts(sled as *const IdentitySled as *const u8, IdentitySled::SIZE)
-        };
-        let mut f = std::fs::File::create(path).unwrap();
-        f.write_all(bytes).unwrap();
-    }
 
     #[test]
     fn should_reject_missing_identity() {
@@ -121,23 +107,30 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Owns `OP_SLED_PATH` for the whole body so parallel test threads cannot
-    /// race the process-global env var (same pattern as op-identity).
     #[test]
-    fn should_verify_footprint_against_identity_sled() {
+    fn should_verify_genesis_against_identity_session() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("sled.dat");
-        let path_str = path.to_str().unwrap().to_string();
+        let path = dir.path().join("identity_sled.json");
+        std::fs::write(
+            path,
+            serde_json::to_vec(&serde_json::json!({
+                "sleds": [{
+                    "session_id": "session-a",
+                    "wireguard_pubkey": "abcd1234",
+                    "genesis": "ab".repeat(32),
+                    "trace_id": "11".repeat(16),
+                    "schema_version": 3,
+                    "arrival_timestamp": 1,
+                    "chain_head_at_arrival": "22".repeat(32)
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         unsafe {
-            std::env::set_var("OP_SLED_PATH", &path_str);
+            std::env::set_var("OP_SHM_STATE_DIR", dir.path());
         }
-
-        let mut sled = IdentitySled::default();
-        sled.hashed_footprint = [0xAB; 32];
-        sled.trace_id = [0x11; 16];
-        sled.wireguard_pubkey = [0x22; 32];
-        write_raw_sled(&path, &sled);
-        let matching = hex::encode(sled.hashed_footprint);
+        let matching = "ab".repeat(32);
         let mismatch = hex::encode([0x00u8; 32]);
 
         let mut bad = Request::new(());
@@ -166,7 +159,7 @@ mod tests {
         assert_eq!(id.pubkey, "abcd1234");
 
         unsafe {
-            std::env::remove_var("OP_SLED_PATH");
+            std::env::remove_var("OP_SHM_STATE_DIR");
         }
     }
 }

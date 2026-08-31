@@ -1,0 +1,62 @@
+locale = "en"
+schema_version = 3
+
+[a2a.server]
+enabled = true
+
+[skill_bundles.default]
+directory = "shared/skills/default"
+
+[gateway]
+host = "127.0.0.1"
+port = 8082
+require_pairing = false
+allow_public_bind = false
+allow_remote_admin = false
+request_timeout_secs = 30
+long_running_request_timeout_secs = 600
+
+[providers.models.opencode.go]
+model = "deepseek-v4-flash-free"
+uri = "https://opencode.ai/zen/v1"
+
+[providers.models.salad.default]
+model = "qwen3.6-35b-a3b"
+uri = "https://ai.salad.cloud/v1"
+
+[providers.models.custom.gnoppix]
+uri = "https://us.gnoppix.com/v1"
+model = "google/gemma-4-26b-a4b-it:free"
+wire_api = "chat_completions"
+
+[providers.models.custom.gnoppix-coder]
+uri = "https://us.gnoppix.com/v1"
+model = "qwen/qwen3-coder:free"
+wire_api = "chat_completions"
+
+[agents.dashboard]
+enabled = true
+model_provider = "opencode.go"
+risk_profile = "dashboard"
+skill_bundles = ["default"]
+
+[agents.salad-chat]
+enabled = true
+model_provider = "salad.default"
+risk_profile = "dashboard"
+skill_bundles = ["default"]
+
+[agents.dashboard.a2a]
+published = true
+exposed_skills = [
+    "plugin-schema",
+    "ovs-network-triage",
+    "qdrant-collections",
+    "mutation-dispatch",
+]
+
+[risk_profiles.dashboard]
+level = "readonly"
+workspace_only = true
+require_approval_for_medium_risk = true
+block_high_risk_commands = true

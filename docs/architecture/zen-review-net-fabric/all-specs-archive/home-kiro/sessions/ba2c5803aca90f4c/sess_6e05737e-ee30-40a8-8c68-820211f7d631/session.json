@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_6e05737e-ee30-40a8-8c68-820211f7d631",
+  "title": "agent",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/repos-bulk"
+  ],
+  "createdAt": "2026-08-10T16:46:43.034Z",
+  "lastModifiedAt": "2026-08-10T16:48:00.849Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

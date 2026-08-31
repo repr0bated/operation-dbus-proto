@@ -1,0 +1,6 @@
+{
+  "id": "14",
+  "subject": "Enable the host Phase 1 runit graph",
+  "description": "Enable egress policy, attachment, OpenFlow, and final netclient gates in dependency order; run scoped teardown on failure.",
+  "status": "pending"
+}

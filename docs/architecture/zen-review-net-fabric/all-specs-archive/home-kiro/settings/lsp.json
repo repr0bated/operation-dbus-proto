@@ -1,0 +1,100 @@
+{
+  "languages": {
+    "rust": {
+      "name": "rust-analyzer",
+      "command": "rust-analyzer",
+      "args": [],
+      "file_extensions": ["rs"],
+      "project_patterns": ["Cargo.toml"],
+      "exclude_patterns": [
+        "**/target/**",
+        "**/.git/**",
+        "**/vendor/**",
+        "**/*.generated.rs"
+      ],
+      "multi_workspace": false,
+      "request_timeout_secs": 180,
+
+      "initialization_options": {
+        "cargo": {
+          "buildScripts": { "enable": true },
+          "features": "all",
+          "allTargets": true,
+          "noDefaultFeatures": false
+        },
+        "procMacro": {
+          "enable": true,
+          "attributes": { "enable": true }
+        },
+        "cachePriming": {
+          "enable": true,
+          "numThreads": "physical"
+        },
+        "checkOnSave": false,
+        "diagnostics": {
+          "enable": true,
+          "experimental": { "enable": false }
+        },
+        "inlayHints": {
+          "maxLength": null,
+          "typeHints": { "enable": true, "hideClosureInitialization": false },
+          "closureReturnTypeHints": { "enable": "always" },
+          "discriminantHints": { "enable": "always" },
+          "parameterHints": { "enable": false },
+          "chainingHints": { "enable": false },
+          "lifetimeElisionHints": { "enable": "never" },
+          "expressionAdjustmentHints": { "enable": "never" },
+          "reborrowHints": { "enable": "never" },
+          "bindingModeHints": { "enable": false },
+          "renderColons": true
+        },
+        "hover": {
+          "documentation": { "enable": true, "keywords": { "enable": false } },
+          "links": { "enable": false },
+          "memoryLayout": {
+            "enable": true,
+            "size": "both",
+            "alignment": "hexadecimal",
+            "offset": "hexadecimal",
+            "niches": true
+          },
+          "show": { "traitAssocItems": 8, "fields": 30, "enumVariants": 30 }
+        },
+        "files": {
+          "excludeDirs": ["target", ".git", "vendor", "node_modules"]
+        },
+        "workspace": {
+          "symbol": {
+            "search": { "scope": "workspace", "kind": "all_symbols", "limit": 512 }
+          }
+        },
+        "lru": { "capacity": 512 },
+        "completion": { "autoimport": { "enable": false } }
+      }
+    },
+
+    "bash": {
+      "name": "bash-language-server",
+      "command": "bash-language-server",
+      "args": ["start"],
+      "file_extensions": ["sh", "bash"],
+      "file_patterns": ["run", "finish", "check", "conf", "*.run"],
+      "project_patterns": [".git"],
+      "exclude_patterns": ["**/target/**", "**/.git/**"],
+      "request_timeout_secs": 30,
+      "initialization_options": {
+        "globPattern": "**/*@(.sh|.bash|run|finish|check)"
+      }
+    },
+
+    "python": {
+      "name": "pyright",
+      "command": "pyright-langserver",
+      "args": ["--stdio"],
+      "file_extensions": ["py", "pyi"],
+      "project_patterns": ["pyproject.toml", "setup.py"],
+      "exclude_patterns": ["**/.venv/**", "**/__pycache__/**", "**/target/**"],
+      "request_timeout_secs": 60
+    }
+  }
+}

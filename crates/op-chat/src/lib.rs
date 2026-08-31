@@ -12,7 +12,6 @@ pub mod agent_tools;
 pub mod chat_service;
 pub mod forced_execution;
 pub mod forced_tool_pipeline;
-pub mod mcp_server;
 pub mod memory_loop;
 pub mod nl_admin;
 pub mod orchestration;

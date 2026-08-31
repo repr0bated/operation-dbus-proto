@@ -1,0 +1,15 @@
+{
+  "description": "Implement the HTTP version of the custom Netmaker GUI page: add client wiring, navigation entry, route, and full NetmakerPage.tsx with Networks, Hosts, Events, and CLI Console tabs.",
+  "context": [
+    "Added netmakerService wrapper to client.ts: imports NetmakerService codec, registers it in CODEC_REGISTRY and static catalog, exports typed wrapper methods for all 10 unary + 1 streaming RPC.",
+    "Added { id: \\\"netmaker\\\", label: \\\"Netmaker\\\", route: \\\"/netmaker\\\", icon: \\\"Radio\\\", section: \\\"Infrastructure\\\", order: 55 } to manifest.ts between btrfs(50) and data-stores(60).",
+    "Added lazy(() => import('./pages/NetmakerPage')) and <Route path=\\\"/netmaker\\\" element={<NetmakerPage />} /> to App.tsx, between btrfs and data-stores.",
+    "Created NetmakerPage.tsx (~900 lines) with full implementation: Networks tab (network cards + node table + node detail panel), Hosts tab (host inventory table), Events tab (live streaming events from streamEvents RPC), CLI Console tab (command picker + parameter inputs + output history). Includes degraded-mode detection, health badge, auto-refresh, and all the patterns from BtrfsPage."
+  ],
+  "modified_files": [
+    "/srv/git/operation-dashboard-ui-07/src/App.tsx",
+    "/srv/git/operation-dashboard-ui-07/src/grpc/client.ts",
+    "/srv/git/operation-dashboard-ui-07/src/json-render/navigation/manifest.ts",
+    "/srv/git/operation-dashboard-ui-07/src/pages/NetmakerPage.tsx"
+  ]
+}

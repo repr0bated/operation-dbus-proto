@@ -1,0 +1,6 @@
+{
+  "id": "7",
+  "subject": "Implement reconciliation loop for container restart",
+  "description": "Detect lost port on container PID change, re-provision idempotently",
+  "status": "pending"
+}

@@ -1,0 +1,6 @@
+{
+  "id": "6",
+  "subject": "Task 3: Add operation.proto client codegen to zeroclaw-gui build.rs",
+  "description": "Client-only codegen for EventChainService",
+  "status": "pending"
+}

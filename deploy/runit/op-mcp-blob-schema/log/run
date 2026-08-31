@@ -1,4 +1,0 @@
-#!/bin/sh
-exec 2>&1
-install -d -m 0755 /var/log/op-dbus/op-mcp-blob-schema
-exec svlogd -tt /var/log/op-dbus/op-mcp-blob-schema

@@ -1,102 +1,32 @@
-# op-dbus MCP Server Configuration Examples
+# Unified op-dbus MCP client examples
 
-This directory contains example MCP server configurations for various AI clients.
+Every example in this directory targets the same bridge-owned Streamable HTTP
+endpoint:
 
-## MCP Endpoints
-
-The op-dbus MCP server exposes three main modes at `https://op-dbus.ghostbridge.tech`:
-
-| Mode | SSE Endpoint | POST Endpoint | Description |
-|------|--------------|---------------|-------------|
-| **Compact** | `/mcp/compact` | `/mcp/compact/message` | 5 lazy meta-tools for efficient tool discovery |
-| **Standard** | `/mcp/sse` | `/mcp/message` | All tools exposed directly |
-| **Agents** | `/mcp/agents` | `/mcp/agents/message` | Specialized AI agents |
-
-### Compact Mode (Recommended for AI Clients)
-Exposes 5 lazy meta-tools instead of the full tool list:
-- `list_tools` - Browse tools with pagination
-- `search_tools` - Search tools by keyword
-- `get_tool_schema` - Get schema for a specific tool
-- `execute_tool` - Execute any underlying tool
-- `respond` - Return the final response
-
-### Standard Mode
-Exposes all tools directly via `tools/list`. Best for clients that can handle large tool lists.
-
-### Agents Mode
-Specialized AI agents for enhanced capabilities:
-- `memory` - Key-value memory (remember, recall, forget)
-- `context_manager` - Context persistence (save, load, list, delete)
-- `sequential_thinking` - Step-by-step reasoning
-- `mem0` - Semantic memory (add, search, get_all, delete, update)
-- `search_specialist` - Code/docs/web search
-- `deployment` - Service deployment (deploy, rollback, status)
-- `python_pro` - Python analysis and refactoring
-- `debugger` - Error analysis and tracing
-- `prompt_engineer` - Prompt generation and optimization
-
-## Configuration Files
-
-| File | Client | Notes |
-|------|--------|-------|
-| `cursor-mcp.json` | Cursor IDE | Uses `url` key |
-| `codex-mcp.json` | Codex Client | Uses `mcpServers` with SSE transport |
-| `vscode-mcp.json` | VS Code (Copilot Chat) | Uses `mcp.servers` structure |
-| `claude-desktop-mcp.json` | Claude Desktop | Prefers stdio transport |
-| `openai-mcp.json` | OpenAI tools | Array-based servers list |
-| `generic-mcp.json` | Reference | Complete with all endpoints |
-
-## Installation
-
-### System-wide (Recommended)
-```bash
-sudo mkdir -p /etc/mcp
-sudo cp *.json /etc/mcp/
+```text
+https://10.0.0.3:8090/mcp
 ```
 
-### Cursor
-```bash
-# Project-level
-mkdir -p .cursor
-cp cursor-mcp.json .cursor/mcp.json
+The listener also serves native gRPC, gRPC-Web, and authenticated reflection on
+port `8090`. Cognitive memory, coding context, agent tools, and blob-schema
+resources are projections of the same sealed catalog; they are not separate MCP
+servers.
 
-# User-level
-cp cursor-mcp.json ~/.cursor/mcp.json
-```
+## Authentication
 
-### VS Code
-Add the contents of `vscode-mcp.json` to your VS Code `settings.json`:
-```json
-{
-  "mcp": {
-    "servers": { ... }
-  }
-}
-```
+The client-side identity broker must attach a fresh
+`x-oracle-identity-assertion-bin` value to every request. Static bearer tokens,
+`X-Ghostbridge-Footprint`, `X-Ghostbridge-Trace-ID`, and MCP session identifiers
+are not authentication.
 
-### Claude Desktop
-Claude Desktop prefers stdio-based MCP servers. Options:
-1. Use the native `op-mcp-server` binary (recommended)
-2. Use mcp-proxy to bridge SSE to stdio
+## Files
 
-## Testing Connection
+The files preserve the configuration shape expected by each named client while
+declaring only `op-dbus-unified`. Copy the matching example into the client's MCP
+configuration and configure its OIA broker and the op-dbus TLS CA.
 
-```bash
-# Test health endpoint
-curl https://op-dbus.ghostbridge.tech/api/health
+## Smoke test
 
-# Test MCP initialize
-curl -X POST https://op-dbus.ghostbridge.tech/mcp/message \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
-
-# Test tools/list
-curl -X POST https://op-dbus.ghostbridge.tech/mcp/message \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-```
-
-## See Also
-
-- [MCP Protocol Specification](https://spec.modelcontextprotocol.io/)
-- [op-dbus Documentation](../../../docs/)
+Use the repository acceptance client so it can mint a valid assertion and verify
+TLS. An unauthenticated `curl` request is expected to return `401` and is a useful
+negative test; it is not a connectivity failure.

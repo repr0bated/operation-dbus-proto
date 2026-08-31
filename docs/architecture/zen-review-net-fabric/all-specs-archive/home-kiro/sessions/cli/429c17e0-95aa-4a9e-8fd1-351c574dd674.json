@@ -1,0 +1,196 @@
+{
+  "session_id": "429c17e0-95aa-4a9e-8fd1-351c574dd674",
+  "cwd": "/srv/git/operation-dashboard-ui-07",
+  "created_at": "2026-08-18T10:40:51.192445354Z",
+  "updated_at": "2026-08-18T10:40:56.323501439Z",
+  "title": "chat",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 3439770574
+          },
+          "result": {
+            "Ok": {
+              "id": "8ade7e1a-e71e-4649-b524-2e3731e2006e",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "thinking",
+                  "data": {
+                    "text": "",
+                    "signature": null,
+                    "redactedContent": [
+                      46,
+                      75,
+                      84,
+                      82,
+                      126,
+                      126,
+                      101,
+                      121,
+                      74,
+                      108,
+                      98,
+                      109,
+                      78,
+                      121,
+                      101,
+                      88,
+                      66,
+                      48,
+                      97,
+                      87,
+                      57,
+                      117,
+                      85,
+                      109,
+                      86,
+                      110,
+                      97,
+                      87,
+                      57,
+                      117,
+                      73,
+                      106,
+                      112,
+                      117,
+                      100,
+                      87,
+                      120,
+                      115,
+                      76,
+                      67,
+                      74,
+                      116,
+                      98,
+                      50,
+                      82,
+                      108,
+                      98,
+                      69,
+                      104,
+                      104,
+                      99,
+                      50,
+                      103,
+                      105,
+                      79,
+                      105,
+                      74,
+                      108,
+                      89,
+                      87,
+                      120,
+                      89,
+                      81,
+                      85,
+                      70,
+                      88,
+                      86,
+                      70,
+                      70,
+                      106,
+                      85,
+                      87,
+                      73,
+                      105,
+                      76,
+                      67,
+                      74,
+                      122,
+                      98,
+                      71,
+                      57,
+                      48,
+                      99,
+                      121,
+                      73,
+                      54,
+                      87,
+                      49,
+                      48,
+                      115,
+                      73,
+                      110,
+                      89,
+                      105,
+                      79,
+                      106,
+                      70,
+                      57
+                    ],
+                    "modelId": "auto"
+                  }
+                },
+                {
+                  "kind": "text",
+                  "data": "Hey! How can I help you today?"
+                }
+              ],
+              "meta": {
+                "timestamp": 1787049656
+              }
+            }
+          },
+          "message_ids": [
+            "126fa304-33cd-4313-ada4-b880f2ec1ec7",
+            "5e72d91f-f38d-42a9-8740-eb87ed00f5ea"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 2,
+            "nanos": 282019949
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-08-18T10:40:56.322925874Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": "auto",
+          "assistant_response_length": 30,
+          "request_attempts": 1,
+          "context_usage_percentage": 1.3706,
+          "metering_usage": [],
+          "user_prompt_length": 4
+        }
+      ],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "429c17e0-95aa-4a9e-8fd1-351c574dd674",
+      "model_info": {
+        "model_id": "auto",
+        "context_window_tokens": 200000
+      },
+      "context_usage_percentage": 1.3706
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/srv/git/operation-dashboard-ui-07"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}

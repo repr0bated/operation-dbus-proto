@@ -1,11 +1,11 @@
 //! E2E oracle identity assertion battery over real TLS (design.md section 4.4).
 //!
-//! Serialized: always run with `--test-threads=1`.
+//! The fixture serializes its process-wide environment and interceptor engine
+//! state internally, so the default parallel Rust test harness is safe.
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::sync::Once;
+use std::sync::{Arc, Once, OnceLock};
 use std::time::Duration;
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
@@ -16,7 +16,9 @@ use op_grpc_bridge::grpc_server::{
 };
 use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY};
 use op_grpc_bridge::mutation_engine::MutationEngine;
-use op_grpc_bridge::oracle_assertion::{derive_human_footprint, AssertionValidator, DecoyTrustStore};
+use op_grpc_bridge::oracle_assertion::{
+    derive_human_footprint, AssertionValidator, DecoyTrustStore,
+};
 use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
 use op_grpc_bridge::proto::plugin_methods::blockchain_plugin_methods_client::BlockchainPluginMethodsClient;
 use op_grpc_bridge::proto::plugin_methods::human_principal_plugin_methods_client::HumanPrincipalPluginMethodsClient;
@@ -31,6 +33,7 @@ use op_identity::oracle_assertion::{
     verify_signature, DecoyIssuer, OracleIdentityAssertion, SignedAssertion,
 };
 use op_identity::session::{derive_principal_id, derive_session_id};
+use op_state::StatePlugin;
 use op_state_store::{ChainConfig, EventChain};
 use prost_types::value::Kind;
 use prost_types::Value as ProstValue;
@@ -149,29 +152,17 @@ fn envelope_result(v: &ProstValue) -> &ProstValue {
 }
 
 fn principal_id_from(v: &ProstValue) -> String {
-    string_field(struct_field(envelope_result(v), "principal"), "principal_id")
+    string_field(
+        struct_field(envelope_result(v), "principal"),
+        "principal_id",
+    )
 }
 
 fn human_pubkey_from(v: &ProstValue) -> String {
-    string_field(struct_field(envelope_result(v), "principal"), "human_pubkey")
-}
-
-const HOST_SLED_FOOTPRINT: [u8; 32] = [0xAA; 32];
-
-fn write_host_sled(path: &std::path::Path) -> String {
-    let sled = op_identity::IdentitySled {
-        hashed_footprint: HOST_SLED_FOOTPRINT,
-        trace_id: [0xBB; 16],
-        ..Default::default()
-    };
-    let bytes = unsafe {
-        std::slice::from_raw_parts(
-            &sled as *const op_identity::IdentitySled as *const u8,
-            op_identity::IdentitySled::SIZE,
-        )
-    };
-    std::fs::write(path, bytes).expect("host sled");
-    hex::encode(HOST_SLED_FOOTPRINT)
+    string_field(
+        struct_field(envelope_result(v), "principal"),
+        "human_pubkey",
+    )
 }
 
 fn signed_with_fields(
@@ -206,10 +197,7 @@ fn fresh_signed(issuer: &DecoyIssuer, pubkey: &str, nonce: [u8; 16]) -> SignedAs
 }
 
 fn attach_assertion(meta: &mut MetadataMap, wire: &[u8]) {
-    meta.insert_bin(
-        ASSERTION_METADATA_KEY,
-        MetadataValue::from_bytes(wire),
-    );
+    meta.insert_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(wire));
 }
 
 fn attach_capability(meta: &mut MetadataMap, cap: &str) {
@@ -231,32 +219,60 @@ fn attach_ghostbridge(meta: &mut MetadataMap, footprint: &str, trace: &str) {
 }
 
 struct TestEnv {
+    _isolation: tokio::sync::OwnedMutexGuard<()>,
     _root: TempDir,
     _cozo: TempDir,
     issuer: DecoyIssuer,
-    host_footprint: String,
-    host_trace: String,
 }
 
 impl TestEnv {
-    fn new() -> Self {
+    async fn new() -> Self {
+        static TEST_ISOLATION: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
+        let isolation = TEST_ISOLATION
+            .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+            .lock_owned()
+            .await;
         let root = tempfile::tempdir().expect("root");
         std::env::set_var("OP_SHM_STATE_DIR", root.path().join("shm-state"));
+        let blob_dir = root.path().join("plugin-blobs");
+        std::env::set_var("OP_BLOB_CATALOG_DIR", &blob_dir);
+        let mut blob_store = op_blob::catalog::BlobStore::open(&blob_dir).expect("blob store");
+        for (plugin_id, schema) in [
+            (
+                "human_principal",
+                op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
+                    .schema()
+                    .expect("human principal schema"),
+            ),
+            (
+                "identity_sled",
+                op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
+                    .schema()
+                    .expect("identity sled schema"),
+            ),
+            (
+                "blockchain",
+                op_plugins::state_plugins::blockchain_plugin::BlockchainPlugin::new()
+                    .schema()
+                    .expect("blockchain schema"),
+            ),
+        ] {
+            let blob = op_blob::blobify_plugin_schema(plugin_id, schema);
+            blob_store.write(&blob).expect("seal E2E plugin schema");
+        }
         let cozo = tempfile::tempdir().expect("cozo");
         std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", cozo.path().join("cozo"));
-        let sled_path = root.path().join("sled.dat");
-        let host_footprint = write_host_sled(&sled_path);
-        std::env::set_var("OP_SLED_PATH", &sled_path);
+        std::env::set_var("OP_AUTH_REPLAY_DB_PATH", root.path().join("auth-replay.db"));
         let grants_path = root.path().join("capability-grants.json");
         write_grants(&grants_path, &empty_grants());
         let issuer = test_issuer();
         write_trust_store(&root, &issuer);
         Self {
+            _isolation: isolation,
             _root: root,
             _cozo: cozo,
             issuer,
-            host_footprint,
-            host_trace: "e2e-host-trace".to_string(),
         }
     }
 
@@ -279,6 +295,12 @@ struct RunningServer {
     ca_pem: String,
     engine: Arc<MutationEngine>,
     _task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for RunningServer {
+    fn drop(&mut self) {
+        self._task.abort();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -316,33 +338,38 @@ where
 
     fn call(&mut self, mut req: http::Request<ReqBody>) -> Self::Future {
         req.extensions_mut().remove::<TcpConnectInfo>();
+        req.extensions_mut()
+            .remove::<tonic::transport::server::TlsConnectInfo<TcpConnectInfo>>();
         req.extensions_mut().remove::<AxumConnectInfo<SocketAddr>>();
         self.inner.call(req)
     }
 }
 
 async fn start_server(strip_connect_info: bool) -> (RunningServer, TestEnv) {
-    start_server_with_env(strip_connect_info, TestEnv::new()).await
+    start_server_with_env(strip_connect_info, TestEnv::new().await).await
 }
 
-async fn start_server_with_env(
-    strip_connect_info: bool,
-    env: TestEnv,
-) -> (RunningServer, TestEnv) {
-    install_crypto_provider();
-    let ck = rcgen::generate_simple_self_signed(vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ])
-    .expect("tls cert");
-    let ca_pem = ck.cert.pem();
-    let identity = Identity::from_pem(ck.cert.pem(), ck.key_pair.serialize_pem());
-
+async fn start_server_with_env(strip_connect_info: bool, env: TestEnv) -> (RunningServer, TestEnv) {
     let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    start_server_with_env_and_engine(strip_connect_info, env, engine).await
+}
+
+async fn start_server_with_env_and_engine(
+    strip_connect_info: bool,
+    env: TestEnv,
+    engine: Arc<MutationEngine>,
+) -> (RunningServer, TestEnv) {
+    install_crypto_provider();
+    let ck =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+            .expect("tls cert");
+    let ca_pem = ck.cert.pem();
+    let identity = Identity::from_pem(ck.cert.pem(), ck.key_pair.serialize_pem());
+
     let server = OperationGrpcServer::new(engine.clone());
-    let validator = Arc::new(AssertionValidator::new(DecoyTrustStore::load()));
+    let validator = Arc::new(AssertionValidator::from_env(DecoyTrustStore::load()));
     let routes = build_operation_routes_with_validator(server, validator);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -434,7 +461,7 @@ async fn call_method(channel: Channel, opts: CallOpts<'_>) -> CallOutcome {
         interface_name: String::new(),
         method_name: opts.method.to_string(),
         arguments: vec![opts.args],
-        actor_id: "e2e".to_string(),
+        actor_id: "spoofed-caller-controlled-actor".to_string(),
         capability_id: opts.capability.to_string(),
     });
     if let Some(signed) = opts.assertion {
@@ -526,10 +553,7 @@ async fn register_human(
     alias: &str,
     nonce: [u8; 16],
 ) {
-    env.grant_human(
-        pubkey,
-        &["human_principal.write", "human_principal.read"],
-    );
+    env.grant_human(pubkey, &["human_principal.write", "human_principal.read"]);
     let args = prost_struct(BTreeMap::from([
         ("human_pubkey".to_string(), prost_str(pubkey)),
         ("display_alias".to_string(), prost_str(alias)),
@@ -576,30 +600,17 @@ async fn resolve_human(channel: Channel, env: &TestEnv, pubkey: &str, nonce: [u8
     assert_ok(out);
 }
 
-fn sled_dir_bytes(path: &std::path::Path) -> Vec<u8> {
-    let mut out = Vec::new();
-    if path.is_file() {
-        out.extend(std::fs::read(path).unwrap());
-        return out;
-    }
-    let mut entries: Vec<_> = std::fs::read_dir(path)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    entries.sort();
-    for entry in entries {
-        out.extend(sled_dir_bytes(&entry));
-    }
-    out
-}
-
 async fn provision_container_identity(
     channel: Channel,
     env: &TestEnv,
     pubkey: &str,
-    _nonce: [u8; 16],
+    nonce: [u8; 16],
 ) -> (String, String) {
-    env.set_grants(&grants_wildcard(&["identity_sled.write"]));
+    let operator = pk(240u8.wrapping_add(nonce[0]));
+    register_human(channel.clone(), env, &operator, "identity-operator", nonce).await;
+    env.grant_human(&operator, &["identity_sled.write"]);
+    let mut write_nonce = nonce;
+    write_nonce[15] ^= 0x80;
     let args = prost_struct(BTreeMap::from([(
         "wireguard_pubkey".to_string(),
         prost_str(pubkey),
@@ -612,8 +623,8 @@ async fn provision_container_identity(
                 method: "write_identity",
                 capability: "identity_sled.write",
                 args,
-                assertion: None,
-                ghostbridge: Some((&env.host_footprint, &env.host_trace)),
+                assertion: Some(fresh_signed(&env.issuer, &operator, write_nonce)),
+                ghostbridge: None,
                 wireguard_pubkey: None,
                 extra_assertion: None,
             },
@@ -622,7 +633,7 @@ async fn provision_container_identity(
     );
     let identity = struct_field(envelope_result(&result), "identity");
     (
-        string_field(identity, "hashed_footprint"),
+        string_field(identity, "genesis"),
         string_field(identity, "trace_id"),
     )
 }
@@ -656,6 +667,7 @@ async fn happy_path_registered_human_gated_call_over_tls() {
     )
     .await;
     assert_ok(out);
+    let legacy_footprint = "aa".repeat(32);
     let no_meta = call_method(
         ch,
         CallOpts {
@@ -667,13 +679,13 @@ async fn happy_path_registered_human_gated_call_over_tls() {
                 prost_str(&pubkey),
             )])),
             assertion: None,
-            ghostbridge: None,
+            ghostbridge: Some((&legacy_footprint, "legacy-trace")),
             wireguard_pubkey: None,
             extra_assertion: None,
         },
     )
     .await;
-    assert_unauthenticated(no_meta, "Missing Ghostbridge Identity Sled");
+    assert_unauthenticated(no_meta, "Missing Oracle identity assertion");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -700,6 +712,19 @@ async fn generated_plugin_route_authenticates_registered_human() {
         .expect("generated route should authenticate the assertion")
         .into_inner();
     assert!(response.principal.is_some());
+
+    let mut legacy_only = Request::new(HumanPrincipalResolveKeyRequest {
+        human_pubkey: pubkey,
+    });
+    attach_capability(legacy_only.metadata_mut(), "human_principal.read");
+    attach_ghostbridge(
+        legacy_only.metadata_mut(),
+        &"bb".repeat(32),
+        "legacy-generated-trace",
+    );
+    let status = client.resolve_key(legacy_only).await.unwrap_err();
+    assert_eq!(status.code(), Code::Unauthenticated);
+    assert_eq!(status.message(), "Missing Oracle identity assertion");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -731,7 +756,9 @@ async fn generated_plugin_route_preserves_integer_arguments() {
         .into_inner();
     assert_eq!(response.events.len(), 1);
     assert!(response.has_more);
-    assert_eq!(response.total_in_chain, 2);
+    // Genesis anchoring records a session-arrival event before the
+    // registration mutation, in addition to the chain's initial event.
+    assert_eq!(response.total_in_chain, 3);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -754,7 +781,9 @@ async fn oracle_assertion_cannot_authenticate_unguarded_ovsdb_transact() {
 
     let status = client.transact(request).await.unwrap_err();
     assert_eq!(status.code(), Code::Unauthenticated);
-    assert!(status.message().contains("Missing Ghostbridge Identity Sled"));
+    assert!(status
+        .message()
+        .contains("Missing Ghostbridge session identity"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -822,10 +851,7 @@ async fn rejects_revoked_human_key() {
     let pubkey = pk(3);
     register_human(ch.clone(), &env, &pubkey, "revoke-me", [0x04; 16]).await;
     resolve_human(ch.clone(), &env, &pubkey, [0x05; 16]).await;
-    env.grant_human(
-        &pubkey,
-        &["human_principal.write", "human_principal.read"],
-    );
+    env.grant_human(&pubkey, &["human_principal.write", "human_principal.read"]);
     let revoke_args = prost_struct(BTreeMap::from([(
         "human_pubkey".to_string(),
         prost_str(&pubkey),
@@ -876,7 +902,15 @@ async fn rejects_expired_assertion() {
     register_human(ch.clone(), &env, &pubkey, "exp", [0x08; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now - 600, now - 60, [0x09; 16], None);
+    let signed = signed_with_fields(
+        &env.issuer,
+        &pubkey,
+        test_ip(),
+        now - 600,
+        now - 60,
+        [0x09; 16],
+        None,
+    );
     let out = call_method(
         ch,
         CallOpts {
@@ -954,7 +988,15 @@ async fn rejects_source_ip_substitution() {
     register_human(ch.clone(), &env, &pubkey, "ip", [0x0C; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let bad = signed_with_fields(&env.issuer, &pubkey, alt_ip(), now - 5, now + 300, [0x0D; 16], None);
+    let bad = signed_with_fields(
+        &env.issuer,
+        &pubkey,
+        alt_ip(),
+        now - 5,
+        now + 300,
+        [0x0D; 16],
+        None,
+    );
     let out = call_method(
         ch.clone(),
         CallOpts {
@@ -1014,7 +1056,8 @@ async fn rejects_container_key_substitution() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let container_pk = pk(8);
-    let (_fp, _trace) = provision_container_identity(ch.clone(), &env, &container_pk, [0x11; 16]).await;
+    let (_fp, _trace) =
+        provision_container_identity(ch.clone(), &env, &container_pk, [0x11; 16]).await;
     env.grant_human(&container_pk, &["human_principal.read"]);
     let signed = fresh_signed(&env.issuer, &container_pk, [0x12; 16]);
     let out = call_method(
@@ -1047,7 +1090,15 @@ async fn rejects_over_long_ttl() {
     register_human(ch.clone(), &env, &pubkey, "long", [0x13; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now, now + 901, [0x14; 16], None);
+    let signed = signed_with_fields(
+        &env.issuer,
+        &pubkey,
+        test_ip(),
+        now,
+        now + 901,
+        [0x14; 16],
+        None,
+    );
     verify_signature(
         &signed.assertion,
         &signed.signature,
@@ -1230,14 +1281,16 @@ async fn rejects_malformed_assertion_metadata() {
             actor_id: "e2e".to_string(),
             capability_id: "human_principal.read".to_string(),
         });
-        req.metadata_mut().insert_bin(
-            ASSERTION_METADATA_KEY,
-            MetadataValue::from_bytes(&wire),
-        );
+        req.metadata_mut()
+            .insert_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(&wire));
         attach_capability(req.metadata_mut(), "human_principal.read");
         let status = client.call_method(req).await.unwrap_err();
         assert_eq!(status.code(), Code::Unauthenticated, "nonce {nonce_byte}");
-        assert!(status.message().contains("Malformed"), "{}", status.message());
+        assert!(
+            status.message().contains("Malformed"),
+            "{}",
+            status.message()
+        );
     }
 }
 
@@ -1251,7 +1304,15 @@ async fn rejects_not_yet_valid_assertion() {
     register_human(ch.clone(), &env, &pubkey, "future", [0x20; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now + 300, now + 900, [0x21; 16], None);
+    let signed = signed_with_fields(
+        &env.issuer,
+        &pubkey,
+        test_ip(),
+        now + 300,
+        now + 900,
+        [0x21; 16],
+        None,
+    );
     let out = call_method(
         ch,
         CallOpts {
@@ -1282,7 +1343,15 @@ async fn accepts_within_leeway_expired_assertion() {
     register_human(ch.clone(), &env, &pubkey, "leeway", [0x22; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now - 300, now - 10, [0x23; 16], None);
+    let signed = signed_with_fields(
+        &env.issuer,
+        &pubkey,
+        test_ip(),
+        now - 300,
+        now - 10,
+        [0x23; 16],
+        None,
+    );
     assert_ok(
         call_method(
             ch,
@@ -1314,7 +1383,15 @@ async fn accepts_lifetime_exactly_900s() {
     register_human(ch.clone(), &env, &pubkey, "900", [0x24; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
     let now = chrono::Utc::now().timestamp();
-    let signed = signed_with_fields(&env.issuer, &pubkey, test_ip(), now, now + 900, [0x25; 16], None);
+    let signed = signed_with_fields(
+        &env.issuer,
+        &pubkey,
+        test_ip(),
+        now,
+        now + 900,
+        [0x25; 16],
+        None,
+    );
     assert_ok(
         call_method(
             ch,
@@ -1436,12 +1513,17 @@ async fn fixture_connect_info_matches_validator() {
             "human_pubkey".to_string(),
             prost_str(&pubkey),
         )]))],
-        actor_id: "e2e".to_string(),
+        actor_id: "spoofed-caller-controlled-actor".to_string(),
         capability_id: "human_principal.read".to_string(),
     });
     attach_assertion(req.metadata_mut(), &signed.to_wire());
     attach_capability(req.metadata_mut(), "human_principal.read");
     let _ = client.call_method(req).await.expect("composed path ok");
+    let chain = srv.engine.event_chain.read().await;
+    let event = chain.events().last().expect("method event");
+    assert_eq!(event.actor_id, derive_principal_id(&pubkey));
+    assert_ne!(event.actor_id, "spoofed-caller-controlled-actor");
+    drop(chain);
     let mut probe = Request::new(());
     probe.extensions_mut().insert(TcpConnectInfo {
         local_addr: Some(SocketAddr::new(test_ip(), 0)),
@@ -1593,8 +1675,11 @@ async fn e2e_assertion_precedence_over_footprint_headers() {
     let mut bad = fresh_signed(&env.issuer, &pubkey, [0x36; 16]);
     bad.signature[0] ^= 0x01;
     let container_pk = pk(33);
-    let (fp, trace) = provision_container_identity(ch.clone(), &env, &container_pk, [0x37; 16]).await;
-    env.set_grants(&serde_json::json!({ fp.clone(): { "capabilities": ["human_principal.read"] } }));
+    let (fp, trace) =
+        provision_container_identity(ch.clone(), &env, &container_pk, [0x37; 16]).await;
+    env.set_grants(
+        &serde_json::json!({ fp.clone(): { "capabilities": ["human_principal.read"] } }),
+    );
     let out = call_method(
         ch,
         CallOpts {
@@ -1647,7 +1732,9 @@ async fn e2e_container_and_human_never_cross_authenticate() {
     let human_pk = pk(35);
     register_human(ch.clone(), &env, &human_pk, "human", [0x3A; 16]).await;
     let hfp = footprint_hex(&human_pk);
-    env.set_grants(&serde_json::json!({ hfp.clone(): { "capabilities": ["human_principal.read"] } }));
+    env.set_grants(
+        &serde_json::json!({ hfp.clone(): { "capabilities": ["human_principal.read"] } }),
+    );
     assert_ghostbridge_identity_rejected(
         call_method(
             ch.clone(),
@@ -1718,7 +1805,7 @@ async fn e2e_human_grants_same_mechanism() {
         .await,
     );
     env.set_grants(&grants_wildcard(&["human_principal.read"]));
-    assert_ok(
+    assert_permission_denied(
         call_method(
             ch.clone(),
             CallOpts {
@@ -1843,23 +1930,33 @@ async fn e2e_freshness_lifecycle() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn e2e_empty_trust_store_fail_closed() {
-    let env = TestEnv::new();
+    let env = TestEnv::new().await;
     let cozo = env.cozo_path();
     let grants_template = env._root.path().join("capability-grants.json");
     let (srv, env) = start_server_with_env(false, env).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(38);
     register_human(ch.clone(), &env, &pubkey, "empty-trust", [0x44; 16]).await;
+    let container_pk = pk(39);
+    let (fp, trace) =
+        provision_container_identity(ch.clone(), &env, &container_pk, [0x46; 16]).await;
+    let engine = srv.engine.clone();
     drop(srv);
     drop(ch);
     std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", &cozo);
-    write_grants(&grants_template, &grants_for(&pubkey, &["human_principal.read"]));
+    write_grants(
+        &grants_template,
+        &grants_for(&pubkey, &["human_principal.read"]),
+    );
     let missing = tempfile::tempdir().expect("missing");
     std::env::set_var(
         "OP_DECOY_TRUST_STORE",
         missing.path().join("missing-trust.json"),
     );
-    let (srv2, env) = start_server_with_env(false, env).await;
+    // Reload the validator with an empty trust store while retaining the
+    // already-authoritative session/genesis state. This test is about trust
+    // fail-closure, not in-process restart hydration.
+    let (srv2, env) = start_server_with_env_and_engine(false, env, engine).await;
     let ch = tls_channel(srv2.addr, &srv2.ca_pem).await;
     assert_unauthenticated(
         call_method(
@@ -1881,28 +1978,25 @@ async fn e2e_empty_trust_store_fail_closed() {
         .await,
         "UnknownDecoyKey",
     );
-    let container_pk = pk(39);
-    let (fp, trace) = provision_container_identity(ch.clone(), &env, &container_pk, [0x46; 16]).await;
     env.set_grants(&serde_json::json!({ fp.clone(): { "capabilities": ["identity_sled.read"] } }));
-    assert_ok(
-        call_method(
-            ch,
-            CallOpts {
-                plugin_id: "identity_sled",
-                method: "get_identity",
-                capability: "identity_sled.read",
-                args: prost_struct(BTreeMap::from([(
-                    "session_id".to_string(),
-                    prost_str(&derive_session_id(&container_pk)),
-                )])),
-                assertion: None,
-                ghostbridge: Some((&fp, &trace)),
-                wireguard_pubkey: Some(&container_pk),
-                extra_assertion: None,
-            },
-        )
-        .await,
-    );
+    let legacy_only = call_method(
+        ch,
+        CallOpts {
+            plugin_id: "identity_sled",
+            method: "get_identity",
+            capability: "identity_sled.read",
+            args: prost_struct(BTreeMap::from([(
+                "session_id".to_string(),
+                prost_str(&derive_session_id(&container_pk)),
+            )])),
+            assertion: None,
+            ghostbridge: Some((&fp, &trace)),
+            wireguard_pubkey: Some(&container_pk),
+            extra_assertion: None,
+        },
+    )
+    .await;
+    assert_unauthenticated(legacy_only, "Missing Oracle identity assertion");
 }
 
 // ?? VAL-CROSS-010 ???????????????????????????????????????????????????????????
@@ -1974,7 +2068,10 @@ async fn e2e_alias_mutation_has_no_auth_effect() {
     );
     assert_eq!(principal_id_from(&before), principal_id_from(&after));
     assert_eq!(human_pubkey_from(&before), human_pubkey_from(&after));
-    assert_eq!(footprint_hex(&pubkey), hex::encode(derive_human_footprint(&pubkey)));
+    assert_eq!(
+        footprint_hex(&pubkey),
+        hex::encode(derive_human_footprint(&pubkey))
+    );
 }
 
 // ?? VAL-CROSS-011 ???????????????????????????????????????????????????????????
@@ -2033,15 +2130,13 @@ async fn e2e_per_principal_grant_isolation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn e2e_missing_connect_info_fails_closed() {
-    let env = TestEnv::new();
-    let cozo = env.cozo_path();
+    let env = TestEnv::new().await;
     let (srv, env) = start_server_with_env(false, env).await;
     let ch_ok = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(43);
     register_human(ch_ok, &env, &pubkey, "ci", [0x4F; 16]).await;
     drop(srv);
-    std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", &cozo);
-    let (srv2, env2) = start_server_with_env(true, TestEnv::new()).await;
+    let (srv2, env2) = start_server_with_env(true, env).await;
     let ch_bad = tls_channel(srv2.addr, &srv2.ca_pem).await;
     env2.grant_human(&pubkey, &["human_principal.read"]);
     assert_unauthenticated(
@@ -2070,7 +2165,7 @@ async fn e2e_missing_connect_info_fails_closed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn e2e_revocation_durable_across_restart() {
-    let env = TestEnv::new();
+    let env = TestEnv::new().await;
     let cozo = env.cozo_path();
     let (srv, env) = start_server_with_env(false, env).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
@@ -2217,15 +2312,20 @@ async fn e2e_concurrent_multi_principal_interleaving() {
 // ?? VAL-CROSS-018 ???????????????????????????????????????????????????????????
 
 #[tokio::test(flavor = "multi_thread")]
-async fn e2e_human_registration_no_container_side_effects() {
+async fn e2e_human_registration_anchors_session_genesis() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
-    let sled_path = std::env::var("OP_SLED_PATH").unwrap();
-    let before = sled_dir_bytes(std::path::Path::new(&sled_path));
     let pubkey = pk(48);
     register_human(ch, &env, &pubkey, "sidefx", [0x5C; 16]).await;
-    let after = sled_dir_bytes(std::path::Path::new(&sled_path));
-    assert_eq!(before, after);
+    let session = srv
+        .engine
+        .session_context_for_actor(&pubkey)
+        .await
+        .expect("verified registration anchors a session");
+    assert_eq!(session.session_id, derive_session_id(&pubkey));
+    assert_eq!(session.wireguard_pubkey, pubkey);
+    assert_eq!(session.genesis_hex.len(), 64);
+    assert!(session.genesis_hex.chars().all(|c| c.is_ascii_hexdigit()));
 }
 
 // ?? VAL-CROSS-019 ???????????????????????????????????????????????????????????
@@ -2236,10 +2336,7 @@ async fn e2e_revocation_tombstone_end_to_end() {
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(49);
     register_human(ch.clone(), &env, &pubkey, "tomb", [0x5D; 16]).await;
-    env.grant_human(
-        &pubkey,
-        &["human_principal.write", "human_principal.read"],
-    );
+    env.grant_human(&pubkey, &["human_principal.write", "human_principal.read"]);
     assert_ok(
         call_method(
             ch.clone(),
@@ -2306,17 +2403,36 @@ async fn e2e_revocation_tombstone_end_to_end() {
 // ?? VAL-CROSS-021 ???????????????????????????????????????????????????????????
 
 #[tokio::test(flavor = "multi_thread")]
-async fn e2e_restart_empties_replay_cache_expired_stays_closed() {
+async fn e2e_replay_nonce_remains_consumed_after_server_restart() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(50);
     register_human(ch.clone(), &env, &pubkey, "restart", [0x61; 16]).await;
     env.grant_human(&pubkey, &["human_principal.read"]);
-    let now = chrono::Utc::now().timestamp();
-    let expired = signed_with_fields(&env.issuer, &pubkey, test_ip(), now - 600, now - 60, [0x62; 16], None);
+    let assertion = fresh_signed(&env.issuer, &pubkey, [0x62; 16]);
+    assert_ok(
+        call_method(
+            ch.clone(),
+            CallOpts {
+                plugin_id: "human_principal",
+                method: "resolve_key",
+                capability: "human_principal.read",
+                args: prost_struct(BTreeMap::from([(
+                    "human_pubkey".to_string(),
+                    prost_str(&pubkey),
+                )])),
+                assertion: Some(assertion.clone()),
+                ghostbridge: None,
+                wireguard_pubkey: None,
+                extra_assertion: None,
+            },
+        )
+        .await,
+    );
+    let engine = srv.engine.clone();
     drop(srv);
     drop(ch);
-    let (srv2, env2) = start_server(false).await;
+    let (srv2, _env) = start_server_with_env_and_engine(false, env, engine).await;
     let ch2 = tls_channel(srv2.addr, &srv2.ca_pem).await;
     assert_unauthenticated(
         call_method(
@@ -2329,14 +2445,14 @@ async fn e2e_restart_empties_replay_cache_expired_stays_closed() {
                     "human_pubkey".to_string(),
                     prost_str(&pubkey),
                 )])),
-                assertion: Some(expired),
+                assertion: Some(assertion),
                 ghostbridge: None,
                 wireguard_pubkey: None,
                 extra_assertion: None,
             },
         )
         .await,
-        "Expired",
+        "Replay",
     );
 }
 

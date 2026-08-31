@@ -15,7 +15,7 @@
       "pubkey": "/yBYjQkcD997wTd+e6b1rJiALMKLbLVfF2IO413lj1Y=",
       "allowed_ip": "100.69.0.254/32",
       "sled_source": true,
-      "notes": "IdentitySled at /dev/shm/plugin_schema.dat is written from this pubkey"
+      "notes": "Host WireGuard public key; session identity is projected by identity_sled"
     },
     "jeremy": {
       "role": "user",

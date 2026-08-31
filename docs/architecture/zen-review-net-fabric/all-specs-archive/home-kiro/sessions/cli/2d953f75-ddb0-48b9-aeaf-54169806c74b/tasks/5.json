@@ -1,0 +1,6 @@
+{
+  "id": "5",
+  "subject": "Configure xray-side gateway (10.200.1.2/30 secondary on eth0)",
+  "description": "Add secondary IP to xray's eth0 for netmk gateway resolution",
+  "status": "pending"
+}

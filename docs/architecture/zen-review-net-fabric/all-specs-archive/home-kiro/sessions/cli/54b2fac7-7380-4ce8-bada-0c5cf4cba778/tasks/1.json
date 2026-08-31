@@ -1,0 +1,6 @@
+{
+  "id": "1",
+  "subject": "Run read-only live preflight and capture immutable baseline",
+  "description": "Confirm runit host, privileges, actual Incus instance names/PIDs, OVS/controller services, xray inside interface, netmaker WireGuard ports, adapter/runtime paths, wgcf interface/mark/handshake/table, and existing feature state before mutation.",
+  "status": "completed"
+}

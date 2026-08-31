@@ -131,9 +131,7 @@ fn run() -> Result<bool> {
     };
 
     match (&cli.input, &cli.output, &cli.input_dir, &cli.output_dir) {
-        (Some(input), Some(output), None, None) => {
-            emit_one(input, output, cli.format, &coverage)
-        }
+        (Some(input), Some(output), None, None) => emit_one(input, output, cli.format, &coverage),
         (None, None, Some(input_dir), Some(output_dir)) => {
             emit_dir(input_dir, output_dir, cli.format, &coverage)
         }
@@ -147,8 +145,7 @@ fn emit_one(
     format: Format,
     coverage: &CoverageInputs,
 ) -> Result<bool> {
-    let source =
-        fs::read_to_string(input).with_context(|| format!("read {}", input.display()))?;
+    let source = fs::read_to_string(input).with_context(|| format!("read {}", input.display()))?;
     let name = input
         .file_name()
         .and_then(|s| s.to_str())
@@ -216,8 +213,7 @@ fn emit_dir(
     format: Format,
     coverage: &CoverageInputs,
 ) -> Result<bool> {
-    fs::create_dir_all(output_dir)
-        .with_context(|| format!("create {}", output_dir.display()))?;
+    fs::create_dir_all(output_dir).with_context(|| format!("create {}", output_dir.display()))?;
 
     let mut entries: Vec<PathBuf> = fs::read_dir(input_dir)
         .with_context(|| format!("read {}", input_dir.display()))?

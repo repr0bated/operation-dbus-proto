@@ -1,0 +1,6 @@
+{
+  "id": "12",
+  "subject": "Migrate NetMaker to lowercase runit PID 1",
+  "description": "Create a rollback snapshot, stop via D-Bus, rename lowercase, attach golden runit artifacts, select runit init, and start via D-Bus; roll back if API/broker health fails.",
+  "status": "pending"
+}

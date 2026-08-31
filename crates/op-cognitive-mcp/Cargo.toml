@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 op-core = { path = "../op-core" }
 op-identity = { path = "../op-identity" }
-op-waypipe-grpc = { path = "../op-waypipe-grpc" }
 op-blob = { workspace = true }
 op-mcp = { path = "../op-mcp" }
 op-agents = { path = "../op-agents" }
@@ -27,16 +26,13 @@ qdrant-client = "1.17"
 reqwest = { workspace = true }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-axum = { version = "0.7", features = ["json", "http2"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors"] }
 uuid = { version = "1.0", features = ["v4", "v5"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 clap = { workspace = true, features = ["env"] }
 cozo = { workspace = true }
 
-# gRPC (NotebookLM CognitiveToolService)
+# Generated CognitiveToolService compatibility types (no listener ownership)
 tonic = { workspace = true }
 prost = { workspace = true }
 tonic-reflection = { workspace = true }
@@ -55,10 +51,7 @@ parking_lot = { workspace = true }
 # Random for jitter
 rand = "0.8"
 
-# SSE streaming
-async-stream = "0.3"
 tokio-stream = "0.1"
-reqwest-eventsource = "0.5"
 
 # Examples
 futures = "0.3"

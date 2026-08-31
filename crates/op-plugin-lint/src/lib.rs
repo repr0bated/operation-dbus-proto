@@ -6,8 +6,8 @@
 mod audit;
 mod binary;
 mod emit;
-mod gaps;
 mod gadget;
+mod gaps;
 mod introspect;
 mod repomix;
 mod report;

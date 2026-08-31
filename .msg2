@@ -1,0 +1,39 @@
+feat(openflow): resolve port_mac: in flow actions; name the PTAP blocker
+
+Depends on 0001-controller-fix.patch (which passes the new port_macs argument);
+apply 0001 first, then this. Neither compiles alone.
+
+port_mac: resolution (new, working):
+- resolve_mac() accepts either a literal MAC or `port_mac:<port name>`, looked
+  up in the hw_addr map that 0001 harvests from the switch's own PortDesc reply.
+  This is what lets openflow-static-flows.json say
+  "eth_dst": "port_mac:ovsbr0" instead of baking a host-specific MAC into
+  config that goes stale the moment the bridge is recreated. Used by SetField
+  eth_dst/eth_src (dl_dst/dl_src aliases included).
+- json_flow_to_add / json_flow_to_delete take &HashMap<String, [u8; 6]>.
+  The delete path ignores it (deletes match on fields, not actions) but keeps
+  the argument so both call sites in controller.rs stay symmetric.
+
+encap / packet_type (recognised, refused with a reason -- NOT working):
+The prio-200 netmaker flow cannot be encoded by this crate. Verified against
+rovs-openflow 0.2.0:
+- `Match` (match_fields.rs) has 43 fields, none of them packet_type, and
+  `Match::encode` only emits fields it knows. There is no raw-OXM escape hatch,
+  so OXM_OF_PACKET_TYPE (class 0x8000, field 44) is unreachable.
+- `Action` has 25 variants, none of them Encap, and `ActionList::push` takes
+  `Action` -- no raw/experimenter variant -- so OFPAT_ENCAP (29) is unreachable.
+
+Rather than leave the flow failing with a generic "unsupported match field", it
+is now parsed, validated and rejected with the exact missing crate support and
+the out-of-band workaround (`ovs-ofctl -O OpenFlow15 add-flow`), so the operator
+sees the real blocker in the log line 0001 emits as `skipping static flow`.
+`JsonFlowAction::Encap { header }` (alias `ethertype`) exists for the same
+reason: without it serde fails with an opaque unknown-variant error.
+
+Unblocking this properly needs rovs-openflow to gain either packet_type +
+Encap support or a raw OXM/action escape hatch; that is a change to
+github.com/delandtj/rovs, not to this crate.
+
+Tests: port_mac resolves to the discovered hw_addr, unknown port_mac is an
+error (never a looser flow), the prio-200 netmaker flow reports the blocker and
+the workaround, and packet_type syntax is validated before it is refused.

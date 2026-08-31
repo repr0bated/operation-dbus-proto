@@ -7,6 +7,17 @@
 
 ---
 
+> **Canonical MCP architecture:** MCP discovery/execution is owned solely by
+> `op-grpc-bridge` on TLS `:8090` — see
+> `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/`. The "op-mcp"
+> section below is a **read-only monitoring dashboard** (status, tool-registry
+> browser, metrics) that reads bridge state over the authenticated gRPC path. op-web
+> MUST NOT host an MCP server, MCP transports, or any MCP execution endpoint on
+> `:8080` (canonical FR-1). Any wording implying op-web runs the MCP protocol server
+> is superseded.
+
+---
+
 ## Overview
 
 This document analyzes each crate in the op-dbus workspace to identify UI requirements. The UI will be built as an embedded React SPA (TypeScript + Vite) within the `op-web` crate that scales to ~16,000 D-Bus objects.
@@ -231,7 +242,10 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 
 ## 6. op-mcp (HIGH PRIORITY)
 
-**Purpose**: MCP protocol server with multiple transports
+**Purpose**: Read-only dashboard to **monitor** the MCP surface owned by
+`op-grpc-bridge :8090` (canonical FR-1). op-web does not run an MCP protocol server
+or any MCP transport; this section is telemetry/observability over the bridge, read
+via the authenticated gRPC path.
 
 ### User Stories
 

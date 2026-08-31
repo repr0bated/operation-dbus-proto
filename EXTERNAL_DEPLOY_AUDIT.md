@@ -55,7 +55,7 @@ mirrored (with updates) in the current repo's `deploy/`.
 | `s6/op-web-srv`, `s6/op-web-log` | Real | op-web server longrun. Core of current architecture. |
 | `s6/op-projection`, `s6/op-projection-log` | Real | Projection server longrun. Core of current architecture. |
 | `s6/op-cognitive-mcp`, `s6/op-cognitive-mcp-log` | Real | External MCP gateway. Per `CLAUDE.md`, the universal external gateway. |
-| `s6/op-identity-sled` | Real | Identity/sled service. Core of current architecture. |
+| `s6/op-identity-sled` | Deprecated | Former process-global raw identity service; do not install or run. Session identity is projected by the `identity_sled` plugin. |
 | `s6/op-grpc-bridge` | Real | Consolidated gRPC bridge (not the `-zeroclaw` variant). Core of current architecture. |
 | `s6/op-mcp-compact`, `s6/op-mcp-compact-log` | Real | Loopback-only MCP for chatbot. Per `CLAUDE.md`. |
 | `s6/chatmanager` | Real | op-chat longrun. Core of current architecture. |

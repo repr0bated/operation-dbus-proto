@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_e3be8fd3-8d5e-4b73-b834-e5406d06194a",
+  "title": "Revise netclient netns spec",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-03T01:13:26.234Z",
+  "lastModifiedAt": "2026-08-03T02:41:40.240Z",
+  "modelId": "gpt-5.6-sol",
+  "autopilot": true,
+  "effortLevel": "max",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "I’m resuming the netclient-container-netns spec update and reconciling the existing documents with code and current live networking evidence.",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

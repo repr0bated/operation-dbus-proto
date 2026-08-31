@@ -95,10 +95,10 @@ pub mod prelude {
     pub use super::dynamic_loading::DynamicLoadingPlugin;
     pub use super::state_plugins::{
         AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
-        CognitiveMcpPlugin, CompactMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin,
-        DnsResolverPlugin, EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin,
-        FreeDesktopPlugin, FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin,
-        KeypairPlugin, KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
+        CognitiveMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin, DnsResolverPlugin,
+        EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
+        FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin,
+        KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
         NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
         OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
         RovsCommandsPlugin, RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,

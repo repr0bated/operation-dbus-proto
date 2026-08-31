@@ -1,0 +1,16 @@
+/model
+/effort
+implement accountability audit spec
+als be sure to enable claude skill grpc-expert and any other skills you think may be helpful
+continue
+we dont use s6 anymore, makd sure  your changes reflect a doinit sv init system
+just the s6 work
+run spec workflow on full migration to runit sv system init
+still running spec workflow on full migration to runit sv system init? xray handles reverse proxy  no ngnix
+so did you copy  build files to runtime location since we have gone to a build /btrfs send deployment model?
+i would like a 2 parallel aproach , creating the deploy/golden subvolume that would be used for deployment and to install in live/current runtime environment
+firest i want yo uto commit and push. i am moving the local repo to a different location after that we cdan test and add  golden-only
+try pushing now
+write context fole so i can get you new shell
+do gh auth token and gh auth setup-git
+do that it is in .bash_secrets

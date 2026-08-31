@@ -303,34 +303,41 @@ mod tests {
         }"#;
         let leaves = BTreeSet::from(["selected_model".into(), "bridge".into()]);
         let methods = BTreeSet::new();
-        let gaps = gaps_from_surface_json_for_plugin(
-            surface,
-            &leaves,
-            &methods,
-            "antigravity_chat",
-        )
-        .unwrap();
+        let gaps =
+            gaps_from_surface_json_for_plugin(surface, &leaves, &methods, "antigravity_chat")
+                .unwrap();
         assert!(
             gaps.delegated_paths.iter().any(|p| p == "cmd.models"),
             "delegated={:?}",
             gaps.delegated_paths
         );
         assert!(
-            !gaps.missing_cli_commands.iter().any(|p| p.starts_with("cmd.models")),
+            !gaps
+                .missing_cli_commands
+                .iter()
+                .any(|p| p.starts_with("cmd.models")),
             "missing_cli={:?}",
             gaps.missing_cli_commands
         );
         // mode is product, not model
         assert!(
-            gaps.missing_cli_commands.iter().any(|p| p == "flag.root.mode")
-                || gaps.missing_paths_sample.iter().any(|p| p == "flag.root.mode"),
+            gaps.missing_cli_commands
+                .iter()
+                .any(|p| p == "flag.root.mode")
+                || gaps
+                    .missing_paths_sample
+                    .iter()
+                    .any(|p| p == "flag.root.mode"),
             "mode should remain a product gap; missing={:?} sample={:?}",
             gaps.missing_cli_commands,
             gaps.missing_paths_sample
         );
         // selected_model covers flag.root.model
         assert!(
-            !gaps.missing_cli_commands.iter().any(|p| p == "flag.root.model"),
+            !gaps
+                .missing_cli_commands
+                .iter()
+                .any(|p| p == "flag.root.model"),
             "selected_model should cover flag.root.model"
         );
         assert!(gaps.missing_by_group.contains_key("delegated_gemini"));

@@ -11,6 +11,7 @@ pub mod registration;
 pub mod schema_bridge;
 pub mod session;
 pub mod session_genesis;
+pub mod session_projection;
 pub mod token; // Keeping for now if needed internally
 pub mod wireguard;
 
@@ -21,12 +22,13 @@ pub use recovery::{
 };
 pub use registration::{generate_magic_link_token, generate_wireguard_keypair, WireGuardKeyPair};
 pub use schema_bridge::{
-    read_schema_blob, read_sled, read_sled_at, run_schema_shuttle, socket_entries_from_env,
-    verify_ghostbridge_footprint, verify_session_genesis, write_schema_blob, write_sled,
-    write_sled_advance,
-    FootprintVerifyError, IdentitySled,
-    SocketEntry, SubidCategory, SubidTaxonomy, SHM_SLED_PATH, SHM_XRAY_CONFIG,
+    resolve_verified_session, schema_catalog_hash, schema_catalog_hash_previous,
+    verify_session_genesis, FootprintVerifyError, SubidCategory, SubidTaxonomy,
 };
 pub use session::{Session, SessionManager};
+pub use session_projection::{
+    configured_identity_session, read_identity_sessions, resolve_identity_session, SessionIdentity,
+    SessionProjectionError, SESSION_SELECTOR_ENV,
+};
 pub use token::{CachedToken, TokenManager};
 pub use wireguard::{PeerInfo, WireGuardIdentity};

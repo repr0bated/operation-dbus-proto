@@ -12,14 +12,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 
 use crate::context::GenerationContext;
 use crate::tools::{ToolCall, ToolRegistry};
-
-const SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
-const FOOTPRINT_OFFSET: usize = 40;
-const TRACE_OFFSET: usize = 72;
 
 /// Inference loop that generates UI specs.
 pub struct InferenceLoop {
@@ -213,9 +208,10 @@ impl InferenceLoop {
         };
 
         let mut req = self.client.post(&url).json(&request);
-        if let Some((footprint, trace_id)) = live_ghostbridge_identity() {
+        if let Some((genesis, trace_id)) = live_ghostbridge_identity() {
             req = req
-                .header("x-ghostbridge-footprint", footprint)
+                .header("x-ghostbridge-genesis", genesis.clone())
+                .header("x-ghostbridge-footprint", genesis)
                 .header("x-ghostbridge-trace-id", trace_id);
         }
 
@@ -436,12 +432,10 @@ fn extract_json_object(content: &str) -> Option<serde_json::Value> {
     None
 }
 
-/// Resolve Ghostbridge identity for op-web `/v1/chat/completions`.
-///
-/// Prefers env overrides, then the live host sled at `/dev/shm/plugin_schema.dat`
-/// (same offsets as `IdentitySled`: footprint @40, trace_id @72).
+/// Resolve the explicitly selected session identity for op-web calls.
 fn live_ghostbridge_identity() -> Option<(String, String)> {
-    let env_fp = std::env::var("X_GHOSTBRIDGE_FOOTPRINT")
+    let env_fp = std::env::var("X_GHOSTBRIDGE_GENESIS")
+        .or_else(|_| std::env::var("X_GHOSTBRIDGE_FOOTPRINT"))
         .or_else(|_| std::env::var("GB_FOOTPRINT"))
         .ok()
         .filter(|v| !v.trim().is_empty());
@@ -452,15 +446,7 @@ fn live_ghostbridge_identity() -> Option<(String, String)> {
     if let (Some(fp), Some(tr)) = (env_fp, env_tr) {
         return Some((fp, tr));
     }
-
-    let bytes = std::fs::read(Path::new(SLED_PATH)).ok()?;
-    if bytes.len() < TRACE_OFFSET + 16 {
-        return None;
-    }
-    let footprint = hex::encode(&bytes[FOOTPRINT_OFFSET..FOOTPRINT_OFFSET + 32]);
-    let trace_id = hex::encode(&bytes[TRACE_OFFSET..TRACE_OFFSET + 16]);
-    if footprint.chars().all(|c| c == '0') || trace_id.chars().all(|c| c == '0') {
-        return None;
-    }
-    Some((footprint, trace_id))
+    let identity = op_identity::configured_identity_session().ok()?;
+    let genesis = identity.genesis.filter(|value| !value.is_empty())?;
+    Some((genesis, identity.trace_id))
 }

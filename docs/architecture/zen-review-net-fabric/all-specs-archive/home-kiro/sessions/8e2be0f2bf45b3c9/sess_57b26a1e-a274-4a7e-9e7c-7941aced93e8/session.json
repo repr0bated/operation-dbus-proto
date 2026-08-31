@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_57b26a1e-a274-4a7e-9e7c-7941aced93e8",
+  "title": "chat resume-id cli_54b2fac7-7380-4ce8-bada-0c5cf4cba778_Xx4nlUYF",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/operation-dashboard-ui-07"
+  ],
+  "createdAt": "2026-08-02T21:29:25.332Z",
+  "lastModifiedAt": "2026-08-02T21:53:36.024Z",
+  "modelId": "claude-opus-5",
+  "autopilot": true,
+  "effortLevel": "high",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

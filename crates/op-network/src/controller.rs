@@ -680,7 +680,8 @@ impl OpenFlowController {
                 reconnect.set_max_backoff(Duration::from_secs(30));
                 reconnect.connecting();
 
-                match handle_connection(stream, flows, static_flows, static_fdb, active_conn).await {
+                match handle_connection(stream, flows, static_flows, static_fdb, active_conn).await
+                {
                     Ok(()) => {
                         // Clean close — mark disconnected so next accept starts fresh.
                         reconnect.disconnected();

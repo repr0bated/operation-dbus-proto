@@ -37,7 +37,10 @@ const LOCAL_SECTIONS: &[(&str, &str)] = &[
         "registration_service",
         "super::tched_router::RegistrationServiceSchema",
     ),
-    ("user_container", "super::tched_router::UserContainerOptions"),
+    (
+        "user_container",
+        "super::tched_router::UserContainerOptions",
+    ),
     ("identity_chain", "super::tched_router::IdentityOptions"),
     ("privacy_policy", "super::tched_router::PrivacyOptions"),
 ];
@@ -122,10 +125,13 @@ fn discover_sections(schema: &Value) -> Vec<Section> {
 }
 
 fn main() {
-    let out_path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/state_plugins/tched_router_config_surface.rs")
-    });
+    let out_path = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src/state_plugins/tched_router_config_surface.rs")
+        });
 
     let schema = serde_json::to_value(schemars::schema_for!(zeroclaw::Config))
         .expect("Config schema serializes");
@@ -225,7 +231,9 @@ fn main() {
     s.push_str("pub enum SectionSource {\n    /// Upstream `zeroclaw::Config` (the config file).\n    Upstream,\n    /// Local 3tched Router state (a plain configuration).\n    Local,\n}\n\n");
 
     s.push_str("/// Every method owned by this surface (for dispatch membership checks).\n");
-    s.push_str("pub const CONFIG_METHODS: &[&str] = &[\n    \"GetConfig\",\n    \"PatchConfig\",\n");
+    s.push_str(
+        "pub const CONFIG_METHODS: &[&str] = &[\n    \"GetConfig\",\n    \"PatchConfig\",\n",
+    );
     for (key, _ty, _local) in &all {
         let _ = writeln!(s, "    \"{}\",", method_name(key));
     }

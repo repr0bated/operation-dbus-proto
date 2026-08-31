@@ -1,0 +1,30 @@
+[package]
+name = "op-gallery-gen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Model-agnostic generative UI gallery system — replaces op-gemma generators"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+op-blob = { workspace = true }
+op-plugins = { workspace = true }
+op-state-store = { path = "../op-state-store" }
+schemars = { workspace = true }
+jsonschema = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[bin]]
+name = "op-gallery-gen"
+path = "src/main.rs"

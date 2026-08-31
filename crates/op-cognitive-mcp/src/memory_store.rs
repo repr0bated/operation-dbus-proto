@@ -364,7 +364,7 @@ impl CognitiveMemoryStore {
                     ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
                         := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
                            namespace = $ns,
-                           (expires_at = "" || expires_at > $now)
+                           (expires_at == "" || expires_at > $now)
                     :order -updated_at
                     "#,
                     p,
@@ -377,7 +377,7 @@ impl CognitiveMemoryStore {
                     r#"
                     ?[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed]
                         := *memory_entries[namespace, key, id, value, tags, created_at, updated_at, expires_at, access_count, last_accessed],
-                           (expires_at = "" || expires_at > $now)
+                           (expires_at == "" || expires_at > $now)
                     :order -updated_at
                     "#,
                     p,
@@ -602,4 +602,57 @@ fn parse_ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|t| t.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn query_entries_returns_active_rows_and_filters_expired_rows() {
+        let shuttle = Arc::new(CozoGraphShuttle::new_in_memory().unwrap());
+        let store = CognitiveMemoryStore::new(shuttle).await.unwrap();
+        store
+            .upsert_namespace(
+                "container:expiry-probe",
+                NamespaceKind::Custom,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        store
+            .store_entry(
+                "container:expiry-probe",
+                "active",
+                serde_json::json!("keep"),
+                Vec::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .store_entry(
+                "container:expiry-probe",
+                "expired",
+                serde_json::json!("drop"),
+                Vec::new(),
+                Some(Utc::now() - chrono::Duration::minutes(1)),
+            )
+            .await
+            .unwrap();
+
+        let entries = store
+            .query_entries(EntryQuery {
+                namespace_id: Some("container:expiry-probe".to_string()),
+                ..EntryQuery::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, "active");
+    }
 }

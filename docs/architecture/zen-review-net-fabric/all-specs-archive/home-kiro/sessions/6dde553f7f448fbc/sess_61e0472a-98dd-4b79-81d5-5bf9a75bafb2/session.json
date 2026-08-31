@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_61e0472a-98dd-4b79-81d5-5bf9a75bafb2",
+  "title": "tangent-1",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-19T06:57:26.257Z",
+  "lastModifiedAt": "2026-08-19T21:12:13.174Z",
+  "parentSessionId": "sess_006ef8f3-d948-4c78-8feb-6ebdbd00b5b4",
+  "createdReason": "tangent",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "description": "Verifying the json-render4-ui deployment is serving correctly at http://127.0.0.1:8080/",
+  "status": "idle",
+  "titleSetByUser": true
+}

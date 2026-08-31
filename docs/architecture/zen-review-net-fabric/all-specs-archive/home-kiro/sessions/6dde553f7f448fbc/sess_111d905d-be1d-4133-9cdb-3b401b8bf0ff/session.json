@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_111d905d-be1d-4133-9cdb-3b401b8bf0ff",
+  "title": "tangent-1",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-14T07:27:50.527Z",
+  "lastModifiedAt": "2026-08-14T07:34:12.006Z",
+  "parentSessionId": "sess_d4495bbe-0bff-441a-9a8d-0d16c74383b3",
+  "createdReason": "tangent",
+  "modelId": "auto",
+  "description": "The deployed binary doesn't have ZEROCLAW_TLS_CERT_FILE support. Need to rebuild the binary to enable tonic-TLS on port 8090.",
+  "status": "idle",
+  "titleSetByUser": true
+}

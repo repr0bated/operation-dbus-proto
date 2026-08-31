@@ -1,0 +1,6 @@
+{
+  "id": "1",
+  "subject": "Confirm standards, specs, and specialist guidance",
+  "description": "Read CLAUDE.md, design.md, tasks.md, spec.md, grpc-expert SKILL.md, and network-control-plane SKILL.md in the requested order.",
+  "status": "completed"
+}

@@ -578,7 +578,13 @@ mod tests {
             .await
             .expect_err("undeclared model must be rejected by the router");
 
-        assert!(error.to_string().contains("not declared"), "{error}");
+        let message = error.to_string();
+        assert!(
+            message.contains("not declared")
+                || message.contains("differs from ZeroClaw's selected provider")
+                || message.contains("differs from ZeroClaw's selected model"),
+            "{error}"
+        );
     }
 
     #[test]

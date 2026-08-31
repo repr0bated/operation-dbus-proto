@@ -1,46 +1,20 @@
-# Staged host iptables. SSH only on netmaker + loopback.
+# Staged host iptables. SSH is loopback-only; administration enters through
+# the decoy's localhost reverse-SSH door.
 # Live path: /etc/iptables/iptables.rules (iptables-nft restores this on boot).
 *filter
 :INPUT ACCEPT [0:0]
 :FORWARD ACCEPT [0:0]
 :OUTPUT ACCEPT [0:0]
-:NETMAKER-ACL-FWD - [0:0]
-:NETMAKER-ACL-IN - [0:0]
-:NETMAKER-ACL-OUT - [0:0]
-:netmakerfilter - [0:0]
 -A INPUT -p tcp -m tcp --dport 22 -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment ssh-est -j ACCEPT
 -A INPUT -i lo -p tcp -m tcp --dport 22 -m comment --comment ssh-lo -j ACCEPT
--A INPUT -i netmaker -p tcp -m tcp --dport 22 -m comment --comment ssh-netmaker -j ACCEPT
 -A INPUT -p tcp -m tcp --dport 22 -m comment --comment ssh-public -j DROP
--A INPUT -i netmaker -j ACCEPT
--A INPUT -i netmaker -p icmp -j ACCEPT
 -A INPUT -p tcp -m tcp --dport 8444 -m comment --comment decoy-xhttp -j ACCEPT
--A INPUT -i netmaker -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment NETMAKER -j ACCEPT
--A INPUT -i netmaker -m comment --comment NETMAKER -j NETMAKER-ACL-IN
--A FORWARD -o netmaker -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment NETMAKER -j ACCEPT
--A FORWARD -i netmaker -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment NETMAKER -j ACCEPT
--A FORWARD -i netmaker -o netmaker -m comment --comment NETMAKER -j NETMAKER-ACL-IN
--A FORWARD -i netmaker ! -o netmaker -m comment --comment NETMAKER -j NETMAKER-ACL-FWD
--A NETMAKER-ACL-FWD -s 100.69.0.0/24 -d 10.0.0.0/24 -m comment --comment NETMAKER -j ACCEPT
--A NETMAKER-ACL-FWD -s 10.0.0.0/24 -m comment --comment NETMAKER -j ACCEPT
--A NETMAKER-ACL-FWD -i netmaker -m comment --comment NETMAKER -j ACCEPT
--A NETMAKER-ACL-IN -i netmaker -p udp -m udp --dport 53 -m comment --comment NETMAKER -j ACCEPT
--A NETMAKER-ACL-IN -i netmaker -p tcp -m tcp --dport 51821 -m comment --comment NETMAKER -j ACCEPT
--A NETMAKER-ACL-IN -i netmaker -m comment --comment NETMAKER -j ACCEPT
--A NETMAKER-ACL-OUT -m comment --comment NETMAKER -j ACCEPT
--A netmakerfilter -i netmaker -m comment --comment NETMAKER -j RETURN
 COMMIT
 *nat
 :PREROUTING ACCEPT [0:0]
 :INPUT ACCEPT [0:0]
 :OUTPUT ACCEPT [0:0]
 :POSTROUTING ACCEPT [0:0]
-:netmakernat - [0:0]
--A POSTROUTING -o svc0 -m comment --comment NETMAKER -j MASQUERADE
 -A POSTROUTING -o wgcf-egress -j MASQUERADE
 -A POSTROUTING -o wgcf-uiStream -j MASQUERADE
--A POSTROUTING -o netmaker -m comment --comment NETMAKER -j netmakernat
--A netmakernat -s 100.69.0.0/16 -d 10.0.0.0/24 -m comment --comment NETMAKER -j MASQUERADE
--A netmakernat -s 10.0.0.0/24 -m comment --comment NETMAKER -j MASQUERADE
--A netmakernat -j RETURN
 COMMIT

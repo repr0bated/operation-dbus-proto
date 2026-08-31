@@ -1,0 +1,5 @@
+# Fully yolo: auto-allow all capabilities without prompting.
+# Hardcoded Kiro invariants still deny writes to ~/.kiro/settings/ and .kiro/settings/.
+rules:
+  - capability: all
+    effect: allow

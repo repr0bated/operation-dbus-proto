@@ -111,7 +111,9 @@ impl ResourceRegistry {
                 let plugin_id = blob.trim_start_matches("blob://").trim();
                 let dir = std::env::var("OP_BLOB_CATALOG_DIR")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
+                    .unwrap_or_else(|_| {
+                        std::path::PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR)
+                    });
                 crate::blob_schema::read_schema_resource(&dir, plugin_id)
             }
             _ => None,

@@ -44,6 +44,7 @@ ehttp = { version = "0.5", features = ["native-async"] }
 dirs-next = "2"
 uuid = { version = "1", features = ["v4"] }
 include_dir = { version = "0.7", optional = true }
+op-identity = { path = "../op-identity" }
 
 [features]
 default = []

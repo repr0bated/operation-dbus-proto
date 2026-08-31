@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_c4ebe02f-57c4-4548-bcf3-f8bbccc5f235",
+  "title": "WireGuard Identity Gating Spec",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T04:23:30.484Z",
+  "lastModifiedAt": "2026-08-04T04:24:14.085Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Reading codebase to understand current identity verification state and gaps. Starting with CLAUDE.md for the claimed zero-trust model.",
+  "status": "idle"
+}

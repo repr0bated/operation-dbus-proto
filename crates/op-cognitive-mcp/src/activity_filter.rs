@@ -91,7 +91,11 @@ pub fn derive_significance(
 
         // read_only field write — this is a violation attempt, always Signal
         if is_write {
-            if let Some(field_schema) = schema.fields.get(raw_name).or_else(|| schema.fields.get(field_name)) {
+            if let Some(field_schema) = schema
+                .fields
+                .get(raw_name)
+                .or_else(|| schema.fields.get(field_name))
+            {
                 if field_schema.read_only {
                     return Significance::Signal;
                 }

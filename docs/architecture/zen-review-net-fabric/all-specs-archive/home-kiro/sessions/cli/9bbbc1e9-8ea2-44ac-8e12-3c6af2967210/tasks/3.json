@@ -1,0 +1,6 @@
+{
+  "id": "3",
+  "subject": "Inspect OpenFlow persistence and rule-programming patterns",
+  "description": "Find exact flow types, D-Bus methods, controller APIs, and current setup persistence points.",
+  "status": "pending"
+}

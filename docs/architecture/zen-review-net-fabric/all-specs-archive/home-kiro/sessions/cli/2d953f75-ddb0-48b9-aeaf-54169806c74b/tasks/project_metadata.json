@@ -1,0 +1,3 @@
+{
+  "description": "Implement netclient-container-netns spec Phase 1: OVS internal port for NetMaker container with WARP-obfuscated egress through xray"
+}

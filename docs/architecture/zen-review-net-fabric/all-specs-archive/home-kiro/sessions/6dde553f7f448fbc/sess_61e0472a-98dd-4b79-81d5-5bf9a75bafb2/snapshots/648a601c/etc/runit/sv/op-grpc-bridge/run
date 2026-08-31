@@ -1,0 +1,56 @@
+#!/bin/sh
+exec 2>&1
+
+wait_dep() {
+    sv start "$1" >/dev/null 2>&1 || true
+    i=0
+    until sv check "$1" >/dev/null 2>&1; do
+        i=$((i+1))
+        [ "$i" -ge 90 ] && { echo "dependency $1 not ready after 90s" >&2; exit 1; }
+        sleep 1
+    done
+}
+
+# Start after the NetMaker container has published broker.sock, but before the
+# host netclient joins. The bridge binds loopback only, so it does not need the
+# netmaker mesh address to exist first.
+#
+# Nothing in the boot path calls back into this service: ovs-vswitchd
+# materializes the topology from conf.db and the ovsbr0-* units use plain `ip`.
+# That absence of a back-edge is what keeps this list cycle-free — check it with
+# deploy/runit/check-dep-cycles.py before any reboot.
+wait_dep opdbus-rundirs
+wait_dep opdbus-grants
+wait_dep dbus
+wait_dep op-session-bus
+wait_dep ovsdb-server
+wait_dep incus-ct-netmaker
+# Qdrant is optional here. The bridge initializes its semantic shuttle
+# best-effort and must still open :8090 for NetMaker, D-Bus, and gRPC when
+# vector search is unavailable.
+
+set -a
+[ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
+[ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
+[ -r /etc/op-dbus/netmaker-api.env ] && . /etc/op-dbus/netmaker-api.env
+set +a
+
+# One TLS TCP door: :8090 demuxes MQTT/WebSocket `/mqtt`, gRPC-Web, and native
+# gRPC. Bind loopback before netclient; mesh/svc0 publications relay back to
+# this listener after their addresses exist. Local non-TCP clients use the UDS.
+FABRIC_BIND="127.0.0.1:${NETMAKER_BROKER_PORT:-8090}"
+export ZEROCLAW_BIND_ADDR="$FABRIC_BIND"
+export GRPC_BIND="$FABRIC_BIND"
+export EMQX_BROKER_SOCKET="${NETMAKER_BROKER_SOCKET:-/run/ghostbridge/NetMaker/broker.sock}"
+export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
+export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
+export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
+export RUST_LOG="${GRPC_RUST_LOG:-info}"
+export OP_DBUS_SCHEMA_PLUGIN_ID="tched_router"
+export WG_PUBKEY="eT/L5V6XkbWp9ln9KShZyaNs80s+sjTvggzNJ2Nvw3w="
+export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
+[ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"
+# Phase 2: tool dispatch is in-process ToolRegistry — no HTTP MCP loopback URL.
+
+/usr/local/libexec/3tched/runit-ready-signal op-grpc-bridge
+exec /usr/local/bin/op-grpc-bridge

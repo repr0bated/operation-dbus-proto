@@ -10,23 +10,26 @@ mission documents but does not deploy.
 1. **Oracle decoy is the sole incoming WireGuard termination point.** The
    main host has no incoming identity WireGuard interface; never add
    `wg-lan` or any host WG interface.
-2. **Exactly one NetMaker transport.** NetMaker is transport, not the human
-   identity authority. Multiple tunnels caused MTU issues.
+2. **No NetMaker transport remains.** The decoy's standalone `wg0` terminates
+   human WireGuard; its standalone `wgcf-ingress` carries Xray egress through
+   WARP. The retired static NetMaker carrier must not be recreated.
 3. **Assertion carriage is INNER.** The short-lived Ed25519-signed
    `OracleIdentityAssertion` rides as gRPC metadata
    (`x-oracle-identity-assertion-bin`) inside the existing TLS channel.
    Xray is a passthrough and never sees plaintext identity state.
 4. **`op-grpc-bridge` is the sole validator and the application
    authorization boundary.** Validation order: parse → trusted decoy key →
-   signature → expiry → replay cache → source-IP binding → HumanPrincipal
-   resolution → existing capability gate. Every step fail-closed.
+   signature → expiry → replay cache → configured transport binding →
+   HumanPrincipal resolution → existing capability gate. Production WARP uses
+   the trusted-decoy-signature binding; every step remains fail-closed.
 5. **Human identity, WireGuard key, login session, workspace container, and
    display alias are separate concepts.** A workspace container is not the
    human. System containers are never users. The display alias is
    display-only and never authoritative.
-6. **Connection/login arrival triggers resolution.** No handshake watchers,
-   no polling loops, no D-Bus watchers, no background expiry tasks (the
-   replay cache purges lazily on access).
+6. **The authenticated client request triggers resolution.** No handshake
+   watchers, polling loops, D-Bus watchers, or background expiry tasks (the
+   replay cache purges lazily on access). SSH login alone is administration;
+   it does not mint or carry OIA1 identity.
 7. **Xray live config exists only at `/etc/xray/xray_config.json` inside the
    xray container.** Models do not write or reload xray directly.
    `op-xray-daemon` remains lifecycle-only.
@@ -64,25 +67,27 @@ stand-ins.
 ### 3.1 Oracle decoy (EXTERNAL)
 
 - Terminates the human's WireGuard tunnel; the kernel verifies the peer.
-- Maps the authenticated peer pubkey to a registered `HumanPrincipal` (via
-  `resolve_key` on the generated gRPC surface).
-- Issues the signed assertion (decoy Ed25519 key identified by
+- Issues the signed assertion for the exact `/32` peer selected by the kernel
+  (decoy Ed25519 key identified by
   `decoy_key_id`) with TTL ≤ 900 s.
+- The client that requested the assertion carries the returned OIA1 envelope
+  as `x-oracle-identity-assertion-bin` on its inner tonic request. Neither
+  WGCF nor Xray creates or injects that metadata.
 - The decoy's verifying keys are provisioned to the bridge's trust store
   (`OP_DECOY_TRUST_STORE`, default `/etc/opdbus/decoy-trust.json`) by an
   operational process outside this mission.
 
-### 3.2 NetMaker transport (EXTERNAL)
+### 3.2 Assertion transport (EXTERNAL)
 
-- Exactly one tunnel carries decoy→host traffic.
-- **Inner-IP preservation assumption**: the human's NetMaker inner IP
-  (`netmaker_inner_ip`) must be the source IP observed by the bridge on the
-  TLS connection — i.e., no NAT rewrites the inner source address along the
-  decoy → NetMaker → xray → bridge path. If a deployment cannot preserve
-  this, the source-IP binding step must be re-specified before enabling the
-  assertion path there.
-- NetMaker ACLs (`OP_NETMK_*`) remain the transport-level policy; they are
-  not identity.
+- Exactly one WARP tunnel carries decoy→host Xray traffic.
+- WARP and Xray replace the human WireGuard inner source address. Deployments
+  therefore set `OP_ORACLE_ASSERTION_SOURCE_BINDING=trusted-decoy-signature`:
+  the bridge binds identity to the provisioned decoy Ed25519 key, short
+  assertion lifetime, one-time nonce, and registered human WireGuard key.
+- `exact-peer-ip` remains the strict default for transports that genuinely
+  preserve the human inner source address. Unknown configuration values fall
+  back to that strict mode.
+- WARP is transport-level policy; it is not identity.
 
 ### 3.3 Xray container (EXTERNAL, unchanged)
 

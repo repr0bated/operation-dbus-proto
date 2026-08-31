@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_fa75bf2a-9071-4c98-bffe-11907e74b892",
+  "title": "New Session",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-02T19:08:54.173Z",
+  "lastModifiedAt": "2026-08-02T19:08:54.290Z",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  },
+  "autopilot": true
+}

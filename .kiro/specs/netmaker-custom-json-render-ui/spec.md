@@ -1,5 +1,12 @@
 # Spec: NetMaker Custom json-render UI
 
+> **Canonical MCP/gRPC ingress:** the only authenticated network ingress for gRPC/MCP
+> is `op-grpc-bridge` on TLS `:8090` — see
+> `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/`. This UI drives gRPC
+> against that ingress (TLS `:8090`, or the host/container UDS). It MUST NOT target
+> `:3003`, `:50051`, `:50052`, `:11438`, or any standalone MCP daemon; those are
+> retired. Where this doc lists other endpoints, treat `:8090` (+ UDS) as authoritative.
+
 ## Summary
 
 Extend the `zeroclaw-gui` json-render.dev interpreter and `op-web` backend with 7 new networking-specific DSL component kinds, a typed action bus for gRPC/socket operations, and a network telemetry subsystem. This enables operator-console visualization of the full gRPC and socket networking surface area exposed by OP-DBUS's control plane.
@@ -148,4 +155,4 @@ crates/op-web/src/
 ## Related Specs
 
 - `#[[file:.kiro/specs/schemars-to-reflection-plugin-pipeline/design.md]]` — Defines the PluginSchema → blob → reflection pipeline this spec reads from
-- `#[[file:.kiro/specs/unified-blob-catalog-mcp/design.md]]` — Defines the Qdrant vector collection over blob schemas (orthogonal, not a dependency)
+- `#[[file:.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/design.md]]` — Canonical MCP/blob-catalog/vectors architecture and the single `:8090` ingress this UI drives (supersedes the former `unified-blob-catalog-mcp` spec, now consolidated there)

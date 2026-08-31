@@ -1,10 +1,10 @@
 // 🟢 🛡️ The Tonic gRPC Gatekeeper (Middleware Interceptor)
 // Sits on the primary gRPC ingress at port 8090. Intercepts Xray-injected headers,
-// performs a zero-copy check against the IdentitySled in shared memory, and either
-// allows the gRPC payload through or drops the connection instantly.
+// resolves the request's projected identity session, and either allows the gRPC
+// payload through or drops the connection instantly.
 //
 // Operated by A.N.N.A. Scribe. No payload enters the system without a cryptographic
-// "Snowball" session. No SQL databases, no D-Bus watchers. 1:1 Direct Read only.
+// "Snowball" session. No process-wide, last-writer-wins identity is consulted.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -65,8 +65,10 @@ impl tonic::service::Interceptor for GhostbridgeInterceptorWithValidator {
     }
 }
 
-/// Build a per-serving-instance interceptor that governs the optional oracle
-/// assertion path and falls back to the legacy Ghostbridge footprint path.
+/// Build the per-serving-instance PluginService/generated-route interceptor.
+/// Oracle assertion metadata is mandatory on this gate; legacy footprint
+/// authentication remains available only through [`GhostbridgeInterceptor`]
+/// on explicitly legacy domain services.
 pub fn make_ghostbridge_interceptor(
     validator: Arc<AssertionValidator>,
 ) -> GhostbridgeInterceptorWithValidator {
@@ -162,53 +164,30 @@ fn ghostbridge_interceptor_with_validator(
     validator: &AssertionValidator,
     mut req: Request<()>,
 ) -> Result<Request<()>, Status> {
-    if let Some(wire) = read_assertion_wire(&req)? {
-        let source = peer_socket_addr(&req);
-        let now = chrono::Utc::now().timestamp();
-        let registration_bootstrap = req
-            .metadata()
-            .get(crate::grpc_server::DECLARED_CAPABILITY_HEADER)
-            .and_then(|v| v.to_str().ok())
-            == Some("human_principal.write");
-        let mut identity = validator
-            .validate_with_bootstrap(&wire, source, now, registration_bootstrap)
-            .map_err(Status::from)?;
-        let engine =
-            engine_handle().ok_or_else(|| Status::internal("MutationEngine Memory Unreachable"))?;
-        let session = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(engine.ensure_session_context(&identity.human_pubkey))
-        })
-        .ok_or_else(|| {
-            Status::unauthenticated("Assertion identity has no anchored session genesis")
-        })?;
-        identity.session_genesis = session.genesis_hex;
-        req.extensions_mut().insert(identity);
-        return Ok(req);
-    }
-    warn_footprint_fallback();
-    ghostbridge_footprint_interceptor(req)
-}
-
-/// Announce the degradation from the assertion path to the legacy self-asserted
-/// footprint header.
-///
-/// When no assertion is presented this falls back silently, so a decoy that is
-/// not issuing — or a trust store that failed closed — presents as "identity is
-/// not being carried" rather than as an error anywhere. Warn once so the
-/// condition is visible without emitting a line per request, and keep a
-/// per-request record at debug.
-fn warn_footprint_fallback() {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        tracing::warn!(
-            metadata_key = ASSERTION_METADATA_KEY,
-            "no oracle identity assertion presented — falling back to the legacy \
-             self-asserted footprint path; the presented identity is NOT cryptographically \
-             bound to a WireGuard-authenticated peer (logged once per process)"
-        );
-    });
-    tracing::debug!("assertion absent; using legacy self-asserted footprint path");
+    let wire = read_assertion_wire(&req)?
+        .ok_or_else(|| Status::unauthenticated("Missing Oracle identity assertion"))?;
+    let source = peer_socket_addr(&req);
+    let now = chrono::Utc::now().timestamp();
+    let registration_bootstrap = req
+        .metadata()
+        .get(crate::grpc_server::DECLARED_CAPABILITY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        == Some("human_principal.write");
+    let mut pending = validator
+        .validate_pending_with_bootstrap(&wire, source, now, registration_bootstrap)
+        .map_err(Status::from)?;
+    let engine =
+        engine_handle().ok_or_else(|| Status::internal("MutationEngine Memory Unreachable"))?;
+    let session = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            engine.ensure_verified_human_session_context(&pending.identity().human_pubkey),
+        )
+    })
+    .ok_or_else(|| Status::unauthenticated("Assertion identity has no anchored session genesis"))?;
+    pending.identity_mut().session_genesis = session.genesis_hex;
+    let identity = validator.consume_pending(pending).map_err(Status::from)?;
+    req.extensions_mut().insert(identity);
+    Ok(req)
 }
 
 /// Legacy/test entry: footprint-only path (assertion metadata absent).
@@ -303,7 +282,7 @@ fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>
 
     if genesis_value.is_none() || trace_value.is_none() {
         return Err(Status::unauthenticated(
-            "A.N.N.A. Scribe: Missing Ghostbridge Identity Sled. Connection Dropped.",
+            "Missing Ghostbridge session identity. Connection dropped.",
         ));
     }
 
@@ -403,6 +382,18 @@ pub(crate) mod tests {
     use tonic::metadata::MetadataValue;
     use tonic::Code;
 
+    fn install_grants(document: serde_json::Value) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("grants tempdir");
+        let path = dir.path().join("capability-grants.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&document).expect("serialize grants"),
+        )
+        .expect("write grants");
+        std::env::set_var("OP_GRANTS_PATH", path);
+        dir
+    }
+
     fn request_with_connect_info(ip: std::net::IpAddr) -> Request<()> {
         let mut req = Request::new(());
         req.extensions_mut().insert(source_at(ip));
@@ -460,7 +451,7 @@ pub(crate) mod tests {
         assert_eq!(status.code(), tonic::Code::Unauthenticated);
         assert!(status
             .message()
-            .contains("Missing Ghostbridge Identity Sled"));
+            .contains("Missing Ghostbridge session identity"));
     }
 
     #[test]
@@ -532,10 +523,6 @@ pub(crate) mod tests {
     fn test_mutation_engine_unreachable_returns_internal() {
         if engine_handle().is_some() {
             eprintln!("skipping: another interceptor test registered an engine");
-            return;
-        }
-        if op_identity::read_sled().is_ok() {
-            eprintln!("skipping: live IdentitySled present in shared memory");
             return;
         }
         let mut req = Request::new(());
@@ -612,14 +599,13 @@ pub(crate) mod tests {
     }
 
     /// VAL-BRIDGE-024
-    pub async fn assertion_absent_ghostbridge_path_unchanged_impl() {
-        let req = Request::new(());
-        let baseline = ghostbridge_interceptor(req).unwrap_err();
+    pub async fn assertion_absent_rejects_legacy_headers_impl() {
         let mut gate = make_ghostbridge_interceptor(validator_for_tests());
-        let req = Request::new(());
-        let gated = gate.call(req).unwrap_err();
-        assert_eq!(baseline.code(), gated.code());
-        assert_eq!(baseline.message(), gated.message());
+        let mut req = Request::new(());
+        insert_ghostbridge_headers(&mut req, &"aa".repeat(32), "legacy-trace");
+        let status = gate.call(req).unwrap_err();
+        assert_eq!(status.code(), Code::Unauthenticated);
+        assert_eq!(status.message(), "Missing Oracle identity assertion");
     }
 
     /// VAL-BRIDGE-025
@@ -663,9 +649,12 @@ pub(crate) mod tests {
                 "resolve_key": { "required_capability": "human_principal.read" }
             },
             "capability_grants": {
-                footprint_hex: ["human_principal.read"]
+                "*": ["human_principal.read"]
             }
         });
+        let _grants = install_grants(serde_json::json!({
+            footprint_hex.clone(): { "capabilities": ["human_principal.read"] }
+        }));
         let identity = bridge_capability_identity(&{
             let mut ex = tonic::Extensions::new();
             ex.insert(HumanPrincipalIdentity {
@@ -686,6 +675,7 @@ pub(crate) mod tests {
             Some(&identity),
         )
         .is_ok());
+        std::env::remove_var("OP_GRANTS_PATH");
     }
 
     /// VAL-BRIDGE-028
@@ -697,8 +687,13 @@ pub(crate) mod tests {
             "methods": {
                 "resolve_key": { "required_capability": "human_principal.read" }
             },
-            "capability_grants": {}
+            "capability_grants": {
+                footprint_hex.clone(): ["human_principal.read"]
+            }
         });
+        let _grants = install_grants(serde_json::json!({
+            "*": { "capabilities": ["human_principal.read"] }
+        }));
         let identity = GhostbridgeIdentity {
             footprint: footprint_hex,
             session_id: "human".to_string(),
@@ -711,10 +706,39 @@ pub(crate) mod tests {
             Some(&identity),
         )
         .is_err());
+        assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
+            None,
+            "human_principal",
+            "resolve_key",
+            Some("human_principal.read"),
+            Some(&identity),
+        )
+        .is_err());
+        assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
+            Some(&schema),
+            "human_principal",
+            "missing_method",
+            Some("human_principal.read"),
+            Some(&identity),
+        )
+        .is_err());
+        let missing_metadata = serde_json::json!({
+            "methods": { "resolve_key": { "required_capability": null } }
+        });
+        assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
+            Some(&missing_metadata),
+            "human_principal",
+            "resolve_key",
+            Some("human_principal.read"),
+            Some(&identity),
+        )
+        .is_err());
+        std::env::remove_var("OP_GRANTS_PATH");
     }
 
     /// VAL-BRIDGE-029
     pub async fn human_identity_shadows_ghostbridge_for_capability_gate_impl() {
+        let _cozo = temp_cozo();
         let human_fp = derive_human_footprint("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=");
         let ghost_fp = "aa".repeat(32);
         let schema = serde_json::json!({
@@ -722,9 +746,12 @@ pub(crate) mod tests {
                 "resolve_key": { "required_capability": "human_principal.read" }
             },
             "capability_grants": {
-                hex::encode(human_fp): ["human_principal.read"]
+                ghost_fp.clone(): ["human_principal.read"]
             }
         });
+        let _grants = install_grants(serde_json::json!({
+            hex::encode(human_fp): { "capabilities": ["human_principal.read"] }
+        }));
         let mut ex = tonic::Extensions::new();
         ex.insert(HumanPrincipalIdentity {
             principal_id: "did:op:human:shadow".to_string(),
@@ -747,6 +774,7 @@ pub(crate) mod tests {
             Some(&identity),
         )
         .is_ok());
+        std::env::remove_var("OP_GRANTS_PATH");
     }
 
     /// VAL-BRIDGE-036
@@ -822,6 +850,9 @@ pub(crate) mod tests {
 /// `capabilities` array. Missing, malformed, or unreadable grant state fails
 /// closed.
 pub fn load_capability_grants(footprint_hex: &str) -> std::collections::HashSet<String> {
+    if footprint_hex.is_empty() || footprint_hex == "*" {
+        return std::collections::HashSet::new();
+    }
     let path = std::env::var("OP_GRANTS_PATH")
         .unwrap_or_else(|_| "/dev/shm/opdbus/capability-grants.json".to_string());
     let Ok(bytes) = std::fs::read(path) else {
@@ -832,7 +863,6 @@ pub fn load_capability_grants(footprint_hex: &str) -> std::collections::HashSet<
     };
     document
         .get(footprint_hex)
-        .or_else(|| document.get("*"))
         .and_then(|entry| entry.get("capabilities"))
         .and_then(serde_json::Value::as_array)
         .into_iter()

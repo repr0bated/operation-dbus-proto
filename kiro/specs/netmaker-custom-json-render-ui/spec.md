@@ -148,4 +148,4 @@ crates/op-web/src/
 ## Related Specs
 
 - `#[[file:.kiro/specs/schemars-to-reflection-plugin-pipeline/design.md]]` — Defines the PluginSchema → blob → reflection pipeline this spec reads from
-- `#[[file:.kiro/specs/unified-blob-catalog-mcp/design.md]]` — Defines the Qdrant vector collection over blob schemas (orthogonal, not a dependency)
+- `#[[file:.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/design.md]]` — Canonical MCP/blob-catalog/vectors architecture and the single `:8090` ingress (supersedes the former `unified-blob-catalog-mcp`, consolidated there)

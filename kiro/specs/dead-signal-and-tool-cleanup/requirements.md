@@ -1,5 +1,11 @@
 # Requirements — dead-signal-and-tool-cleanup
 
+> **MCP architecture note:** doc-comment references to `compact_mcp` /
+> `cognitive_mcp` MCP-tool exposure are governed by
+> `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/` (single authenticated
+> `:8090` ingress; capabilities are a filtered view of one bridge-owned registry).
+> This cleanup spec's `Updated`-signal and op-tools scope is orthogonal and unchanged.
+
 ## Context
 
 `.kiro/specs/remove-projection-static-tree/` shipped and is live (commit `39bde466`,

@@ -1,0 +1,36 @@
+{
+  "description": "Execute the authorized NetMaker runit migration and Phase 1 activation in strict prerequisite order.",
+  "context": [
+    "Read-only live preflight completed with no mutation. Hard prerequisite failed: host has no wgcf-egress interface, no table-51820 routes, no underlay mark 0x51820, and no wgcf-egress owning runit definition; only WireGuard interface 3tched exists with fwmark off. Config hash was captured as 08ce0fca11cfee95adfece0164c8d7a196a750b9fe937a606defdcf2bfdeb998, but immutable policy prohibits creating/starting/repairing wgcf state. Additional blocker: live Incus instance is case-sensitive `NetMaker` (Running), while all typed reconciliation and installed incus-ct-netmaker service target lowercase `netmaker`; native API for lowercase returns 404. Adapter host runtime directory/socket and op-netmk-reconcile/op-grpc-adapters installed binaries are absent. Packaging mismatch discovered: build-golden installs host binaries to /usr/local/bin while new host runit definitions default helper to /usr/bin. Feature policy rules/chains were absent before activation. No live state was changed and no build/install/enable/start was attempted after the gate failure.",
+    "Captured secure read-only rollback inventory at /tmp/opdbus-netmk-baseline-20260802T014448Z (0700). NetMaker PID 4864 uses systemd PID1; running services/listeners include EMQX, Netmaker API, Grafana, Prometheus, rust-network-mgr, cron, resolved, dbus, and rsyslog. Persistent /etc/netmaker/netmaker.env exists mode 0600 and exactly reproduces running LICENSE_KEY, MASTER_KEY, tenant, and server settings without exposing values. Authenticated /api/server/health returns pre-existing HTTP 403 `invalid license: failed to validate license key: no result found`; API listener is reachable. Netclient binary/config exists but daemon is not running, nodes.json is empty, `netclient list` reports `no such network`, no WireGuard interface/peer/handshake exists, and only configured local listenport 51822 can serve as first-boot fallback. Therefore Phase 1's authenticated healthy backend, live peer-port discovery, join, and handshake acceptance gates cannot pass. Immutable wgcf config hash/table/mark remained unchanged during inventory. No production mutation was performed.",
+    "Implemented guarded runit migration control path. Incus plugin now resolves a single case-insensitive legacy name, exposes native snapshot/restore/start/stop/restart/rename/single-config/exact-device operations, and mutation_engine dispatches those D-Bus methods instead of echoing. Added schema test pinning all migration methods (3 Incus tests passed). Added btrfs-golden NetMaker runit PID1 tree preserving dbus, resolved, cron, rsyslog, EMQX, Netmaker, Grafana, Prometheus, rust-network-mgr; adapter auto-starts and netclient is held down. Added audited host incus-ct-netmaker runit lifecycle, exact helper paths, first-boot port env support, guarded migration script with snapshot-before-stop and automatic filesystem/config/name rollback. build-golden dry-run passed and stages all container assets. cargo check op-plugins/op-grpc-bridge passed; shell syntax and diff checks passed. Independent review found no hard blockers; its snapshot-restore recommendation was implemented and revalidated. No live production state was changed."
+  ],
+  "modified_files": [
+    "/srv/git/odbus/crates/op-grpc-bridge/src/mutation_engine.rs",
+    "/srv/git/odbus/crates/op-plugins/src/state_plugins/incus.rs",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/1",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/2",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/3",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/cron/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/dbus/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/emqx/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/grafana/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/netclient/down",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/netclient/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/netmaker/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/op-grpc-adapters/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/prometheus/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/resolved/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/rsyslog/run",
+    "/srv/git/odbus/deploy/containers/netmaker-runit/etc/runit/sv/rust-network-mgr/run",
+    "/srv/git/odbus/deploy/runit/build-golden.sh",
+    "/srv/git/odbus/deploy/runit/incus-ct-netmaker/run",
+    "/srv/git/odbus/deploy/runit/migrate-netmaker-to-runit.sh",
+    "/srv/git/odbus/deploy/runit/netmaker-adapter-loopback/run",
+    "/srv/git/odbus/deploy/runit/netmaker-op-grpc-adapters/run",
+    "/srv/git/odbus/deploy/runit/netmk-egress-policy/run",
+    "/srv/git/odbus/deploy/runit/netmk-netclient-start/run",
+    "/srv/git/odbus/deploy/runit/netmk-of-restrict/run",
+    "/srv/git/odbus/deploy/runit/netmk-port-attach/run"
+  ]
+}

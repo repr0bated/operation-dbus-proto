@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_c3dc067b-0905-4caa-9524-08cdc44a1b06",
+  "title": "Wire ZeroClaw to gRPC bridge",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-07T20:18:02.658Z",
+  "lastModifiedAt": "2026-08-07T20:59:50.691Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Starting spec workflow to wire OpenWrt ZeroClaw gateway to host gRPC bridge. Gathering context from handoff doc and zeroclaw source.",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

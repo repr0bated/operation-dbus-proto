@@ -1,0 +1,6 @@
+{
+  "id": "9",
+  "subject": "Task 11: Full build + clippy verification",
+  "description": "cargo check --workspace, clippy on affected crates, verify scope boundaries",
+  "status": "pending"
+}

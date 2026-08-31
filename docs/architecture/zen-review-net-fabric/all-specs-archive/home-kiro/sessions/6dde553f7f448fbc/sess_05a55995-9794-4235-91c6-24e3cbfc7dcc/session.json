@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_05a55995-9794-4235-91c6-24e3cbfc7dcc",
+  "title": "3tched/ghostbridge spec package",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-06T09:03:19.193Z",
+  "lastModifiedAt": "2026-08-06T10:07:46.241Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Writing full Kiro spec package (requirements.md, design.md, tasks.md) for the 3tched control plane + ghostbridge mesh identity system.",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

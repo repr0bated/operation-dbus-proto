@@ -1,7 +1,0 @@
-#!/bin/sh
-exec 2>&1
-# Agents MCP is D-Bus agent_config, not HTTP :11437.
-#   unix:path=/run/opdbus/session-bus.sock
-#   org.opdbus.v1.plugins /org/opdbus/v1/plugins/agent_config PluginV1.Call
-echo "op-mcp-agents: refuse HTTP; use zcall agent_config" >&2
-exec pause

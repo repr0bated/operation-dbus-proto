@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_e1331679-36ee-4bc4-94a9-b397a4f1ff5a",
+  "title": "lsp",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/repos-bulk"
+  ],
+  "createdAt": "2026-08-10T16:37:02.841Z",
+  "lastModifiedAt": "2026-08-10T16:38:12.909Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

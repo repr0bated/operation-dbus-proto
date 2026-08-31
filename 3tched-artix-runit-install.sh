@@ -836,24 +836,6 @@ if [ -x ${BIN_DIR}/opblob ]; then
 else
     echo "warning: ${BIN_DIR}/opblob missing — blob catalog not sealed"
 fi
-# Host Identity Sled — required by op-web gRPC client + GhostbridgeInterceptor.
-# Lives in tmpfs (/dev/shm/plugin_schema.dat); re-seed every boot from WG iface.
-if [ -x ${BIN_DIR}/op-identity-sled ]; then
-    WG_IFACE="\${OP_IDENTITY_WG_IFACE:-3tched}"
-    PUBKEY=""
-    if command -v wg >/dev/null 2>&1; then
-        PUBKEY=\$(wg show "\$WG_IFACE" public-key 2>/dev/null || true)
-    fi
-    if [ -n "\$PUBKEY" ]; then
-        ${BIN_DIR}/op-identity-sled --refresh --pubkey "\$PUBKEY" >/dev/null 2>&1 \\
-            && echo "identity sled seeded from \$WG_IFACE" \\
-            || echo "warning: op-identity-sled --refresh failed"
-    else
-        echo "warning: no WG pubkey for \$WG_IFACE — identity sled not seeded"
-    fi
-else
-    echo "warning: ${BIN_DIR}/op-identity-sled missing — identity sled not seeded"
-fi
 cat > /dev/shm/xray_config.json <<'XRAY_CONFIG_EOF'
 {
   "log": { "loglevel": "warning" },

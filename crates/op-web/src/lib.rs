@@ -3,7 +3,6 @@
 //! This crate consolidates ALL HTTP services into a single server:
 //! - REST API for tools, agents, chat, status
 //! - WebSocket for real-time chat
-//! - MCP protocol endpoint for Claude Desktop
 //! - SSE for streaming events
 //! - Static file serving for web UI
 //!
@@ -19,7 +18,6 @@
 //! │  /api/agents     - Agent management                             │
 //! │  /api/chat       - Chat API                                     │
 //! │  /api/events     - SSE event stream                             │
-//! │  /mcp            - MCP JSON-RPC endpoint                        │
 //! │  /ws             - WebSocket chat                               │
 //! │  /               - Static files (WASM frontend)                 │
 //! └─────────────────────────────────────────────────────────────────┘
@@ -28,12 +26,7 @@
 pub mod chat_store;
 pub mod email;
 pub mod groups_admin;
-pub mod grpc_proxy;
 pub mod handlers;
-pub mod mcp;
-pub mod mcp_agents;
-pub mod mcp_compact;
-pub mod mcp_discovery;
 pub mod middleware;
 pub mod orchestrator;
 pub mod privacy_container;

@@ -33,14 +33,29 @@ pub struct JsonFlowEntry {
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JsonFlowAction {
-    Output { port: String },
-    LoadRegister { register: u8, value: u64 },
-    Resubmit { table: u8 },
-    SetField { field: String, value: String },
+    Output {
+        port: String,
+    },
+    LoadRegister {
+        register: u8,
+        value: u64,
+    },
+    Resubmit {
+        table: u8,
+    },
+    SetField {
+        field: String,
+        value: String,
+    },
     Drop,
     Normal,
-    Controller { max_len: Option<u16> },
-    ArpResponder { mac: String, ip: String },
+    Controller {
+        max_len: Option<u16>,
+    },
+    ArpResponder {
+        mac: String,
+        ip: String,
+    },
     /// OF1.5 `encap(<header>)`. Only `ethernet` is meaningful here: it gives a
     /// packet arriving on an L3-only port (WireGuard, which has no Ethernet
     /// header at all) the Ethernet header the rest of the bridge assumes,
@@ -506,10 +521,7 @@ mod tests {
     }
 
     fn port_macs() -> HashMap<String, [u8; 6]> {
-        HashMap::from([(
-            "ovsbr0".to_string(),
-            [0x02, 0x00, 0x64, 0x45, 0x00, 0x0a],
-        )])
+        HashMap::from([("ovsbr0".to_string(), [0x02, 0x00, 0x64, 0x45, 0x00, 0x0a])])
     }
 
     /// The prio-200 netmaker flow from openflow-static-flows.json.
@@ -540,14 +552,16 @@ mod tests {
 
     #[test]
     fn add_uses_the_declared_table() {
-        let flow = json_flow_to_add(&flow_json(serde_json::json!(42)), &ports(), &port_macs()).unwrap();
+        let flow =
+            json_flow_to_add(&flow_json(serde_json::json!(42)), &ports(), &port_macs()).unwrap();
 
         assert_eq!(flow.table_id, 7);
     }
 
     #[test]
     fn delete_is_strict_and_scoped_to_the_exact_flow() {
-        let flow = json_flow_to_delete(&flow_json(serde_json::json!(42)), &ports(), &port_macs()).unwrap();
+        let flow =
+            json_flow_to_delete(&flow_json(serde_json::json!(42)), &ports(), &port_macs()).unwrap();
 
         assert_eq!(flow.command, FlowCommand::DeleteStrict);
         assert_eq!(flow.table_id, 7);
@@ -558,7 +572,8 @@ mod tests {
 
     #[test]
     fn delete_without_cookie_does_not_filter_by_cookie() {
-        let flow = json_flow_to_delete(&flow_json_without_cookie(), &ports(), &port_macs()).unwrap();
+        let flow =
+            json_flow_to_delete(&flow_json_without_cookie(), &ports(), &port_macs()).unwrap();
 
         assert_eq!(flow.cookie, 0);
         assert_eq!(flow.cookie_mask, 0);
@@ -625,7 +640,10 @@ mod tests {
         assert_eq!(flow.match_fields.in_port, Some(4));
 
         let rendered = format!("{:?}", flow.actions);
-        assert!(rendered.contains("Encap { new_header_len: 16 }"), "{rendered}");
+        assert!(
+            rendered.contains("Encap { new_header_len: 16 }"),
+            "{rendered}"
+        );
         assert!(rendered.contains("SetEthSrc"), "{rendered}");
         assert!(rendered.contains("SetEthDst"), "{rendered}");
         assert!(rendered.contains("Local"), "{rendered}");

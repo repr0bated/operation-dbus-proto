@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""
+Bulk symbol indexer - extracts symbols from all repos via tree-sitter,
+then embeds and stores via lspvec pipeline.
+
+Usage:
+    python3 index_all.py [--lang rust] [--repo rust/tokio-rs__tokio]
+    python3 index_all.py --all
+"""
+import argparse
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Iterator
+
+import tree_sitter as ts
+
+sys.path.insert(0, str(Path(__file__).parent))
+from lspvec import (
+    CozoStore, QdrantStore, Embedder, Indexer, Symbol, Edge,
+)
+
+
+# ---------------------------------------------------------------------------
+# Tree-sitter language setup
+# ---------------------------------------------------------------------------
+
+LANGS = {}
+
+def _load_langs():
+    global LANGS
+    import tree_sitter_rust
+    import tree_sitter_python
+    import tree_sitter_go
+    import tree_sitter_c
+    import tree_sitter_typescript
+    import tree_sitter_bash
+
+    LANGS = {
+        "rust": ts.Language(tree_sitter_rust.language()),
+        "python": ts.Language(tree_sitter_python.language()),
+        "go": ts.Language(tree_sitter_go.language()),
+        "c": ts.Language(tree_sitter_c.language()),
+        "cpp": ts.Language(tree_sitter_c.language()),  # close enough for symbols
+        "typescript": ts.Language(tree_sitter_typescript.language_typescript()),
+        "bash": ts.Language(tree_sitter_bash.language()),
+    }
+
+_load_langs()
+
+
+# ---------------------------------------------------------------------------
+# Symbol node types per language
+# ---------------------------------------------------------------------------
+
+SYMBOL_NODES = {
+    "rust": {
+        "function_item": "function",
+        "struct_item": "struct",
+        "enum_item": "enum",
+        "impl_item": "impl",
+        "trait_item": "interface",
+        "mod_item": "module",
+        "type_item": "type",
+        "const_item": "constant",
+        "static_item": "constant",
+        "macro_definition": "function",
+    },
+    "python": {
+        "function_definition": "function",
+        "class_definition": "class",
+        "decorated_definition": "function",
+    },
+    "go": {
+        "function_declaration": "function",
+        "method_declaration": "method",
+        "type_declaration": "type",
+        "type_spec": "type",
+    },
+    "c": {
+        "function_definition": "function",
+        "struct_specifier": "struct",
+        "enum_specifier": "enum",
+        "type_definition": "type",
+    },
+    "cpp": {
+        "function_definition": "function",
+        "struct_specifier": "struct",
+        "enum_specifier": "enum",
+        "class_specifier": "class",
+        "type_definition": "type",
+    },
+    "typescript": {
+        "function_declaration": "function",
+        "class_declaration": "class",
+        "interface_declaration": "interface",
+        "type_alias_declaration": "type",
+        "enum_declaration": "enum",
+        "method_definition": "method",
+    },
+    "bash": {
+        "function_definition": "function",
+    },
+}

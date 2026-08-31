@@ -1,0 +1,125 @@
+# lspvec repo manifest
+# format: path|lang|notes
+# Generated 2026-08-10
+#
+# Languages: rust(37), go(14), c(17), python(12), typescript(7), protobuf(2), docs(4), spec(2), cpp(2)
+
+# === RUST (via rust-analyzer) ===
+rust/GREsau__schemars|rust|json schema derive
+rust/WireGuard__wireguard-rs|rust|wireguard
+rust/cloudflare__boringtun|rust|wireguard userspace
+rust/dtolnay__syn|rust|proc-macro parsing
+rust/firecracker-microvm__firecracker|rust|microvm
+rust/googleapis__google-cloud-rust|rust|gcloud client
+rust/grpc__grpc-rust|rust|grpc
+rust/hiltontj__serde_json_path|rust|json path
+rust/hyperium__h2|rust|http2
+rust/hyperium__http|rust|http types
+rust/hyperium__hyper|rust|http client/server
+rust/hyperium__tonic|rust|grpc framework
+rust/mullvad__mullvadvpn-app|rust|vpn app
+rust/nickel-lang__nickel|rust|config language
+rust/oxidecomputer__dropshot|rust|http api framework
+rust/oxidecomputer__typify|rust|json schema to rust
+rust/qdrant__qdrant|rust|vector db
+rust/rust-lang__crates.io|rust|crates registry
+rust/rust-lang__miri|rust|interpreter
+rust/rust-lang__rust-analyzer|rust|lsp server
+rust/rust-lang__rust-bindgen|rust|c/c++ bindgen
+rust/rust-lang__rust|rust|compiler
+rust/rust-lang__rustfmt|rust|formatter
+rust/rust-lang__rustlings|rust|exercises
+rust/rust-netlink__netlink-packet-core|rust|netlink
+rust/rust-netlink__rtnetlink|rust|route netlink
+rust/rustls__rustls|rust|tls
+rust/serde-rs__json|rust|json serde
+rust/serde-rs__serde|rust|serialization
+rust/tokio-rs__axum|rust|web framework
+rust/tokio-rs__bytes|rust|byte utilities
+rust/tokio-rs__mini-redis|rust|redis example
+rust/tokio-rs__mio|rust|async io
+rust/tokio-rs__prost|rust|protobuf
+rust/tokio-rs__tokio|rust|async runtime
+rust/tokio-rs__tracing|rust|diagnostics
+rust/tower-rs__tower|rust|service abstractions
+rust/transact-rs__sqlx|rust|sql toolkit
+rust/z-galaxy__zbus|rust|dbus
+
+# === GO (via gopls) ===
+bufbuild__buf|go|protobuf toolchain
+cilium__ebpf|go|ebpf
+containers__podman|go|container runtime
+cue-lang__cue|go|config language
+grpc-ecosystem__grpc-gateway|go|grpc-rest gateway
+grpc__grpc-go|go|grpc
+lxc__incus|go|containers/vms
+open-policy-agent__opa|go|policy engine
+opencontainers__image-spec|go|oci image spec
+opencontainers__runc|go|oci runtime
+opencontainers__runtime-spec|go|oci runtime spec
+sigstore__cosign|go|signing
+sigstore__rekor|go|transparency log
+datahub-project__datahub|go|metadata platform
+
+# === C (via clangd) ===
+NetworkManager__NetworkManager|c|network management
+bus1__dbus-broker|c|dbus broker
+containers__crun|c|oci runtime
+dbus__dbus|c|dbus reference
+freeipa__freeipa|c|identity management
+kdave__btrfs-progs|c|btrfs userspace
+libbpf__libbpf|c|ebpf library
+libinput__libinput|c|input handling
+openvswitch__ovs|c|virtual switch
+pipewire__pipewire|c|multimedia
+polkit__polkit|c|authorization
+skarnet__execline|c|scripting
+skarnet__s6|c|supervision
+skarnet__s6-linux-init|c|init
+skarnet__s6-rc|c|service manager
+skarnet__skalibs|c|system library
+systemd__systemd|c|init system
+wayland__wayland|c|display protocol
+wayland__wayland-protocols|c|wayland protocols
+
+# === C++ (via clangd) ===
+grpc__grpc|cpp|grpc core
+davmac314__dinit|cpp|init system
+protocolbuffers__protobuf|cpp|protobuf core
+
+# === PYTHON (via pylsp) ===
+anthropics__anthropic-sdk-python|python|anthropic sdk
+anthropics__claude-code|python|claude code
+cloud-custodian__cloud-custodian|python|cloud policy
+compl-ai__compl-ai|python|compliance ai
+googleapis__python-genai|python|google genai
+in-toto__in-toto|python|supply chain
+microsoft__presidio|python|pii detection
+modelcontextprotocol__python-sdk|python|mcp sdk
+opencontrol__schemas|python|compliance schemas
+qdrant__qdrant-client|python|qdrant client
+usnistgov__OSCAL|python|security framework
+xdg__xdg-specs|python|desktop specs
+
+# === TYPESCRIPT (via typescript-language-server) ===
+OAI__OpenAPI-Specification|typescript|openapi spec
+OpenGovDataMirror__A_gsa_fedramp-automation|typescript|fedramp
+json-schema-org__json-schema-spec|typescript|json schema
+modelcontextprotocol__modelcontextprotocol|typescript|mcp spec
+modelcontextprotocol__servers|typescript|mcp servers
+modelcontextprotocol__typescript-sdk|typescript|mcp ts sdk
+vercel-labs__json-render|typescript|json rendering
+
+# === PROTOBUF (via buf-lsp) ===
+bufbuild__protovalidate|protobuf|validation
+googleapis__googleapis|protobuf|google apis
+
+# === DOCS/SPEC (no LSP, text chunking only) ===
+APIs-guru__openapi-directory|docs|openapi collection
+ComplianceAsCode__content|docs|compliance content
+LINCnil__GDPR-Developer-Guide|docs|gdpr guide
+TechShieldOlamide__trustgrid-compliance-templates|docs|compliance templates
+Auxin-io__cybersecurity-templates|docs|security templates
+vaibhavjain2608__compliance-policy-templates|docs|compliance templates
+confluentinc__schema-registry|docs|kafka schema registry
+jsontypedef__json-typedef-spec|docs|jtd spec

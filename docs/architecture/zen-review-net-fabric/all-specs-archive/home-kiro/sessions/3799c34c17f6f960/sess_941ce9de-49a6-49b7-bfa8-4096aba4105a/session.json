@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_941ce9de-49a6-49b7-bfa8-4096aba4105a",
+  "title": ".cursor/projects/srv-git-operation-dbus-proto/agent-transcripts/8e6f6cba-17cb...",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/home/jeremy"
+  ],
+  "createdAt": "2026-08-08T22:03:41.083Z",
+  "lastModifiedAt": "2026-08-08T22:05:14.505Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

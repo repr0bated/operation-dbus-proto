@@ -1152,7 +1152,7 @@ mod tests {
     fn parse_instance_list_builds_typed_devices() {
         let raw = br#"[
             {
-                "name": "netmaker",
+                "name": "control-plane-test",
                 "status": "Running",
                 "type": "container",
                 "profiles": ["default"],
@@ -1160,7 +1160,7 @@ mod tests {
                 "devices": {
                     "api-sock": {
                         "type": "proxy",
-                        "listen": "unix:/run/netmaker/api.sock",
+                        "listen": "unix:/run/control-plane-test/api.sock",
                         "connect": "tcp:127.0.0.1:8081",
                         "uid": "0"
                     },
@@ -1228,6 +1228,19 @@ pub struct DeleteInstanceInput {
     pub name: String,
 }
 
+/// Dispatch the Incus instance deletion declared by [`incus_schema`].
+///
+/// The generic schema router validates the arguments and capability before
+/// reaching this function.  Keep the actual lifecycle mutation in the Incus
+/// plugin so D-Bus callers use the same REST-over-Unix-socket backend as the
+/// declarative state path.
+pub async fn dispatch_delete_instance(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let input: DeleteInstanceInput =
+        serde_json::from_value(args.clone()).context("invalid delete_instance arguments")?;
+    IncusPlugin::apply_delete(&input.name).await?;
+    Ok(serde_json::json!({ "success": true }))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StartInstanceInput {
     pub name: String,
@@ -1280,6 +1293,22 @@ pub struct RemoveDeviceInput {
     pub device_name: String,
 }
 
+/// Remove one Incus device through the same REST-over-Unix backend used by
+/// declarative reconciliation.
+pub async fn dispatch_remove_device(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let input: RemoveDeviceInput =
+        serde_json::from_value(args.clone()).context("invalid remove_device arguments")?;
+    IncusPlugin::run_incus_command(&[
+        "config",
+        "device",
+        "remove",
+        &input.instance_name,
+        &input.device_name,
+    ])
+    .await?;
+    Ok(serde_json::json!({ "success": true }))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateDeviceInput {
     pub instance_name: String,
@@ -1313,35 +1342,6 @@ pub(crate) fn incus_schema() -> PluginSchema {
                             "type": "nic",
                             "nictype": "bridged",
                             "parent": "ovsbr0"
-                        }
-                    }
-                ]
-            },
-            {
-                "name": "netmaker",
-                "status": "Running",
-                "type": "container",
-                "image": "docker.io/gravitl/netmaker:v1.5.1",
-                "profiles": ["default"],
-                "config": { "boot.autostart": "true" },
-                "devices": [
-                    {
-                        "name": "api-sock",
-                        "device": {
-                            "type": "proxy",
-                            "listen": "unix:/run/netmaker/api.sock",
-                            "connect": "tcp:127.0.0.1:8081",
-                            "uid": "0",
-                            "gid": "0",
-                            "mode": "0660"
-                        }
-                    },
-                    {
-                        "name": "sqldata",
-                        "device": {
-                            "type": "disk",
-                            "path": "/root/data",
-                            "source": "nm-sqldata"
                         }
                     }
                 ]

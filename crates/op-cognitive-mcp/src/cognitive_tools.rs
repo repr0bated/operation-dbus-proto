@@ -206,6 +206,14 @@ impl Tool for RegisterToolTool {
         json!({"type": "object", "additionalProperties": true})
     }
 
+    fn required_capability(&self) -> Option<&str> {
+        Some("cognitive_mcp.invoke")
+    }
+
+    fn subid(&self) -> Option<&str> {
+        Some("mut.service.cognitive-mcp.tool.register@v1")
+    }
+
     async fn execute(&self, _input: Value) -> Result<Value> {
         Err(anyhow::anyhow!(
             "register_tool is not yet implemented — no dynamic tool-registration mechanism exists"

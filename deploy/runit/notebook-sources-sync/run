@@ -15,9 +15,10 @@ wait_dep() {
     done
 }
 
-# Cognitive gRPC + identity sled needed for ingest
+# The unified bridge owns cognitive gRPC and MCP dispatch. Do not wait for or
+# start the retired standalone cognitive listener.
 wait_dep opdbus-rundirs
-wait_dep op-cognitive-mcp 2>/dev/null || true
+wait_dep op-grpc-bridge
 
 export HOME="${HOME:-/home/admin}"
 export OP_DBUS_ROOT="${OP_DBUS_ROOT:-/home/admin/git/odbus}"

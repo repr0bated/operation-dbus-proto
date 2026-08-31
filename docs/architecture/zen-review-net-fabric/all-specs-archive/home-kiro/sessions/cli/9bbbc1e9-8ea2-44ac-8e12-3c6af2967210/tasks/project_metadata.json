@@ -1,0 +1,6 @@
+{
+  "description": "Investigate and summarize the Phase 1 implementation surface for netclient-container-netns, including exact APIs, reconciliation, dependencies, and runit patterns.",
+  "context": [
+    "Read the requested standards/spec/skill files in full: CLAUDE.md; .kiro/specs/netclient-container-netns/{design,tasks,spec}.md; skills/{grpc-expert,network-control-plane}/SKILL.md. Important conflict: skills contain stale s6 and old Xray path guidance; CLAUDE.md and AGENTS.md are authoritative for current runit and /etc/xray/xray_config.json policy."
+  ]
+}

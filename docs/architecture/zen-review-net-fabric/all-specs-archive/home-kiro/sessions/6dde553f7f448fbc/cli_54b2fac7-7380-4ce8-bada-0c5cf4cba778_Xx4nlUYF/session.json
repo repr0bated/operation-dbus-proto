@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "cli_54b2fac7-7380-4ce8-bada-0c5cf4cba778_Xx4nlUYF",
+  "title": "load skills in the skills folder in this repo and any other that may help with  imlement ing this spec: /srv/git/odbus/.kiro/specs/netclient-contai...",
+  "agentMode": "plan",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-01T21:59:27.880451954+00:00",
+  "lastModifiedAt": "2026-08-02T21:28:04.645Z",
+  "createdReason": "human",
+  "modelId": "claude-opus-5",
+  "autopilot": true,
+  "effortLevel": "max",
+  "status": "idle"
+}

@@ -15,16 +15,38 @@ import asyncio
 import sys
 from pathlib import Path
 
+TLS_HEADER_LEN = 5
+MAX_TLS_RECORD_LEN = 18_432
+MAX_CLIENT_HELLO_LEN = 65_536
+
+
+def _handshake_payload(data: bytes) -> bytes:
+    """Join complete TLS handshake records from an initial byte sequence."""
+    payload = bytearray()
+    offset = 0
+    while offset + TLS_HEADER_LEN <= len(data):
+        if data[offset] != 0x16:
+            break
+        rec_len = int.from_bytes(data[offset + 3 : offset + 5], "big")
+        record_end = offset + TLS_HEADER_LEN + rec_len
+        if record_end > len(data):
+            break
+        payload.extend(data[offset + TLS_HEADER_LEN : record_end])
+        offset = record_end
+    return bytes(payload)
+
 
 def extract_sni(data: bytes) -> str | None:
-    """Best-effort SNI extraction from a TLS ClientHello record."""
-    if len(data) < 5 or data[0] != 0x16:
+    """Best-effort SNI extraction from one or more TLS ClientHello records."""
+    if len(data) < TLS_HEADER_LEN or data[0] != 0x16:
         return None
-    # TLS record: type(1) ver(2) len(2)
-    rec_len = int.from_bytes(data[3:5], "big")
-    hello = data[5 : 5 + rec_len]
+    hello = _handshake_payload(data)
     if len(hello) < 42 or hello[0] != 0x01:  # handshake type client_hello
         return None
+    hello_len = int.from_bytes(hello[1:4], "big")
+    if hello_len > MAX_CLIENT_HELLO_LEN or len(hello) < 4 + hello_len:
+        return None
+    hello = hello[: 4 + hello_len]
     # Handshake header: type(1) len(3) + client_version(2) random(32)
     body = hello[4:]
     if len(body) < 34:
@@ -78,6 +100,40 @@ def extract_sni(data: bytes) -> str | None:
     return None
 
 
+async def read_client_hello(reader: asyncio.StreamReader) -> bytes:
+    """Read complete TLS records until the initial ClientHello is complete.
+
+    StreamReader.read() may return a partial TCP segment. Reading an arbitrary
+    2 KiB chunk therefore misroutes valid fragmented or post-quantum-sized
+    ClientHello messages to the default backend.
+    """
+    raw = bytearray()
+    handshake_len: int | None = None
+
+    while True:
+        header = await reader.readexactly(TLS_HEADER_LEN)
+        raw.extend(header)
+        if header[0] != 0x16:
+            return bytes(raw)
+
+        rec_len = int.from_bytes(header[3:5], "big")
+        if rec_len > MAX_TLS_RECORD_LEN:
+            return bytes(raw)
+
+        record = await reader.readexactly(rec_len)
+        raw.extend(record)
+
+        payload = _handshake_payload(bytes(raw))
+        if len(payload) >= 4:
+            if payload[0] != 0x01:
+                return bytes(raw)
+            handshake_len = int.from_bytes(payload[1:4], "big")
+            if handshake_len > MAX_CLIENT_HELLO_LEN:
+                return bytes(raw)
+        if handshake_len is not None and len(payload) >= 4 + handshake_len:
+            return bytes(raw)
+
+
 async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
         while True:
@@ -104,7 +160,10 @@ async def handle(
 ) -> None:
     peer = client_w.get_extra_info("peername")
     try:
-        first = await asyncio.wait_for(client_r.read(2048), timeout=5)
+        first = await asyncio.wait_for(read_client_hello(client_r), timeout=5)
+    except asyncio.IncompleteReadError as exc:
+        # Preserve a short non-TLS probe for the default backend when possible.
+        first = exc.partial
     except Exception as exc:
         print(f"sni-demux: peek failed from {peer}: {exc}", flush=True)
         client_w.close()

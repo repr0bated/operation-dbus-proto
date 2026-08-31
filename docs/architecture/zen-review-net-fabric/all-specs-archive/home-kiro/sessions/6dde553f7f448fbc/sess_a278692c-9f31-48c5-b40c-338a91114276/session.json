@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_a278692c-9f31-48c5-b40c-338a91114276",
+  "title": "Write a spec for replacing xray's static IP/port ACLs with real WireGuard-ide...",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T04:24:17.370Z",
+  "lastModifiedAt": "2026-08-04T04:25:23.531Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "idle"
+}

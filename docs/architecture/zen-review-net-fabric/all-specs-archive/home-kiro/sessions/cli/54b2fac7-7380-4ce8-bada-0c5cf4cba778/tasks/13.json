@@ -1,0 +1,6 @@
+{
+  "id": "13",
+  "subject": "Deploy and start the in-container Netmaker adapter",
+  "description": "Start the in-container runit adapter and verify the UDS plus authenticated host loopback health.",
+  "status": "pending"
+}

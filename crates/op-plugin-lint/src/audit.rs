@@ -3,9 +3,7 @@
 use crate::report::Report;
 use crate::subid::{validate_subid, KNOWN_X_KEYS};
 use anyhow::{Context, Result};
-use syn::{
-    parse_file, Attribute, Expr, Fields, Item, ItemStruct, Lit, Meta, MetaNameValue,
-};
+use syn::{parse_file, Attribute, Expr, Fields, Item, ItemStruct, Lit, Meta, MetaNameValue};
 
 /// Optional Inspector-Gadget coverage inputs.
 #[derive(Debug, Clone, Default)]
@@ -438,7 +436,8 @@ fn audit_struct(report: &mut Report, st: &ItemStruct, has_category: &mut bool) {
             );
         }
 
-        let has_serde_default = fattrs.contains("serde(default") || fattrs.contains("serde(default)");
+        let has_serde_default =
+            fattrs.contains("serde(default") || fattrs.contains("serde(default)");
         // syn pretty may normalize differently; also check attribute path
         let serde_default = field.attrs.iter().any(|a| {
             let s = attr_tokens(a);
@@ -484,7 +483,6 @@ fn audit_struct(report: &mut Report, st: &ItemStruct, has_category: &mut bool) {
                 Some(floc.clone()),
             );
         }
-
     }
 }
 
@@ -676,4 +674,3 @@ fn type_string(ty: &syn::Type) -> String {
         _ => String::new(),
     }
 }
-

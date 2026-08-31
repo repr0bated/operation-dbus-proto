@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_295f4629-1d9c-471a-86a1-f399677ac894",
+  "title": "Chat exploration",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus/crates/op-web/ui"
+  ],
+  "createdAt": "2026-08-06T09:01:05.934Z",
+  "lastModifiedAt": "2026-08-06T09:01:14.965Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Looking at the chat module in the project.",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

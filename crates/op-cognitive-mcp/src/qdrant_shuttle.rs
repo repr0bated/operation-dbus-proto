@@ -1,10 +1,4 @@
-use std::fs::File;
-use std::mem::size_of;
-use std::path::{Path, PathBuf};
-
 use anyhow::{ensure, Context, Result};
-use memmap2::MmapOptions;
-use op_identity::IdentitySled;
 use op_state_store::{FieldType, PluginSchema};
 use qdrant_client::qdrant::{
     Condition, Filter, PointStruct, QueryPointsBuilder, RetrievedPoint, ScoredPoint,
@@ -14,12 +8,12 @@ use qdrant_client::{Payload, Qdrant};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_QDRANT_URL: &str = "http://127.0.0.1:6334";
 const DEFAULT_COLLECTION_NAME: &str = "ctl_plane_reasoning_episodes";
 const DEFAULT_USER_MEMORY_COLLECTION: &str = "user_memory";
 const DEFAULT_BLOB_VECTORS_COLLECTION: &str = "blob_vectors";
-const DEFAULT_SCHEMA_SLED_PATH: &str = "/dev/shm/plugin_schema.dat";
 const DEFAULT_TRACE_LIMIT: u32 = 5;
 const DEFAULT_VOYAGE_API_URL: &str = "https://api.voyageai.com/v1/embeddings";
 const DEFAULT_VOYAGE_MONGODB_API_URL: &str = "https://ai.mongodb.com/v1/embeddings";
@@ -28,9 +22,9 @@ const DEFAULT_VOYAGE_OUTPUT_DIMENSION: u32 = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionTraceContext {
-    pub wireguard_pubkey: [u8; 32],
+    pub wireguard_pubkey: String,
     pub mutation_index: u64,
-    pub hashed_footprint: [u8; 32],
+    pub genesis: String,
     pub trace_id: String,
 }
 
@@ -39,7 +33,6 @@ pub struct QdrantSemanticShuttle {
     collection_name: String,
     user_memory_collection: String,
     blob_vectors_collection: String,
-    sled_path: PathBuf,
     voyage_client: VoyageClient,
 }
 
@@ -54,8 +47,6 @@ impl QdrantSemanticShuttle {
             .unwrap_or_else(|_| DEFAULT_USER_MEMORY_COLLECTION.into());
         let blob_vectors_collection = std::env::var("COGNITIVE_MCP_BLOB_VECTORS_COLLECTION")
             .unwrap_or_else(|_| DEFAULT_BLOB_VECTORS_COLLECTION.into());
-        let sled_path = std::env::var("COGNITIVE_MCP_SCHEMA_SLED_PATH")
-            .unwrap_or_else(|_| DEFAULT_SCHEMA_SLED_PATH.into());
         let voyage_client = VoyageClient::from_env()?;
 
         Self::new_with_clients(
@@ -63,7 +54,6 @@ impl QdrantSemanticShuttle {
             collection_name,
             user_memory_collection,
             blob_vectors_collection,
-            sled_path,
             voyage_client,
         )
         .await
@@ -74,13 +64,11 @@ impl QdrantSemanticShuttle {
         collection_name: impl Into<String>,
         user_memory_collection: impl Into<String>,
         blob_vectors_collection: impl Into<String>,
-        sled_path: impl Into<PathBuf>,
         voyage_client: VoyageClient,
     ) -> Result<Self> {
         let collection_name = collection_name.into();
         let user_memory_collection = user_memory_collection.into();
         let blob_vectors_collection = blob_vectors_collection.into();
-        let sled_path = sled_path.into();
         let client = Qdrant::from_url(qdrant_url)
             .build()
             .with_context(|| format!("failed to build Qdrant client for {qdrant_url}"))?;
@@ -97,7 +85,6 @@ impl QdrantSemanticShuttle {
             collection = %collection_name,
             user_memory_collection = %user_memory_collection,
             blob_vectors_collection = %blob_vectors_collection,
-            sled_path = %sled_path.display(),
             "Qdrant Semantic Shuttle linked to the gRPC interface"
         );
 
@@ -106,30 +93,31 @@ impl QdrantSemanticShuttle {
             collection_name,
             user_memory_collection,
             blob_vectors_collection,
-            sled_path,
             voyage_client,
         })
     }
 
-    /// Reads the active identity sled directly from shared memory.
+    /// Reads the explicitly selected identity session.
     pub fn current_trace_context(&self) -> Result<SessionTraceContext> {
-        let sled = read_identity_sled(&self.sled_path)?;
-        ensure!(
-            sled.is_sled_valid(),
-            "A.N.N.A. Scribe: Invalid Schema State. No active trace available."
-        );
+        let identity = op_identity::configured_identity_session()
+            .context("no unambiguous identity session is configured for semantic tracing")?;
+        let genesis = identity
+            .genesis
+            .clone()
+            .filter(|value| !value.is_empty())
+            .context("configured identity session has no genesis")?;
 
         Ok(SessionTraceContext {
-            wireguard_pubkey: sled.wireguard_pubkey,
-            mutation_index: sled.mutation_index,
-            hashed_footprint: sled.hashed_footprint,
-            trace_id: format_trace_id(sled.hashed_footprint),
+            wireguard_pubkey: identity.wireguard_pubkey,
+            mutation_index: identity.mutation_index,
+            genesis,
+            trace_id: identity.trace_id,
         })
     }
 
     /// Renders the active appended PluginSchema into deterministic retrieval text.
     pub fn current_schema_embedding_text(&self) -> Result<String> {
-        let schema = read_plugin_schema(&self.sled_path)?;
+        let schema = read_plugin_schema()?;
         Ok(render_schema_embedding_text(&schema))
     }
 
@@ -401,21 +389,9 @@ impl QdrantSemanticShuttle {
     }
 
     fn active_schema_query_text(&self) -> Result<(SessionTraceContext, String)> {
-        let (sled, schema) = read_identity_sled_and_schema(&self.sled_path)?;
-        ensure!(
-            sled.is_sled_valid(),
-            "A.N.N.A. Scribe: Invalid Schema State. No active trace available."
-        );
-
-        Ok((
-            SessionTraceContext {
-                wireguard_pubkey: sled.wireguard_pubkey,
-                mutation_index: sled.mutation_index,
-                hashed_footprint: sled.hashed_footprint,
-                trace_id: format_trace_id(sled.hashed_footprint),
-            },
-            render_schema_embedding_text(&schema),
-        ))
+        let trace = self.current_trace_context()?;
+        let schema = read_plugin_schema()?;
+        Ok((trace, render_schema_embedding_text(&schema)))
     }
 }
 
@@ -536,30 +512,7 @@ struct VoyageEmbeddingRequest<'a> {
     output_dtype: &'a str,
 }
 
-fn read_identity_sled(path: &Path) -> Result<IdentitySled> {
-    let file = File::open(path)
-        .with_context(|| format!("failed to open SchemaEngine sled at {}", path.display()))?;
-    // SAFETY: The file is opened read-only and we only read a validated-length region.
-    // The mmap is dropped before this function returns, so no dangling pointers escape.
-    let mmap = unsafe { MmapOptions::new().map(&file) }
-        .with_context(|| format!("failed to mmap SchemaEngine sled at {}", path.display()))?;
-
-    ensure!(
-        mmap.len() >= size_of::<IdentitySled>(),
-        "SchemaEngine sled at {} is smaller than IdentitySled ABI ({})",
-        path.display(),
-        size_of::<IdentitySled>()
-    );
-
-    let sled_ptr = mmap.as_ptr().cast::<IdentitySled>();
-    // SAFETY: We validated mmap.len() >= size_of::<IdentitySled>() above, so the pointer is
-    // within the mapped region. read_unaligned is safe because we only copy the value out.
-    let sled = unsafe { std::ptr::read_unaligned(sled_ptr) };
-
-    Ok(sled)
-}
-
-fn read_plugin_schema(_path: &Path) -> Result<PluginSchema> {
+fn read_plugin_schema() -> Result<PluginSchema> {
     // The sealed blob IS the plugin: the active session schema is read from
     // the plugin's own blob in the SHM catalog. `OP_ACTIVE_SCHEMA_PLUGIN`
     // selects which plugin anchors the session's retrieval text.
@@ -568,38 +521,12 @@ fn read_plugin_schema(_path: &Path) -> Result<PluginSchema> {
     if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(&plugin_id) {
         return Ok(schema);
     }
-    // Transitional fallback: a sled-embedded single schema from hosts not yet
-    // re-sealed with a blob catalog.
-    let schema_bytes = op_identity::read_schema_blob().with_context(|| {
-        format!("no sealed blob for '{plugin_id}' and no sled-embedded schema available")
-    })?;
-    parse_plugin_schema(schema_bytes, Path::new("(sled-embedded schema blob)"))
-}
-
-fn read_identity_sled_and_schema(path: &Path) -> Result<(IdentitySled, PluginSchema)> {
-    let sled = read_identity_sled(path)?;
-    let schema = read_plugin_schema(path)?;
-    Ok((sled, schema))
-}
-
-fn parse_plugin_schema(schema_bytes: Vec<u8>, path: &Path) -> Result<PluginSchema> {
-    ensure!(
-        !schema_bytes.is_empty(),
-        "Schema file at {} is empty",
-        path.display()
-    );
-
-    serde_json::from_slice(&schema_bytes)
-        .with_context(|| format!("failed to parse PluginSchema from {}", path.display()))
-}
-
-fn format_trace_id(hashed_footprint: [u8; 32]) -> String {
-    format!("trace-{}", hex::encode(hashed_footprint))
+    anyhow::bail!("sealed plugin blob '{plugin_id}' is unavailable")
 }
 
 /// Returns (plugin_id, embedding_text) for every active plugin in the SHM
 /// blob catalog. The multi-plugin counterpart to `current_schema_embedding_text`,
-/// which only ever covers the single sled-resident schema.
+/// which covers the explicitly selected active plugin.
 fn all_blob_embedding_texts() -> Result<Vec<(String, String)>> {
     let ids = op_blob::catalog::read_manifest_plugin_ids_shm()
         .context("SHM blob manifest is unavailable")?;
@@ -779,22 +706,6 @@ mod tests {
     use op_state_store::{Constraint, FieldSchema, ReadOnlyCondition};
     use serde_json::json;
     use std::collections::HashMap;
-
-    #[test]
-    fn should_preserve_identity_sled_abi_shape() {
-        // Canonical sled from op-identity: wireguard_pubkey(32) + mutation_index(8)
-        // + is_valid(1) + _pad(7) + hashed_footprint(32) + subid taxonomy + compliance fields.
-        assert!(
-            size_of::<IdentitySled>() >= 32 + 8 + 1 + 7 + 32,
-            "IdentitySled ABI unexpectedly shrank (using canonical op-identity layout)"
-        );
-    }
-
-    #[test]
-    fn should_format_trace_id_from_hashed_footprint() {
-        let trace_id = format_trace_id([0xAB; 32]);
-        assert_eq!(trace_id, format!("trace-{}", "ab".repeat(32)));
-    }
 
     #[test]
     fn plugin_id_to_uuid_is_stable() {

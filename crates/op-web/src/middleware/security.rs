@@ -10,30 +10,20 @@
 
 use axum::{
     extract::{ConnectInfo, Request},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     middleware::Next,
-    response::{IntoResponse, Response},
-    Json,
+    response::Response,
 };
 use op_core::security::AccessZone;
-use op_identity::FootprintVerifyError;
-use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use tracing::{debug, warn};
 
-/// Extract a bearer / mcp-token from request headers (no static allow-list).
+/// Extract a bearer token from request headers (no static allow-list).
 ///
 /// Returns the first non-empty value found. The caller is responsible for
 /// validating the token against the authoritative session/peer ledger.
 pub fn extract_auth_token(headers: &HeaderMap) -> Option<String> {
-    if let Some(raw) = headers.get("x-op-mcp-token").and_then(|v| v.to_str().ok()) {
-        let token = raw.trim();
-        if !token.is_empty() {
-            return Some(token.to_string());
-        }
-    }
-
     if let Some(raw) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(bearer) = raw.trim().strip_prefix("Bearer ") {
             let token = bearer.trim();
@@ -202,11 +192,11 @@ pub fn extract_ip(headers: &HeaderMap, addr: Option<&SocketAddr>) -> String {
 /// it MUST (a) be opt-in via env var, (b) be accepted only from
 /// `is_trusted_proxy()` peers, and (c) carry a short-lived HMAC-signed token
 /// rather than a static secret.
-pub async fn ip_security_middleware(
-    mut request: Request,
-    next: Next,
-) -> Response {
-    let connect_info = request.extensions().get::<ConnectInfo<SocketAddr>>().copied();
+pub async fn ip_security_middleware(mut request: Request, next: Next) -> Response {
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
     let headers = request.headers();
     let addr = connect_info.map(|ci| ci.0);
     // `client_ip` is informational only; we feed the same value into
@@ -222,72 +212,6 @@ pub async fn ip_security_middleware(
 
     request.extensions_mut().insert(zone);
     next.run(request).await
-}
-
-/// Enforcing gate for `/mcp/*` only (Phase 2 FR-2a).
-///
-/// Allows the request when either:
-/// 1. `AccessZone` is `Localhost` or `TrustedMesh` (netmaker/loopback), or
-/// 2. valid Ghostbridge identity headers are present
-///    (`x-ghostbridge-footprint` plus `x-ghostbridge-trace-id` or
-///    `x-wireguard-pubkey`) and the footprint verifies against the live sled.
-///
-/// Applied on the `/mcp` nest (and `/mcp/agents*`), never globally.
-pub async fn mcp_ingress_auth_middleware(request: Request, next: Next) -> Response {
-    let zone = request
-        .extensions()
-        .get::<AccessZone>()
-        .copied()
-        .unwrap_or(AccessZone::Public);
-
-    match zone {
-        AccessZone::Localhost | AccessZone::TrustedMesh => {
-            return next.run(request).await;
-        }
-        AccessZone::PrivateNetwork | AccessZone::Public => {}
-    }
-
-    match ghostbridge_headers_ok(request.headers()) {
-        Ok(()) => next.run(request).await,
-        Err(status) => (
-            status,
-            Json(json!({
-                "error": "mcp ingress requires netmaker/loopback zone or Ghostbridge identity",
-            })),
-        )
-            .into_response(),
-    }
-}
-
-fn ghostbridge_headers_ok(headers: &HeaderMap) -> Result<(), StatusCode> {
-    let footprint = headers
-        .get("x-ghostbridge-footprint")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let trace_id = headers
-        .get("x-ghostbridge-trace-id")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let wireguard_pubkey = headers
-        .get("x-wireguard-pubkey")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    if trace_id.is_none() && wireguard_pubkey.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    match op_identity::verify_session_genesis(footprint, trace_id, wireguard_pubkey) {
-        Ok(()) => Ok(()),
-        Err(FootprintVerifyError::Mismatch) | Err(FootprintVerifyError::InvalidSled) => {
-            Err(StatusCode::FORBIDDEN)
-        }
-        Err(FootprintVerifyError::SledUnreachable) => Err(StatusCode::SERVICE_UNAVAILABLE),
-    }
 }
 
 #[cfg(test)]
@@ -403,11 +327,11 @@ mod tests {
     }
 
     #[test]
-    fn extract_auth_token_prefers_mcp_token_then_bearer() {
+    fn extract_auth_token_accepts_bearer_only() {
         let mut h = HeaderMap::new();
         h.insert("x-op-mcp-token", HeaderValue::from_static("tok-1"));
         h.insert("authorization", HeaderValue::from_static("Bearer tok-2"));
-        assert_eq!(extract_auth_token(&h).as_deref(), Some("tok-1"));
+        assert_eq!(extract_auth_token(&h).as_deref(), Some("tok-2"));
 
         let mut h2 = HeaderMap::new();
         h2.insert("authorization", HeaderValue::from_static("Bearer tok-2"));

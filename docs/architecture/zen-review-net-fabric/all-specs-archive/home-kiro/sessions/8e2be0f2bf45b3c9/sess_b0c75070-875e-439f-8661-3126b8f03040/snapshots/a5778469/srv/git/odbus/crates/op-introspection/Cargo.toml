@@ -1,0 +1,11 @@
+[package]
+name = "op-introspection"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "DBus introspection capabilities (stubbed)"
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }

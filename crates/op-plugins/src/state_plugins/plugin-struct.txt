@@ -308,7 +308,7 @@
   ┌──────────────────┬──────────────────────────────────────────────────────┐
   │      Layer       │                        Result                        │
   ├──────────────────┼──────────────────────────────────────────────────────┤
-  │ Transports       │ Both up on WG IP 10.220.35.1 — MCP/HTTP :3003, gRPC  │
+  │ Transports       │ Unified bridge TLS :8090; no plugin-owned listener    │
   │                  │ :50052                                               │
   ├──────────────────┼──────────────────────────────────────────────────────┤
   │ Zero-trust gate  │ ✅ Anonymous call rejected Unauthenticated: Missing  │

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Xray binds a host proxy on 10.200.0.1 and therefore starts after egress.
+# Xray starts after its host service address and WARP egress are ready.
 exec 2>&1
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/usr/sbin:/usr/lib/incus:${PATH:-}"
@@ -16,13 +16,8 @@ wait_dep() {
 }
 
 wait_dep incusd
-wait_dep xray-config-mount
 wait_dep ovsbr0-svc-addr
-wait_dep netclient
-
-until [ -s /dev/shm/xray_config.json ]; do
-    sleep 1
-done
+wait_dep wgcf-egress
 
 NAME=xray
 START_PID=
@@ -54,6 +49,12 @@ until incus list -f csv -c ns 2>/dev/null | rg -q "^${NAME},RUNNING$"; do
     [ "$i" -ge 60 ] && { echo "container $NAME did not reach RUNNING" >&2; exit 1; }
     sleep 1
 done
+
+# The sole live path is inside the container. Refuse readiness if the baked
+# bootstrap is missing or invalid; never copy from /dev/shm or a host runtime
+# path and never reload Xray directly.
+incus exec "$NAME" -- test -s /etc/xray/xray_config.json
+incus exec "$NAME" -- /usr/local/bin/xray run -test -config /etc/xray/xray_config.json
 
 /usr/local/libexec/3tched/runit-ready-signal incus-ct-xray
 

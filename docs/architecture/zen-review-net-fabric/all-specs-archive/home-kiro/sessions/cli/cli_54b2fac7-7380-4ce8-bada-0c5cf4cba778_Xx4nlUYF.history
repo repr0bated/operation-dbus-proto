@@ -1,0 +1,120 @@
+try now
+need to reseal
+resal is just opblob seal-shm
+you installed binaries already?
+somehnig is overlooked the ui is still looking for ovsdbmirror, is that the ui code or roust code
+look a grpc diagnosticdes ion ui rwep0o
+worng repo the reop is /srv/git/operation-dashboard-ui-07/
+every one of the server stream son that page initiall is green then turns red
+fix it
+this is why originally had 2 ip aliased on one interface so the incoming can be xhttp adn the second ip picks up on the needed protocol
+]athere is no caddy or ngnix xray handles that
+handles revers proxy also
+you can edit the vvonfig it is inside the xray container
+that is the whole po9int of the refactor was to make socke  nad remove eth0
+so you are saying we neethe the eth0 in the container?
+yes
+there is no cadd, xray does that so leave eth0 for incoming to xray then xray uses it caddy like abiloities to forward to next hop
+can you replace the mail caddy with xraqy ?
+there should be tonic tls shouldnt need caddy
+xray also has the ability to steal and reuse real tls
+all every domain. what do your recommend for the dest?
+they sstart green again..look at logs
+tonic web sohould traanslate
+we are not using caddy
+we cotrol wher dashboaer loads from
+check logs same thing
+projecton was removed on purpose mutaiton updates dbus tree
+that is what i am hitting
+look at json render, it is allrenderd
+i invokied  operation.registry.v1.hearbeatrequest and gott acknowledged:\nfalse\nreregisterRequired:\ntrue\n\n▾\nserverTime:\n{2}\nseconds:\n"1785640782"\nnanos:\n930034713
+what is runtimemirror, i thought depriceated
+state sync sounds lik drift . only one source of truth nothing to sync
+what is get state then
+soo what would it turn. and i though  ggrpc was super fast it is taking forever tor these tinivoke
+a minurte? look at request get state, still running
+just  came in
+acknowledged:\nfalse\nreregisterRequired:\ntrue\n\n▾\nserverTime:\n{2}\nseconds:\n"1785640782"\nnanos:\n930034713
+wire it without xhttp so i can see how fast
+pluginservice returnd failed to fetch Live reflection empty — using compiled codecs\nThe server exposed no service descriptors, so the picker falls back to 16 compiled services · 96 methods.\nFailed to fetch
+retry  burtton nest to live refecton still says empty\
+now none of rcp green
+tried loading from both. do you have grpc expert skill loaded? slow, http did not fix these green but slow, System Info\n\nRuntimeMirror/GetSystemInfo\n\n1134ms\nOK\n\n\nList Services\n\nRuntimeMirror/ListServices\n\n1366ms\nOK\n\n\nList Interfaces\n\nRuntimeMirror/ListInterfaces\n\n1521ms\nOK\n\n\nNUMA Topology\n\nRuntimeMirror/GetNumaTopology\n\n1694ms\nOK\n\n\nDiscover Components\n\nComponentRegistry/Discover\n\n1857ms\nOK these not loading at all: Get State\n\nStateSync/GetState\n\nTesting…\n\nList Plugins\n\nPluginService/ListPlugins\n\nTesting…\n\nGet Events\n\nEventChainService/GetEvents\n\nTesting…\n\nVerify Chain\n\nEventChainService/VerifyChain\n\nTesting…\n\nList DBs (OVS)\n\nOvsdbMirror/ListDbs\n\nTesting…\n\nBridge State\n\nOvsdbMirror/GetBridgeState\n\nTesting…
+so the ui needs to read identity sled
+try building the rust version with cargo
+that is not what displays inh browser it crteates a binary, where ?
+there are 2 versions vite and ee?? forgot naame of rust version that creates a binary
+totally differnjh the rust version doe not uswe vite
+yes
+what is ssh login for mesh?
+what is ssh login for mesh?, and egress from decoy not accessible 10.0.0.2  dead
+connection refused  unless yo just added jermy. but all traffic comjes in through there. so 10.0.0.2 should be accessibel
+is the netmaker egress setup in netmaker?
+it is a feature of netmaker you have to set wityh api
+i dont think thatis blocking becaus netmaker servers are repoting ok, adn i dont thik you could join . ithink it is a reporting bug because we installed bare metal. so set with api the egress
+man8081
+if you cant get to int us 127 inside container
+you should join inside the netmaker container so the 254 is part of mesth
+joun -t token
+joun -t token\n\nyou do that in the containrer
+i think if you get the container added to the netmaker network from inside container that is going to solve the problem. if yo ucant join instide continer it is a differnet problem because it does not depend on the grpc or xxray o its all local
+you are bputting oo muchl dot put dial just  -t <token>
+inside ?
+like i was point out before . we cann ping 100.69.0.254 but where does it dispaly? ip a  shou? not inside container
+so netmake iIS working the ns is not exopese
+/plan
+look at all the other  containers, they have hostsidde socket righ?
+look at all the other  containers, they have hostsidde socket righ? grpc has hostside socke t also
+so douluicate for nm
+/code
+how do i get out of plan
+execute
+if the case it need t be on vbridge andreploace the nm0 there
+we went through so many configurations with trial and erroe. i want to try xray with no interface with 10.0.0.1 > physical uplink
+you can alias the 10.0.0.2 to the uplink
+forget about th license, it isw got a free fvresion that works without it  if we dont user rporting and moer tha on one egress we ar4e fine
+the second peer is the decowy where we need the egre34ss from
+we dont know if it joined corrcly do you see int as a node in netmaker , it was using static wirguard conf before because netlent waqs not working now it is
+yu need to use dotken and netclient to join then add egress. also inside netmake containr joint he container as 254
+made alo of progress . cant get a network inside netmaker or registe as saas and the netmaker containersocket needs set up lith et tonic socket  anjd the egress needs to gbe cerated in ne3tmjaker
+/model
+/effort
+made alo of progress . cant get a network inside netmaker or registe as saas and the netmaker containersocket needs set up lith et tonic socket  anjd the egress needs to gbe cerated in ne3tmjaker
+load grpc skill
+you may need terh netmaker interface on bgridge dfirswt
+youi join from the host
+the socket woks with netcleit whet the socke tis swetup crre3xctly and it uses the emqx xockt  to join
+have to use 8090 prot it hink touwhg
+have to use 8090 prot it hink touwhg\n\ntonic, join netmake with tonic
+sweal\n\nseal \
+if you fhange the dbus code need to reseal
+maked suerr not to dupliecate l i rthink ther aere nemake rmethods o the grpc bridsge and shold not bge there and also i think the netmaker  methos  are awk and shulod be i in ansd out
+plugins are toe single source of truth
+/usage
+take a look at /svr/git/operation-dasbaors....
+all the schema fro all the blobs is seerved fro mcp, can that be used?
+Yeah.Yeah.The idea is that I am going to have a chat interface with a chatbot that is just for the UI vendor, and I'm gonna give it little information. I just wanna say, make this set of data as accessible as possible to as many people, industries, as, industries and causes, and as possible. And that's all I wanna give them. And then in the interface, you'll have options to add context and maybe semantic searches or a specific UI that you need.
+/plan
+we are dumpting the schhema and sealing our selfve we3 have mcplete control should be dump into a table?
+so maypbe astagin table for ui the sits beween the blobs and the ui
+but it still beed gto beseen as schma if it isgoing to be rendered
+look at jsonrenderer.dev
+mys chemaq s standard its not like out of the ordinharyu is it?
+teh good thing is is t is alerady verified thatt dies not need to happen. the the othe r is that thatei is w a dedicated llm for this. once the rendirndg id done its not a problem any moer right?
+mis understood nme , makes the modeldj jub moe import t . ithinkyou are looking at this renering on the flyu alway differnt the u orphs wit the data./. not weh ave aq ui deesiner whiche is te llm and wit fine mau differnt waqy stto sort , display  utate thet at and come uip with may e 100s or 1000s  of fixed ui  elemnts thtw ll ernder  as deiigned  o yuo can erneder diffent colors css bbut thedate is going to be processed the same everyt time, wit iknow data  goes he r ore there.
+jjgas the renderings go into the gallery, and then we promote them to the catalog, which would be approved for rendering to the site.
+if we need somethig specifigtheiner face allos wor irt but ialso allowws the modl to odome up with gthings humans woeuldt think of that was teh idea of the mcp, mak all the blobs ond dat pool so it can make cross wconnectoh
+so the mod is judt ar4med with sa 3 line promp with nolanguadf sayingui or caerd or nadvigaton. the json ereneree.dev api and documention and how to acces the datea. that is all\
+thatis why afeter each render the memryas the renderings go into the gallery, and then we promote them to the catalog, which would be approved for rendering to the site. wiped
+ii want it to have time rto thin and exaxamint he tdat , let it run foe4 3 hours apd produce   100 or 10 but lit is really lood and cross examine
+that would be a mode
+\ten lartr throw indsomethin th is indisrtry specific o a dogaphic  jus  ahint of soejmthing elswe
+just the word comliance
+that idont understan., claude did a whole rewrith of alothe protos and took out all of the sucdess
+tha not it thenor someon ofrw  this the chekkeed out ...  pliswe mivfed the whold rep fro one opalce to another
+why cant se look at the time periond it was only wokd bing done and on job that hswd mutiple subacgents
+and look in  int he operation dashobqaard reopo0 alswo
+this where it is i bet
+\not this reo-p
+\
+one dire3ctory u8p

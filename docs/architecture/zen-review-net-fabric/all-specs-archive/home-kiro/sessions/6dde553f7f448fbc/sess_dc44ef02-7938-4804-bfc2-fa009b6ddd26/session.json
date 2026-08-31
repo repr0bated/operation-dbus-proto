@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_dc44ef02-7938-4804-bfc2-fa009b6ddd26",
+  "title": "Writing torch-pass spec",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T03:36:44.524Z",
+  "lastModifiedAt": "2026-08-04T03:44:42.827Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Completed torch-pass spec with requirements.md, design.md, and tasks.md. The spec addresses replacing xray's static IP/port ACLs with verified WireGuard identity-based gating.",
+  "status": "idle"
+}

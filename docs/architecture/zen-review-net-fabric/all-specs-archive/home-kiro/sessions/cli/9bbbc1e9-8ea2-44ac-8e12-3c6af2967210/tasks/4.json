@@ -1,0 +1,6 @@
+{
+  "id": "4",
+  "subject": "Inspect gRPC Netmaker adapter and bridge client",
+  "description": "Read grpc_client.rs and all relevant op-grpc-adapters Netmaker implementation/configuration files.",
+  "status": "pending"
+}

@@ -28,10 +28,9 @@ pkill -f "socat TCP-LISTEN:443,bind=10.0.0.2" 2>/dev/null || true
 pkill -f "/usr/local/libexec/3tched/sni-demux.py" 2>/dev/null || true
 sleep 0.2
 
-# Listen set. Public and svc0 only. The netmaker address (100.69.0.1:443) is
-# served by uds-mail-web, which relays it straight to the mail CT's web.sock --
-# on the mesh that address serves one thing, so SNI demuxing buys nothing and
-# a bare IP with no SNI would fall to Reality instead of reaching webmail.
+# Listen set. Public and the local 3tched service segment only. Human identity
+# arrives inside the TLS/gRPC payload through Xray; this edge listener never
+# mints, injects, or derives identity from a transport address.
 set -- --listen 188.68.58.237:443 --listen 10.0.0.2:443
 if [ -S "$MAIL" ]; then
     chmod 666 "$MAIL" 2>/dev/null || true

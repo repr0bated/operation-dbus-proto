@@ -1,7 +1,7 @@
 //! Negative topology gates: filesystem scans enforcing repudiated-mechanism
 //! absence and inventory pins (validation-contract VAL-GATE-001..018).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,11 +20,6 @@ const REPUDIATED_MECHANISM_DOC_TOKENS: &[&str] = &[
 /// Five repudiated-mechanism token families enforced in `crates/` (VAL-GATE-003..006).
 const REPUDIATED_CRATES_TOKEN_FAMILIES: &[&str] =
     &["wg-lan", "TransportBindingIndex", "op-identity-shuttle"];
-
-const OP_IDENTITY_SHUTTLE_BASELINE: &[(&str, usize)] = &[
-    ("crates/op-identity/src/bin/op-identity-shuttle.rs", 3),
-    ("crates/op-gemma/src/main.rs", 1),
-];
 
 const OPENFLOW_COMPOUND_TOKENS: &[&str] = &[
     "identity_tag",
@@ -107,14 +102,13 @@ const PINNED_PYTHON_FILES: &[&str] = &[
     "scripts/scan-codebase.py",
     "scripts/setup-gemini-oauth.py",
     "scripts/test-antigravity-gemini.py",
-    "scripts/uv-tools/gen/__init__.py",
-    "scripts/uv-tools/gen/cognitive_pb2.py",
-    "scripts/uv-tools/gen/cognitive_pb2_grpc.py",
     "scripts/uv-tools/notebook_sync.py",
+    "scripts/uv-tools/test_notebook_sync.py",
     "scripts/vectorize/vectorize_code.py",
     "scripts/vectorize/vectorize_compliance.py",
     "scripts/vectorize/vectorize_lsp.py",
     "scripts/vectorize_oscal.py",
+    "scripts/vectorize_rust_repos.py",
 ];
 
 const COMMAND_NEW_PATTERNS: &[&str] = &[
@@ -213,10 +207,6 @@ fn read_text(path: &Path) -> Result<String, String> {
 
 fn read_text_or_skip(path: &Path) -> Option<String> {
     read_text(path).ok()
-}
-
-fn count_occurrences(haystack: &str, needle: &str) -> usize {
-    haystack.match_indices(needle).count()
 }
 
 /// Shared scanner entry point for token-family gates and the self-test (VAL-GATE-011).
@@ -418,62 +408,6 @@ fn scan_openflow_identity_tagging(root: &Path) -> Result<Vec<Violation>, String>
     Ok(violations)
 }
 
-fn scan_op_identity_shuttle_baseline(root: &Path) -> Result<Vec<Violation>, String> {
-    let files = collect_files_under(root, "crates")?;
-    let mut observed: HashMap<String, usize> = HashMap::new();
-    for path in files {
-        let rel = rel_path(root, &path);
-        if is_gate_self(&rel) {
-            continue;
-        }
-        let Some(text) = read_text_or_skip(&path) else {
-            continue;
-        };
-        let count = count_occurrences(&text, "op-identity-shuttle");
-        if count > 0 {
-            *observed.entry(rel).or_default() += count;
-        }
-    }
-
-    let mut violations = Vec::new();
-    let pinned_total: usize = OP_IDENTITY_SHUTTLE_BASELINE.iter().map(|(_, n)| n).sum();
-    let mut actual_total = 0usize;
-
-    for (rel, expected) in OP_IDENTITY_SHUTTLE_BASELINE {
-        let got = observed.remove(*rel).unwrap_or(0);
-        actual_total += got;
-        if got > *expected {
-            violations.push(Violation {
-                path: (*rel).to_string(),
-                detail: format!(
-                    "op-identity-shuttle count {got} exceeds pinned baseline {expected}"
-                ),
-            });
-        }
-    }
-
-    for (rel, count) in observed {
-        actual_total += count;
-        violations.push(Violation {
-            path: rel,
-            detail: format!(
-                "op-identity-shuttle occurrence outside pinned baseline (count {count})"
-            ),
-        });
-    }
-
-    if actual_total > pinned_total && violations.is_empty() {
-        violations.push(Violation {
-            path: "crates/".to_string(),
-            detail: format!(
-                "op-identity-shuttle total {actual_total} exceeds pinned total {pinned_total}"
-            ),
-        });
-    }
-
-    Ok(violations)
-}
-
 fn inventory_set(
     root: &Path,
     subdirs: &[&str],
@@ -491,7 +425,8 @@ fn inventory_set(
                 continue;
             }
             let rel = rel_path(root, &path);
-            if rel.contains("/.venv/") || rel.contains("/target/") {
+            if rel.contains("/.venv/") || rel.contains("/target/") || rel.contains("/node_modules/")
+            {
                 continue;
             }
             set.insert(rel);
@@ -700,10 +635,10 @@ fn forbidden_token_transport_binding_index_absent() {
 }
 
 #[test]
-fn op_identity_shuttle_confined_to_pinned_baseline() {
+fn op_identity_shuttle_absent() {
     let root = workspace_root().canonicalize().unwrap();
-    let violations = scan_op_identity_shuttle_baseline(&root).unwrap();
-    assert_violations_empty("op-identity-shuttle baseline", violations);
+    let violations = scan_crates_for_literal_token(&root, "op-identity-shuttle", true).unwrap();
+    assert_violations_empty("op-identity-shuttle", violations);
 }
 
 #[test]
@@ -814,9 +749,9 @@ fn boundary_documentation_covers_external_families() {
 
     let required = [
         "sole incoming WireGuard termination",
-        "Exactly one NetMaker",
-        "Inner-IP preservation",
-        "no NAT",
+        "No NetMaker transport remains",
+        "standalone `wgcf-ingress`",
+        "trusted-decoy-signature",
         "Passthrough only",
         "/etc/xray/xray_config.json",
         "OP_DECOY_TRUST_STORE",
@@ -841,7 +776,7 @@ fn boundary_documentation_covers_external_families() {
         let covers_a = section.contains("sole incoming WireGuard termination")
             || section.contains("WireGuard tunnel");
         let covers_b =
-            section.contains("Exactly one NetMaker") || section.contains("Inner-IP preservation");
+            section.contains("Exactly one WARP") || section.contains("trusted-decoy-signature");
         let covers_c =
             section.contains("Passthrough only") || section.contains("/etc/xray/xray_config.json");
         let covers_d = section.contains("OP_DECOY_TRUST_STORE") || section.contains("trust store");

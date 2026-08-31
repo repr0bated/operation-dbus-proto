@@ -1,0 +1,6 @@
+{
+  "id": "9",
+  "subject": "Capture NetMaker service inventory and rollback baseline",
+  "description": "Inventory running processes, enabled unit commands, config/env dependencies, binaries, API/broker listeners, DNS, and Incus devices without exposing secrets.",
+  "status": "completed"
+}

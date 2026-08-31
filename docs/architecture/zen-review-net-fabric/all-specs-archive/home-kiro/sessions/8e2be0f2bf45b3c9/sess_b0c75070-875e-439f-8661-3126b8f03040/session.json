@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_b0c75070-875e-439f-8661-3126b8f03040",
+  "title": "Create json-render-ui repo",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/operation-dashboard-ui-07"
+  ],
+  "createdAt": "2026-08-18T06:57:28.336Z",
+  "lastModifiedAt": "2026-08-18T10:31:27.668Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Created json-render-ui repo at /srv/git/json-render-ui. Pure json-render + gRPC event stream. Builds clean, 324KB bundle.",
+  "status": "in_progress",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

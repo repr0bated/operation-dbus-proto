@@ -280,8 +280,7 @@ SERVICE          SOCKET PATH                                        PROTOCOL
 OVSDB            /usr/local/var/run/openvswitch/db.sock (primary)  JSON-RPC (rovs)
                  /var/run/openvswitch/db.sock (fallback)
 D-Bus System     /var/run/dbus/system_bus_socket                   D-Bus
-gRPC             10.200.0.2:50051 (op-mcp)                         gRPC/HTTP2
-                 0.0.0.0:50052 (op-chat)
+gRPC + MCP       0.0.0.0:8090 (op-grpc-bridge, TLS)                gRPC/HTTP2
 Netmaker         /var/run/netclient/netclient.sock                  gRPC
 OpenFlow         tcp:10.88.88.1:6653                               OpenFlow 1.3
 ```
@@ -293,10 +292,9 @@ SERVICE              PURPOSE
 incus                Container runtime
 op-dbus              Core D-Bus daemon
 op-dbus-mirror       OVSDB/D-Bus state mirror
-op-cognitive-mcp     Cognitive MCP (CozoDB, Qdrant, memory)
+op-grpc-bridge       Authenticated gRPC, MCP, chat, and cognitive ingress
 op-web-srv           Unified HTTP API + embedded UI (port 8080)
 op-projection        Plugin state projection
-op-mcp-http          MCP HTTP ingress
 ovs-vswitchd         OVS virtual switch daemon
 nextdns              DNS-over-HTTPS (NextDNS)
 dbus-srv             D-Bus system bus
@@ -546,7 +544,7 @@ mod tests {
     async fn test_system_prompt_generation() {
         let prompt = generate_system_prompt(None).await;
         assert!(prompt.content.contains("FORCED TOOL EXECUTION"));
-        assert!(prompt.content.contains("ovs-br0"));
+        assert!(prompt.content.contains("ovsbr0"));
         assert!(prompt.content.contains("CUSTOM INSTRUCTIONS"));
     }
 

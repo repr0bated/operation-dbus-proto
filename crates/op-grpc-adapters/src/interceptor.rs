@@ -1,12 +1,16 @@
-//! Ghostbridge identity interceptor — validates X-Ghostbridge-Footprint and
-//! X-Ghostbridge-Trace-ID on every inbound gRPC call, identical to op-grpc-bridge.
+//! Ghostbridge identity interceptor — validates a session genesis against the
+//! authoritative per-session identity projection.
 
 use tonic::{Request, Status};
 
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
-    let footprint = req.metadata().get("x-ghostbridge-footprint");
+    let footprint = req
+        .metadata()
+        .get("x-ghostbridge-genesis")
+        .or_else(|| req.metadata().get("x-ghostbridge-footprint"));
     let trace_id = req.metadata().get("x-ghostbridge-trace-id");
+    let pubkey = req.metadata().get("x-wireguard-pubkey");
 
     if footprint.is_none() || trace_id.is_none() {
         return Err(Status::unauthenticated(
@@ -14,17 +18,14 @@ pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> 
         ));
     }
 
-    // Zero-copy sled read — validate footprint matches live schema state.
-    if let Ok((ptr, _mmap)) = op_identity::read_sled() {
-        let sled = unsafe { &*ptr };
-        let expected = hex::encode(sled.hashed_footprint);
-        let received = footprint.unwrap().to_str().unwrap_or("");
-        if received != expected {
-            return Err(Status::permission_denied(
-                "Ghostbridge footprint mismatch — session out of sync",
-            ));
-        }
-    }
+    let received = footprint
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| Status::invalid_argument("Invalid genesis header encoding"))?;
+    let trace_id = trace_id.and_then(|value| value.to_str().ok());
+    let pubkey = pubkey.and_then(|value| value.to_str().ok());
+    op_identity::verify_session_genesis(received, trace_id, pubkey).map_err(|_| {
+        Status::permission_denied("Ghostbridge genesis does not match an anchored session")
+    })?;
 
     Ok(req)
 }

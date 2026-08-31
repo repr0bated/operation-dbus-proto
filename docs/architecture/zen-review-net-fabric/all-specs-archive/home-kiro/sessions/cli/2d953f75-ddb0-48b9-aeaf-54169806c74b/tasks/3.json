@@ -1,0 +1,6 @@
+{
+  "id": "3",
+  "subject": "Implement OVS internal port creation for netmk",
+  "description": "Add OVSDB transact to create internal port on ovsbr0, move to container netns via rtnetlink",
+  "status": "pending"
+}

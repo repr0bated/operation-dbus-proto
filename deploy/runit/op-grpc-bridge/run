@@ -11,10 +11,6 @@ wait_dep() {
     done
 }
 
-# Start after the NetMaker container has published broker.sock, but before the
-# host netclient joins. The bridge binds loopback only, so it does not need the
-# netmaker mesh address to exist first.
-#
 # Nothing in the boot path calls back into this service: ovs-vswitchd
 # materializes the topology from conf.db and the ovsbr0-* units use plain `ip`.
 # That absence of a back-edge is what keeps this list cycle-free — check it with
@@ -24,27 +20,80 @@ wait_dep opdbus-grants
 wait_dep dbus
 wait_dep op-session-bus
 wait_dep ovsdb-server
-wait_dep incus-ct-netmaker
 # Qdrant is optional here. The bridge initializes its semantic shuttle
-# best-effort and must still open :8090 for NetMaker, D-Bus, and gRPC when
-# vector search is unavailable.
+# best-effort and must still open :8090 for D-Bus and gRPC when vector search
+# is unavailable.
 
 set -a
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
 [ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
-[ -r /etc/op-dbus/netmaker-api.env ] && . /etc/op-dbus/netmaker-api.env
 set +a
 
-# One TLS TCP door: :8090 demuxes MQTT/WebSocket `/mqtt`, gRPC-Web, and native
-# gRPC. Bind loopback before netclient; mesh/svc0 publications relay back to
-# this listener after their addresses exist. Local non-TCP clients use the UDS.
-FABRIC_BIND="127.0.0.1:${NETMAKER_BROKER_PORT:-8090}"
+has_ipv4() {
+    interface=$1
+    address=$2
+    ip -4 -o addr show dev "$interface" 2>/dev/null | awk -v wanted="$address" '
+        {
+            split($4, parts, "/")
+            if (parts[1] == wanted) found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+has_local_ipv4() {
+    address=$1
+    ip -4 -o addr show 2>/dev/null | awk -v wanted="$address" '
+        {
+            split($4, parts, "/")
+            if (parts[1] == wanted) found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+wait_for_ipv4() {
+    interface=$1
+    address=$2
+    timeout=${3:-90}
+    elapsed=0
+    while ! has_ipv4 "$interface" "$address"; do
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo "required address $address did not appear on $interface after ${timeout}s" >&2
+            exit 1
+        fi
+        sleep 1
+    done
+}
+
+# svc0 is a required canonical ingress. Do not silently degrade to loopback if
+# the network-critical owner has not materialized the address yet.
+wait_for_ipv4 svc0 10.0.0.3 "${OP_GRPC_SVC0_WAIT_SECS:-90}"
+
+# One bridge-owned TLS TCP door for gRPC-Web, native gRPC, and MCP. Netmaker is
+# conditional: bind it only when the host currently owns the configured
+# address. The bridge parses this as a comma-separated bind list.
+NETMAKER_MESH_IP="${NETMAKER_MESH_IP:-100.69.0.1}"
+FABRIC_BIND="127.0.0.1:8090,10.0.0.3:8090"
+if has_local_ipv4 "$NETMAKER_MESH_IP"; then
+    FABRIC_BIND="$FABRIC_BIND,$NETMAKER_MESH_IP:8090"
+else
+    echo "Netmaker address $NETMAKER_MESH_IP is not locally present; skipping conditional bind"
+fi
 export ZEROCLAW_BIND_ADDR="$FABRIC_BIND"
 export GRPC_BIND="$FABRIC_BIND"
-export EMQX_BROKER_SOCKET="${NETMAKER_BROKER_SOCKET:-/run/ghostbridge/NetMaker/broker.sock}"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
 export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
+# The bridge opens this append-only journal with mode 0600 and syncs every
+# accepted nonce before dispatch. Keeping it outside tmpfs preserves replay
+# rejection across service/process restarts.
+export OP_AUTH_REPLAY_DB_PATH="${OP_AUTH_REPLAY_DB_PATH:-/var/lib/op-dbus/auth-replay.db}"
+# WARP + Xray necessarily replace the decoy's human-WG inner source address.
+# Bind OIA1 to the trusted decoy signature, short lifetime, one-time nonce, and
+# registered human key rather than the legacy Netmaker TCP-source equality.
+export OP_ORACLE_ASSERTION_SOURCE_BINDING="${OP_ORACLE_ASSERTION_SOURCE_BINDING:-trusted-decoy-signature}"
 export RUST_LOG="${GRPC_RUST_LOG:-info}"
 export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6334}"
 [ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"

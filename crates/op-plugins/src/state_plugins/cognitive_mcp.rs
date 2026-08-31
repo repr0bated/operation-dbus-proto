@@ -1,22 +1,20 @@
 //! Cognitive MCP state plugin — GB.CognitiveMcp.
 //!
-//! Tracks and manages the op-cognitive-mcp server: bind addresses, WireGuard
-//! identity, tool registrations, and gRPC/HTTP health.  Publishes live state
-//! to D-Bus under `/opdbus/v1/plugins/cognitive_mcp` for introspection by clients.
+//! Declares the cognitive tools compiled into `op-grpc-bridge`. The bridge owns
+//! the runtime and publishes its read-only projection to D-Bus under
+//! `/opdbus/v1/plugins/cognitive_mcp`; there is no separately supervised
+//! cognitive service or plugin-owned listener configuration.
 //!
 //! The canonical schema (every gRPC method, every MCP tool, every
 //! request/response field) lives in the `cognitive_mcp_schema()` function below.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
+use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use op_state_store::SideEffect;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::ValueAsScalar;
-use simd_json::{prelude::*, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 
 use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 
@@ -27,62 +25,8 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 const PLUGIN_NAME: &str = "cognitive_mcp";
 const PLUGIN_VERSION: &str = "2.0.0";
 const PLUGIN_CATEGORY: &str = "service";
-const PLUGIN_DESCRIPTION: &str = "Cognitive MCP server — memory, gRPC CognitiveToolService. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
+const PLUGIN_DESCRIPTION: &str = "Bridge-owned cognitive MCP tools — memory, code context, and grounded query capabilities compiled into op-grpc-bridge. THE PLUGIN IS THE SCHEMA: every method, tool, property, and field is declared here. Downstream inherits.";
 const PLUGIN_DISPLAY_NAME: &str = "GB.CognitiveMcp";
-
-/// Live supervised path (`/run/runit/service/op-cognitive-mcp`).
-const SUPERVISED_PATH: &str = "/run/runit/service/op-cognitive-mcp";
-const ENV_DIR: &str = "/etc/runit/sv/op-cognitive-mcp/env";
-const RUNTIME_ENV_DIR: &str = "/run/runit/service/op-cognitive-mcp/env";
-const DEFAULT_HTTP: &str = "100.90.37.254:3003";
-const DEFAULT_GRPC: &str = "100.90.37.254:50052";
-const DEFAULT_WG: &str = "netmaker";
-
-// ── Deployment config (tunable via env-dir / apply_state) ──────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CognitiveMcpConfig {
-    #[serde(default = "default_http")]
-    pub http: String,
-    #[serde(default = "default_grpc")]
-    pub grpc: String,
-    #[serde(default = "default_wg")]
-    pub wg_interface: String,
-    #[serde(default = "default_true")]
-    pub http_enabled: bool,
-    #[serde(default = "default_true")]
-    pub grpc_enabled: bool,
-    #[serde(default = "default_true")]
-    pub dbus_enabled: bool,
-}
-
-fn default_http() -> String {
-    DEFAULT_HTTP.into()
-}
-fn default_grpc() -> String {
-    DEFAULT_GRPC.into()
-}
-fn default_wg() -> String {
-    DEFAULT_WG.into()
-}
-fn default_true() -> bool {
-    true
-}
-
-impl Default for CognitiveMcpConfig {
-    fn default() -> Self {
-        Self {
-            http: default_http(),
-            grpc: default_grpc(),
-            wg_interface: default_wg(),
-            http_enabled: true,
-            grpc_enabled: true,
-            dbus_enabled: true,
-        }
-    }
-}
-
-// ── Plugin struct + service helpers ─────────────────────────────────────────
 
 // =============================================================================
 // PLUGIN BODY: D-Bus-backed behavior only
@@ -93,81 +37,6 @@ pub struct CognitiveMcpPlugin;
 impl CognitiveMcpPlugin {
     pub fn new() -> Self {
         Self
-    }
-
-    fn service_running() -> bool {
-        let sv = std::path::Path::new(SUPERVISED_PATH);
-        sv.exists() && !sv.join("down").exists()
-    }
-
-    fn read_env(key: &str) -> Option<String> {
-        std::fs::read_to_string(format!("{ENV_DIR}/{key}"))
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
-    fn current_config() -> CognitiveMcpConfig {
-        CognitiveMcpConfig {
-            http: Self::read_env("COGNITIVE_MCP_BIND").unwrap_or_else(default_http),
-            grpc: Self::read_env("COGNITIVE_MCP_GRPC_BIND").unwrap_or_else(default_grpc),
-            wg_interface: Self::read_env("WG_INTERFACE").unwrap_or_else(default_wg),
-            http_enabled: Self::read_env("COGNITIVE_MCP_HTTP_DISABLED").is_none(),
-            grpc_enabled: Self::read_env("COGNITIVE_MCP_GRPC_DISABLED").is_none(),
-            dbus_enabled: Self::read_env("COGNITIVE_MCP_DBUS_DISABLED").is_none(),
-        }
-    }
-
-    async fn write_env(key: &str, value: &str) -> Result<()> {
-        tokio::fs::create_dir_all(ENV_DIR)
-            .await
-            .context("create env dir")?;
-        tokio::fs::write(format!("{ENV_DIR}/{key}"), value)
-            .await
-            .with_context(|| format!("write env {key}"))?;
-        if let Ok(()) = tokio::fs::create_dir_all(RUNTIME_ENV_DIR).await {
-            let _ = tokio::fs::write(format!("{RUNTIME_ENV_DIR}/{key}"), value).await;
-        }
-        Ok(())
-    }
-
-    async fn reload_service() -> Result<()> {
-        // D-Bus only per AGENTS.md §4 - no subprocess fallbacks
-        Self::reload_service_dbus().await
-    }
-
-    async fn reload_service_dbus() -> Result<()> {
-        let conn = zbus::Connection::system()
-            .await
-            .context("Failed to connect to system D-Bus")?;
-
-        let reply = conn
-            .call_method(
-                Some("org.opdbus.v1.Runit.Systemctl"),
-                "/org/opdbus/v1/plugins/runit/systemctl",
-                Some("org.opdbus.v1.Runit.Systemctl"),
-                "reload",
-                &("op-cognitive-mcp",),
-            )
-            .await
-            .context("Failed to call reload on runit-systemctl D-Bus service")?;
-
-        let (success, message): (bool, String) = reply.body().deserialize().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to deserialize runit-systemctl reload response: {}",
-                e
-            )
-        })?;
-
-        if success {
-            tracing::info!("Reloaded op-cognitive-mcp via D-Bus: {}", message);
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "runit-systemctl reload failed: {}",
-                message
-            ))
-        }
     }
 }
 
@@ -194,53 +63,28 @@ impl StatePlugin for CognitiveMcpPlugin {
         Some(schema)
     }
 
-    /// Whether the supervised service definition exists on this host.
+    /// The cognitive runtime is a compiled component of `op-grpc-bridge`.
     ///
-    /// Availability gates more than reporting: `freeze_plugin_method_reflection`
-    /// skips unavailable plugins, so a false negative here means none of this
-    /// plugin's frozen per-method gRPC services get activated — the sealed blob is
-    /// advertised in the reflection catalog but nothing is mounted to serve it.
-    ///
-    /// Checks runit and s6 layouts. This host runs runit
-    /// (`/etc/runit/sv/op-cognitive-mcp`); checking only the s6 path reported the
-    /// plugin unavailable and silently suppressed its gRPC surface.
+    /// Availability is derived from inventory registration plus the bridge's
+    /// compile-time dependency, never from a runit directory. This keeps schema
+    /// consumers and reflection activation stable after the standalone service
+    /// definition is removed.
     fn is_available(&self) -> bool {
-        ["/etc/runit/sv/op-cognitive-mcp", SUPERVISED_PATH]
-            .iter()
-            .any(|p| std::path::Path::new(p).exists())
+        true
     }
 
     fn unavailable_reason(&self) -> String {
-        "op-cognitive-mcp supervised service definition not found under \
-         /etc/runit/sv or /run/runit/service"
+        "cognitive_mcp is compiled into op-grpc-bridge and has no external service dependency"
             .into()
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
-        let current_cfg: CognitiveMcpConfig = simd_json::serde::from_owned_value(current.clone())?;
-        let desired_cfg: CognitiveMcpConfig = simd_json::serde::from_owned_value(desired.clone())?;
-
-        let mut actions = Vec::new();
-        macro_rules! field_diff {
-            ($field:ident, $key:expr) => {
-                if current_cfg.$field != desired_cfg.$field {
-                    actions.push(StateAction::Modify {
-                        resource: $key.into(),
-                        changes: simd_json::serde::to_owned_value(&desired_cfg.$field)?,
-                    });
-                }
-            };
-        }
-        field_diff!(http, "http");
-        field_diff!(grpc, "grpc");
-        field_diff!(wg_interface, "wg_interface");
-        field_diff!(http_enabled, "http_enabled");
-        field_diff!(grpc_enabled, "grpc_enabled");
-        field_diff!(dbus_enabled, "dbus_enabled");
-
+        // This StatePlugin publishes the bridge-owned projection only. Cognitive
+        // mutations are the declared tool methods below and flow through the
+        // MutationEngine; there is no declarative service configuration to apply.
         Ok(StateDiff {
             plugin: self.name().into(),
-            actions,
+            actions: Vec::new(),
             metadata: DiffMetadata {
                 timestamp: chrono::Utc::now().timestamp(),
                 current_hash: format!("{:x}", md5::compute(simd_json::to_string(current)?)),
@@ -250,98 +94,16 @@ impl StatePlugin for CognitiveMcpPlugin {
     }
 
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        let mut changes = Vec::new();
-        let mut errors = Vec::new();
-        let mut needs_reload = false;
-
-        for action in &diff.actions {
-            if let StateAction::Modify {
-                resource,
-                changes: val,
-            } = action
-            {
-                let result: Result<()> = match resource.as_str() {
-                    "http" => {
-                        if let Some(s) = val.as_str() {
-                            Self::write_env("COGNITIVE_MCP_BIND", s).await?;
-                            needs_reload = true;
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("http must be a string"))
-                        }
-                    }
-                    "grpc" => {
-                        if let Some(s) = val.as_str() {
-                            Self::write_env("COGNITIVE_MCP_GRPC_BIND", s).await?;
-                            needs_reload = true;
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("grpc must be a string"))
-                        }
-                    }
-                    "wg_interface" => {
-                        if let Some(s) = val.as_str() {
-                            Self::write_env("WG_INTERFACE", s).await?;
-                            needs_reload = true;
-                            Ok(())
-                        } else {
-                            Err(anyhow::anyhow!("wg_interface must be a string"))
-                        }
-                    }
-                    "http_enabled" => {
-                        if val.as_bool() == Some(false) {
-                            Self::write_env("COGNITIVE_MCP_HTTP_DISABLED", "1").await?;
-                        } else {
-                            let _ = tokio::fs::remove_file(format!(
-                                "{ENV_DIR}/COGNITIVE_MCP_HTTP_DISABLED"
-                            ))
-                            .await;
-                        }
-                        needs_reload = true;
-                        Ok(())
-                    }
-                    "grpc_enabled" => {
-                        if val.as_bool() == Some(false) {
-                            Self::write_env("COGNITIVE_MCP_GRPC_DISABLED", "1").await?;
-                        } else {
-                            let _ = tokio::fs::remove_file(format!(
-                                "{ENV_DIR}/COGNITIVE_MCP_GRPC_DISABLED"
-                            ))
-                            .await;
-                        }
-                        needs_reload = true;
-                        Ok(())
-                    }
-                    "dbus_enabled" => {
-                        if val.as_bool() == Some(false) {
-                            Self::write_env("COGNITIVE_MCP_DBUS_DISABLED", "1").await?;
-                        } else {
-                            let _ = tokio::fs::remove_file(format!(
-                                "{ENV_DIR}/COGNITIVE_MCP_DBUS_DISABLED"
-                            ))
-                            .await;
-                        }
-                        needs_reload = true;
-                        Ok(())
-                    }
-                    other => Err(anyhow::anyhow!("unknown cognitive_mcp field: {other}")),
-                };
-                match result {
-                    Ok(()) => changes.push(format!("cognitive_mcp.{resource} updated")),
-                    Err(e) => errors.push(format!("cognitive_mcp.{resource}: {e}")),
-                }
-            }
-        }
-
-        if needs_reload && errors.is_empty() {
-            if let Err(e) = Self::reload_service().await {
-                tracing::warn!("cognitive_mcp reload: {e}");
-            }
-        }
-
+        let errors = (!diff.actions.is_empty())
+            .then(|| {
+                "cognitive_mcp state is bridge-owned and read-only; invoke a declared cognitive tool method instead"
+                    .to_string()
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
         Ok(ApplyResult {
             success: errors.is_empty(),
-            changes_applied: changes,
+            changes_applied: Vec::new(),
             errors,
             checkpoint: None,
         })
@@ -352,30 +114,17 @@ impl StatePlugin for CognitiveMcpPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = simd_json::json!(null);
-        Ok(Checkpoint {
-            id: format!("cognitive_mcp-{}", chrono::Utc::now().timestamp()),
-            plugin: self.name().into(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: current,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!("cognitive_mcp has no plugin-owned mutable state to checkpoint")
     }
 
-    async fn rollback(&self, checkpoint: &Checkpoint) -> Result<()> {
-        let old: CognitiveMcpConfig =
-            simd_json::serde::from_owned_value(checkpoint.state_snapshot.clone())?;
-        let desired = simd_json::serde::to_owned_value(&old)?;
-        let current = simd_json::json!(null);
-        let diff = self.calculate_diff(&current, &desired).await?;
-        self.apply_state(&diff).await?;
-        Ok(())
+    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
+        anyhow::bail!("cognitive_mcp has no plugin-owned mutable state to roll back")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
-            supports_rollback: true,
-            supports_checkpoints: true,
+            supports_rollback: false,
+            supports_checkpoints: false,
             supports_verification: true,
             atomic_operations: false,
         }
@@ -522,21 +271,17 @@ fn default_code_index_mode() -> CodeIndexMode {
     CodeIndexMode::default()
 }
 
-// Defaults matching the hand-rolled schema contract
-fn default_cognitive_http() -> String {
-    "0.0.0.0:3003".to_string()
+// Defaults matching the bridge-owned schema contract
+fn default_bridge_owned() -> bool {
+    true
 }
 
-fn default_cognitive_grpc() -> String {
-    "0.0.0.0:50052".to_string()
+fn default_true() -> bool {
+    true
 }
 
-fn default_running() -> bool {
-    false
-}
-
-fn default_healthy() -> bool {
-    false
+fn default_execution_model() -> String {
+    "in_process".to_string()
 }
 
 fn default_queries_remaining() -> i64 {
@@ -569,19 +314,6 @@ fn default_code_context_limit() -> u8 {
 
 fn default_session_id() -> String {
     "default".to_string()
-}
-
-// Examples
-fn example_cognitive_http() -> String {
-    "100.90.37.254:3003".to_string()
-}
-
-fn example_cognitive_grpc() -> String {
-    "100.90.37.254:50052".to_string()
-}
-
-fn example_wg_interface() -> String {
-    "netmaker".to_string()
 }
 
 fn example_memory_namespace() -> Option<String> {
@@ -794,29 +526,11 @@ pub struct InvokeToolOutput {
     pub error: Option<String>,
 }
 
-/// Output for GetConfig method
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GetConfigOutput {
-    pub http: String,
-    pub grpc: String,
-    pub wg_interface: String,
-    pub http_enabled: bool,
-    pub grpc_enabled: bool,
-    pub dbus_enabled: bool,
-}
-
-/// Output for SetConfig method
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SetConfigOutput {
-    pub success: bool,
-    pub message: String,
-}
-
 /// Output for GetHealth method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GetHealthOutput {
-    pub healthy: bool,
-    pub running: bool,
+    pub bridge_owned: bool,
+    pub execution_model: String,
     pub auth_status: String,
     pub queries_remaining: i64,
     pub queries_limit: i64,
@@ -898,41 +612,16 @@ pub struct GeminiQueryOutput {
     pub citations: Vec<String>,
 }
 
-/// Output for RestartService method
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RestartServiceOutput {
-    pub success: bool,
-    pub message: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.cognitive-mcp.schema@v1"))]
 #[schemars(extend("x-oscal-category" = "service"))]
 pub struct CognitiveMcpState {
-    #[serde(default = "default_cognitive_http")]
-    #[schemars(description = "HTTP/SSE bind address for the MCP protocol endpoint", example = example_cognitive_http(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.http@v1"))]
-    pub http: String,
-    #[serde(default = "default_cognitive_grpc")]
-    #[schemars(description = "gRPC bind address for the CognitiveToolService endpoint", example = example_cognitive_grpc(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc@v1"))]
-    pub grpc: String,
-    #[serde(default = "default_wg")]
-    #[schemars(description = "WireGuard interface to read identity from", example = example_wg_interface(), extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.wg-interface@v1"))]
-    pub wg_interface: String,
-    #[serde(default = "default_true")]
-    #[schemars(description = "Enable the HTTP/SSE MCP transport", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.http-enabled@v1"))]
-    pub http_enabled: bool,
-    #[serde(default = "default_true")]
-    #[schemars(description = "Enable the gRPC CognitiveToolService transport", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.grpc-enabled@v1"))]
-    pub grpc_enabled: bool,
-    #[serde(default = "default_true")]
-    #[schemars(description = "Register on D-Bus as org.opdbus.CognitiveMcp", extend("x-oscal-subid" = "mut.software.plugin.cognitive-mcp.dbus-enabled@v1"))]
-    pub dbus_enabled: bool,
-    #[serde(default = "default_running")]
-    #[schemars(description = "Whether the s6 service is currently running", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.running@v1"))]
-    pub running: bool,
-    #[serde(default = "default_healthy")]
-    #[schemars(description = "Last known health status from GetHealth", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.healthy@v1"))]
-    pub healthy: bool,
+    #[serde(default = "default_bridge_owned")]
+    #[schemars(description = "True because the cognitive runtime is compiled into and owned by op-grpc-bridge", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.bridge-owned@v1"))]
+    pub bridge_owned: bool,
+    #[serde(default = "default_execution_model")]
+    #[schemars(description = "Cognitive runtime execution model; always in_process for this plugin", extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.execution-model@v1"))]
+    pub execution_model: String,
     #[serde(default = "default_auth_status")]
     #[schemars(description = "Current authentication method", example = example_auth_status(), extend("readOnly" = true), extend("x-oscal-subid" = "obs.software.plugin.cognitive-mcp.auth-status@v1"))]
     pub auth_status: AuthStatus,
@@ -965,23 +654,21 @@ pub struct CognitiveMcpState {
 // PLUGIN EXIT: publish the single PluginSchema contract
 // =============================================================================
 
-// Handler audit (all 15 schema methods below) — where each is actually backed:
-// get_config              → cognitive_mcp.rs:current_config() (this file, StatePlugin)
-// set_config              → cognitive_mcp.rs:apply_state() (this file, StatePlugin)
-// get_health              → op-cognitive-mcp/grpc_service.rs:get_health (tonic RPC)
-// list_tools              → op-cognitive-mcp/dbus_interface.rs:list_tools (D-Bus)
-// register_tool           → op-cognitive-mcp/cognitive_tools.rs:RegisterToolTool
+// Handler audit (all 13 schema methods below) — where each is actually backed:
+// get_health              → op-grpc-bridge/mutation_engine.rs bridge-owned projection
+// list_tools              → op-grpc-bridge/mutation_engine.rs in-process ToolRegistry
+// register_tool           → embedded op_cognitive_mcp::cognitive_tools::RegisterToolTool
 //                           (stub — no dynamic tool-registration mechanism exists yet)
-// memory_store            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_store
-// memory_retrieve         → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_retrieve
-// memory_query            → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_query
-// memory_delete           → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_delete
-// memory_list_namespaces  → op-cognitive-mcp/cognitive_tools.rs:MemoryTool::op_list_namespaces
-// code_search             → op-cognitive-mcp/code_tools.rs:CodeSearchTool
-// code_index              → op-cognitive-mcp/code_tools.rs:CodeIndexTool
-// code_context            → op-cognitive-mcp/code_tools.rs:CodeContextTool
-// gemini_query            → op-cognitive-mcp/grpc_service.rs:gemini_query (tonic RPC)
-// restart_service         → cognitive_mcp.rs:reload_service_dbus() (this file, StatePlugin)
+// memory_store            → embedded op_cognitive_mcp::cognitive_tools::MemoryTool::op_store
+// memory_retrieve         → embedded op_cognitive_mcp::cognitive_tools::MemoryTool::op_retrieve
+// memory_query            → embedded op_cognitive_mcp::cognitive_tools::MemoryTool::op_query
+// memory_delete           → embedded op_cognitive_mcp::cognitive_tools::MemoryTool::op_delete
+// memory_list_namespaces  → embedded op_cognitive_mcp::cognitive_tools::MemoryTool::op_list_namespaces
+// code_search             → embedded op_cognitive_mcp::code_tools::CodeSearchTool
+// code_index              → embedded op_cognitive_mcp::code_tools::CodeIndexTool
+// code_context            → embedded op_cognitive_mcp::code_tools::CodeContextTool
+// gemini_query            → embedded op_cognitive_mcp::cognitive_tools::AskQuestionTool
+// invoke_tool             → op-grpc-bridge/mutation_engine.rs in-process ToolRegistry
 pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CognitiveMcpState))
         .expect("schemars schema serializes to JSON");
@@ -997,26 +684,6 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     // Add methods
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 
-    schema.methods.insert(
-        "get_config".to_string(),
-        method_decl_from_schemars_with_output::<NoArgs, GetConfigOutput>(
-            "get_config",
-            SideEffect::Read,
-            true,
-            "cognitive_mcp.read",
-            "obs.service.cognitive-mcp.config.get@v1",
-        ),
-    );
-    schema.methods.insert(
-        "set_config".to_string(),
-        method_decl_from_schemars_with_output::<(), SetConfigOutput>(
-            "set_config",
-            SideEffect::Mutation,
-            false,
-            "cognitive_mcp.invoke",
-            "mut.service.cognitive-mcp.config.set@v1",
-        ),
-    );
     schema.methods.insert(
         "get_health".to_string(),
         method_decl_from_schemars_with_output::<NoArgs, GetHealthOutput>(
@@ -1137,17 +804,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             "mut.service.gemini.query@v1",
         ),
     );
-    schema.methods.insert(
-        "restart_service".to_string(),
-        method_decl_from_schemars_with_output::<(), RestartServiceOutput>(
-            "restart_service",
-            SideEffect::Mutation,
-            true,
-            "cognitive_mcp.invoke",
-            "mut.service.cognitive-mcp.restart@v1",
-        ),
-    );
-    // Generic tool invocation. The 15 methods above are fixed at blob-seal time, but
+    // Generic tool invocation. The 12 methods above are fixed at blob-seal time, but
     // the ToolRegistry is populated at runtime (406 tools today), so a per-tool method
     // is impossible without re-sealing on every registration. `invoke_tool` is the one
     // typed door to the whole registry: `tool_name` selects the tool and `arguments` is
@@ -1167,14 +824,14 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         "cognitive_mcp.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "cognitive_mcp.read".to_string(),
-            description: "Grants: get_config, get_health, list_tools, memory_retrieve, memory_query, memory_list_namespaces, code_search, code_context.".to_string(),
+            description: "Grants bridge-owned cognitive reads: get_health, list_tools, memory_retrieve, memory_query, memory_list_namespaces, code_search, code_context.".to_string(),
         },
     );
     schema.capabilities.insert(
         "cognitive_mcp.invoke".to_string(),
         op_state_store::CapabilityDecl {
             id: "cognitive_mcp.invoke".to_string(),
-            description: "Grants: set_config, register_tool, memory_store, memory_delete, code_index, gemini_query, restart_service, invoke_tool.".to_string(),
+            description: "Grants in-process cognitive tool invocation: register_tool, memory_store, memory_delete, code_index, gemini_query, invoke_tool.".to_string(),
         },
     );
 
@@ -1231,6 +888,106 @@ mod tests {
         for subid in subids {
             validate_subid(&subid).expect("invalid subid: {subid}");
         }
+    }
+
+    #[test]
+    fn bridge_owned_plugin_is_available_without_a_service_definition() {
+        let plugin = CognitiveMcpPlugin::new();
+        assert!(plugin.is_available());
+        assert!(plugin
+            .unavailable_reason()
+            .contains("compiled into op-grpc-bridge"));
+    }
+
+    #[test]
+    fn schema_excludes_retired_standalone_service_controls() {
+        let schema = CognitiveMcpPlugin::new()
+            .schema()
+            .expect("cognitive_mcp must publish its bridge-owned schema");
+
+        for method in ["get_config", "set_config", "restart_service"] {
+            assert!(
+                !schema.methods.contains_key(method),
+                "retired standalone management method {method} leaked into the schema"
+            );
+        }
+        for field in [
+            "http",
+            "grpc",
+            "wg_interface",
+            "http_enabled",
+            "grpc_enabled",
+            "dbus_enabled",
+            "running",
+        ] {
+            assert!(
+                !schema.fields.contains_key(field),
+                "retired standalone transport field {field} leaked into the schema"
+            );
+        }
+
+        assert_eq!(schema.methods.len(), 13);
+        for method in [
+            "get_health",
+            "list_tools",
+            "register_tool",
+            "memory_store",
+            "memory_retrieve",
+            "memory_query",
+            "memory_delete",
+            "memory_list_namespaces",
+            "code_search",
+            "code_index",
+            "code_context",
+            "gemini_query",
+            "invoke_tool",
+        ] {
+            assert!(
+                schema.methods.contains_key(method),
+                "bridge-owned cognitive method {method} must remain sealed"
+            );
+        }
+
+        let encoded = serde_json::to_string(&schema).expect("schema serializes");
+        for retired_signal in ["3003", "50052", "netmaker", "op-cognitive-mcp"] {
+            assert!(
+                !encoded.contains(retired_signal),
+                "retired standalone signal {retired_signal} leaked into the schema"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn state_plugin_cannot_apply_service_configuration() {
+        let plugin = CognitiveMcpPlugin::new();
+        let diff = plugin
+            .calculate_diff(
+                &simd_json::json!({"bridge_owned": true}),
+                &simd_json::json!({"http": "127.0.0.1:1"}),
+            )
+            .await
+            .expect("read-only diff calculation succeeds");
+        assert!(diff.actions.is_empty());
+
+        let forged = StateDiff {
+            plugin: PLUGIN_NAME.to_string(),
+            actions: vec![op_state::StateAction::Modify {
+                resource: "http".to_string(),
+                changes: simd_json::json!("127.0.0.1:1"),
+            }],
+            metadata: diff.metadata,
+        };
+        let result = plugin
+            .apply_state(&forged)
+            .await
+            .expect("read-only rejection is an ApplyResult");
+        assert!(!result.success);
+        assert!(result.changes_applied.is_empty());
+        assert!(result.errors[0].contains("bridge-owned and read-only"));
+
+        let capabilities = plugin.capabilities();
+        assert!(!capabilities.supports_checkpoints);
+        assert!(!capabilities.supports_rollback);
     }
 }
 

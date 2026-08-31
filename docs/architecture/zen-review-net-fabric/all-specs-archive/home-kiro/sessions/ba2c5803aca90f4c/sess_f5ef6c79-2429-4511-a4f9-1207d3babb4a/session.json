@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_f5ef6c79-2429-4511-a4f9-1207d3babb4a",
+  "title": "do you se a lsp.json on your settings folder",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/repos-bulk"
+  ],
+  "createdAt": "2026-08-10T16:39:59.302Z",
+  "lastModifiedAt": "2026-08-10T16:42:09.091Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

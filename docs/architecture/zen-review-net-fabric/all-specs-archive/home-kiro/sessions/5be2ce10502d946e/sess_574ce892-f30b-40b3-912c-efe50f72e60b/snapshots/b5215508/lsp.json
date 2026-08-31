@@ -1,0 +1,121 @@
+{
+  "servers": {
+    "rust-analyzer": {
+      "command": "rust-analyzer",
+      "args": [],
+      "file_patterns": ["*.rs"],
+      "request_timeout_secs": 180,
+      "initialization_options": {
+        "cargo": {
+          "features": "all",
+          "allTargets": true,
+          "buildScripts": {
+            "enable": true
+          }
+        },
+        "procMacro": {
+          "enable": true,
+          "attributes": {
+            "enable": true
+          }
+        },
+        "checkOnSave": false,
+        "inlayHints": {
+          "maxLength": null,
+          "typeHints": {
+            "enable": true
+          },
+          "chainingHints": {
+            "enable": false
+          },
+          "parameterHints": {
+            "enable": false
+          },
+          "expressionAdjustmentHints": {
+            "enable": false
+          },
+          "lifetimeElisionHints": {
+            "enable": "never"
+          },
+          "closureReturnTypeHints": {
+            "enable": "always"
+          }
+        },
+        "hover": {
+          "memoryLayout": {
+            "enable": true
+          }
+        },
+        "cachePriming": {
+          "enable": true
+        },
+        "diagnostics": {
+          "enable": true
+        }
+      }
+    },
+    "pylsp": {
+      "command": "pylsp",
+      "args": [],
+      "file_patterns": ["*.py"],
+      "request_timeout_secs": 120,
+      "initialization_options": {}
+    },
+    "gopls": {
+      "command": "gopls",
+      "args": ["serve"],
+      "file_patterns": ["*.go"],
+      "request_timeout_secs": 120,
+      "initialization_options": {
+        "analyses": {
+          "unusedparams": false,
+          "shadow": false
+        },
+        "staticcheck": false,
+        "hints": {
+          "assignVariableTypes": true,
+          "compositeLiteralFields": true,
+          "compositeLiteralTypes": true,
+          "constantValues": true,
+          "functionTypeParameters": true,
+          "parameterNames": false,
+          "rangeVariableTypes": true
+        }
+      }
+    },
+    "clangd": {
+      "command": "clangd",
+      "args": ["--background-index", "--clang-tidy=false", "--header-insertion=never"],
+      "file_patterns": ["*.c", "*.h", "*.cpp", "*.hpp", "*.cc", "*.cxx"],
+      "request_timeout_secs": 120,
+      "initialization_options": {}
+    },
+    "typescript-language-server": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "file_patterns": ["*.ts", "*.tsx", "*.js", "*.jsx"],
+      "request_timeout_secs": 90,
+      "initialization_options": {
+        "preferences": {
+          "includeInlayParameterNameHints": "none",
+          "includeInlayVariableTypeHints": true,
+          "includeInlayFunctionLikeReturnTypeHints": true
+        }
+      }
+    },
+    "bash-language-server": {
+      "command": "bash-language-server",
+      "args": ["start"],
+      "file_patterns": ["*.sh", "*.bash", "run", "finish", "check", "log/*"],
+      "request_timeout_secs": 60,
+      "initialization_options": {}
+    },
+    "buf-lsp": {
+      "command": "buf",
+      "args": ["lsp"],
+      "file_patterns": ["*.proto"],
+      "request_timeout_secs": 60,
+      "initialization_options": {}
+    }
+  }
+}

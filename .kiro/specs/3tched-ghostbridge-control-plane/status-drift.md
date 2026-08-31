@@ -2,7 +2,7 @@
 
 **Updated:** 2026-08-07T17:10:00Z  
 **Spec:** `.kiro/specs/3tched-ghostbridge-control-plane` (+ topology lock in `.kiro/specs/README.md`)  
-**Related:** `netmaker-xray-identity-handoff`, `cognitive-mcp-only-door-phase2` (mesh xhttp hop)
+**Related:** `netmaker-xray-identity-handoff`, `unified-authenticated-mcp-cognitive-control-plane` (canonical MCP ingress; supersedes cognitive-mcp-only-door-phase2)
 
 ## Spec lock (intended)
 

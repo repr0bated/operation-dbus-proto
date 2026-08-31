@@ -63,7 +63,8 @@ mod projection {
 
         // Read router projection from D-Bus via /dev/shm projection cache
         // The actual projection is written by op-dbus at /dev/shm/plugin-{name}.json
-        let projection_path = if std::path::Path::new("/dev/shm/plugin-tched_router.json").exists() {
+        let projection_path = if std::path::Path::new("/dev/shm/plugin-tched_router.json").exists()
+        {
             "/dev/shm/plugin-tched_router.json"
         } else {
             "/dev/shm/plugin-zeroclaw.json"

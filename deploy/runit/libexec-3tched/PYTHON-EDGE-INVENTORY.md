@@ -1,6 +1,8 @@
 # Python edge inventory — /usr/local/libexec/3tched
 
-Captured live from the host 2026-08-16. This is the invocation context that
+Captured live from the host 2026-08-16. This is a historical invocation snapshot;
+rows explicitly marked retired no longer describe active deployment wiring. It records
+the invocation context that
 cannot be recovered by reading the scripts: which runit service starts each
 one, its exact argv, what it listens on, and what is on the other side.
 
@@ -48,14 +50,14 @@ flags already express them.
 
 | Service | argv | Running |
 |---|---|---|
-| `fwd-nm-mesh-8090` | `tcp-listen 100.69.0.1 8090 unix-connect /run/opdbus/grpc.sock` | yes |
+| `fwd-nm-mesh-8090` | `tcp-listen 100.69.0.1 8090 unix-connect /run/opdbus/grpc.sock` | **retired 2026-08-31** — `op-grpc-bridge` conditionally binds the locally-owned configured mesh IP directly |
 | `uds-assistant` | `tcp-listen 10.200.0.2 8091 unix-connect "$SOCK"` | no — assistant container is stopped |
 
 ### NOT expressible today — TCP-to-TCP, no op-uds-relay flag exists
 
 | Service | argv | Running |
 |---|---|---|
-| `fwd-8090` | `tcp-listen 10.0.0.3 $TONIC_PORT tcp-connect 127.0.0.1 $TONIC_PORT` (8090) | yes |
+| `fwd-8090` | `tcp-listen 10.0.0.3 $TONIC_PORT tcp-connect 127.0.0.1 $TONIC_PORT` (8090) | **retired 2026-08-31** — `op-grpc-bridge` binds `10.0.0.3:8090` directly |
 | `fwd-nm-tonic-8081` | `tcp-listen 10.0.0.2 8081 tcp-connect 127.0.0.1 8081` | yes |
 | `fwd-nm-broker-8083` | `tcp-listen 10.0.0.2 8083 tcp-connect 127.0.0.1 8083` | yes |
 | `fwd-nm-mesh-8081` | `tcp-listen 100.69.0.1 8081 tcp-connect 127.0.0.1 8081` | yes |

@@ -1665,7 +1665,6 @@ pub(crate) fn openflow_schema() -> PluginSchema {
     schema
 }
 
-
 /// Input for EnsureFallbackNormal — cookied priority=0 actions=NORMAL.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EnsureFallbackNormalInput {
@@ -1772,7 +1771,6 @@ pub struct ModifyFlowInput {
     /// Update priority
     pub priority: Option<u16>,
 }
-
 
 /// Dispatch an `openflow` schema method. Called from `op-grpc-bridge`'s
 /// `MutationEngine::dispatch_method_call`. JSON args validated against

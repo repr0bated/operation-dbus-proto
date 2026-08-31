@@ -83,6 +83,9 @@ impl ActiveReflectionCatalog {
     }
 
     pub async fn upsert_blob(&self, blob: PluginObjectBlob) {
+        if op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id) {
+            return;
+        }
         let mut inner = self.inner.write().await;
         inner.blobs.insert(blob.manifest.plugin_id.clone(), blob);
         inner.rebuild_index();
@@ -133,6 +136,9 @@ impl ActiveReflectionCatalog {
         let count = blobs.len();
         inner.blobs = blobs
             .into_iter()
+            .filter(|blob| {
+                !op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id)
+            })
             .map(|blob| (blob.manifest.plugin_id.clone(), blob))
             .collect();
         inner.catalog_hash = Some(hash);

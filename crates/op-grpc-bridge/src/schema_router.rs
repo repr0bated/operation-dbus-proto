@@ -23,8 +23,8 @@ use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-// Import capability grants loader for bridge-layer enforcement (VAL-ENFORCE-002).
-use crate::interceptor::load_capability_grants;
+// Import exact-principal capability enforcement (VAL-ENFORCE-002).
+use crate::interceptor::{load_capability_grants, GhostbridgeIdentity};
 use zbus::{Connection, Proxy};
 
 use crate::mutation_engine::MutationEngine;
@@ -426,6 +426,9 @@ impl SchemaRouter {
         let mut routes = HashMap::new();
         for blob in catalog.plugin_object_blobs() {
             let plugin_id = blob.manifest.plugin_id.clone();
+            if op_plugins::default_registry::is_retired_plugin(&plugin_id) {
+                continue;
+            }
             let schema: JsonValue = match serde_json::from_str(&blob.schema_json) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -693,6 +696,71 @@ impl SchemaBackedInterface {
 
         Ok(())
     }
+
+    async fn dispatch_call_for_identity(
+        &self,
+        method: String,
+        json_args: String,
+        identity: Option<&GhostbridgeIdentity>,
+    ) -> zbus::fdo::Result<String> {
+        let method_decl = match self.route.methods.get(&method) {
+            Some(decl) => decl,
+            None => return Err(zbus::fdo::Error::UnknownMethod(method)),
+        };
+
+        info!(plugin_id = %self.plugin_id, method, "D-Bus method call received");
+
+        if let Err(error) = self.validate_json_args(method_decl, &json_args) {
+            return Err(zbus::fdo::Error::InvalidArgs(format!(
+                "arguments do not conform to schema for method '{}': {}",
+                method, error
+            )));
+        }
+
+        let identity = identity.ok_or_else(|| {
+            zbus::fdo::Error::AccessDenied(
+                "PluginV1.Call has no authoritative sender-to-footprint identity binding"
+                    .to_string(),
+            )
+        })?;
+        if identity.footprint.is_empty() || identity.session_id.is_empty() {
+            return Err(zbus::fdo::Error::AccessDenied(
+                "PluginV1.Call requires a non-empty authenticated identity".to_string(),
+            ));
+        }
+
+        let required_cap = method_decl
+            .get("required_capability")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|capability| !capability.is_empty());
+        if let Some(required_cap) = required_cap {
+            if !load_capability_grants(&identity.footprint).contains(required_cap) {
+                return Err(zbus::fdo::Error::AccessDenied(format!(
+                    "capability '{}' is not granted to the authenticated caller of method '{}'",
+                    required_cap, method
+                )));
+            }
+        }
+
+        let engine = self.engine.as_ref().ok_or_else(|| {
+            zbus::fdo::Error::Failed(
+                "MutationEngine not wired to this interface — dispatch unavailable".to_string(),
+            )
+        })?;
+        let result = engine
+            .dispatch_method_call(
+                &self.plugin_id,
+                &method,
+                &json_args,
+                required_cap,
+                &identity.session_id,
+            )
+            .await
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+
+        serde_json::to_string(&result).map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+    }
 }
 
 /// Test-only access to the zbus `call` dispatcher: the interface method is
@@ -701,12 +769,22 @@ impl SchemaBackedInterface {
 /// lookup → arg validation → capability gate → dispatch) through this door.
 #[cfg(test)]
 impl SchemaBackedInterface {
+    pub(crate) const TEST_CALLER_FOOTPRINT: &'static str = "schema-router-test-footprint";
+
     pub(crate) async fn call_in_test(
         &self,
         method: String,
         json_args: String,
     ) -> zbus::fdo::Result<String> {
-        self.call(method, json_args).await
+        self.dispatch_call_for_identity(
+            method,
+            json_args,
+            Some(&GhostbridgeIdentity {
+                footprint: Self::TEST_CALLER_FOOTPRINT.to_string(),
+                session_id: "schema-router-test-session".to_string(),
+            }),
+        )
+        .await
     }
 }
 
@@ -723,85 +801,12 @@ impl SchemaBackedInterface {
     ///   3. Capability check → reject if required_capability not granted (AccessDenied)
     ///   4. MutationEngine.mutate → record in event chain (Requirement 5)
     async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
-        // 1. Method-existence gate: reject undeclared methods (Requirement 6).
-        // If the methods map is empty, ALL invocations are rejected as UnknownMethod.
-        let method_decl = match self.route.methods.get(&method) {
-            Some(decl) => decl,
-            None => return Err(zbus::fdo::Error::UnknownMethod(method)),
-        };
-
-        info!(plugin_id = %self.plugin_id, method, "D-Bus method call received");
-
-        // 2. Argument validation against MethodDecl.args JSON Schema (Requirement 6.3).
-        // json_args must conform to the schema; rejection as InvalidArgs without calling mutate.
-        if let Err(e) = self.validate_json_args(method_decl, &json_args) {
-            return Err(zbus::fdo::Error::InvalidArgs(format!(
-                "arguments do not conform to schema for method '{}': {}",
-                method, e
-            )));
-        }
-
-        // 3. Capability enforcement (Requirement 7.2, VAL-ENFORCE-002/003).
-        // For D-Bus calls, capability checks are delegated to the bridge.
-        // The caller identity (footprint) must grant the required_capability if non-null.
-        // This enforcement happens at bridge layer only (VAL-ENFORCE-006).
-        let required_cap = method_decl
-            .get("required_capability")
-            .and_then(|c| c.as_str())
-            .filter(|s| !s.is_empty());
-
-        if let Some(cap) = required_cap {
-            // For D-Bus, we check the current sled's footprint grants.
-            // This is the primary gate: footprint validation already passed via
-            // the sled's temporal hash check (NFR-006).
-            let grants = match op_identity::read_sled() {
-                Ok((ptr, _mmap)) => {
-                    let sled = unsafe { &*ptr };
-                    load_capability_grants(&hex::encode(sled.hashed_footprint))
-                }
-                Err(_) => std::collections::HashSet::new(),
-            };
-
-            if !grants.contains(cap) {
-                // VAL-ENFORCE-003: Missing capability denied without calling mutate.
-                return Err(zbus::fdo::Error::AccessDenied(format!(
-                    "capability '{}' required for method '{}' is not granted",
-                    cap, method
-                )));
-            }
-        }
-
-        // 4. Real dispatch through MutationEngine (Requirement 5).
-        //    json_args is passed verbatim — no default, no placeholder
-        //    (Requirement 5.4 / VAL-DISPATCH-004).
-        let engine = self.engine.as_ref().ok_or_else(|| {
-            zbus::fdo::Error::Failed(
-                "MutationEngine not wired to this interface — dispatch unavailable".to_string(),
-            )
-        })?;
-
-        // The capability_id is read from the MethodDecl's required_capability
-        // (enforcement already performed above, here it's threaded into event chain).
-        let capability_id = required_cap.map(|s| s.to_string());
-
-        // The actor_id for a D-Bus dispatch is the caller's bus identity.
-        // The interceptor-extracted footprint/session is the primary gate;
-        // here we use the plugin's bus name as the actor for audit purposes.
-        let actor_id = format!("dbus:{}", self.plugin_id);
-
-        let result = engine
-            .dispatch_method_call(
-                &self.plugin_id,
-                &method,
-                &json_args,
-                capability_id.as_deref(),
-                &actor_id,
-            )
+        // zbus authenticates the bus connection, but this interface currently
+        // has no authoritative sender unique-name -> Ghostbridge footprint
+        // resolver. Until that binding exists, the production D-Bus method is
+        // deliberately unavailable rather than borrowing wildcard authority.
+        self.dispatch_call_for_identity(method, json_args, None)
             .await
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-
-        // 5. Return the serialized result to the D-Bus caller.
-        serde_json::to_string(&result).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     /// Get a property value from SHM present-state.
@@ -920,6 +925,7 @@ impl From<SchemaRouterError> for tonic::Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::human_principal_dispatch::tests::test_registry_guard;
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -1372,6 +1378,7 @@ mod tests {
         );
 
         cleanup(&base);
+        std::env::remove_var("OP_GRANTS_PATH");
     }
 
     // ── VAL-BRIDGE-004: every MethodDecl exposed as a callable method ──
@@ -1398,13 +1405,15 @@ mod tests {
         // A declared method is callable (passes the method-existence gate);
         // an undeclared method is rejected as UnknownMethod.
         let unknown = iface
-            .call("Nonexistent".to_string(), "{}".to_string())
+            .call_in_test("Nonexistent".to_string(), "{}".to_string())
             .await;
         assert!(
             matches!(unknown, Err(zbus::fdo::Error::UnknownMethod(_))),
             "undeclared method must be rejected as UnknownMethod"
         );
-        let known = iface.call("GetKey".to_string(), "{}".to_string()).await;
+        let known = iface
+            .call_in_test("GetKey".to_string(), "{}".to_string())
+            .await;
         assert!(
             !matches!(known, Err(zbus::fdo::Error::UnknownMethod(_))),
             "a declared method must be exposed (not rejected as UnknownMethod)"
@@ -1731,7 +1740,7 @@ mod tests {
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
         let result = iface
-            .call("GetStatus".to_string(), r#"{"verbose":true}"#.to_string())
+            .call_in_test("GetStatus".to_string(), r#"{"verbose":true}"#.to_string())
             .await;
         assert!(result.is_ok(), "dispatch should succeed: {:?}", result);
         let body: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -1770,7 +1779,7 @@ mod tests {
 
         let body: serde_json::Value = serde_json::from_str(
             &iface
-                .call("GetStatus".to_string(), "{}".to_string())
+                .call_in_test("GetStatus".to_string(), "{}".to_string())
                 .await
                 .unwrap(),
         )
@@ -1802,7 +1811,7 @@ mod tests {
         // Valid JSON args that pass validation, but ForceDispatchError triggers
         // an error in dispatch_method_call to test error propagation.
         let result = iface
-            .call("ForceDispatchError".to_string(), "{}".to_string())
+            .call_in_test("ForceDispatchError".to_string(), "{}".to_string())
             .await;
         assert!(result.is_err(), "dispatch error must propagate to caller");
         let err = result.unwrap_err();
@@ -1851,7 +1860,7 @@ mod tests {
 
         let verbatim = r#"{"verbose":false}"#;
         iface
-            .call("GetStatus".to_string(), verbatim.to_string())
+            .call_in_test("GetStatus".to_string(), verbatim.to_string())
             .await
             .unwrap();
 
@@ -1901,7 +1910,7 @@ mod tests {
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
         iface
-            .call("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
+            .call_in_test("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
             .await
             .unwrap();
 
@@ -1943,7 +1952,9 @@ mod tests {
             assert!(chain.events().is_empty(), "no events before dispatch");
         }
 
-        let result = iface.call("GetStatus".to_string(), "{}".to_string()).await;
+        let result = iface
+            .call_in_test("GetStatus".to_string(), "{}".to_string())
+            .await;
 
         assert!(result.is_ok(), "dispatch must succeed");
         let chain = engine.event_chain.read().await;
@@ -1966,7 +1977,7 @@ mod tests {
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
         iface
-            .call("GetStatus".to_string(), "{}".to_string())
+            .call_in_test("GetStatus".to_string(), "{}".to_string())
             .await
             .unwrap();
 
@@ -1990,7 +2001,7 @@ mod tests {
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
         let result = iface
-            .call("Nonexistent".to_string(), "{}".to_string())
+            .call_in_test("Nonexistent".to_string(), "{}".to_string())
             .await;
         assert!(
             matches!(result, Err(zbus::fdo::Error::UnknownMethod(_))),
@@ -2022,7 +2033,9 @@ mod tests {
         // The call should validate by looking up the method in the route's methods map
         // (which contains MethodDecl JSON) and then dispatch.
         // Use GetKey which has null required_capability (from write_test_monolith)
-        let result = iface.call("GetKey".to_string(), "{}".to_string()).await;
+        let result = iface
+            .call_in_test("GetKey".to_string(), "{}".to_string())
+            .await;
         assert!(
             result.is_ok(),
             "call should succeed after method lookup and validation: {:?}",
@@ -2053,7 +2066,9 @@ mod tests {
 
         // SetKey requires {"key": "string"} with key in required array
         // Missing required key should be rejected
-        let result = iface.call("SetKey".to_string(), "{}".to_string()).await;
+        let result = iface
+            .call_in_test("SetKey".to_string(), "{}".to_string())
+            .await;
         assert!(
             matches!(result, Err(zbus::fdo::Error::InvalidArgs(_))),
             "missing required key should be rejected as InvalidArgs"
@@ -2100,7 +2115,7 @@ mod tests {
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
         let result = iface
-            .call("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
+            .call_in_test("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
             .await;
         assert!(
             result.is_ok(),
@@ -2192,7 +2207,9 @@ mod tests {
         );
 
         // Any method call should be rejected as UnknownMethod
-        let result = iface.call("AnyMethod".to_string(), "{}".to_string()).await;
+        let result = iface
+            .call_in_test("AnyMethod".to_string(), "{}".to_string())
+            .await;
         assert!(
             matches!(result, Err(zbus::fdo::Error::UnknownMethod(_))),
             "empty methods map must reject all invocations as UnknownMethod"
@@ -2212,15 +2229,13 @@ mod tests {
 
     #[tokio::test]
     async fn required_capability_check_denies_ungranted() {
+        let _env_guard = test_registry_guard();
         // VAL-ENFORCE-002: When required_capability is declared, the caller's
         // footprint must grant it. If not granted, the call is denied without
         // calling mutate (VAL-ENFORCE-003).
         let base = test_base_dir();
 
-        // Clean up any stale env vars from prior tests to ensure fresh test state
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
-        let _ = std::fs::remove_file("/dev/shm/plugin_schema.dat");
 
         // Build the capability grants file with grants for one footprint
         let grants_path = base.join("opdbus/capability-grants.json");
@@ -2232,32 +2247,6 @@ mod tests {
         });
         std::fs::write(&grants_path, serde_json::to_vec(&grants_json).unwrap()).unwrap();
 
-        // Write sled with a different footprint (not in grants)
-        let sled = op_identity::IdentitySled {
-            wireguard_pubkey: [0xAA; 32],
-            mutation_index: 1,
-            hashed_footprint: [0xDD; 32], // Not in grants
-            trace_id: [0xEE; 16],
-            schema_version: 1,
-            reserved: [0u8; 44],
-            vector_id: [0xCC; 16],
-        };
-        // Write sled bytes directly to custom path (bypass write_sled's hardcoded path)
-        let sled_path = base.join("plugin_schema.dat");
-        let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                &sled as *const op_identity::IdentitySled as *const u8,
-                op_identity::IdentitySled::SIZE,
-            )
-        };
-        let tmp = format!("{}.tmp", sled_path.to_string_lossy());
-        let mut f = std::fs::File::create(&tmp).unwrap();
-        std::io::Write::write_all(&mut f, bytes).unwrap();
-        f.sync_data().unwrap();
-        std::fs::rename(&tmp, &sled_path).unwrap();
-
-        // Set env vars AFTER writing files
-        std::env::set_var("OP_SLED_PATH", sled_path.clone().into_os_string());
         std::env::set_var("OP_GRANTS_PATH", grants_path.into_os_string());
 
         let engine = test_engine();
@@ -2267,7 +2256,7 @@ mod tests {
 
         // SetKey has required_capability: "beta.set_key" which is NOT granted
         let result = iface
-            .call("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
+            .call_in_test("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
             .await;
 
         // Should be denied as AccessDenied
@@ -2285,28 +2274,23 @@ mod tests {
         );
 
         cleanup(&base);
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
     }
 
     #[tokio::test]
     async fn required_capability_check_allows_granted() {
+        let _env_guard = test_registry_guard();
         // VAL-ENFORCE-002: When required_capability is declared and the caller's
         // footprint grants it, the call proceeds to mutate.
         let base = test_base_dir();
 
-        // Clean up any stale env vars from prior tests
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
-        let _ = std::fs::remove_file("/dev/shm/plugin_schema.dat");
 
         // Build the capability grants file with grants for the sled footprint
         let grants_path_cloned = base.join("opdbus/capability-grants.json");
         std::fs::create_dir_all(grants_path_cloned.parent().unwrap()).unwrap();
-        // Use the exact hex string that will be produced (32 bytes = 64 hex chars)
-        let footprint_for_grants = hex::encode([0xDD; 32]);
         let grants_json = json!({
-            footprint_for_grants: {
+            (SchemaBackedInterface::TEST_CALLER_FOOTPRINT): {
                 "capabilities": ["beta.set_key"]
             }
         });
@@ -2319,30 +2303,6 @@ mod tests {
         // Set OP_GRANTS_PATH to point to our test grants file
         std::env::set_var("OP_GRANTS_PATH", grants_path_cloned.into_os_string());
 
-        // Write sled with the matching footprint
-        let sled = op_identity::IdentitySled {
-            wireguard_pubkey: [0xAA; 32],
-            mutation_index: 1,
-            hashed_footprint: [0xDD; 32], // In grants
-            trace_id: [0xEE; 16],
-            schema_version: 1,
-            reserved: [0u8; 44],
-            vector_id: [0xCC; 16],
-        };
-        let sled_path_cloned = base.join("plugin_schema.dat");
-        let sled_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                &sled as *const op_identity::IdentitySled as *const u8,
-                op_identity::IdentitySled::SIZE,
-            )
-        };
-        let tmp = format!("{}.tmp", sled_path_cloned.to_string_lossy());
-        let mut f = std::fs::File::create(&tmp).unwrap();
-        std::io::Write::write_all(&mut f, sled_bytes).unwrap();
-        f.sync_data().unwrap();
-        std::fs::rename(&tmp, &sled_path_cloned).unwrap();
-        std::env::set_var("OP_SLED_PATH", sled_path_cloned.into_os_string());
-
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
@@ -2350,7 +2310,7 @@ mod tests {
 
         // SetKey has required_capability: "beta.set_key" which IS granted
         let result = iface
-            .call("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
+            .call_in_test("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
             .await;
 
         // Should succeed (and mutate be called)
@@ -2369,42 +2329,75 @@ mod tests {
         );
 
         cleanup(&base);
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
+    }
+
+    #[tokio::test]
+    async fn required_capability_check_rejects_wildcard_operator_grant() {
+        let _env_guard = test_registry_guard();
+        let base = test_base_dir();
+        let grants_path = base.join("opdbus/capability-grants.json");
+        std::fs::create_dir_all(grants_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &grants_path,
+            serde_json::to_vec(&json!({
+                "*": { "capabilities": ["beta.set_key"] }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Wildcard authority is never inherited by the explicit test identity.
+        std::env::set_var("OP_GRANTS_PATH", &grants_path);
+
+        let engine = test_engine();
+        let iface = SchemaBackedInterface::with_engine(
+            "beta".to_string(),
+            dispatch_test_route(),
+            Some(engine.clone()),
+        );
+        let result = iface
+            .call_in_test("SetKey".to_string(), r#"{"key":"operator"}"#.to_string())
+            .await;
+
+        assert!(
+            matches!(result, Err(zbus::fdo::Error::AccessDenied(_))),
+            "wildcard operator grant must not dispatch: {result:?}"
+        );
+        assert!(engine.event_chain.read().await.events().is_empty());
+
+        cleanup(&base);
+        std::env::remove_var("OP_GRANTS_PATH");
+    }
+
+    #[tokio::test]
+    async fn dbus_call_without_sender_footprint_binding_fails_closed() {
+        let engine = test_engine();
+        let iface = SchemaBackedInterface::with_engine(
+            "beta".to_string(),
+            dispatch_test_route(),
+            Some(engine.clone()),
+        );
+
+        let result = iface
+            .call("SetKey".to_string(), r#"{"key":"operator"}"#.to_string())
+            .await;
+
+        assert!(
+            matches!(result, Err(zbus::fdo::Error::AccessDenied(_))),
+            "production D-Bus Call must deny until sender identity is bound: {result:?}"
+        );
+        assert!(engine.event_chain.read().await.events().is_empty());
     }
 
     // ── VAL-ENFORCE-005: Null required_capability allows any authenticated caller ──
 
     #[tokio::test]
     async fn null_required_capability_allows_authenticated_caller() {
+        let _env_guard = test_registry_guard();
         // VAL-ENFORCE-005: Where required_capability is null, the bridge allows
         // invocation by any authenticated caller without a capability check.
         let base = test_base_dir();
-
-        // No grants file at all
-        let sled = op_identity::IdentitySled {
-            wireguard_pubkey: [0xAA; 32],
-            mutation_index: 1,
-            hashed_footprint: [0xBB; 32], // Any footprint
-            trace_id: [0xEE; 16],
-            schema_version: 1,
-            reserved: [0u8; 44],
-            vector_id: [0xCC; 16],
-        };
-        // Write sled bytes directly to custom path (bypass write_sled's hardcoded path)
-        let sled_path = base.join("plugin_schema.dat");
-        let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                &sled as *const op_identity::IdentitySled as *const u8,
-                op_identity::IdentitySled::SIZE,
-            )
-        };
-        let tmp = format!("{}.tmp", sled_path.to_string_lossy());
-        let mut f = std::fs::File::create(&tmp).unwrap();
-        std::io::Write::write_all(&mut f, bytes).unwrap();
-        f.sync_data().unwrap();
-        std::fs::rename(&tmp, &sled_path).unwrap();
-        std::env::set_var("OP_SLED_PATH", sled_path.into_os_string());
 
         // No grants file - set to empty JSON for this test path
         let grants_path = base.join("opdbus/capability-grants.json");
@@ -2419,7 +2412,7 @@ mod tests {
 
         // GetStatus has required_capability: null - should be allowed
         let result = iface
-            .call("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
+            .call_in_test("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
             .await;
 
         assert!(
@@ -2437,78 +2430,6 @@ mod tests {
         );
 
         cleanup(&base);
-        std::env::remove_var("OP_SLED_PATH");
-    }
-
-    // ── VAL-NFR-006: Footprint gate (primary) is checked before capability check ──
-
-    #[tokio::test]
-    async fn footprint_gate_before_capability() {
-        // VAL-NFR-006: The footprint gate is primary (checked before capability).
-        // If the footprint itself is stale/mismatched, the request is rejected
-        // before we even check capabilities.
-        let base = test_base_dir();
-
-        // Write sled with one footprint
-        let sled = op_identity::IdentitySled {
-            wireguard_pubkey: [0xAA; 32],
-            mutation_index: 1,
-            hashed_footprint: [0xBB; 32],
-            trace_id: [0xEE; 16],
-            schema_version: 1,
-            reserved: [0u8; 44],
-            vector_id: [0xCC; 16],
-        };
-        // Write sled bytes directly to custom path (bypass write_sled's hardcoded path)
-        let sled_path = base.join("plugin_schema.dat");
-        let bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                &sled as *const op_identity::IdentitySled as *const u8,
-                op_identity::IdentitySled::SIZE,
-            )
-        };
-        let tmp = format!("{}.tmp", sled_path.to_string_lossy());
-        let mut f = std::fs::File::create(&tmp).unwrap();
-        std::io::Write::write_all(&mut f, bytes).unwrap();
-        f.sync_data().unwrap();
-        std::fs::rename(&tmp, &sled_path).unwrap();
-        std::env::set_var("OP_SLED_PATH", sled_path.into_os_string());
-
-        // Write grants for a DIFFERENT footprint
-        let grants_path = base.join("opdbus/capability-grants.json");
-        std::fs::create_dir_all(grants_path.parent().unwrap()).unwrap();
-        let grants_json = json!({
-            "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd": {
-                "capabilities": ["beta.set_key"]
-            }
-        });
-        std::fs::write(&grants_path, serde_json::to_vec(&grants_json).unwrap()).unwrap();
-
-        // Set OP_GRANTS_PATH to point to our test grants file
-        std::env::set_var("OP_GRANTS_PATH", grants_path.into_os_string());
-
-        // The interceptor would reject this request first due to footprint mismatch,
-        // before we ever check the grants. This test verifies the logical ordering.
-        let engine = test_engine();
-        let route = dispatch_test_route();
-        let iface =
-            SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
-
-        // For D-Bus calls, we check sled grants. Since the sled footprint isn't in grants,
-        // the capability check would fail (footprint gate passed but grants check fails).
-        // This is the correct behavior: footprint is primary gate, capability is additive.
-        let result = iface
-            .call("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
-            .await;
-
-        assert!(
-            matches!(result, Err(zbus::fdo::Error::AccessDenied(_))),
-            "footprint not in grants should be denied: {:?}",
-            result
-        );
-
-        cleanup(&base);
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
     }
 
@@ -2516,6 +2437,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_dispatch_pipeline_ordering() {
+        let _env_guard = test_registry_guard();
         // VAL-CROSS-003: Full pipeline ordering:
         // method lookup → arg validation → capability enforcement → mutate → event chain
         // This test verifies the ordering using the already-tested building blocks.
@@ -2526,7 +2448,7 @@ mod tests {
         let iface =
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
         let result = iface
-            .call("NonexistentMethod".to_string(), "{}".to_string())
+            .call_in_test("NonexistentMethod".to_string(), "{}".to_string())
             .await;
         assert!(matches!(result, Err(zbus::fdo::Error::UnknownMethod(_))));
         assert!(
@@ -2541,7 +2463,9 @@ mod tests {
             dispatch_test_route(),
             Some(engine2.clone()),
         );
-        let result = iface2.call("SetKey".to_string(), "{}".to_string()).await; // Missing 'key' arg
+        let result = iface2
+            .call_in_test("SetKey".to_string(), "{}".to_string())
+            .await; // Missing 'key' arg
         assert!(matches!(result, Err(zbus::fdo::Error::InvalidArgs(_))));
         assert!(
             engine2.event_chain.read().await.events().is_empty(),
@@ -2550,7 +2474,6 @@ mod tests {
 
         // Test 3: Missing capability → AccessDenied (capability check is third)
         // No grants file - capability check should fail before mutate
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
         let engine3 = test_engine();
         let iface3 = SchemaBackedInterface::with_engine(
@@ -2559,12 +2482,12 @@ mod tests {
             Some(engine3.clone()),
         );
         let result = iface3
-            .call("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
+            .call_in_test("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
             .await;
-        // Should fail because no sled/grants available
+        // Should fail because no explicit operator grant is available.
         assert!(
             result.is_err(),
-            "missing sled should cause error: {:?}",
+            "missing grant should cause error: {:?}",
             result
         );
         assert!(
@@ -2603,7 +2526,9 @@ mod tests {
             route_no_cap,
             Some(engine4.clone()),
         );
-        let result = iface4.call("GetStatus".to_string(), "{}".to_string()).await;
+        let result = iface4
+            .call_in_test("GetStatus".to_string(), "{}".to_string())
+            .await;
         assert!(
             result.is_ok(),
             "null required_capability should succeed: {:?}",

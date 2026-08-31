@@ -190,8 +190,7 @@ fn extract_structured(file_path: &str, body: &str) -> Option<(StructuredKind, Ve
     }
     if lower.ends_with(".py") {
         // Skip unit tests — schema surface is production modules.
-        if lower.ends_with("_test.py") || lower.ends_with("/test_") || lower.contains("/tests/")
-        {
+        if lower.ends_with("_test.py") || lower.ends_with("/test_") || lower.contains("/tests/") {
             return None;
         }
         return Some((
@@ -206,7 +205,10 @@ fn extract_structured(file_path: &str, body: &str) -> Option<(StructuredKind, Ve
         return Some(extract_yaml_or_openapi(file_path, body));
     }
     if lower.ends_with(".avsc") {
-        return Some((StructuredKind::Avro, extract_jsonish(file_path, body, "avro")));
+        return Some((
+            StructuredKind::Avro,
+            extract_jsonish(file_path, body, "avro"),
+        ));
     }
     if lower.ends_with(".json") {
         return Some(extract_json_family(file_path, body));
@@ -333,10 +335,7 @@ fn extract_python_element_paths(file_path: &str, body: &str) -> Vec<String> {
     }
 
     for (i, (start, name)) in class_iter.iter().enumerate() {
-        let end = class_iter
-            .get(i + 1)
-            .map(|(s, _)| *s)
-            .unwrap_or(body.len());
+        let end = class_iter.get(i + 1).map(|(s, _)| *s).unwrap_or(body.len());
         let block = &body[*start..end];
         let cpath = format!("{base}.class.{name}");
         out.insert(cpath.clone());
@@ -491,9 +490,8 @@ fn extract_sql_paths(file_path: &str, body: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
     out.insert(base.clone());
 
-    let create_table = re(
-        r"(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\w+\.)?(\w+)\s*\((.*?)\)",
-    );
+    let create_table =
+        re(r"(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\w+\.)?(\w+)\s*\((.*?)\)");
     let create_type = re(r"(?is)CREATE\s+TYPE\s+(?:\w+\.)?(\w+)");
     let create_view = re(r"(?is)CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:\w+\.)?(\w+)");
     // Type token stops at whitespace/comma so we don't swallow following columns.
@@ -692,7 +690,12 @@ fn extract_prisma_paths(file_path: &str, body: &str) -> Vec<String> {
 // ── Thrift / Cap'n / FlatBuffers / XSD / CSV ─────────────────────────────────
 
 fn extract_thrift_paths(file_path: &str, body: &str) -> Vec<String> {
-    extract_keyword_blocks(file_path, body, "thrift", &["struct", "enum", "service", "union"])
+    extract_keyword_blocks(
+        file_path,
+        body,
+        "thrift",
+        &["struct", "enum", "service", "union"],
+    )
 }
 
 fn extract_capnp_paths(file_path: &str, body: &str) -> Vec<String> {
@@ -700,7 +703,12 @@ fn extract_capnp_paths(file_path: &str, body: &str) -> Vec<String> {
 }
 
 fn extract_fbs_paths(file_path: &str, body: &str) -> Vec<String> {
-    extract_keyword_blocks(file_path, body, "fbs", &["table", "struct", "enum", "union"])
+    extract_keyword_blocks(
+        file_path,
+        body,
+        "fbs",
+        &["table", "struct", "enum", "union"],
+    )
 }
 
 fn extract_keyword_blocks(
@@ -734,7 +742,9 @@ fn extract_xsd_paths(file_path: &str, body: &str) -> Vec<String> {
     let base = format!("xsd.{}", file_key(file_path));
     let mut out = BTreeSet::new();
     out.insert(base.clone());
-    let names = re(r#"(?i)<(?:xs:|xsd:)?(element|complexType|simpleType|attribute)\s+[^>]*name\s*=\s*"([^"]+)""#);
+    let names = re(
+        r#"(?i)<(?:xs:|xsd:)?(element|complexType|simpleType|attribute)\s+[^>]*name\s*=\s*"([^"]+)""#,
+    );
     for cap in names.captures_iter(body) {
         let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("element");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");

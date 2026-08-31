@@ -1,6 +1,8 @@
-//! op-mcp: Unified MCP Protocol Server
+//! op-mcp: MCP protocol and tool-runtime library.
 //!
-//! Supports server modes:
+//! The crate owns no production listener binary. `op-grpc-bridge` owns the
+//! authenticated external MCP frontend and uses these protocol/tool primitives
+//! for embedded execution. Library consumers can compose the following modes:
 //! - **Compact**: 5 meta-tools with per-request lazy tool loading (recommended for LLMs)
 //! - **Agents**: Always-on cognitive agents (memory, sequential_thinking, etc.)
 //! - **Full**: All tools directly exposed (may hit client limits)

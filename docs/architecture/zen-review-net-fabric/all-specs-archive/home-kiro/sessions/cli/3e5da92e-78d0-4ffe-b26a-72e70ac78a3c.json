@@ -1,0 +1,150 @@
+{
+  "session_id": "3e5da92e-78d0-4ffe-b26a-72e70ac78a3c",
+  "cwd": "/home/admin/git/odbus",
+  "created_at": "2026-08-01T17:02:08.717997917Z",
+  "updated_at": "2026-08-01T17:03:50.879459313Z",
+  "title": null,
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "3e5da92e-78d0-4ffe-b26a-72e70ac78a3c",
+      "model_info": {
+        "model_name": "claude-opus-5",
+        "description": "Experimental preview of Claude Opus 5 model with 1M context window",
+        "model_id": "claude-opus-5",
+        "context_window_tokens": 1000000,
+        "rate_multiplier": 2.2,
+        "rate_unit": "Credit",
+        "additional_fields": {
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "thinking": {
+                "required": [
+                  "type"
+                ],
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "adaptive",
+                      "disabled"
+                    ]
+                  },
+                  "display": {
+                    "type": "string",
+                    "enum": [
+                      "summarized",
+                      "omitted"
+                    ]
+                  }
+                }
+              },
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 128000
+              },
+              "output_config": {
+                "type": "object",
+                "properties": {
+                  "effort": {
+                    "type": "string",
+                    "default": "high",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "context_usage_percentage": 5.5569,
+      "additional_fields": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "thinking": {
+              "required": [
+                "type"
+              ],
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "adaptive",
+                    "disabled"
+                  ]
+                },
+                "display": {
+                  "type": "string",
+                  "enum": [
+                    "summarized",
+                    "omitted"
+                  ]
+                }
+              }
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 128000
+            },
+            "output_config": {
+              "type": "object",
+              "properties": {
+                "effort": {
+                  "type": "string",
+                  "default": "high",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "overrides": {
+          "output_config": {
+            "effort": "xhigh"
+          }
+        }
+      }
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/home/admin/git/odbus"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}

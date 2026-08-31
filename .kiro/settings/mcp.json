@@ -1,31 +1,8 @@
 {
   "mcpServers": {
-    "op-dbus-compact": {
+    "op-dbus-unified": {
       "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/compact",
-      "timeout": 120000
-    },
-    "op-dbus-agents": {
-      "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/agents/message",
-      "timeout": 120000
-    },
-    "op-web-compact": {
-      "command": "/usr/local/bin/op-mcp-server",
-      "args": [
-        "--stdio",
-        "-m",
-        "compact"
-      ],
-      "timeout": 120000
-    },
-    "op-cognitive-mcp": {
-      "command": "/usr/local/bin/op-mcp-server",
-      "args": [
-        "--stdio",
-        "-m",
-        "cognitive"
-      ],
+      "url": "https://127.0.0.1:8090/mcp",
       "timeout": 120000
     }
   }

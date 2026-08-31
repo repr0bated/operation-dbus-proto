@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_48317e54-c487-4b24-948e-49d875ff1982",
+  "title": "WireGuard Identity Gating Spec",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T03:35:28.901Z",
+  "lastModifiedAt": "2026-08-04T03:36:00.311Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Reading codebase to understand current identity/ACL state and gaps before writing spec for replacing static IP/port ACLs with verified WireGuard peer identity.",
+  "status": "idle"
+}

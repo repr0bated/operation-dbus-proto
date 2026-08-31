@@ -1,0 +1,90 @@
+# Control-plane status vs `.kiro` routing spec
+
+**Updated:** 2026-08-07T17:10:00Z  
+**Spec:** `.kiro/specs/3tched-ghostbridge-control-plane` (+ topology lock in `.kiro/specs/README.md`)  
+**Related:** `netmaker-xray-identity-handoff`, `cognitive-mcp-only-door-phase2` (mesh xhttp hop)
+
+## Spec lock (intended)
+
+1. **REALITY = one SNI only** (`REQ-REALITY-002` / `003`): single innocuous decoy `serverName` (e.g. `www.microsoft.com` / `www.apple.com`). **No owned domains** in `serverNames`.
+2. **No SNI demux on public `:443`** (`REQ-SNI-001`): SNI ignored for routing; auth → tunnel, else decoy.
+3. **Owned services on one mesh subnet**, demux by **IP:port** via OpenFlow (`REQ-OVS-001`), not public SNI.
+4. **Internal** post-tunnel xhttp sniff (if used) stays on the **10.200.0.0/24** fabric (`10.200.0.1` xray → `10.200.0.2` host ports) — not Reality edge.
+5. **DNS split:** Netmaker DNS for owned + local (`nm.internal`); NextDNS (SNI/DoH inject) for everything else. Public *web* hostnames on Cloudflare; `mail.*` may publish VPS IP.
+6. **Primary access = WireGuard mesh** (decoy terminates human WG); Reality optional camouflage only.
+7. **NetMaker identity:** `ghostbridge.tech` (not public A→mail-vps for broker/api — ingress/SNI/mesh path).
+
+## Working / aligned
+
+| Area | State |
+|------|--------|
+| EMQX in NetMaker CT | Up (`:1883/:8883/:8083/:8084` inside CT); host proxy `127.0.0.1:8083` |
+| Netmaker API (host) | `127.0.0.1:8081` health OK; `nm-api-tls` on `:8443` (local) |
+| Mesh host `ghostbridge-host` | On `3tched` as `100.69.0.1` |
+| Egress resource | `decoy-egress` exists for `10.0.0.0/24` (gateway node attach still empty) |
+| OF fallback | `cookie=0x3344434800000001 priority=0 actions=NORMAL` present; fail_mode=standalone |
+| Managed OF pins | UDP `:443` to pub IP; TCP `10.200.0.1:8081` (schema) |
+| Decoy WG (`wg0`) | Handshake OK to router peer |
+| Blobs | `opblob seal-shm` OK (catalog generation observed ≥606) |
+
+## Drift / not to spec (must fix)
+
+### D1 — REALITY `serverNames` violates single-decoy rule
+**Severity:** high (camouflage defeat / owned-name exposure)  
+**REQ:** `REQ-REALITY-002`, `REQ-REALITY-003`, `REQ-SNI-001`  
+**Evidence:** live `/var/lib/opdbus-runtime/xray_config.json` and `/etc/xray/xray_config.json` list many owned names (`api|broker|dashboard|assistant|qdrant|registration|mail|gassistant|… .ghostbridge.tech` / `.3tched.com`) **plus** `www.apple.com`.  
+**Fix:** trim to **one** innocuous decoy only; owned SNI demux only on mesh/xhttp path after tunnel, targeting **one subnet** (`10.200.0.0/24`).
+
+### D2 — Live xray routing/DNS stripped vs staged design
+**Severity:** high (broker/API SNI path broken)  
+**Evidence:** live config `rule_count=1` (api only), `dns=null`, no owned-domain → `to-broker|to-api|…` rules. Staged intent lives in `/var/lib/opdbus-runtime/test5.json` (NextDNS + xhttp domain rules).  
+**Fix:** restore mesh-side xhttp/NextDNS split; keep Reality edge single-decoy.
+
+### D3 — Netmaker DNS off
+**Severity:** medium  
+**Evidence:** `dnsmode: off`, `manage_dns: false` in CT `config.yaml`.  
+**Fix:** re-enable Netmaker DNS for owned + `nm.internal`; leave recursive/other to NextDNS inject.
+
+### D4 — Netmaker server name advertisement lag
+**Severity:** low/medium  
+**Evidence:** `config.yaml` / `netmaker.env` set `server: ghostbridge.tech` / `SERVER_NAME=ghostbridge.tech`, but `getserverinfo` still returned `Server=3tched.com` after restart (DB/cache or env precedence).  
+**Fix:** confirm runtime source of truth; force reload until API advertises `ghostbridge.tech`.
+
+### D5 — Public/API reachability for netclient
+**Severity:** high for join/pull  
+**Evidence:** external `188.68.58.237:8443` refused / no route from decoy; router join failed `connection refused`. Host-local `:8443` OK. OF `NORMAL` alone is not the intended host L3 model (custom OF / shared MAC `eth0`=`pub0`).  
+**Fix:** explicit cookied `output:pub0`/`output:eth0` (or restore intended controller schema) for API/broker ports that must be reachable on the chosen path — without IP/nft “to decoy”; decoy reachability via **Netmaker egress**.
+
+### D6 — Decoy netclient stale
+**Severity:** high for mesh  
+**Evidence:** `netclient list` → `no such network`; `3tched` handshake ~1.5d stale; pull fails on API `:8443`. Not in server host list (only `ghostbridge-host`).  
+**Fix:** restore API path, then `netclient pull` / rejoin; attach decoy node to `decoy-egress`.
+
+### D7 — Temporary OF experiments
+**Severity:** low (cleanup)  
+**Evidence:** priority=200 tcp/arp `:8443` `output:2/4` flows may still be present from debugging.  
+**Fix:** reconcile via `op-netmk-reconcile openflow` / cookie-scoped delete; do not leave ad-hoc flows.
+
+## “One subnet” routing summary
+
+```
+Internet → [:443 REALITY, single decoy SNI] ──optional──┐
+Internet → CF (public web)                              │
+Human WG → Oracle decoy only                            │
+                                                        ▼
+              NetMaker transport / mesh (3tched, 100.69/24)
+                                                        │
+              OpenFlow IP:port demux (one fabric)
+                                                        ▼
+              10.200.0.0/24  (xray 10.200.0.1 → host 10.200.0.2 ports)
+              optional mesh xhttp SNI → api/broker/dashboard/…
+              DNS: NM owned+nm.internal | NextDNS elsewhere
+```
+
+## Signals
+
+- `/var/lib/opdbus-runtime/signals/cp-routing-spec-drift.status`
+- `/var/lib/opdbus-runtime/signals/cp-routing-spec-drift.json`
+- `/var/lib/opdbus-runtime/netmaker/signals/cp-routing-spec-drift.status`
+
+- **20260807T171929Z** Reality: privateKey on decoy (`egress-server.json` :9443), publicKey client in xray CT (`decoy-reality`); serverNames=`[ghostbridge.tech]` only.

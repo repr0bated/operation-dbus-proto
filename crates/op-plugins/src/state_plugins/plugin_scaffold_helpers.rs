@@ -15,7 +15,6 @@ pub(crate) use super::antigravity::antigravity_schema as antigravity_plugin_sche
 pub(crate) use super::antigravity_chat::antigravity_chat_schema as antigravity_chat_plugin_schema;
 pub(crate) use super::btrfs_plugin::btrfs_schema as btrfs_plugin_schema;
 pub(crate) use super::cognitive_mcp::cognitive_mcp_schema as cognitive_mcp_plugin_schema;
-pub(crate) use super::compact_mcp::compact_mcp_schema as compact_mcp_plugin_schema;
 pub(crate) use super::cron::cron_schema as cron_plugin_schema;
 pub(crate) use super::ctl_plane_chatbot::ctl_plane_chatbot_schema as ctl_plane_chatbot_plugin_schema;
 pub(crate) use super::endpoint::endpoint_schema as endpoint_plugin_schema;

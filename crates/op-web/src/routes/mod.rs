@@ -13,9 +13,6 @@ use tower_http::trace::TraceLayer;
 
 use crate::groups_admin;
 use crate::handlers;
-use crate::mcp;
-use crate::mcp_agents;
-use crate::mcp_discovery;
 use crate::middleware::security;
 use crate::sse;
 use crate::state::AppState;
@@ -40,7 +37,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Health & Status
         .route("/health", get(handlers::health::health_handler))
         .route("/status", get(handlers::status::status_handler))
-        // Schema — single source of truth from shared memory
+        // Schema — single source of truth from the sealed blob catalog
         .route("/schema", get(handlers::schema::schema_handler))
         // Compatibility paths used by dashboard builds predating `/api/schema`.
         .route("/schema/catalog", get(handlers::schema::schema_handler))
@@ -48,7 +45,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/schema/catalog/detail",
             get(handlers::schema::schema_catalog_handler),
         )
-        // Identity sled — live WireGuard identity from shared memory
+        // Identity sled compatibility route — one projected session per request
         .route(
             "/identity/sled",
             get(handlers::identity::identity_sled_handler),
@@ -238,31 +235,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/assistant/models",
             get(handlers::openclaw::openclaw_models_handler),
         )
-        // MCP server management endpoints
-        .route("/mcp/servers", get(handlers::mcp::list_servers_handler))
-        .route("/mcp/servers/:id", get(handlers::mcp::get_server_handler))
-        .route(
-            "/mcp/cognitive/agents",
-            get(handlers::mcp::list_agents_handler),
-        )
-        .route(
-            "/mcp/cognitive/agents",
-            post(handlers::mcp::set_agents_handler),
-        )
-        .route(
-            "/mcp/cognitive/memory",
-            post(handlers::mcp::query_memory_handler),
-        )
-        .route(
-            "/mcp/cognitive/memory/:key",
-            delete(handlers::mcp::delete_memory_handler),
-        )
-        .route(
-            "/mcp/cognitive/memory/stats",
-            get(handlers::mcp::memory_stats_handler),
-        )
-        // MCP discovery endpoints
-        .route("/mcp/_config", get(mcp::config_handler))
         // SSE events
         .route("/events", get(sse::sse_handler))
         // Privacy router endpoints
@@ -284,25 +256,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(handlers::privacy::google_callback),
         );
 
-    // MCP JSON-RPC endpoints (profile-based and legacy)
-    let mcp_route = mcp::create_mcp_router();
-
-    // Critical Agents MCP endpoint (SSE-based, direct tool access)
-    // These are added separately to avoid state conflicts
-    let agents_mcp_route = Router::new()
-        .route(
-            "/mcp/agents",
-            get(mcp_agents::mcp_agents_sse_handler_stateless),
-        )
-        .route(
-            "/mcp/agents/message",
-            post(mcp_agents::mcp_agents_message_handler_stateless),
-        );
-
     // WebSocket route
     let ws_route = Router::new().route("/ws", get(websocket::websocket_handler));
 
-    // Main router - agents_mcp_route FIRST so it takes precedence
+    // Main dashboard/REST router. MCP and gRPC are served only by the
+    // authenticated bridge on TLS :8090.
     let router = Router::new()
         .nest("/api", api_routes)
         // Ordinary HTTP compatibility lives on op-web :8080. Each handler is
@@ -320,23 +278,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/privacy/access",
             get(handlers::privacy::privacy_access_message),
         )
-        // JSON-RPC compatibility aliases (mirror /mcp)
-        .route("/jsonrpc", post(mcp::jsonrpc_handler))
-        .route("/rpc", post(mcp::jsonrpc_handler))
-        .merge(agents_mcp_route) // Agents first (more specific)
-        .nest("/mcp", mcp_route) // Nest MCP routes under /mcp (not root)
         .merge(ws_route)
-        // Well-known discovery endpoint for auto-configuration
-        .route(
-            "/.well-known/mcp.json",
-            get(mcp_discovery::mcp_discovery_handler),
-        )
         .nest("/groups-admin", groups_admin::create_groups_admin_router())
         .nest("/admin", admin::admin_routes());
 
-    // Serve the pinned Lovable dashboard while keeping `/api`, `/mcp`, and
-    // websocket routes on this same origin. Client-side routes fall back to
-    // index.html.
+    // Serve the pinned Lovable dashboard while keeping `/api` and websocket
+    // routes on this origin. Client-side routes fall back to index.html.
     let static_dir = std::env::var("OP_WEB_STATIC_DIR")
         .unwrap_or_else(|_| "/usr/local/share/op-dbus/dashboard".to_string());
     let spa =

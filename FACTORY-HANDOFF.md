@@ -8,8 +8,9 @@ live test + pasted output.** Conserve tokens.
 1. **Only `/org/opdbus/v1/plugins/<plugin>` is projectable.** NEVER register a rogue D-Bus
    name like `opdbus.v1.Xray` / `/opdbus/v1/xray`. Control goes through state plugins.
 2. **shm-reactive, no watch/poll/query/index.** `/dev/shm` is authoritative present-state;
-   components READ it; xray greets connections (event), no polling loops. Sled =
-   `/dev/shm/plugin_schema.dat`; xray dyn config = `/dev/shm/xray-ghostbridge.json`.
+   components READ it; xray greets connections (event), no polling loops. Session identity is
+   projected at `opdbus/state/identity_sled.json`; plugin schemas live in the sealed blob catalog.
+   The former process-global raw identity/schema file is retired and must not be recreated.
 3. **Host = s6 (NOT systemd).** Inside containers = Debian/Alpine systemd. Moving a service
    to host means an s6 service def in `/etc/s6/sv/<name>/`.
 4. **No unfounded generalizations.** Scope claims to what's verified.

@@ -723,4 +723,3 @@ impl OvsdbDbusClient {
         crate::datapath_safe::attach_controller_safe(bridge, endpoint).await
     }
 }
-

@@ -1,5 +1,11 @@
 # Requirements: accountability-audit-trail
 
+> **Canonical event-chain source:** the per-`PluginV1.Call` `EventChain` this spec
+> queries is appended by `op-grpc-bridge` on every dispatched call (incl. failures)
+> — see `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/` (DR-5,
+> SEC-9). This spec's GUI/plugin query surface is orthogonal and unchanged; it MUST
+> NOT introduce any MCP execution route or standalone MCP listener.
+
 ## Purpose
 
 Replace the `Route::Accountability` stub in zeroclaw-gui with a real view that renders

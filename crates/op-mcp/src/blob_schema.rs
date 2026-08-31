@@ -120,9 +120,8 @@ impl BlobSchemaExecutor {
 
     fn find_blob_path(&self, plugin_id: &str) -> Result<PathBuf> {
         let prefix = format!("{plugin_id}.");
-        let dir = std::fs::read_dir(&self.catalog_dir).with_context(|| {
-            format!("read blob catalog dir {}", self.catalog_dir.display())
-        })?;
+        let dir = std::fs::read_dir(&self.catalog_dir)
+            .with_context(|| format!("read blob catalog dir {}", self.catalog_dir.display()))?;
         for entry in dir {
             let path = entry?.path();
             let name = path
@@ -321,7 +320,7 @@ pub fn read_schema_resource(dir: &Path, plugin_id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-        #[test]
+    #[test]
     fn require_plugin_id_rejects_blank() {
         let args = json!({"plugin_id": "  "});
         assert!(BlobSchemaExecutor::require_plugin_id(&args).is_err());

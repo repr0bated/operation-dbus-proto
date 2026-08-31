@@ -6,6 +6,11 @@
 **Branch:** feat/sled-source-port-salt  
 **Commit:** 2c2cfb1d  
 
+> **Historical audit notice (2026-08-31):** findings that describe the former
+> raw shared-memory identity/schema file are retained as evidence of the
+> retired design, not as current architecture. Active code now uses projected
+> session identity and the sealed plugin-blob catalog.
+
 ---
 
 ## 1. Executive Summary

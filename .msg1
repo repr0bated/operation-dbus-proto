@@ -1,0 +1,49 @@
+fix(openflow): request all ports in PORT_DESC; pin FDB before flow install
+
+Re-implements the intent of 106a0ef6 on current HEAD, where the plumbing that
+commit relied on no longer exists (handle_connection lost its static_fdb
+parameter, the barrier block is gone, and the controller had been moved back to
+Version::Of13). Do not force-merge 106a0ef6 -- it conflicts around hunk 2.
+
+Root cause of the flooding: OF1.5 added an ofp15_port_desc_request body that
+OF1.3 does not have (openflow-1.5.h: "All ports if OFPP_ANY").
+build_port_desc_request sent an 8-byte body, so port_no was absent/zero -- port
+0 is not a valid port, OVS answers with an EMPTY port list and no error, every
+symbolic port name fails to resolve, every configured flow is skipped and
+actions=NORMAL floods gateway-bound frames to every port. Observed on the wire:
+
+  OFPST_PORT_DESC request (OF1.5) (xid=0x4): port=0
+  OFPST_PORT_DESC reply   (OF1.5) (xid=0x4):      <- empty
+
+Changes:
+
+- OF_VERSION const (Version::Of15) replaces the hardcoded Version::Of13 at
+  every send site. OF1.5 is load-bearing, not cosmetic: packet_type matches and
+  encap(ethernet) -- needed to give the L3-only netmaker WireGuard port an
+  Ethernet header -- do not exist before 1.5. One constant, so a bridge pinned
+  to an older protocol set can be accommodated with a single edit.
+- build_port_desc_request: 16-byte body with OFPP_ANY at body[8..12], and the
+  stale pad(12) doc comment corrected to the real
+  type(2)+flags(2)+pad(4)+port_no(4)+pad(4) layout.
+- discover_ports: stride on each ofp_port's own length field instead of a fixed
+  64-byte chunk. From OF1.4 ofp_port is variable length (40-byte fixed part plus
+  port properties), so the OF1.3 stride mis-slices every port after the first.
+  Also harvests hw_addr into a port name -> MAC map so static flows can say
+  "eth_dst": "port_mac:ovsbr0" instead of hard-coding the bridge MAC.
+- Static FDB pins are re-asserted as step 5b, BEFORE the static-flow loop and
+  its barrier. The pins live in ovs-vswitchd's L2 table (not OVSDB, not the flow
+  table) so a vswitchd restart drops them, and the ISP filters VRRP off customer
+  ports so the gateway virtual MAC can never be learned. L2 reachability must
+  never be gated on symbolic-port resolution. Adds the plumbing the reference
+  commit assumed: OpenFlowController::static_fdb populated from
+  static_fdb_from_env(), threaded through run() into handle_connection.
+- Static-flow loop counts skips (static_skipped) and logs each one with warn!.
+  The plugin declares atomic_operations: false; one unresolvable flow (netmaker,
+  while netmaker-ovs-attach is broken) must not tear down the session.
+- Re-adds the post-install barrier so static-flow acceptance is deterministic,
+  with the non-hanging semantics: FlowMod errors warn! instead of bail!, the
+  loop breaks when an error carries our own barrier_xid (an errored barrier
+  never produces a reply), and a 10s tokio::time::timeout bounds the wait.
+
+Adds test_port_desc_request_asks_for_all_ports. The two existing FlowMod tests
+now assert version byte 0x06.

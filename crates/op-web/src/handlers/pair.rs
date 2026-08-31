@@ -1,7 +1,7 @@
 //! Device pairing for dashboard / egui clients that lack Ghostbridge identity.
 //!
 //! - `POST /admin/paircode/new` — mint a short-lived pairing code (mesh/localhost only)
-//! - `POST /pair` with `X-Pairing-Code` — exchange code for bearer token + sled identity
+//! - `POST /pair` with `X-Pairing-Code` — exchange code for bearer token + session identity
 //!
 //! Response shape matches zeroclaw-gui `AuthState::pair`:
 //! `{ "token": "...", "hashed_footprint": "...", "trace_id": "..." }`
@@ -14,7 +14,7 @@ use axum::{
     Json,
 };
 use op_core::security::AccessZone;
-use op_identity::schema_bridge::{read_sled, IdentitySled};
+use op_identity::{resolve_identity_session, SessionIdentity};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -30,6 +30,7 @@ const CODE_TTL: Duration = Duration::from_secs(5 * 60);
 #[derive(Clone)]
 struct PendingCode {
     expires_at: Instant,
+    session_id: String,
 }
 
 struct PairState {
@@ -98,15 +99,20 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response {
         .expect("response builder")
 }
 
-fn read_live_identity() -> Result<(String, String), String> {
-    let (ptr, _mmap) = read_sled().map_err(|e| format!("identity sled unavailable: {e}"))?;
-    // SAFETY: mmap outlives the borrow; IdentitySled is plain data.
-    let sled: &IdentitySled = unsafe { &*ptr };
-    let is_valid = sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
-    if !is_valid {
-        return Err("identity sled is present but not valid".into());
-    }
-    Ok((hex::encode(sled.hashed_footprint), sled.trace_id_hex()))
+fn request_session(headers: &HeaderMap) -> Result<SessionIdentity, String> {
+    let selector = [
+        "x-identity-session-id",
+        "x-ghostbridge-trace-id",
+        "x-wireguard-pubkey",
+        "x-ghostbridge-genesis",
+        "x-ghostbridge-footprint",
+    ]
+    .into_iter()
+    .find_map(|name| headers.get(name).and_then(|value| value.to_str().ok()))
+    .map(str::trim)
+    .filter(|value| !value.is_empty());
+
+    resolve_identity_session(selector).map_err(|error| error.to_string())
 }
 
 /// `POST /admin/paircode/new` — generate a one-time pairing code.
@@ -134,6 +140,14 @@ pub async fn paircode_new_handler(
         }
     }
 
+    let identity = match request_session(request.headers()) {
+        Ok(identity) => identity,
+        Err(error) => {
+            warn!(%error, "paircode mint rejected: identity session unavailable");
+            return json_response(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": error }));
+        }
+    };
+
     let code = generate_code();
     {
         let mut st = lock_pair();
@@ -142,6 +156,7 @@ pub async fn paircode_new_handler(
             code.clone(),
             PendingCode {
                 expires_at: Instant::now() + CODE_TTL,
+                session_id: identity.session_id,
             },
         );
     }
@@ -175,6 +190,7 @@ fn default_device_type() -> String {
 #[derive(Debug, Serialize)]
 struct PairResponse {
     token: String,
+    genesis: String,
     hashed_footprint: String,
     trace_id: String,
     device_name: String,
@@ -199,11 +215,11 @@ pub async fn pair_handler(
         );
     };
 
-    {
+    let session_id = {
         let mut st = lock_pair();
         purge_expired(&mut st);
         match st.pending.remove(&code) {
-            Some(pending) if pending.expires_at > Instant::now() => {}
+            Some(pending) if pending.expires_at > Instant::now() => pending.session_id,
             Some(_) => {
                 return json_response(
                     StatusCode::UNAUTHORIZED,
@@ -217,15 +233,20 @@ pub async fn pair_handler(
                 );
             }
         }
-    }
+    };
 
-    let (footprint, trace_id) = match read_live_identity() {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, "pair failed: no live identity");
-            return json_response(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": e }));
+    let identity = match resolve_identity_session(Some(&session_id)) {
+        Ok(identity) => identity,
+        Err(error) => {
+            warn!(%error, "pair failed: projected session unavailable");
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({ "error": error.to_string() }),
+            );
         }
     };
+    let genesis = identity.genesis.clone().unwrap_or_default();
+    let trace_id = identity.trace_id;
 
     let token = generate_token();
     {
@@ -235,7 +256,7 @@ pub async fn pair_handler(
             PairedSession {
                 device_name: body.device_name.clone(),
                 device_type: body.device_type.clone(),
-                footprint: footprint.clone(),
+                footprint: genesis.clone(),
                 trace_id: trace_id.clone(),
                 created_at: Instant::now(),
             },
@@ -252,7 +273,8 @@ pub async fn pair_handler(
         StatusCode::OK,
         serde_json::to_value(PairResponse {
             token,
-            hashed_footprint: footprint,
+            genesis: genesis.clone(),
+            hashed_footprint: genesis,
             trace_id,
             device_name: body.device_name,
         })

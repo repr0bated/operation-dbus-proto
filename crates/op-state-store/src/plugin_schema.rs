@@ -11,7 +11,7 @@
 //! so runtime code can continue to resolve legacy schemas without turning this
 //! catalog back into a second schema authority.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
@@ -316,10 +316,15 @@ pub struct PluginSchema {
     /// legacy schema that predates the declaration point).
     #[serde(default)]
     pub capabilities: HashMap<String, CapabilityDecl>,
-    /// Per-footprint grants sealed with the plugin. The gRPC gate prefers
-    /// this over `/dev/shm/opdbus/capability-grants.json` when present.
-    /// Keys are footprint hex or `"*"`. Values are capability ids.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    /// Legacy per-footprint grant annotations carried by older schemas.
+    /// Runtime authorization uses the independent principal grant store, not
+    /// this field. Wildcard entries are discarded on read and never sealed.
+    #[serde(
+        default,
+        skip_serializing_if = "capability_grants_have_no_exact_entries",
+        serialize_with = "serialize_exact_capability_grants",
+        deserialize_with = "deserialize_exact_capability_grants"
+    )]
     pub capability_grants: HashMap<String, Vec<String>>,
     /// Declared signals emitted by the plugin.
     #[serde(default)]
@@ -327,6 +332,35 @@ pub struct PluginSchema {
     /// Plugin capability guarantees (4-field canonical block).
     #[serde(default)]
     pub guarantees: PluginCapabilities,
+}
+
+fn capability_grants_have_no_exact_entries(grants: &HashMap<String, Vec<String>>) -> bool {
+    grants.keys().all(|footprint| footprint == "*")
+}
+
+fn serialize_exact_capability_grants<S>(
+    grants: &HashMap<String, Vec<String>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    grants
+        .iter()
+        .filter(|(footprint, _)| footprint.as_str() != "*")
+        .collect::<HashMap<_, _>>()
+        .serialize(serializer)
+}
+
+fn deserialize_exact_capability_grants<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut grants = HashMap::<String, Vec<String>>::deserialize(deserializer)?;
+    grants.remove("*");
+    Ok(grants)
 }
 
 fn default_dialect() -> String {
@@ -4790,6 +4824,30 @@ mod tests {
         assert!(!is_canonical_capability_id("agent.read"));
         assert!(!is_canonical_capability_id("cap.software.zeroclaw.read"));
         assert!(!is_canonical_capability_id(""));
+    }
+
+    #[test]
+    fn wildcard_capability_grants_are_never_sealed_or_rehydrated() {
+        let mut schema = PluginSchema::builder("demo").build();
+        schema
+            .capability_grants
+            .insert("*".to_string(), vec!["demo.admin".to_string()]);
+        schema
+            .capability_grants
+            .insert("exact-footprint".to_string(), vec!["demo.read".to_string()]);
+
+        let encoded = serde_json::to_value(&schema).expect("schema serializes");
+        assert!(encoded["capability_grants"].get("*").is_none());
+        assert_eq!(
+            encoded["capability_grants"]["exact-footprint"],
+            serde_json::json!(["demo.read"])
+        );
+
+        let mut legacy = encoded;
+        legacy["capability_grants"]["*"] = serde_json::json!(["demo.admin"]);
+        let decoded: PluginSchema = serde_json::from_value(legacy).expect("legacy schema parses");
+        assert!(!decoded.capability_grants.contains_key("*"));
+        assert!(decoded.capability_grants.contains_key("exact-footprint"));
     }
 
     #[test]

@@ -1,5 +1,12 @@
 # Requirements — NetMaker / Xray Identity Handoff (corrected)
 
+> **Canonical consumer:** this spec is the authoritative Oracle-signed assertion
+> (OIA1) identity model. The MCP/cognitive control plane at `op-grpc-bridge` TLS
+> `:8090` (see `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/`)
+> **consumes** this pipeline as its SEC-2 authentication step and does not redefine
+> it. Any `:50052`/`:3003`/`mcp.internal` route referenced below is being retired in
+> favor of the single `:8090` ingress; the identity mechanics are unchanged.
+
 > One trust chain: a human authenticates with WireGuard at the Oracle decoy, the
 > decoy issues a short-lived Ed25519-signed identity assertion, and that assertion
 > rides as gRPC metadata inside the existing TLS channel through passthrough xray

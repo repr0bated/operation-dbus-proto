@@ -1,0 +1,6 @@
+{
+  "id": "11",
+  "subject": "Build and install the validated migration and Phase 1 artifacts",
+  "description": "Build the required release binaries and install them plus runit definitions through build-golden without activating the feature graph.",
+  "status": "pending"
+}

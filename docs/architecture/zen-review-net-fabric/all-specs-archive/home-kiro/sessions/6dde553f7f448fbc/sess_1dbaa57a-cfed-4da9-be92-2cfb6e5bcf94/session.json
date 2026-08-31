@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_1dbaa57a-cfed-4da9-be92-2cfb6e5bcf94",
+  "title": "Use the spec workflow. Create the full spec package — requirements.md,\ndesign...",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-03T15:24:30.187Z",
+  "lastModifiedAt": "2026-08-03T15:31:53.222Z",
+  "modelId": "claude-sonnet-5",
+  "autopilot": true,
+  "effortLevel": "high",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "failed"
+}

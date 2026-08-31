@@ -25,6 +25,11 @@ fn grep_gates() {
         "write_sled_full",
         "SENTINEL_FOOTPRINT",
         "anna_scribe",
+        "plugin_schema.dat",
+        "OP_SLED_PATH",
+        "SHM_SLED_PATH",
+        "op-identity-sled",
+        "op-sled-top",
     ];
     let mut failures = Vec::new();
 

@@ -1,0 +1,3 @@
+{"id":"d9a96234-62b1-4364-9408-ac4910f9e85c","timestamp":"2026-08-04T03:35:14.852Z","payload":{"type":"user","content":"test","images":[],"documents":[]}}
+{"id":"2ad96324-2d52-4be6-8ff4-66d0b00b68d9-turn-start","timestamp":"2026-08-04T03:35:15.313Z","payload":{"type":"turn_start","executionId":"2ad96324-2d52-4be6-8ff4-66d0b00b68d9"}}
+{"id":"a48bc43e-62d4-44c8-9e14-3b5a0edc19a1","timestamp":"2026-08-04T03:35:15.398Z","payload":{"type":"steering_inclusion","documents":["file:///srv/git/odbus/AGENTS.md"],"executionId":"2ad96324-2d52-4be6-8ff4-66d0b00b68d9"}}

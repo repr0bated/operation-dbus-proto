@@ -1,0 +1,6 @@
+{
+  "id": "2",
+  "subject": "Inspect OVS, rtnetlink, and OCI/Netmaker implementation paths",
+  "description": "Trace exact OVSDB port calls, cross-netns support, OCI lifecycle/reconciliation, and related dispatch code.",
+  "status": "pending"
+}

@@ -1,0 +1,6 @@
+{
+  "id": "5",
+  "subject": "Task 10: Add startup chain rebuild from timing_subvol",
+  "description": "EventChain::replay_from_footprint + rebuild_chain_from_disk",
+  "status": "pending"
+}

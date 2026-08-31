@@ -7,7 +7,8 @@
 
 use crate::error::{AssistantError, Result};
 use crate::incus::{
-    SchemaTags, DEFAULT_WG_XRAY_ENDPOINT, ENV_RPC_ENDPOINT, HEADER_FOOTPRINT, HEADER_TRACE_ID,
+    SchemaTags, DEFAULT_WG_XRAY_ENDPOINT, ENV_RPC_ENDPOINT, HEADER_FOOTPRINT, HEADER_GENESIS,
+    HEADER_TRACE_ID,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -162,6 +163,7 @@ impl Transport {
         let mut req = self.http.post(&url).json(&body);
         if tags.is_valid() {
             req = req
+                .header(HEADER_GENESIS, tags.footprint_hex.clone())
                 .header(HEADER_FOOTPRINT, tags.footprint_hex)
                 .header(HEADER_TRACE_ID, tags.trace_id);
         }

@@ -58,8 +58,7 @@ MAX_DETAIL_LINES = 500
 # Human descriptions for known 3tched services (extend as needed)
 SERVICE_BLURB = {
     "op-web": "HTTP API + dashboard (Axum). Static UI from OP_WEB_STATIC_DIR.",
-    "op-grpc-bridge": "gRPC / gRPC-Web bridge; dual-listen grpc.sock + container.sock.",
-    "op-cognitive-mcp": "MCP gateway, memory, NotebookLM tools, gRPC :50052.",
+    "op-grpc-bridge": "Unified TLS :8090 MCP/gRPC door plus local grpc.sock.",
     "op-session-bus": "SESSION D-Bus at /run/opdbus/session-bus.sock.",
     "opdbus-rundirs": "Creates /run/opdbus, SHM catalog, seeds identity sled.",
     "op-of-controller": "OpenFlow controller 127.0.0.1:6653.",
@@ -72,7 +71,6 @@ SERVICE_BLURB = {
     "wg-3tched": "WireGuard mesh interface 3tched (100.69.0.254/16).",
     "xray-config-mount": "Bind /dev/shm/xray_config.json into xray CT (SHM only).",
     "incusd": "Incus container daemon.",
-    "fwd-8090": "Mesh tcpfwd → host/bridge gRPC (often port conflict).",
     "fwd-8444": "Mesh 100.69.0.254:8444 → xray VLESS.",
     "uds-assistant": "UDS forward for assistant controlplane http.sock.",
     "notebook-sources-sync": "Periodic LLM session → notebook sources sync.",

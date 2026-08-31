@@ -1,3 +1,23 @@
+# Mandatory skill preload — every agent and model
+
+At the start of every session in this repository, before analysis, diagnostics,
+planning, edits, or delegated/subagent work, every LLM/agent must read these four
+files completely:
+
+- `.agents/skills/grpc-expert/SKILL.md`
+- `.agents/skills/grpc-protocol-expert/SKILL.md`
+- `.agents/skills/json-render/SKILL.md`
+- `.agents/skills/ovs-db-analysis/SKILL.md`
+
+This preload is mandatory even when the immediate task does not mention these
+domains. Every newly spawned subagent and every model handoff must repeat it for
+its own session; a parent agent's preload does not count for a child. Do not
+claim a skill is loaded unless its `SKILL.md` was read completely. Load all four,
+then apply only the guidance relevant to the task. For OP-DBUS PluginSchema,
+generated plugin services, reflection, and seal/freeze/hot work,
+`grpc-expert` takes precedence over the generic `grpc-protocol-expert`; use the
+generic skill for protocol, channel, TLS, streaming, and observability concerns.
+
 # Agent host-service policy
 
 This host runs **runit** as PID 1. Agents must manage host services through

@@ -1,0 +1,6 @@
+{
+  "id": "2",
+  "subject": "Read existing codebase: oci.rs, netmaker.rs, op-ovsbr0-setup.rs",
+  "description": "Understand current plugin state, netmaker adapter, and OVS setup patterns",
+  "status": "pending"
+}

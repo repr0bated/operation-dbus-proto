@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_f2720a71-e73e-4d65-a928-66b68c4eab9d",
+  "title": "Plugin Page Endpoint + CI",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/home/jeremy"
+  ],
+  "createdAt": "2026-08-18T19:41:15.433Z",
+  "lastModifiedAt": "2026-08-18T21:51:00.059Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "I'm reading the required files to understand the codebase before implementing the plugin_page HTTP endpoint and CI checks.",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

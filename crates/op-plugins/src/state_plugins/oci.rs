@@ -32,7 +32,7 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
             required: true,
             description: "Incus instance name (must match hostname inside container)".to_string(),
             default: None,
-            example: Some(json!("netmaker")),
+            example: Some(json!("control-plane-test")),
             constraints: Vec::new(),
             read_only: true,
             read_only_when: None,
@@ -43,9 +43,9 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
         FieldSchema {
             field_type: FieldType::String,
             required: true,
-            description: "OCI image reference (e.g. docker:gravitl/netmaker:v1.5.1)".to_string(),
+            description: "OCI image reference (e.g. docker:library/alpine:3.22)".to_string(),
             default: None,
-            example: Some(json!("docker:gravitl/netmaker:v1.5.1")),
+            example: Some(json!("docker:library/alpine:3.22")),
             constraints: Vec::new(),
             read_only: false,
             read_only_when: None,
@@ -97,7 +97,7 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
             required: false,
             description: "Environment variables for the container".to_string(),
             default: Some(json!({})),
-            example: Some(json!({"SERVER_HOST": "129.153.134.63", "API_PORT": "8081"})),
+            example: Some(json!({"SERVICE_PORT": "8081"})),
             constraints: Vec::new(),
             read_only: false,
             read_only_when: None,
@@ -111,7 +111,7 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
             description: "Proxy devices: unix socket listeners on host -> TCP inside container".to_string(),
             default: Some(json!([])),
             example: Some(json!([
-                {"id": "api-sock", "listen": "unix:/run/netmaker/api.sock", "connect": "tcp:127.0.0.1:8081"}
+                {"id": "api-sock", "listen": "unix:/run/control-plane-test/api.sock", "connect": "tcp:127.0.0.1:8081"}
             ])),
             constraints: Vec::new(),
             read_only: false,
@@ -126,7 +126,7 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
             description: "Disk device mounts (storage volumes)".to_string(),
             default: Some(json!([])),
             example: Some(json!([
-                {"id": "nm-sqldata", "path": "/root/data", "source": "nm-sqldata"}
+                {"id": "service-data", "path": "/var/lib/service", "source": "service-data"}
             ])),
             constraints: Vec::new(),
             read_only: false,
@@ -159,7 +159,7 @@ fn oci_container_fields() -> HashMap<String, FieldSchema> {
 /// See: https://docs.docker.com/engine/api/v1.45/
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PullImageInput {
-    /// Image reference (e.g., docker:gravitl/netmaker:v1.5.1)
+    /// Image reference (e.g., docker:library/alpine:3.22)
     pub image: String,
 }
 
@@ -218,44 +218,9 @@ pub(crate) fn oci_schema() -> PluginSchema {
             true,
             "Declared OCI containers with lifecycle config",
         )
-        .example(json!({
-            "containers": [
-                {
-                    "name": "netmaker",
-                    "image": "docker:gravitl/netmaker:v1.5.1",
-                    "loopback_required": true,
-                    "privileged": true,
-                    "env": {
-                        "SERVER_HOST": "129.153.134.63",
-                        "API_PORT": "8081",
-                        "DATABASE": "sqlite"
-                    },
-                    "sockets": [
-                        {"id": "api-sock", "listen": "unix:/run/netmaker/api.sock", "connect": "tcp:127.0.0.1:8081"}
-                    ],
-                    "volumes": [
-                        {"id": "nm-sqldata", "path": "/root/data", "source": "nm-sqldata"}
-                    ]
-                },
-                {
-                    "name": "netmaker-mq",
-                    "image": "docker:eclipse-mosquitto:2.0.15-openssl",
-                    "loopback_required": true,
-                    "sockets": [
-                        {"id": "mqtt-sock", "listen": "unix:/run/netmaker/mq.sock", "connect": "tcp:127.0.0.1:1883"},
-                        {"id": "mqtts-sock", "listen": "unix:/run/netmaker/mqtts.sock", "connect": "tcp:127.0.0.1:8883"}
-                    ]
-                },
-                {
-                    "name": "netmaker-ui",
-                    "image": "docker:gravitl/netmaker-ui:v1.5.1",
-                    "loopback_required": true,
-                    "sockets": [
-                        {"id": "ui-sock", "listen": "unix:/run/netmaker/ui.sock", "connect": "tcp:127.0.0.1:80"}
-                    ]
-                }
-            ]
-        }))
+        // The example is also the initial projection on a fresh host. Keep it
+        // empty so schema documentation never fabricates live containers.
+        .example(json!({ "containers": [] }))
         .method(super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<PullImageInput, super::plugin_scaffold_helpers::AckOutput>(
             "pull_image",
             op_state_store::SideEffect::Mutation,
@@ -424,4 +389,16 @@ impl StatePlugin for OciPlugin {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("oci", |_ctx| std::sync::Arc::new(OciPlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_projection_does_not_fabricate_containers() {
+        let schema = oci_schema();
+        let example = schema.example.expect("OCI schema example");
+        assert_eq!(example["containers"], json!([]));
+    }
 }

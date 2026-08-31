@@ -512,32 +512,6 @@ pub struct GenerativeLanguageEndpoints {
     pub count_tokens: String,
 }
 
-/// MCP compact endpoint reference.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.antigravity.mcp-compact-endpoint.schema@v1"))]
-pub struct McpCompactEndpoint {
-    /// Endpoint URL.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.mcp-compact-endpoint.url@v1"))]
-    pub url: String,
-    /// HTTP method.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.mcp-compact-endpoint.method@v1"))]
-    pub method: String,
-    /// Content-Type header.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.mcp-compact-endpoint.content-type@v1"))]
-    pub content_type: String,
-    /// Human-readable description.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.antigravity.mcp-compact-endpoint.description@v1"))]
-    pub description: String,
-    /// Endpoint status.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.mcp-compact-endpoint.status@v1"))]
-    pub status: String,
-}
-
 /// OAuth bridge endpoint details.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.oauth-bridge-endpoint.schema@v1"))]
@@ -586,10 +560,6 @@ pub struct Endpoints {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.endpoints.generative-language@v1"))]
     pub generative_language_api: GenerativeLanguageEndpoints,
-    /// MCP compact endpoint.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.endpoints.mcp-compact@v1"))]
-    pub mcp_compact: McpCompactEndpoint,
     /// OAuth bridge endpoint.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.endpoints.oauth-bridge@v1"))]
@@ -1139,13 +1109,6 @@ impl AntigravityPlugin {
                     generate_content: "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".to_string(),
                     stream_generate_content: "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent".to_string(),
                     count_tokens: "https://generativelanguage.googleapis.com/v1beta/models/{}:countTokens".to_string(),
-                },
-                mcp_compact: McpCompactEndpoint {
-                    url: "http://127.0.0.1:8080/mcp/compact".to_string(),
-                    method: "POST".to_string(),
-                    content_type: "application/json".to_string(),
-                    description: "MCP compact endpoint - all registered tools in a single call".to_string(),
-                    status: "available".to_string(),
                 },
                 oauth_bridge: OauthBridgeEndpoint {
                     url: "http://127.0.0.1:3333".to_string(),

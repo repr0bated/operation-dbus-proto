@@ -1,5 +1,5 @@
 #!/bin/sh
-# opdbus-rundirs: runtime dirs, sealed-blob catalog, and Ghostbridge identity.
+# opdbus-rundirs: runtime dirs and the sealed plugin-blob catalog.
 set -eu
 umask 022
 
@@ -24,77 +24,8 @@ else
     echo "warning: /usr/local/bin/opblob missing — blob catalog not sealed"
 fi
 
-# Host Ghostbridge identity sled. It lives in tmpfs and must be re-seeded every
-# boot. Prefer the host WireGuard identity, then fall back to the trusted
-# chatbot identity used by the shared Ghostbridge socket.
-umask 077
-if [ -x /usr/local/bin/op-identity-sled ]; then
-    WG_IFACE="${OP_IDENTITY_WG_IFACE:-3tched}"
-    PUBKEY=""
-    TRACE_ID=""
-    IDENTITY_SOURCE=""
-    if command -v wg >/dev/null 2>&1; then
-        PUBKEY=$(wg show "$WG_IFACE" public-key 2>/dev/null || true)
-    fi
-    if [ -n "$PUBKEY" ]; then
-        IDENTITY_SOURCE="WireGuard interface $WG_IFACE"
-    elif command -v jq >/dev/null 2>&1 \
-        && [ -r /var/lib/opdbus-runtime/identities/chatbot/identity.json ] \
-        && [ "$(jq -r '.role == "chatbot" and .ghostbridge == true' /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null)" = "true" ]; then
-        PUBKEY=$(jq -er '.pubkey | select(type == "string" and length > 0)' \
-            /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null || true)
-        TRACE_ID=$(jq -er '.session_id | select(type == "string" and length > 0)' \
-            /var/lib/opdbus-runtime/identities/chatbot/identity.json 2>/dev/null || true)
-        IDENTITY_SOURCE="trusted chatbot identity"
-    fi
-
-    SLED_VIEW=$(mktemp /run/opdbus/identity-sled.XXXXXX)
-    if [ -n "$PUBKEY" ] && {
-        if [ -n "$TRACE_ID" ]; then
-            /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" \
-                --trace-id "$TRACE_ID" >"$SLED_VIEW" 2>/dev/null
-        else
-            /usr/local/bin/op-identity-sled --refresh --pubkey "$PUBKEY" \
-                >"$SLED_VIEW" 2>/dev/null
-        fi
-    }; then
-        FOOTPRINT=$(jq -er '.hashed_footprint | ascii_downcase | select(length == 64)' \
-            "$SLED_VIEW" 2>/dev/null || true)
-        case "$FOOTPRINT" in
-            *[!0-9a-f]*|"")
-                echo "warning: identity sled returned an invalid footprint"
-                ;;
-            *)
-                GRANTS_PATH=/dev/shm/opdbus/capability-grants.json
-                GRANTS_TMP=$(mktemp /dev/shm/opdbus/capability-grants.XXXXXX)
-                # The sled footprint changes after every audited mutation, so
-                # grants are capability-scoped rather than footprint-pinned.
-                # Ghostbridge authentication is still required before lookup.
-                jq -n '{
-                    "*": {
-                        capabilities: [
-                            "cap.software.zeroclaw.chat@v1",
-                            "cap.software.zeroclaw.models.read@v1",
-                            "cognitive_mcp.read",
-                            "cognitive_mcp.invoke"
-                        ]
-                    }
-                }' >"$GRANTS_TMP"
-                chmod 0600 "$GRANTS_TMP"
-                mv -f "$GRANTS_TMP" "$GRANTS_PATH"
-                echo "Ghostbridge identity seeded from $IDENTITY_SOURCE with least-privilege ZeroClaw + cognitive_mcp read/invoke grants"
-                ;;
-        esac
-    else
-        echo "warning: no trusted Ghostbridge identity available — identity sled not seeded"
-    fi
-    rm -f "$SLED_VIEW"
-else
-    echo "warning: /usr/local/bin/op-identity-sled missing — Ghostbridge identity not seeded"
-fi
-
 # Xray owns its single live configuration inside the container at
 # /etc/xray/xray_config.json. Host bootstrap must not create a shadow live
 # path in /dev/shm or /var/lib; container materialization/reload belongs to
 # the validated D-Bus deployment path.
-echo "rundirs ready: /run/opdbus, sealed catalog, Ghostbridge identity"
+echo "rundirs ready: /run/opdbus and sealed plugin catalog"

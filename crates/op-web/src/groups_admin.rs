@@ -240,8 +240,7 @@ async fn get_profile(axum::extract::Path(name): axum::extract::Path<String>) -> 
             Json(json!({
                 "profile": name,
                 "groups": groups,
-                "preset": config.preset,
-                "mcp_endpoint": format!("/mcp/groups/{}", name)
+                "preset": config.preset
             }))
         }
         None => Json(json!({
@@ -274,8 +273,7 @@ async fn save_profile(
     Json(json!({
         "success": true,
         "profile": name,
-        "group_count": count,
-        "mcp_endpoint": format!("/mcp/groups/{}", name)
+        "group_count": count
     }))
 }
 

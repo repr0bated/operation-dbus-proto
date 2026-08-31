@@ -380,8 +380,26 @@ pub(crate) mod tests {
     use op_state_store::{ChainConfig, EventChain};
     use serde_json::Value as JsonValue;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, MutexGuard};
     use tokio::sync::RwLock;
+
+    /// Serialize tests that redirect the process-wide principal-store path.
+    ///
+    /// The store itself is correctly keyed by path, but the path selector is
+    /// an environment variable shared by every test thread. Holding this guard
+    /// for the lifetime of the temp directory keeps registration and strict
+    /// assertion resolution on the same authoritative store.
+    pub(crate) fn test_registry_guard() -> MutexGuard<'static, ()> {
+        static TEST_REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        TEST_REGISTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) struct TempCozo {
+        _guard: MutexGuard<'static, ()>,
+        _dir: tempfile::TempDir,
+    }
 
     pub(crate) fn test_engine() -> Arc<MutationEngine> {
         let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
@@ -389,12 +407,17 @@ pub(crate) mod tests {
         Arc::new(MutationEngine::new(event_chain, ovsdb))
     }
 
-    /// Unique temp Cozo path per test. The bridge lib suite always runs
-    /// single-threaded, so the process-global env override is race-free.
-    pub(crate) fn temp_cozo() -> tempfile::TempDir {
+    /// Unique temp Cozo path per test, held together with the process-global
+    /// environment lock so parallel test-harness threads cannot redirect a
+    /// validator between registration and resolution.
+    pub(crate) fn temp_cozo() -> TempCozo {
+        let guard = test_registry_guard();
         let dir = tempfile::tempdir().expect("tempdir");
         std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", dir.path().join("cozo"));
-        dir
+        TempCozo {
+            _guard: guard,
+            _dir: dir,
+        }
     }
 
     /// Unique temp projection dir per test so MutationEngine-driving tests
@@ -860,16 +883,20 @@ pub(crate) mod tests {
             footprint: footprint.clone(),
             session_id: "gate-matrix-test".to_string(),
         };
+        let grants_dir = tempfile::tempdir().expect("grants dir");
+        let grants_path = grants_dir.path().join("capability-grants.json");
+        std::env::set_var("OP_GRANTS_PATH", &grants_path);
 
         for (method, decl) in &methods {
             let capability = decl["required_capability"]
                 .as_str()
                 .unwrap_or_else(|| panic!("{method} declares a capability"));
 
-            // Grants declared but NOT covering this footprint: deny without
-            // the grant — with no header, a wrong header, and even the
-            // correct header.
-            schema_json["capability_grants"] = serde_json::json!({});
+            // Embedded schema grants never authorize. With an empty external
+            // exact-principal store, no header value may open the method.
+            schema_json["capability_grants"] =
+                serde_json::json!({ footprint.clone(): [capability] });
+            std::fs::write(&grants_path, b"{}").expect("write empty grants");
             for header in [None, Some("unrelated.capability"), Some(capability)] {
                 assert!(
                     crate::grpc_server::enforce_bridge_capability_with_schema(
@@ -884,10 +911,17 @@ pub(crate) mod tests {
                 );
             }
 
-            // Granting the schema-declared capability to this footprint
-            // permits the call with the matching declared header.
-            schema_json["capability_grants"] =
-                serde_json::json!({ footprint.clone(): [capability] });
+            // The authoritative exact-footprint store permits the matching
+            // declaration even when the embedded schema contains only `*`.
+            schema_json["capability_grants"] = serde_json::json!({ "*": [capability] });
+            std::fs::write(
+                &grants_path,
+                serde_json::to_vec(&serde_json::json!({
+                    footprint.clone(): { "capabilities": [capability] }
+                }))
+                .expect("serialize grants"),
+            )
+            .expect("write exact grant");
             assert!(
                 crate::grpc_server::enforce_bridge_capability_with_schema(
                     Some(&schema_json),
@@ -900,6 +934,7 @@ pub(crate) mod tests {
                 "{method} must be permitted with its grant"
             );
         }
+        std::env::remove_var("OP_GRANTS_PATH");
     }
 
     /// VAL-REGISTRY-021: malformed pubkeys are rejected with zero state change.
@@ -999,20 +1034,18 @@ pub(crate) mod tests {
     async fn plugin_service_input_validation() {
         let _cozo = temp_cozo();
         let _shm = temp_shm();
-        // The D-Bus capability gate reads the CURRENT sled's footprint and
-        // loads grants keyed by it. The host sled is root-only, so point
-        // OP_SLED_PATH at a zeroed test sled (read_sled's documented test
-        // override) and OP_GRANTS_PATH at a wildcard grant covering both
-        // human_principal capabilities. Both are restored afterwards so
-        // later single-threaded tests see the host state again.
+        // The test-only dispatcher supplies an explicit caller footprint; grant
+        // only that identity the capabilities required by this validation test.
         let grants_dir = tempfile::tempdir().expect("grants dir");
-        let sled_path = grants_dir.path().join("test-sled.dat");
-        std::fs::write(&sled_path, vec![0u8; op_identity::IdentitySled::SIZE]).expect("write sled");
-        std::env::set_var("OP_SLED_PATH", &sled_path);
         let grants_path = grants_dir.path().join("capability-grants.json");
         std::fs::write(
             &grants_path,
-            r#"{"*": {"capabilities": ["human_principal.write", "human_principal.read"]}}"#,
+            serde_json::to_vec(&serde_json::json!({
+                (SchemaBackedInterface::TEST_CALLER_FOOTPRINT): {
+                    "capabilities": ["human_principal.write", "human_principal.read"]
+                }
+            }))
+            .expect("serialize grants"),
         )
         .expect("write grants");
         std::env::set_var("OP_GRANTS_PATH", &grants_path);
@@ -1059,7 +1092,6 @@ pub(crate) mod tests {
         );
         assert_eq!(before["result"]["principals"].as_array().unwrap().len(), 0);
 
-        std::env::remove_var("OP_SLED_PATH");
         std::env::remove_var("OP_GRANTS_PATH");
     }
 

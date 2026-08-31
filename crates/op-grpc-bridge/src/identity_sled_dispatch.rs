@@ -19,7 +19,7 @@
 //! Authoritative store: the per-session record in this plugin's state cache
 //! (projected to `/dev/shm/opdbus/state/identity_sled.json`, durable in Cozo)
 //! IS the identity. The legacy global 152-byte sled at
-//! `/dev/shm/plugin_schema.dat` is not written and not consulted.
+//! The retired process-global raw identity file is not written or consulted.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -212,10 +212,7 @@ fn sled_to_genesis_inputs(sled: &ContainerIdentitySled) -> GenesisInputsRecord {
 fn join_genesis_inputs(sleds: &mut [ContainerIdentitySled], inputs: &[GenesisInputsRecord]) {
     let expected_shape = op_plugins::state_plugins::identity_sled::SCHEMA_CONTENT_HASH.trim();
     for sled in sleds.iter_mut() {
-        let Some(found) = inputs
-            .iter()
-            .find(|row| row.session_id == sled.session_id)
-        else {
+        let Some(found) = inputs.iter().find(|row| row.session_id == sled.session_id) else {
             continue;
         };
         if !found.schema_content_hash.is_empty() && found.schema_content_hash != expected_shape {
@@ -1181,7 +1178,9 @@ pub(crate) mod tests {
                 .unwrap_or_else(|| panic!("handle '{handle}' must resolve the session"));
             assert_eq!(found.session_id, identity.session_id);
         }
-        assert!(session_record_for_actor(engine.as_ref(), "").await.is_none());
+        assert!(session_record_for_actor(engine.as_ref(), "")
+            .await
+            .is_none());
         assert!(session_record_for_actor(engine.as_ref(), "nobody")
             .await
             .is_none());

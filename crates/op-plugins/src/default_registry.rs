@@ -26,6 +26,19 @@ use crate::schema_loader::SchemaLoader;
 
 use crate::AutoPlugin;
 
+/// Plugins deliberately removed from the live control plane.
+///
+/// A retired implementation may remain for recovery tooling or be deleted
+/// entirely; either way, never publish or auto-create its id as a callable
+/// plugin. The sealed blob catalog and generated gRPC routes are both derived
+/// from [`DefaultPluginRegistry::available_plugins`], so this is the common
+/// fail-closed boundary.
+pub const RETIRED_PLUGIN_IDS: &[&str] = &["compact_mcp", "netmaker"];
+
+pub fn is_retired_plugin(plugin_id: &str) -> bool {
+    RETIRED_PLUGIN_IDS.contains(&plugin_id)
+}
+
 /// Context handed to a plugin's registered constructor at load time. Wraps the
 /// registry so co-located registrations can reach the few inputs a constructor
 /// needs (state store, config-path resolution) without exposing private fields.
@@ -263,6 +276,13 @@ impl DefaultPluginRegistry {
     pub async fn load_plugin(&self, name: &str) -> Result<Arc<dyn op_state::StatePlugin>> {
         let resolved_name = Self::resolve_requested_plugin_name(name)?;
 
+        if is_retired_plugin(&resolved_name) {
+            return Err(anyhow!(
+                "plugin '{}' is retired and cannot be loaded or recreated",
+                resolved_name
+            ));
+        }
+
         let ctx = PluginCtx { reg: self };
         for registration in inventory::iter::<PluginReg> {
             if registration.name == resolved_name {
@@ -301,6 +321,7 @@ impl DefaultPluginRegistry {
         let mut plugins: Vec<String> = inventory::iter::<PluginReg>
             .into_iter()
             .map(|registration| registration.name.to_string())
+            .filter(|plugin_id| !is_retired_plugin(plugin_id))
             .collect();
 
         plugins.sort();
@@ -365,6 +386,24 @@ mod tests {
             "discovered plugins missing plugin-owned schema: {:?}",
             missing
         );
+    }
+
+    #[tokio::test]
+    async fn test_retired_plugins_are_not_loadable_or_advertised() {
+        let store = Arc::new(MemoryStore::new());
+        let registry = DefaultPluginRegistry::new(store);
+
+        let advertised = DefaultPluginRegistry::available_plugins();
+        for plugin_id in RETIRED_PLUGIN_IDS {
+            assert!(!advertised.iter().any(|candidate| candidate == *plugin_id));
+
+            let error = registry
+                .load_plugin(plugin_id)
+                .await
+                .err()
+                .expect("retired plugin must fail closed");
+            assert!(error.to_string().contains("retired"));
+        }
     }
 
     /// Every plugin with canonical-form capability ids on its methods MUST

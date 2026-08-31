@@ -1,0 +1,6 @@
+{
+  "id": "23",
+  "subject": "Correct Incus method output schema/runtime alignment",
+  "description": "Replace Incus AckOutput declarations with method-specific output structs and make dispatch serialization use those exact types; validate before deployment.",
+  "status": "pending"
+}

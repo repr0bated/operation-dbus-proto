@@ -18,7 +18,7 @@ use zbus::{Connection, Proxy};
 
 use base64::Engine;
 use op_blockchain::{PluginFootprint, StreamingBlockchain};
-use op_identity::{read_sled, write_sled_advance};
+use op_cognitive_mcp::CognitiveMcpServer;
 use op_llm::chat::ChatManager;
 use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::blockchain_plugin::{
@@ -97,6 +97,10 @@ pub struct MutationEngine {
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
     /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
     chat_manager: Arc<ChatManager>,
+    /// Lazily initialized cognitive runtime.  It is owned by the bridge and is
+    /// reached only after a call has entered PluginService/MutationEngine; it
+    /// never opens a second listener or becomes a parallel control plane.
+    cognitive_mcp: Arc<OnceCell<Arc<CognitiveMcpServer>>>,
     /// Verified session identities, keyed by session_id. Projection of the
     /// session records for the mutation path — not a second store.
     sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
@@ -219,6 +223,44 @@ impl MutationEngine {
                     %error,
                     session_id = %record.session_id,
                     "session arrival could not be anchored"
+                );
+                None
+            }
+        }
+    }
+
+    /// Anchor the first request only after the Oracle assertion path has
+    /// authenticated the decoy signature and resolved/bootstrapped the human.
+    ///
+    /// Keeping record creation out of [`ensure_session_context`] prevents the
+    /// legacy self-asserted header path from turning an arbitrary public
+    /// WireGuard key into a new session.
+    pub async fn ensure_verified_human_session_context(
+        &self,
+        wireguard_pubkey: &str,
+    ) -> Option<SessionContext> {
+        if let Some(found) = self.session_context_for_actor(wireguard_pubkey).await {
+            return Some(found);
+        }
+        let valid_wireguard_key = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            wireguard_pubkey.trim(),
+        )
+        .is_ok_and(|raw| raw.len() == 32);
+        if !valid_wireguard_key {
+            return None;
+        }
+        let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
+        match self
+            .mint_and_store_genesis(&session_id, wireguard_pubkey)
+            .await
+        {
+            Ok(_) => self.session_context(&session_id).await,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    %session_id,
+                    "verified human arrival could not be anchored"
                 );
                 None
             }
@@ -351,8 +393,24 @@ impl MutationEngine {
             ovsdb,
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
+            cognitive_mcp: Arc::new(OnceCell::new()),
             sessions: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    async fn cognitive_mcp(&self) -> anyhow::Result<&Arc<CognitiveMcpServer>> {
+        self.cognitive_mcp
+            .get_or_try_init(|| async {
+                let path = std::env::var("COGNITIVE_MCP_DB_PATH")
+                    .unwrap_or_else(|_| "/var/lib/op-dbus/cognitive-memory.db".to_string());
+                CognitiveMcpServer::new_durable(&path)
+                    .await
+                    .map(Arc::new)
+                    .map_err(|error| {
+                        anyhow::anyhow!("durable cognitive runtime unavailable at {path}: {error}")
+                    })
+            })
+            .await
     }
 
     /// Open the durable audit sink and rebuild the in-memory event chain from it.
@@ -1120,14 +1178,14 @@ impl MutationEngine {
         // event carries it in tags_touched (VAL-CROSS-020).
         let mut event_tags: Vec<String> = Vec::new();
 
-        // Resolve the acting identity from the Sled (/dev/shm/plugin_schema.dat)
-        // when the caller omitted it. The Sled carries the WireGuard footprint +
-        // trace_id — that identity is authoritative for every mutation.
+        // Identity is request/session scoped. An omitted actor never inherits a
+        // process-wide identity from compatibility state.
         let actor_id = if actor_id.is_empty() {
-            sled_footprint().unwrap_or_else(|| "anonymous".to_string())
+            ANONYMOUS_ACTOR.to_string()
         } else {
             actor_id
         };
+        let session_to_advance = self.session_context_for_actor(&actor_id).await;
 
         // 1. Write to authoritative RCP store
         if plugin_id == "net" || object_path.contains("/ovsdb/") {
@@ -1259,20 +1317,7 @@ impl MutationEngine {
                 caller_result = Some(simd_json::serde::to_owned_value(&result)?);
             }
         } else if plugin_id == "netmaker" && change_type == ChangeType::MethodCall {
-            if let Some(method) = &member_name {
-                let mut args_json = serde_json::to_value(&value)?;
-                if let serde_json::Value::Array(items) = &args_json {
-                    args_json = items
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-                }
-                let result = op_plugins::state_plugins::netmaker::dispatch_netmaker_method(
-                    method, &args_json,
-                )
-                .await?;
-                caller_result = Some(simd_json::serde::to_owned_value(&result)?);
-            }
+            anyhow::bail!("plugin 'netmaker' is retired and cannot be invoked");
         } else {
             // NonNet / Generic Plugin Path
             if change_type == ChangeType::PropertySet {
@@ -1304,28 +1349,16 @@ impl MutationEngine {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        // Write the Identity Sled with the updated mutation index.
-        {
-            let (existing_pubkey_b64, existing_trace_hex) = if let Ok((ptr, _mmap)) = read_sled() {
-                unsafe {
-                    let sled = &*ptr;
-                    (
-                        base64::engine::general_purpose::STANDARD.encode(sled.wireguard_pubkey),
-                        sled.trace_id_hex(),
-                    )
-                }
-            } else {
-                (String::new(), String::new())
-            };
-            if let Err(e) =
-                write_sled_advance(
-                    &existing_pubkey_b64,
-                    change.event_id,
-                    &existing_trace_hex,
-                    0,
-                )
+        if let Some(session) = session_to_advance {
+            if let Err(error) = crate::identity_sled_dispatch::advance_mutation_index(
+                self,
+                &session.session_id,
+                change.event_id,
+            )
+            .await
             {
-                tracing::warn!("sled write after mutation failed: {}", e);
+                tracing::warn!(%error, session_id = %session.session_id,
+                    "session mutation index advance failed");
             }
         }
 
@@ -1481,11 +1514,6 @@ impl MutationEngine {
                 op_plugins::state_plugins::gcloud_adc::dispatch_gcloud_adc_method(method, &args)
                     .await?
             }
-            "compact_mcp" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                op_plugins::state_plugins::compact_mcp::dispatch_compact_mcp_method(method, &args)
-                    .await?
-            }
             "full_system" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::full_system::dispatch_full_system_method(method, &args)
@@ -1498,6 +1526,14 @@ impl MutationEngine {
             "openflow" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 op_plugins::state_plugins::openflow::dispatch_openflow_method(method, &args).await?
+            }
+            "incus" if method == "delete_instance" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::incus::dispatch_delete_instance(&args).await?
+            }
+            "incus" if method == "remove_device" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::incus::dispatch_remove_device(&args).await?
             }
             "privacy_routes" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -1564,7 +1600,7 @@ impl MutationEngine {
             }
             "cognitive_mcp" => {
                 let args = serde_json::to_value(&parsed_value)?;
-                dispatch_cognitive_mcp_method(method, &args).await?
+                self.dispatch_cognitive_mcp_method(method, &args).await?
             }
             // Audit-trail query surface. Deliberately scoped: only the two
             // audit methods are wired. The plugin's seven pre-existing methods
@@ -1887,23 +1923,6 @@ pub enum ErrorCode {
     ValidationFailed,
     ReadOnly,
     Internal,
-}
-
-/// Read the WireGuard footprint from the Sled (1:1 shared memory identity at
-/// `/dev/shm/plugin_schema.dat`). Returns the hex footprint used as the default
-/// `actor_id` when a caller omits identity.
-fn sled_footprint() -> Option<String> {
-    // SAFETY: read_sled returns a valid pointer to IdentitySled in shared memory
-    // for the lifetime of the process; we copy the footprint out and drop the ptr.
-    let (ptr, _mmap) = read_sled().ok()?;
-    unsafe {
-        let sled = &*ptr;
-        if sled.hashed_footprint != [0u8; 32] {
-            Some(hex::encode(sled.hashed_footprint))
-        } else {
-            None
-        }
-    }
 }
 
 /// Build the authoritative `unix_socket` projection state after a successful
@@ -2307,49 +2326,102 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
 ///
 /// OSCAL subid: mut.service.cognitive-mcp.dispatch@v1
 ///
-/// Phase 1 transport is an HTTP loopback to `op-cognitive-mcp`'s MCP endpoint. The
-/// bridge remains the only authorization door: the method-existence gate, arg
-/// validation, capability check and event-chain append have all already happened in
-/// `dispatch_method_call` before this function is reached.
-///
-/// Phase 2 replaces the loopback with an in-process `ToolRegistry::execute` call and
-/// retires the `:3003` listener. See
-/// `.kiro/specs/cognitive-mcp-only-door-phase2/`.
-async fn dispatch_cognitive_mcp_method(
-    method: &str,
-    args: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    // Plugin-local methods answer from published state; no executor hop needed.
-    match method {
-        "get_config" | "get_health" => {
+/// The runtime is in-process, but this function is reached only after the call has
+/// passed through the canonical `PluginService`/`MutationEngine` method gate.  The
+/// registry is therefore an implementation detail behind D-Bus, not a second
+/// listener or control plane.
+impl MutationEngine {
+    /// Resolve trusted per-tool authority metadata from the live in-process
+    /// registry. MCP callers never provide or override this descriptor.
+    pub(crate) async fn cognitive_tool_descriptor(
+        &self,
+        tool_name: &str,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        let candidate = self
+            .cognitive_mcp()
+            .await?
+            .tool_registry()
+            .get_descriptor(tool_name)
+            .await
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(anyhow::Error::from)?;
+        Ok(candidate.and_then(project_sealed_cognitive_tool_descriptor))
+    }
+
+    async fn dispatch_cognitive_mcp_method(
+        &self,
+        method: &str,
+        args: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        // Bridge-local health answers from the published in-process projection;
+        // every cognitive operation below executes through the embedded registry.
+        if method == "get_health" {
             let mut bytes = op_core::projection_shm::read_projection_bytes("cognitive_mcp")
                 .ok_or_else(|| anyhow::anyhow!("cognitive_mcp projection not available"))?;
             let value = simd_json::to_owned_value(&mut bytes)
                 .map_err(|e| anyhow::anyhow!("cognitive_mcp projection is not valid JSON: {e}"))?;
             return Ok(serde_json::to_value(&value)?);
         }
-        "set_config" | "restart_service" => {
-            // These belong to the plugin's own apply_state path, which is reached
-            // through StatePlugin rather than the tool registry. Acknowledge without
-            // fabricating a result so callers can distinguish "accepted" from "done".
-            return Ok(serde_json::json!({
-                "acknowledged": true,
-                "method": method,
-                "note": "handled by cognitive_mcp apply_state; not a tool-registry call",
-            }));
+
+        // `list_tools` is an MCP *protocol* method (`tools/list`), not an entry in the
+        // tool registry, so it cannot go through `tools/call`.
+        if method == "list_tools" {
+            let runtime = self.cognitive_mcp().await?;
+            let descriptors = runtime
+                .tool_registry()
+                .list_descriptors()
+                .await
+                .into_iter()
+                .filter_map(|descriptor| serde_json::to_value(descriptor).ok())
+                .filter_map(project_sealed_cognitive_tool_descriptor)
+                .collect::<Vec<_>>();
+            return Ok(serde_json::json!({ "tools": descriptors }));
         }
-        _ => {}
-    }
 
-    // `list_tools` is an MCP *protocol* method (`tools/list`), not an entry in the
-    // tool registry, so it cannot go through `tools/call`.
-    if method == "list_tools" {
-        return cognitive_tools_list().await;
+        let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
+        let runtime = self.cognitive_mcp().await?;
+        let input = simd_json::serde::to_owned_value(&tool_args)?;
+        let result = runtime.tool_registry().execute(&tool_name, input).await?;
+        Ok(serde_json::to_value(result)?)
     }
+}
 
-    let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
-    let result = call_cognitive_tool(&tool_name, &tool_args).await?;
-    Ok(result)
+/// Project a runtime tool candidate through the sealed cognitive PluginSchema.
+///
+/// A tool is callable only when its public name is itself a declared schema
+/// method and its implementation candidates exactly match that method's
+/// capability and OSCAL subid. Dynamic, multiplexed, and implementation-only
+/// tools therefore remain registered for internal use but fail closed at MCP.
+fn project_sealed_cognitive_tool_descriptor(
+    mut candidate: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let name = candidate.get("name")?.as_str()?.to_string();
+    let candidate_capability = candidate.get("required_capability")?.as_str()?;
+    let candidate_subid = candidate.get("subid")?.as_str()?;
+    let schema = op_plugins::cognitive_mcp_plugin_schema();
+    let method = schema.methods.get(&name)?;
+    let sealed_capability = method.required_capability.as_deref()?;
+    if candidate_capability != sealed_capability || candidate_subid != method.subid {
+        return None;
+    }
+    if !schema.capabilities.contains_key(sealed_capability) {
+        return None;
+    }
+    let object = candidate.as_object_mut()?;
+    object.insert(
+        "required_capability".into(),
+        serde_json::Value::String(sealed_capability.to_string()),
+    );
+    object.insert(
+        "subid".into(),
+        serde_json::Value::String(method.subid.clone()),
+    );
+    object.insert(
+        "authority_method".into(),
+        serde_json::Value::String(method.name.clone()),
+    );
+    Some(candidate)
 }
 
 /// Translate a `cognitive_mcp` schema method name into a live tool-registry call.
@@ -2393,12 +2465,9 @@ fn map_schema_method_to_tool(
             with_field("operation", "list_namespaces"),
         )),
         // Code retrieval / indexing.
-        "code_search" => Ok(("search_blob_vectors".into(), base)),
-        "code_index" => Ok(("refresh_blob_vectors".into(), base)),
-        "code_context" => Ok((
-            "search_blob_vectors".into(),
-            with_field("activity_type", "query"),
-        )),
+        "code_search" => Ok(("code_search".into(), base)),
+        "code_index" => Ok(("code_index".into(), base)),
+        "code_context" => Ok(("code_context".into(), base)),
         // Gemini question answering: the tool names the field `question`.
         "gemini_query" => {
             let mut v = base.clone();
@@ -2434,199 +2503,84 @@ fn map_schema_method_to_tool(
     }
 }
 
-/// Shared HTTP client for the cognitive MCP loopback.
-///
-/// Built once: a fresh `Client` per call would leak a connection pool and defeat
-/// keep-alive on what is a hot path.
-static COGNITIVE_MCP_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+#[cfg(test)]
+mod cognitive_dispatch_tests {
+    use super::{map_schema_method_to_tool, project_sealed_cognitive_tool_descriptor};
 
-fn cognitive_mcp_http() -> &'static reqwest::Client {
-    COGNITIVE_MCP_HTTP.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
-}
+    #[test]
+    fn tool_authority_is_projected_only_from_an_exact_sealed_method() {
+        let projected = project_sealed_cognitive_tool_descriptor(serde_json::json!({
+            "name": "code_search",
+            "required_capability": "cognitive_mcp.read",
+            "subid": "obs.service.code-rag.search@v1",
+            "input_schema": {"type": "object"}
+        }))
+        .expect("code_search has an exact sealed MethodDecl");
+        assert_eq!(projected["authority_method"], "code_search");
+        assert_eq!(projected["required_capability"], "cognitive_mcp.read");
 
-/// MCP endpoint of the local cognitive service.
-///
-/// Overridable so the bridge can follow a relocated listener without a rebuild.
-fn cognitive_mcp_endpoint() -> String {
-    std::env::var("COGNITIVE_MCP_MCP_URL")
-        .unwrap_or_else(|_| "http://10.200.0.2:3003/mcp".to_string())
-}
-
-/// Send the MCP `initialize` handshake.
-///
-/// The cognitive MCP server rejects `tools/call` with "Server not initialized" until
-/// this has been sent. Initialization is server-side state, so it survives across
-/// requests but is lost whenever `op-cognitive-mcp` restarts — which is why callers
-/// treat it as a recoverable condition rather than doing it once at startup.
-async fn cognitive_mcp_initialize() -> anyhow::Result<()> {
-    let endpoint = cognitive_mcp_endpoint();
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 0,
-        "method": "initialize",
-        "params": {},
-    });
-
-    let response = cognitive_mcp_http()
-        .post(&endpoint)
-        .header("Content-Type", "application/json")
-        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
-        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
-        .json(&request)
-        .send()
-        .await
-        .with_context(|| format!("cognitive_mcp initialize POST {endpoint}"))?;
-
-    if !response.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "cognitive_mcp initialize returned HTTP {}",
-            response.status()
-        ));
-    }
-    Ok(())
-}
-
-/// Issue one `tools/call` and return the raw JSON-RPC envelope.
-async fn cognitive_tools_call_raw(
-    tool_name: &str,
-    tool_args: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let endpoint = cognitive_mcp_endpoint();
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": tool_name, "arguments": tool_args },
-    });
-
-    let response = cognitive_mcp_http()
-        .post(&endpoint)
-        .header("Content-Type", "application/json")
-        // The interceptor on the direct listener expects these; the authoritative
-        // authorization decision was already made by the bridge before dispatch.
-        .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
-        .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
-        .json(&request)
-        .send()
-        .await
-        .with_context(|| format!("cognitive_mcp loopback POST {endpoint}"))?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .context("reading cognitive_mcp loopback response body")?;
-
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "cognitive_mcp loopback returned HTTP {status}: {body}"
-        ));
+        assert!(project_sealed_cognitive_tool_descriptor(serde_json::json!({
+            "name": "search_blob_vectors",
+            "required_capability": "cognitive_mcp.read",
+            "subid": "obs.service.cognitive-mcp.blob-vectors.search@v1",
+            "input_schema": {"type": "object"}
+        }))
+        .is_none());
+        assert!(project_sealed_cognitive_tool_descriptor(serde_json::json!({
+            "name": "code_index",
+            "required_capability": "cognitive_mcp.read",
+            "subid": "mut.service.code-rag.index@v1",
+            "input_schema": {"type": "object"}
+        }))
+        .is_none());
     }
 
-    serde_json::from_str(&body)
-        .with_context(|| format!("cognitive_mcp returned non-JSON body: {body}"))
-}
-
-/// Invoke one tool over the MCP `tools/call` JSON-RPC method and unwrap the result.
-///
-/// Performs the `initialize` handshake lazily: rather than initializing once at bridge
-/// startup (which would break the first call after any `op-cognitive-mcp` restart), a
-/// "not initialized" error triggers one initialize and a single retry.
-async fn call_cognitive_tool(
-    tool_name: &str,
-    tool_args: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let mut envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
-
-    if mcp_needs_initialize(&envelope) {
-        cognitive_mcp_initialize().await?;
-        envelope = cognitive_tools_call_raw(tool_name, tool_args).await?;
-    }
-
-    if let Some(error) = envelope.get("error") {
-        let message = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown MCP error");
-        return Err(anyhow::anyhow!("tool '{tool_name}' failed: {message}"));
-    }
-
-    envelope.get("result").cloned().ok_or_else(|| {
-        anyhow::anyhow!("cognitive_mcp response had neither 'result' nor 'error': {envelope}")
-    })
-}
-
-/// Enumerate the live tool registry via the MCP `tools/list` protocol method.
-///
-/// Distinct from `call_cognitive_tool`: `tools/list` is a protocol method rather than a
-/// registry entry, so routing the `list_tools` schema method through `tools/call` would
-/// (and did) fail with "Tool not found: list_tools".
-async fn cognitive_tools_list() -> anyhow::Result<serde_json::Value> {
-    let endpoint = cognitive_mcp_endpoint();
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": {},
-    });
-
-    let post = || async {
-        let response = cognitive_mcp_http()
-            .post(&endpoint)
-            .header("Content-Type", "application/json")
-            .header("X-Ghostbridge-Footprint", "op-grpc-bridge")
-            .header("X-Ghostbridge-Trace-ID", "bridge-dispatch")
-            .json(&request)
-            .send()
-            .await
-            .with_context(|| format!("cognitive_mcp tools/list POST {endpoint}"))?;
-
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .context("reading cognitive_mcp tools/list response body")?;
-        if !status.is_success() {
-            return Err(anyhow::anyhow!(
-                "cognitive_mcp tools/list returned HTTP {status}: {body}"
-            ));
+    #[test]
+    fn code_methods_route_to_the_real_code_tools() {
+        let args = serde_json::json!({ "query": "MutationEngine" });
+        for (method, expected) in [
+            ("code_search", "code_search"),
+            ("code_context", "code_context"),
+            ("code_index", "code_index"),
+        ] {
+            let (actual, forwarded) =
+                map_schema_method_to_tool(method, &args).expect("mapping must exist");
+            assert_eq!(actual, expected);
+            assert_eq!(forwarded, args);
         }
-        serde_json::from_str::<serde_json::Value>(&body)
-            .with_context(|| format!("cognitive_mcp tools/list returned non-JSON body: {body}"))
-    };
-
-    let mut envelope = post().await?;
-    if mcp_needs_initialize(&envelope) {
-        cognitive_mcp_initialize().await?;
-        envelope = post().await?;
     }
 
-    if let Some(error) = envelope.get("error") {
-        let message = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("unknown MCP error");
-        return Err(anyhow::anyhow!("tools/list failed: {message}"));
+    #[test]
+    fn memory_methods_select_the_canonical_memory_operation() {
+        let (tool, args) = map_schema_method_to_tool(
+            "memory_store",
+            &serde_json::json!({ "content": "remember this" }),
+        )
+        .expect("mapping must exist");
+        assert_eq!(tool, "cognitive_memory");
+        assert_eq!(args["operation"], "store");
     }
 
-    envelope
-        .get("result")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("cognitive_mcp tools/list response had no 'result'"))
-}
+    #[test]
+    fn invoke_tool_uses_the_named_registry_target_and_nested_arguments() {
+        let nested = serde_json::json!({"filter": {"limit": 2}});
+        let (tool, args) = map_schema_method_to_tool(
+            "invoke_tool",
+            &serde_json::json!({"tool_name": "safe_read", "arguments": nested}),
+        )
+        .expect("canonical invoke_tool mapping must exist");
+        assert_eq!(tool, "safe_read");
+        assert_eq!(args, serde_json::json!({"filter": {"limit": 2}}));
+    }
 
-/// True when the envelope is the server's "call initialize first" rejection.
-fn mcp_needs_initialize(envelope: &serde_json::Value) -> bool {
-    envelope
-        .get("error")
-        .and_then(|e| e.get("message"))
-        .and_then(|m| m.as_str())
-        .is_some_and(|m| m.contains("not initialized"))
+    #[test]
+    fn retired_standalone_management_methods_have_no_dispatch_path() {
+        for method in ["get_config", "set_config", "restart_service"] {
+            let error = map_schema_method_to_tool(method, &serde_json::json!({}))
+                .expect_err("retired standalone management must not reach a handler");
+            assert!(error.to_string().contains("has no tool-registry mapping"));
+        }
+    }
 }
 
 /// True for the live `unix_socket` registration method and its aliases.

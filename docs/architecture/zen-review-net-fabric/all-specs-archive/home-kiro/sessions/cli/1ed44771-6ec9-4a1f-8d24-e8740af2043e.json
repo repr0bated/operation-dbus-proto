@@ -1,0 +1,37 @@
+{
+  "session_id": "1ed44771-6ec9-4a1f-8d24-e8740af2043e",
+  "cwd": "/srv/git/odbus",
+  "created_at": "2026-08-01T23:47:37.015012633Z",
+  "updated_at": "2026-08-01T23:47:43.377659171Z",
+  "title": "Independently review the Phase 1 netclient netns implementation in /srv/git/odbus. Do not modify files or execute live network/service mutations. I...",
+  "parent_session_id": "54b2fac7-7380-4ce8-bada-0c5cf4cba778",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "1ed44771-6ec9-4a1f-8d24-e8740af2043e",
+      "model_info": null,
+      "context_usage_percentage": null
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/srv/git/odbus"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": null,
+    "goal": null
+  }
+}

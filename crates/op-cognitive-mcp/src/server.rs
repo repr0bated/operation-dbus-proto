@@ -1,22 +1,21 @@
-//! Cognitive MCP Server — Dual Transport (HTTP/SSE + gRPC)
+//! Bridge-owned cognitive runtime.
 //!
 //! Single persistent backend (CozoDB) hosts every relation:
 //! memory namespaces/entries, users, sessions, compliance graph, subid registry, audit log.
+//! This type owns no listener; `op-grpc-bridge` dispatches authenticated calls
+//! into its tool registry in process.
 
 use crate::code_tools::register_code_tools;
 use crate::cognitive_tools::CognitiveToolRegistry;
 use crate::context_awareness::{ContextAwarenessConfig, ContextAwarenessEngine};
 use crate::cozo_shuttle::CozoGraphShuttle;
-use crate::gemini_fallback::GeminiFallback;
-use crate::grpc_service::CognitiveGrpcService;
 use crate::memory_store::CognitiveMemoryStore;
-use crate::proto::cognitive_tool_service_server::CognitiveToolServiceServer;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use crate::quota::QuotaManager;
 use crate::rag_pipeline::{default_collection_from_env, RagPipeline};
 use crate::session::SessionManager;
 use crate::typed_tools;
-use op_mcp::tool_registry::{RegistryExecutor, ToolRegistry};
+use op_mcp::tool_registry::ToolRegistry;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,7 +26,6 @@ pub struct CognitiveMcpServer {
     tool_registry: Arc<ToolRegistry>,
     session_manager: Arc<SessionManager>,
     quota_manager: Arc<QuotaManager>,
-    gemini_fallback: Arc<GeminiFallback>,
     /// Code-RAG pipeline (Voyage + Qdrant). `None` when no Voyage key is found.
     rag_pipeline: Option<Arc<RagPipeline>>,
     /// Proactive coding-context awareness engine.
@@ -62,6 +60,20 @@ impl CognitiveMcpServer {
         Self::new_with_shuttle(cozo_shuttle).await
     }
 
+    /// Open the production durable store without an in-memory fallback.
+    ///
+    /// The bridge uses this constructor so a locked or unavailable Cozo path is
+    /// reported to the caller as `Unavailable` instead of acknowledging writes
+    /// that disappear at restart.  The process may still start and serve
+    /// non-cognitive plugins because initialization is lazy at the call site.
+    pub async fn new_durable(db_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        if db_path.is_empty() || db_path == ":memory:" || db_path == "memory" {
+            return Err("a durable CognitiveMcpServer requires a persistent Cozo path".into());
+        }
+        let cozo_shuttle = Arc::new(CozoGraphShuttle::new_persistent(PathBuf::from(db_path))?);
+        Self::new_with_shuttle(cozo_shuttle).await
+    }
+
     /// Create a Cognitive MCP server with a pre-configured CozoGraphShuttle.
     pub async fn new_with_shuttle(
         cozo_shuttle: Arc<CozoGraphShuttle>,
@@ -83,7 +95,6 @@ impl CognitiveMcpServer {
 
         let session_manager = Arc::new(SessionManager::with_defaults());
         let quota_manager = Arc::new(QuotaManager::with_defaults());
-        let gemini_fallback = Arc::new(GeminiFallback::new());
 
         CognitiveToolRegistry::register_all(
             &tool_registry,
@@ -143,133 +154,9 @@ impl CognitiveMcpServer {
             tool_registry,
             session_manager,
             quota_manager,
-            gemini_fallback,
             rag_pipeline,
             context_engine,
         })
-    }
-
-    /// Run the cognitive MCP server over stdio (stdin/stdout JSON-RPC).
-    /// This is the preferred transport for local MCP clients — no network
-    /// overhead, direct pipe communication.
-    pub async fn start_stdio(self) -> Result<(), Box<dyn std::error::Error>> {
-        use op_mcp::{McpServer, McpServerConfig, StdioTransport, Transport};
-
-        let config = McpServerConfig {
-            name: Some("cognitive-mcp".to_string()),
-            compact_mode: false,
-            ..Default::default()
-        };
-
-        let executor = Arc::new(RegistryExecutor::new(self.tool_registry.clone()));
-        let mcp_server = Arc::new(McpServer::with_executor(config, executor));
-
-        tracing::info!("Cognitive MCP Server starting (stdio transport)");
-
-        StdioTransport::new().serve(mcp_server).await?;
-        Ok(())
-    }
-
-    /// Serve the MCP protocol over HTTP/SSE on `addr`.
-    ///
-    /// # Deprecated
-    ///
-    /// This is a direct listener that bypasses the bridge's accountability chain
-    /// (method gate, arg validation, capability check, event-chain append).
-    /// Use `org.opdbus.v1.PluginV1.Call` on `/org/opdbus/v1/plugins/cognitive_mcp`.
-    /// Removed in Phase 2 (`.kiro/specs/cognitive-mcp-only-door-phase2/`).
-    #[deprecated(note = "Use bridge path: PluginV1.Call on cognitive_mcp plugin")]
-    pub async fn start_http_server(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::context_server::build_context_router;
-        use op_mcp::{HttpSseTransport, McpServer, McpServerConfig, Transport};
-
-        let config = McpServerConfig {
-            name: Some("cognitive-mcp".to_string()),
-            compact_mode: false,
-            ..Default::default()
-        };
-
-        let executor = Arc::new(RegistryExecutor::new(self.tool_registry.clone()));
-        let mcp_server = Arc::new(McpServer::with_executor(config, executor));
-
-        let mut transport = HttpSseTransport::new(addr.to_string());
-        if std::env::var("COGNITIVE_MCP_CONTEXT_HTTP_DISABLED").as_deref() != Ok("1") {
-            // Mount the context-awareness SSE endpoints on the same HTTP server
-            // so they share auth, CORS, and the port with the MCP protocol routes.
-            let context_router = build_context_router(
-                self.context_engine.clone(),
-                self.memory_store.clone(),
-                self.session_manager.clone(),
-            );
-            transport = transport.with_extra_router(context_router);
-        }
-
-        tracing::info!(
-            addr = %addr,
-            "Cognitive MCP Server listening (MCP + context-awareness endpoints)"
-        );
-        transport.serve(mcp_server).await?;
-        Ok(())
-    }
-
-    /// Serve `CognitiveToolService` over gRPC on `addr`.
-    ///
-    /// # Deprecated
-    ///
-    /// Direct listener that bypasses the bridge's accountability chain. Use
-    /// `org.opdbus.v1.PluginV1.Call` on `/org/opdbus/v1/plugins/cognitive_mcp`.
-    /// Phase 2 relocates this service onto the bridge's own tonic server.
-    #[deprecated(note = "Use bridge path: PluginV1.Call on cognitive_mcp plugin")]
-    pub async fn start_grpc_server(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let grpc_service = CognitiveGrpcService::new(
-            self.memory_store.clone(),
-            self.session_manager.clone(),
-            self.quota_manager.clone(),
-            self.gemini_fallback.clone(),
-        );
-
-        let socket_addr: std::net::SocketAddr = addr.parse()?;
-        serve_cognitive_grpc(socket_addr, grpc_service).await?;
-        Ok(())
-    }
-
-    /// Serve HTTP/SSE and gRPC concurrently.
-    ///
-    /// # Deprecated
-    ///
-    /// Starts both direct listeners, each bypassing the bridge's accountability
-    /// chain. Use `org.opdbus.v1.PluginV1.Call` on
-    /// `/org/opdbus/v1/plugins/cognitive_mcp`. Removed in Phase 2.
-    #[deprecated(note = "Use bridge path: PluginV1.Call on cognitive_mcp plugin")]
-    pub async fn start_dual(
-        self,
-        http_addr: &str,
-        grpc_addr: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let grpc_addr = grpc_addr.to_string();
-        let http_addr = http_addr.to_string();
-
-        let grpc_memory = self.memory_store.clone();
-        let grpc_session = self.session_manager.clone();
-        let grpc_quota = self.quota_manager.clone();
-        let grpc_gemini = self.gemini_fallback.clone();
-
-        let grpc_handle = tokio::spawn(async move {
-            let grpc_service =
-                CognitiveGrpcService::new(grpc_memory, grpc_session, grpc_quota, grpc_gemini);
-            let socket_addr: std::net::SocketAddr = grpc_addr.parse().expect("invalid gRPC addr");
-            serve_cognitive_grpc(socket_addr, grpc_service)
-                .await
-                .expect("gRPC server failed");
-        });
-
-        // start_dual is itself deprecated; delegating to the deprecated HTTP listener
-        // is intentional and both disappear together in Phase 2.
-        #[allow(deprecated)]
-        let http_result = self.start_http_server(&http_addr).await;
-        http_result?;
-        grpc_handle.await?;
-        Ok(())
     }
 
     pub fn memory_store(&self) -> Arc<CognitiveMemoryStore> {
@@ -303,57 +190,4 @@ impl CognitiveMcpServer {
     pub fn context_engine(&self) -> Arc<ContextAwarenessEngine> {
         self.context_engine.clone()
     }
-}
-
-/// Shared gRPC stack for :50052 — CognitiveToolService + WaypipeTunnel.
-async fn serve_cognitive_grpc(
-    socket_addr: std::net::SocketAddr,
-    grpc_service: CognitiveGrpcService,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let reflection = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(crate::proto::FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(op_waypipe_grpc::proto::FILE_DESCRIPTOR_SET)
-        .build_v1()
-        .expect("failed to build cognitive+waypipe reflection service");
-
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-    health_reporter
-        .set_serving::<CognitiveToolServiceServer<CognitiveGrpcService>>()
-        .await;
-
-    let waypipe = op_waypipe_grpc::build_tunnel_service(op_waypipe_grpc::TunnelConfig::default())
-        .map_err(|e| format!("waypipe tunnel service: {e}"))?;
-
-    tracing::info!(
-        addr = %socket_addr,
-        "Cognitive gRPC Server listening (includes op.waypipe.v1.WaypipeTunnel)"
-    );
-
-    let cors = tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any)
-        .expose_headers([
-            "grpc-status".parse().unwrap(),
-            "grpc-message".parse().unwrap(),
-            "grpc-status-details-bin".parse().unwrap(),
-        ]);
-
-    // WaypipeTunnel is native h2 (no tonic-web) — laptop clients use tonic.
-    tonic::transport::Server::builder()
-        .accept_http1(true)
-        .layer(cors)
-        .add_service(tonic_web::enable(
-            CognitiveToolServiceServer::with_interceptor(
-                grpc_service,
-                crate::interceptor::ghostbridge_interceptor,
-            ),
-        ))
-        .add_service(waypipe)
-        .add_service(tonic_web::enable(reflection))
-        .add_service(tonic_web::enable(health_service))
-        .serve(socket_addr)
-        .await?;
-
-    Ok(())
 }

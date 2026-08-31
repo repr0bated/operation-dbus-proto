@@ -2875,7 +2875,7 @@
                   "field_type": "string",
                   "required": false,
                   "description": "Cognitive MCP endpoint used by the user container memory flow.",
-                  "default": "http://100.90.37.254:3003/mcp",
+                  "default": "https://10.0.0.3:8090/mcp",
                   "example": null,
                   "constraints": [],
                   "read_only": false,
@@ -3051,7 +3051,7 @@
               ],
               "container_id_template": "ws-{username}",
               "image": "images:debian/12",
-              "cognitive_mcp_endpoint": "http://100.90.37.254:3003/mcp",
+              "cognitive_mcp_endpoint": "https://10.0.0.3:8090/mcp",
               "feature_flags": [
                 "ghostbridge",
                 "semantic_search"
@@ -3836,7 +3836,7 @@
           ],
           "container_id_template": "ws-{username}",
           "image": "images:debian/12",
-          "cognitive_mcp_endpoint": "http://100.90.37.254:3003/mcp",
+          "cognitive_mcp_endpoint": "https://10.0.0.3:8090/mcp",
           "feature_flags": [
             "ghostbridge",
             "semantic_search"
@@ -5118,7 +5118,7 @@
         ],
         "container_id_template": "ws-{username}",
         "image": "images:debian/12",
-        "cognitive_mcp_endpoint": "http://100.90.37.254:3003/mcp",
+        "cognitive_mcp_endpoint": "https://10.0.0.3:8090/mcp",
         "feature_flags": [
           "ghostbridge",
           "semantic_search"

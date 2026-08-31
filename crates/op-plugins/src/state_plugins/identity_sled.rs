@@ -4,7 +4,7 @@
 //! blob: `session_id` (= the container name, derived from the WireGuard
 //! pubkey) keys the record; the host itself is "container zero" — the same
 //! kind of object, not a special case. This replaces the bespoke pre-schema
-//! `#[repr(C)]` sled at `/dev/shm/plugin_schema.dat` as the schema'd,
+//! retired process-global raw record as the schema'd,
 //! reflectable identity surface; that global last-write-wins file is retired
 //! and no longer written or read by any identity path.
 //!

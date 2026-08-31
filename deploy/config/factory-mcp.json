@@ -1,46 +1,18 @@
 {
-  "_comment": "Factory/Droid MCP Configuration for cognitive-mcp gateway",
-  "_source": "AGENTS.md Section 4b - cognitive-mcp (:3003) is universal gateway for ALL external clients",
-  "version": "1.0.0",
+  "_comment": "Factory/Droid uses the single bridge-owned MCP ingress. A broker must attach a fresh x-oracle-identity-assertion-bin value to every request.",
+  "version": "2.0.0",
   "mcpServers": {
-    "cognitive-mcp-gateway": {
-      "name": "cognitive-mcp-gateway",
-      "description": "Cognitive MCP universal gateway for Droid/Factory (external client)",
-      "url": "http://10.200.0.2:3003/mcp",
+    "op-dbus-unified": {
+      "name": "op-dbus-unified",
+      "description": "Unified authenticated MCP, cognitive, coding-context, and blob-schema control plane",
+      "url": "https://10.0.0.3:8090/mcp",
       "transport": "http",
       "enabled": true,
       "auth": {
-        "type": "ghostbridge",
-        "wgInterface": "3tched",
-        "headers": {
-          "X-Ghostbridge-Footprint": "droid",
-          "X-Ghostbridge-Trace-ID": "droid-factory"
-        }
-      },
-      "clientProfile": "droid",
-      "optimization": {
-        "connectionPool": {
-          "maxIdle": 10,
-          "idleTimeoutMs": 90000,
-          "useHttp2": true
-        },
-        "retry": {
-          "maxRetries": 3,
-          "baseDelayMs": 100,
-          "maxDelayMs": 5000,
-          "backoffMultiplier": 2.0,
-          "useJitter": true
-        },
-        "cache": {
-          "toolsListTtlSecs": 300,
-          "resourcesListTtlSecs": 60,
-          "staleWhileRevalidate": true
-        },
-        "circuitBreaker": {
-          "failureThreshold": 5,
-          "successThreshold": 3,
-          "timeoutSecs": 30
-        }
+        "type": "oracle_identity_assertion",
+        "metadata": "x-oracle-identity-assertion-bin",
+        "freshPerRequest": true,
+        "selfAssertedIdentityHeadersAccepted": false
       },
       "timeouts": {
         "requestMs": 30000,
@@ -51,42 +23,12 @@
         "resources": true,
         "prompts": false
       }
-    },
-    "op-dbus-local": {
-      "name": "op-dbus-local",
-      "description": "Local op-dbus system integration (via local proxy)",
-      "command": "curl",
-      "args": [
-        "-s",
-        "http://127.0.0.1:8080/mcp/custom/default/capabilities"
-      ],
-      "enabled": true,
-      "transport": "http",
-      "localOnly": true
-    },
-    "filesystem": {
-      "name": "filesystem",
-      "description": "File system access for reading and writing files",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/home/admin/git/odbus"
-      ],
-      "enabled": true
     }
   },
   "clientMetadata": {
     "clientType": "droid",
     "clientId": "droid-factory-${SESSION_ID}",
     "source": "factory.ai",
-    "endpointRules": {
-      "_comment": "Per AGENTS.md Section 4b: external clients MUST use :3003, NEVER use compact-mcp 127.0.0.1:11436",
-      "external": "http://10.200.0.2:3003/mcp",
-      "loopbackForbidden": [
-        "127.0.0.1:11436",
-        "localhost:11436"
-      ]
-    }
+    "canonicalEndpoint": "https://10.0.0.3:8090/mcp"
   }
 }

@@ -202,14 +202,60 @@ impl MemoryLoop {
 
     /// Semantic boost: embed query, search Qdrant, return matched entries in priority order
     async fn semantic_boost(
-        _qdrant: &Arc<QdrantSemanticShuttle>,
-        _namespace: &str,
-        _query: &str,
+        qdrant: &Arc<QdrantSemanticShuttle>,
+        namespace: &str,
+        query: &str,
         entries: &[MemoryEntry],
     ) -> Result<String> {
-        // TODO: implement when Qdrant user_memory collection is ready
-        // For now: return full entries (already loaded)
-        Ok(Self::format_entries(entries))
+        if entries.is_empty() {
+            return Ok(String::new());
+        }
+
+        let container_id = namespace.strip_prefix("container:").unwrap_or(namespace);
+        let embedding = qdrant
+            .embed_query_text(query)
+            .await
+            .context("failed to vectorize the session memory query")?;
+        let hits = qdrant
+            .search_user_memory(embedding, container_id, entries.len() as u64)
+            .await
+            .context("failed to search vectorized session memory")?;
+
+        // Qdrant determines priority, while CozoDB remains the source of truth
+        // for the value and tags injected into the prompt. Ignore stale vector
+        // hits, de-duplicate entry keys, then append unmatched Cozo entries so
+        // semantic retrieval boosts relevant memory without hiding the rest.
+        let mut prioritized = Vec::with_capacity(entries.len());
+        for hit in hits {
+            let Some(entry_key) = hit
+                .payload
+                .get("entry_key")
+                .and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            if prioritized
+                .iter()
+                .any(|entry: &&MemoryEntry| entry.key.as_str() == entry_key.as_str())
+            {
+                continue;
+            }
+            if let Some(entry) = entries
+                .iter()
+                .find(|entry| entry.key.as_str() == entry_key.as_str())
+            {
+                prioritized.push(entry);
+            }
+        }
+        for entry in entries {
+            if !prioritized.iter().any(|current| current.key == entry.key) {
+                prioritized.push(entry);
+            }
+        }
+
+        Ok(Self::format_entries(
+            &prioritized.into_iter().cloned().collect::<Vec<_>>(),
+        ))
     }
 
     fn format_entries(entries: &[MemoryEntry]) -> String {
@@ -263,7 +309,7 @@ impl MemoryLoop {
 
     async fn post_turn_memory(
         cozo: &Arc<CognitiveMemoryStore>,
-        _qdrant: Option<&Arc<QdrantSemanticShuttle>>,
+        qdrant: Option<&Arc<QdrantSemanticShuttle>>,
         regex: &Regex,
         container_id: &str,
         user_message: &str,
@@ -299,9 +345,13 @@ impl MemoryLoop {
             ));
         }
 
-        // Write to CozoDB (durable)
+        let detected_memories = new_memories.len();
+        let mut stored_memories = Vec::with_capacity(detected_memories);
+
+        // Write to CozoDB (durable). The returned entry id is also the stable
+        // Qdrant point id, keeping repeated writes aligned across both stores.
         for (key, cat, value) in &new_memories {
-            if let Err(e) = cozo
+            match cozo
                 .store_entry(
                     &ns,
                     key,
@@ -311,28 +361,56 @@ impl MemoryLoop {
                 )
                 .await
             {
-                warn!("Failed to store memory entry {}: {}", key, e);
-            } else {
-                debug!("Stored memory: {} in {}", key, ns);
+                Ok(entry) => {
+                    debug!("Stored memory: {} in {}", key, ns);
+                    stored_memories.push((key.clone(), *cat, value.clone(), entry.id));
+                }
+                Err(e) => warn!("Failed to store memory entry {}: {}", key, e),
             }
         }
 
         // Update MEMORY_INDEX
-        if !new_memories.is_empty() {
-            Self::update_memory_index(cozo, &ns, &new_memories).await?;
+        if !stored_memories.is_empty() {
+            let index_entries = stored_memories
+                .iter()
+                .map(|(key, cat, value, _)| (key.clone(), *cat, value.clone()))
+                .collect::<Vec<_>>();
+            Self::update_memory_index(cozo, &ns, &index_entries).await?;
         }
 
-        // TODO: Qdrant upsert when user_memory collection is ready
-        // if let Some(q) = qdrant {
-        //     for (key, cat, value) in &new_memories {
-        //         // embed and upsert
-        //     }
-        // }
+        // Mirror successfully persisted memories into Qdrant. Semantic storage
+        // is best-effort: a Voyage/Qdrant outage must not roll back durable Cozo
+        // memory or prevent the remaining memories from being attempted.
+        if let Some(qdrant) = qdrant {
+            for (key, _, value, point_id) in &stored_memories {
+                let content = Self::memory_content(value);
+                if content.trim().is_empty() {
+                    continue;
+                }
+
+                let result: Result<()> = async {
+                    let vector = qdrant
+                        .embed_document(&content)
+                        .await
+                        .with_context(|| format!("failed to vectorize memory '{key}'"))?;
+                    qdrant
+                        .upsert_user_memory(point_id.clone(), vector, container_id, key, &content)
+                        .await
+                        .with_context(|| format!("failed to upsert vectorized memory '{key}'"))
+                }
+                .await;
+
+                if let Err(error) = result {
+                    warn!(entry_key = key, %error, "Semantic memory mirror failed");
+                }
+            }
+        }
 
         info!(
             container_id,
             namespace = ns,
-            new_memories = new_memories.len(),
+            detected_memories,
+            stored_memories = stored_memories.len(),
             "Post-turn memory persisted"
         );
 
@@ -360,6 +438,13 @@ impl MemoryLoop {
             .expect("hardcoded regex pattern is valid")
             .replace_all(&slug, "");
         format!("{}-{}", slug, Utc::now().timestamp())
+    }
+
+    fn memory_content(value: &Value) -> String {
+        value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default())
     }
 
     async fn update_memory_index(

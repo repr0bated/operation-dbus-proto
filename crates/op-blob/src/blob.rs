@@ -350,12 +350,14 @@ impl<'a> BlobRef<'a> {
         let schema = blob
             .section(SECTION_SCHEMA_JSON)
             .ok_or("missing schema section")?;
-        std::str::from_utf8(schema).map_err(|e| format!("schema section is not valid UTF-8: {e}"))?;
+        std::str::from_utf8(schema)
+            .map_err(|e| format!("schema section is not valid UTF-8: {e}"))?;
 
         let manifest = blob
             .section(SECTION_MANIFEST_JSON)
             .ok_or("missing manifest section")?;
-        std::str::from_utf8(manifest).map_err(|e| format!("manifest section is not valid UTF-8: {e}"))?;
+        std::str::from_utf8(manifest)
+            .map_err(|e| format!("manifest section is not valid UTF-8: {e}"))?;
 
         let mut h = Sha256::new();
         h.update(schema);

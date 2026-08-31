@@ -1839,16 +1839,6 @@ fn tched_router_schema_from_state(state: TchedRouterState) -> PluginSchema {
     super::tched_router_config_surface::register_config_methods(&mut schema);
 
     register_cli_config_methods(&mut schema);
-    schema.capability_grants.insert(
-        "*".to_string(),
-        vec![
-            "tched-router.read".to_string(),
-            "tched-router.write".to_string(),
-            "cap.software.tched-router.router.read@v1".to_string(),
-            "cap.software.tched-router.router.write@v1".to_string(),
-            "cap.software.tched-router.selection.set@v1".to_string(),
-        ],
-    );
 
     schema
 }
@@ -2110,15 +2100,16 @@ fn run_zeroclaw_config(
     json_args: &str,
 ) -> std::result::Result<DispatchOutcome, TchedRouterError> {
     let args: JsonValue = serde_json::from_str(json_args).unwrap_or_else(|_| serde_json::json!({}));
-    let options = args.get("options").cloned().unwrap_or(serde_json::json!({}));
+    let options = args
+        .get("options")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
     let path = args
         .get("path")
         .and_then(JsonValue::as_str)
         .or_else(|| options.get("path").and_then(JsonValue::as_str))
         .unwrap_or("");
-    let value_raw = args
-        .get("value")
-        .or_else(|| options.get("value"));
+    let value_raw = args.get("value").or_else(|| options.get("value"));
     let value_str = match value_raw {
         Some(JsonValue::String(s)) => Some(s.clone()),
         Some(JsonValue::Null) | None => None,
@@ -2146,7 +2137,8 @@ fn run_zeroclaw_config(
     if let Some(val) = &value_str {
         command.arg(val);
     }
-    let is_no_interactive = options.get("no_interactive").and_then(JsonValue::as_bool) == Some(true)
+    let is_no_interactive = options.get("no_interactive").and_then(JsonValue::as_bool)
+        == Some(true)
         || options.get("no_interactive").and_then(JsonValue::as_str) == Some("true")
         || options.get("no-interactive").and_then(JsonValue::as_bool) == Some(true)
         || options.get("no-interactive").and_then(JsonValue::as_str) == Some("true");
@@ -2177,9 +2169,11 @@ fn run_zeroclaw_config(
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| TchedRouterError::ExecutionDenied {
-            reason: format!("zeroclaw {method}: {error}"),
-        })?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| TchedRouterError::ExecutionDenied {
+                reason: format!("zeroclaw {method}: {error}"),
+            })?;
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(body.as_bytes()).map_err(|error| {
                 TchedRouterError::ExecutionDenied {
@@ -2187,13 +2181,17 @@ fn run_zeroclaw_config(
                 }
             })?;
         }
-        child.wait_with_output().map_err(|error| TchedRouterError::ExecutionDenied {
-            reason: format!("zeroclaw {method}: {error}"),
-        })?
+        child
+            .wait_with_output()
+            .map_err(|error| TchedRouterError::ExecutionDenied {
+                reason: format!("zeroclaw {method}: {error}"),
+            })?
     } else {
-        command.output().map_err(|error| TchedRouterError::ExecutionDenied {
-            reason: format!("zeroclaw {method}: {error}"),
-        })?
+        command
+            .output()
+            .map_err(|error| TchedRouterError::ExecutionDenied {
+                reason: format!("zeroclaw {method}: {error}"),
+            })?
     };
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -2217,7 +2215,11 @@ trait IfEmpty {
 
 impl IfEmpty for &str {
     fn if_empty(self, fallback: Self) -> Self {
-        if self.is_empty() { fallback } else { self }
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
     }
 }
 
@@ -2467,6 +2469,10 @@ mod tests {
         assert_eq!(schema.name, PLUGIN_NAME);
         assert_eq!(schema.version, PLUGIN_VERSION);
         assert_eq!(schema.display_name, Some(PLUGIN_DISPLAY_NAME.to_string()));
+        assert!(
+            schema.capability_grants.is_empty(),
+            "plugin schemas declare capabilities but never grant principal authority"
+        );
     }
 
     #[test]

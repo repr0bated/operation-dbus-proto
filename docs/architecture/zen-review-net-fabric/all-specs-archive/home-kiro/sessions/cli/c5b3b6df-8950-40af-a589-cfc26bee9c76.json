@@ -1,0 +1,136 @@
+{
+  "session_id": "c5b3b6df-8950-40af-a589-cfc26bee9c76",
+  "cwd": "/srv/git/odbus",
+  "created_at": "2026-08-09T00:23:18.709268637Z",
+  "updated_at": "2026-08-09T00:23:54.577852208Z",
+  "title": "continure",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 564982784
+          },
+          "result": {
+            "Ok": {
+              "id": "2c29e798-1ad1-4c4a-8ca8-6172e52b8f05",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "It looks like you typed \"continure\" — did you mean \"continue\"? If so, could you let me know what you'd like me to continue with? I don't have context from a previous task or conversation to pick up from.\n\nIf you have a specific task in mind — code changes, debugging, infrastructure work, etc. — just let me know and I'll jump in."
+                }
+              ],
+              "meta": {
+                "timestamp": 1786235017
+              }
+            }
+          },
+          "message_ids": [
+            "1db9924a-9ece-4dd4-94c7-0fad36f1d677",
+            "d0d48098-0e94-47fa-b318-460103c6a8e2"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 4,
+            "nanos": 694230579
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-08-09T00:23:37.368098978Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": "auto",
+          "assistant_response_length": 336,
+          "request_attempts": 1,
+          "context_usage_percentage": 6.7432003,
+          "metering_usage": [],
+          "user_prompt_length": 9
+        },
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 1620903165
+          },
+          "result": {
+            "Ok": {
+              "id": "08a89da0-35b4-469d-be58-a81424627bf6",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "It seems like you're saying you resumed something, but I don't have context from a previous session to pick up from. My conversation history starts fresh here.\n\nCould you remind me what you were working on? For example:\n\n- A specific crate or file you were editing\n- A build issue you were debugging\n- An infrastructure or deployment task\n- Something else entirely\n\nI'll pick it right back up once I know where we left off."
+                }
+              ],
+              "meta": {
+                "timestamp": 1786235034
+              }
+            }
+          },
+          "message_ids": [
+            "16600be8-b5d6-476e-ace4-3e3fd4bcef45",
+            "b0759669-54d0-439b-9ea1-3cc81f785809"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 4,
+            "nanos": 536228499
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-08-09T00:23:54.576085330Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": "auto",
+          "assistant_response_length": 423,
+          "request_attempts": 1,
+          "context_usage_percentage": 6.7587004,
+          "metering_usage": [],
+          "user_prompt_length": 12
+        }
+      ],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "c5b3b6df-8950-40af-a589-cfc26bee9c76",
+      "model_info": {
+        "model_id": "auto",
+        "context_window_tokens": 200000
+      },
+      "context_usage_percentage": 6.7587004
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/srv/git/odbus"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}

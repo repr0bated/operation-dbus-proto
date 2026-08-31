@@ -4,7 +4,7 @@
 # The mail CT has no `nic` and no `proxy` device: the ONLY channel into it is
 # the bind-mounted /run/ghostbridge directory. `mail-uds-relay` (openrc, inside
 # the CT) publishes each daemon port as a socket under /run/ghostbridge/mail/;
-# this unit binds the public and mesh addresses and forwards into those sockets.
+# this unit binds the public address and forwards into those sockets.
 #
 # Replaces mail-port-fabric.py, which forwarded to 127.0.0.1:<port> on the HOST
 # and therefore depended on per-port Incus proxy devices. Those devices are gone
@@ -15,8 +15,9 @@ exec 2>&1
 GB=/run/ghostbridge/mail
 RELAY=/usr/local/libexec/3tched/op-uds-relay
 
-# Comma-separated publication addresses: pub0 + netmaker mesh.
-MAIL_BIND_ADDRS="${MAIL_BIND_ADDRS:-188.68.58.237,100.69.0.1}"
+# Comma-separated publication addresses. Netmaker was retired; public mail
+# remains independent of the decoy identity/WARP path.
+MAIL_BIND_ADDRS="${MAIL_BIND_ADDRS:-188.68.58.237}"
 
 wait_dep() {
     sv start "$1" >/dev/null 2>&1 || true
@@ -30,14 +31,6 @@ wait_dep() {
 
 wait_dep opdbus-rundirs
 wait_dep incus-ct-mail-3tched
-sv start netclient >/dev/null 2>&1 || true
-
-# The mesh address must exist before binding it, or the listener silently
-# publishes on fewer addresses than intended (the sshd failure mode).
-until ip -4 addr show netmaker 2>/dev/null | grep -q "100.69.0.1/"; do
-    echo "mail-port-fabric: waiting for 100.69.0.1 on netmaker"
-    sleep 1
-done
 
 # The CT-side relay creates these; without them there is nothing to forward to.
 i=0
@@ -63,9 +56,9 @@ for spec in 25:smtp 143:imap 465:smtps 587:submission 993:imaps; do
     IFS="$OLDIFS"
 done
 
-# PHP-FPM (SnappyMail backend) stays mesh-only — never published on pub0.
-set -- "$@" --tcp-to-unix "100.69.0.1:9000=$GB/php.sock"
-set -- "$@" --unix-to-tcp "$GB/outbound-smtp.sock=100.69.0.2:25"
+# Outbound mail uses the host's loopback-only Postfix relay. The mail CT stays
+# NIC-less while the relay performs MX lookups and makes Internet connections.
+set -- "$@" --unix-to-tcp "$GB/outbound-smtp.sock=127.0.0.1:25"
 
 /usr/local/libexec/3tched/runit-ready-signal mail-port-fabric 2>/dev/null || true
 exec "$RELAY" "$@"

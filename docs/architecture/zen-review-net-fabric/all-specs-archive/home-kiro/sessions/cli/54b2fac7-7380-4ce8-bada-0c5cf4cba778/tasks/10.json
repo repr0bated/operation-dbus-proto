@@ -1,0 +1,6 @@
+{
+  "id": "10",
+  "subject": "Implement and validate the runit migration control path",
+  "description": "Implement real audited Incus D-Bus dispatch for snapshot, stop/start, rename, config, and exact device reconciliation; correct binary paths and stage a runit container root in the btrfs golden release.",
+  "status": "completed"
+}

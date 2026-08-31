@@ -2,7 +2,7 @@
 //!
 //! Reads the canonical subid registry from `/etc/ghostbridge/subid-registry.json`
 //! and writes two tmpfs artifacts:
-//!   - `/dev/shm/xray-routes.json`    — routes for the op-identity-shuttle
+//!   - `/dev/shm/xray-routes.json`    — routes for the Xray configuration owner
 //!   - `/dev/shm/openflow-routes.json` — rules for the OpenFlow controller
 //!
 //! Per AGENTS.md §4: D-Bus is the control plane; Gemma is a host service that

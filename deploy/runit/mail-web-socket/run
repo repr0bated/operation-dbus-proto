@@ -1,25 +1,27 @@
 #!/bin/sh
 exec 2>&1
-until [ -d /run/ghostbridge ]; do sleep 1; done
+set -eu
+
 SOCK=/run/ghostbridge/mail-web.sock
+TARGET=/run/ghostbridge/mail/web.sock
 
-# Caddy and SnappyMail live inside the NIC-less mail container. Ask the typed
-# Incus D-Bus method to publish Caddy's loopback TLS listener directly into the
-# shared host runtime. The service exits when that socket disappears so runit
-# recreates it after any container restart.
-while :; do
-  rm -f "$SOCK"
-  zcall incus exec_instance -a '{"name":"mail-3tched","command":["/bin/sh","-lc","if ! pgrep -f \\"^/usr/local/bin/op-uds-relay .*mail-web.sock=127.0.0.1:443\\" >/dev/null 2>&1; then nohup /usr/local/bin/op-uds-relay --unix-to-tcp /opt/run-mounts/ghostbridge/mail-web.sock=127.0.0.1:443 >/var/log/mail-web-relay.log 2>&1 & fi"]}' >/dev/null 2>&1 || true
-  i=0
-  until [ -S "$SOCK" ]; do
-    i=$((i + 1))
-    [ "$i" -ge 30 ] && break
-    sleep 1
-  done
-  [ -S "$SOCK" ] && break
-done
+cleanup() {
+  [ ! -L "$SOCK" ] || rm -f "$SOCK"
+}
+trap cleanup EXIT TERM INT HUP
 
-chmod 666 "$SOCK" 2>/dev/null || true
+# The mail container already publishes its TLS origin at mail/web.sock. Xray's
+# sealed bootstrap contract uses the historical flat mail-web.sock path, so
+# expose a stable alias instead of spawning a second container relay through
+# the currently non-functional incus.exec_instance control-plane method.
+until [ -S "$TARGET" ]; do sleep 1; done
+[ ! -e "$SOCK" ] || [ -L "$SOCK" ] || {
+  echo "mail-web-socket: refusing to replace non-symlink $SOCK" >&2
+  exit 1
+}
+rm -f "$SOCK"
+ln -s mail/web.sock "$SOCK"
+
 /usr/local/libexec/3tched/runit-ready-signal mail-web-socket 2>/dev/null || true
-while [ -S "$SOCK" ]; do sleep 2; done
+while [ -S "$TARGET" ]; do sleep 2; done
 exit 1

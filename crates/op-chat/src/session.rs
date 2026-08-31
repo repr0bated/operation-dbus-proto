@@ -83,11 +83,6 @@ impl ChatSession {
         }
     }
 
-    /// Check if session has controller access
-    pub fn can_access_compact_mcp(&self) -> bool {
-        self.is_controller
-    }
-
     /// Add a message to the session
     pub fn add_message(&mut self, message: ChatMessage) {
         self.messages.push(message);

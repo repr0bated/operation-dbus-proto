@@ -319,7 +319,9 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 fn read_zeroclaw_schema_shm() -> Option<Value> {
     let schema = op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::ROUTER_PLUGIN_ID)
         .or_else(|| {
-            op_blob::catalog::read_plugin_schema_shm(crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID)
+            op_blob::catalog::read_plugin_schema_shm(
+                crate::zeroclaw_routes::LEGACY_ROUTER_PLUGIN_ID,
+            )
         })?;
     // `PluginSchema` serializes to { name, version, fields, methods, … }.
     let mut v: Value = simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?;

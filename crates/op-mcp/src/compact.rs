@@ -600,7 +600,7 @@ pub async fn run_compact_unix_server(unix_path: &std::path::Path) -> Result<()> 
     use crate::transport::{HttpSseTransport, Transport};
 
     // ── WireGuard identity ────────────────────────────────────────────────────
-    // Read the local WG pubkey, write the canonical IdentitySled to /dev/shm,
+    // Read the local WG pubkey and resolve its projected identity session,
     // and stamp peer_pubkey into the session so tools can use it for auth.
     let wg_iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
     let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);

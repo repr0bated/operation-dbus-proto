@@ -1,0 +1,6 @@
+{
+  "id": "15",
+  "subject": "Verify live Phase 1 and immutable wgcf invariants",
+  "description": "Verify readiness, OVS/netns/policy/netfilter/OpenFlow/adapter/handshake behavior and compare immutable wgcf baselines; do not trigger Phase 2.",
+  "status": "pending"
+}

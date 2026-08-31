@@ -1,5 +1,16 @@
 # Spec — schemars-to-reflection-plugin-pipeline
 
+> **Canonical MCP/reflection ingress:** the sealed-PluginSchema → build.rs proto →
+> reflection pipeline described here feeds the single authenticated ingress at
+> `op-grpc-bridge` TLS `:8090` (see
+> `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/`, which requires
+> reflection/callable parity at `:8090`). Two notes: (1) references to
+> `/dev/shm/live-schema.json` and a monolithic `plugin_schema_defs.rs` are historical
+> per `CLAUDE.md` — the sealed blob catalog `/dev/shm/opdbus/plugin-blobs/` is
+> authoritative and `plugin_schema.dat` is not a component; (2) any task to "migrate
+> `cognitive_mcp.rs`" is subordinate to the canonical spec's cognitive-registry
+> ownership and code-tool-routing requirements — coordinate there.
+
 ## Summary
 
 This spec defines the complete plugin-owned pipeline from typed Rust structs through `PluginSchema` to D-Bus, `/dev/shm/live-schema.json`, `build.rs` gRPC proto generation, and `tonic-reflection` descriptor exposure.

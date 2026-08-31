@@ -1,0 +1,6 @@
+{
+  "id": "8",
+  "subject": "Task 8: Wire Route::Accountability in views/mod.rs",
+  "description": "ExplorerState field + dedicated match arm before catch-all stub",
+  "status": "pending"
+}

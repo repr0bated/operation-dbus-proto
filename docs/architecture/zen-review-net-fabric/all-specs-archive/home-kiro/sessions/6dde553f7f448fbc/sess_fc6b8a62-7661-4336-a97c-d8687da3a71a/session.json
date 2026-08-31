@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_fc6b8a62-7661-4336-a97c-d8687da3a71a",
+  "title": "WireGuard Identity Gating Spec",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T02:42:46.422Z",
+  "lastModifiedAt": "2026-08-04T02:44:34.783Z",
+  "modelId": "auto",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Writing the three spec documents (requirements.md, design.md, tasks.md) for WireGuard-identity-based gating to replace xray's static IP/port ACLs. Starting with requirements.md.",
+  "status": "idle"
+}

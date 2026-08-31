@@ -93,9 +93,7 @@ const FALLBACK_PRIORITY: u16 = 0;
 const DATAPATH_SETTLE: Duration = Duration::from_millis(1200);
 
 fn fallback_flow_spec() -> String {
-    format!(
-        "cookie={FALLBACK_COOKIE:#x}/-1,priority={FALLBACK_PRIORITY},actions=NORMAL"
-    )
+    format!("cookie={FALLBACK_COOKIE:#x}/-1,priority={FALLBACK_PRIORITY},actions=NORMAL")
 }
 
 async fn run_capture(cmd: &str, args: &[&str]) -> Result<(i32, String, String)> {
@@ -147,7 +145,13 @@ pub async fn set_fail_mode(bridge: &str, mode: &str) -> Result<()> {
     }
     run_ok(
         "ovs-vsctl",
-        &["--no-wait", "set", "Bridge", bridge, &format!("fail_mode={mode}")],
+        &[
+            "--no-wait",
+            "set",
+            "Bridge",
+            bridge,
+            &format!("fail_mode={mode}"),
+        ],
     )
     .await?;
     log::info!("SetFailMode: {bridge} fail_mode={mode}");
@@ -171,14 +175,26 @@ pub async fn ensure_controller_in_band(bridge: &str) -> Result<()> {
     // Portable: find Controller UUIDs referenced by the bridge
     let uuids = run_ok(
         "ovs-vsctl",
-        &["--bare", "--columns=_uuid", "find", "Controller", &format!("target!=\"\"")],
+        &[
+            "--bare",
+            "--columns=_uuid",
+            "find",
+            "Controller",
+            &format!("target!=\"\""),
+        ],
     )
     .await
     .unwrap_or_default();
     for uuid in uuids.lines().map(str::trim).filter(|s| !s.is_empty()) {
         let _ = run_capture(
             "ovs-vsctl",
-            &["--no-wait", "set", "Controller", uuid, "connection_mode=in-band"],
+            &[
+                "--no-wait",
+                "set",
+                "Controller",
+                uuid,
+                "connection_mode=in-band",
+            ],
         )
         .await;
     }
@@ -211,11 +227,7 @@ pub async fn set_controller(bridge: &str, endpoint: &str) -> Result<()> {
     } else {
         format!("tcp:{endpoint}")
     };
-    run_ok(
-        "ovs-vsctl",
-        &["--no-wait", "set-controller", bridge, &ep],
-    )
-    .await?;
+    run_ok("ovs-vsctl", &["--no-wait", "set-controller", bridge, &ep]).await?;
     ensure_controller_in_band(bridge).await?;
     log::info!("SetController: {bridge} -> {ep} (connection_mode=in-band)");
     Ok(())
@@ -261,12 +273,9 @@ pub async fn get_datapath_health(bridge: &str) -> Result<DatapathHealth> {
     .trim_matches('"')
     .to_string();
 
-    let other = run_ok(
-        "ovs-vsctl",
-        &["get", "Bridge", bridge, "other_config"],
-    )
-    .await
-    .unwrap_or_default();
+    let other = run_ok("ovs-vsctl", &["get", "Bridge", bridge, "other_config"])
+        .await
+        .unwrap_or_default();
     let disable_in_band = other.contains("disable-in-band") && other.contains("true");
 
     Ok(DatapathHealth {

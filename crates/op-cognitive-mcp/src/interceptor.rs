@@ -1,9 +1,7 @@
-// The Ghostbridge Gatekeeper for op-cognitive-mcp — the universal external MCP
-// gateway. Calls op_identity::verify_ghostbridge_footprint, the single shared
-// implementation of the Absolute Base check, so this and op-grpc-bridge's
-// interceptor can never silently drift apart again (see SIGNALS.md: this
-// interceptor had previously regressed to a presence-only check while
-// op-grpc-bridge's stayed correct).
+// Compatibility gate for embedded CognitiveToolService consumers. The active
+// external MCP gateway and its authentication policy live in op-grpc-bridge.
+// Authentication here resolves one projected session and verifies the request's
+// genesis against that record.
 
 use op_identity::FootprintVerifyError;
 use tonic::{Request, Status};
@@ -18,46 +16,51 @@ pub struct GhostbridgeIdentity {
 
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    let footprint_value = req.metadata().get("x-ghostbridge-footprint").cloned();
-    let trace_value = req
+    let genesis_value = req
         .metadata()
-        .get("x-ghostbridge-trace-id")
-        .or_else(|| req.metadata().get("x-wireguard-pubkey"))
+        .get("x-ghostbridge-genesis")
+        .or_else(|| req.metadata().get("x-ghostbridge-footprint"))
         .cloned();
+    let trace_value = req.metadata().get("x-ghostbridge-trace-id").cloned();
+    let pubkey_value = req.metadata().get("x-wireguard-pubkey").cloned();
 
-    if footprint_value.is_none() || trace_value.is_none() {
+    if genesis_value.is_none() || (trace_value.is_none() && pubkey_value.is_none()) {
         return Err(Status::unauthenticated(
-            "Missing Ghostbridge Identity Sled.",
+            "Missing Ghostbridge session identity.",
         ));
     }
 
-    let request_footprint = footprint_value
+    let request_genesis = genesis_value
         .as_ref()
         .unwrap()
         .to_str()
-        .map_err(|_| Status::invalid_argument("Invalid footprint header encoding"))?;
+        .map_err(|_| Status::invalid_argument("Invalid genesis header encoding"))?;
+    let trace_id = trace_value.as_ref().and_then(|value| value.to_str().ok());
+    let wireguard_pubkey = pubkey_value.as_ref().and_then(|value| value.to_str().ok());
 
-    op_identity::verify_ghostbridge_footprint(request_footprint).map_err(|error| match error {
-        FootprintVerifyError::SledUnreachable => {
-            Status::internal("MutationEngine Memory Unreachable")
-        }
-        FootprintVerifyError::InvalidSled => {
-            Status::failed_precondition("Invalid Schema State. Cease and Desist.")
-        }
-        FootprintVerifyError::Mismatch => Status::permission_denied(
-            "Temporal Hash Mismatch. Session footprint is out of sync with current mutation.",
-        ),
-    })?;
+    let identity =
+        op_identity::resolve_verified_session(request_genesis, trace_id, wireguard_pubkey)
+            .map_err(|error| match error {
+                FootprintVerifyError::SledUnreachable => {
+                    Status::internal("Identity session projection unreachable")
+                }
+                FootprintVerifyError::InvalidSled => {
+                    Status::failed_precondition("Identity session is not anchored")
+                }
+                FootprintVerifyError::Inactive => {
+                    Status::permission_denied("Identity session is inactive")
+                }
+                FootprintVerifyError::Expired => {
+                    Status::permission_denied("Identity session term has expired")
+                }
+                FootprintVerifyError::Mismatch => Status::permission_denied(
+                    "Session genesis does not match the projected identity record.",
+                ),
+            })?;
 
-    let session_id = trace_value
-        .as_ref()
-        .expect("trace checked above")
-        .to_str()
-        .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?
-        .to_string();
     req.extensions_mut().insert(GhostbridgeIdentity {
-        footprint: request_footprint.to_string(),
-        session_id,
+        footprint: request_genesis.to_string(),
+        session_id: identity.session_id,
     });
 
     Ok(req)

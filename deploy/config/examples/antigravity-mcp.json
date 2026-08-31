@@ -1,20 +1,10 @@
 {
   "$schema": "https://spec.modelcontextprotocol.io/schemas/mcp-config.json",
   "servers": {
-    "op-dbus-agents": {
-      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/agents",
-      "description": "op-dbus AI agents: memory, context_manager, sequential_thinking, rust_pro, python_pro, and more",
-      "transport": "sse"
-    },
-    "op-dbus-compact": {
-      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/compact",
-      "description": "op-dbus tools in compact mode (5 lazy meta-tools for efficient discovery)",
-      "transport": "sse"
-    },
-    "op-dbus-full": {
-      "serverUrl": "https://op-dbus.ghostbridge.tech/mcp/sse",
-      "description": "op-dbus full tool list (750+ tools)",
-      "transport": "sse"
+    "op-dbus-unified": {
+      "serverUrl": "https://10.0.0.3:8090/mcp",
+      "transport": "http",
+      "description": "Unified authenticated MCP control plane"
     }
   }
 }

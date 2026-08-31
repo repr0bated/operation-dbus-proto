@@ -1,0 +1,9 @@
+# Standalone network/control-plane executables replaced by bridge-owned,
+# in-process dispatch. Their crates may remain as libraries or admin tooling,
+# but a golden/live deployment must not publish these listener binaries.
+op-cognitive-mcp
+op-mcp-agents
+op-mcp-compact
+op-mcp-server
+op-waypipe-grpc
+op-chat

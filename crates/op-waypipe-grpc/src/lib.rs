@@ -1,6 +1,6 @@
 //! op-waypipe-grpc — tunnel waypipe Unix sockets over gRPC.
 //!
-//! Auth: server reads Identity Sled (`/dev/shm/plugin_schema.dat`) on each
+//! Auth: server resolves one projected identity session on each
 //! connection — clients do not need a local sled.
 //!
 //! ```text

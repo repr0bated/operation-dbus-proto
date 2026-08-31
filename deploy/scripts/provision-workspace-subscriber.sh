@@ -54,7 +54,7 @@ HOST_GRPC_SOCK="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 STORAGE_POOL="${IDENTITY_STORAGE_POOL:-default}"
 # Local noble fingerprint when present; else remote alias.
 DEFAULT_IMAGE="${IDENTITY_SEED_IMAGE:-3a639373bb7a}"
-COGNITIVE_HTTP="${COGNITIVE_MCP_HTTP:-http://10.200.0.2:3003/mcp}"
+COGNITIVE_BUS_ADDRESS="${COGNITIVE_MCP_BUS_ADDRESS:-unix:path=/run/opdbus/session-bus.sock}"
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ $# -eq 0 ]; then
     sed -n '2,45p' "$0"
@@ -428,19 +428,28 @@ EOF
 
 remember() {
     NS="$1"; KEY="$2"; VAL="$3"
-    # Single memory leaf via cognitive MCP HTTP (host fabric). Falls back to
-    # writing a local seed JSON under the identity runtime dir.
-    if curl -sf -X POST "$COGNITIVE_HTTP" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "User-Agent: op-dbus/1.0" \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"cognitive_memory\",\"arguments\":{\"operation\":\"store\",\"namespace\":\"$NS\",\"key\":\"$KEY\",\"value\":$VAL}}}" \
-        >/dev/null 2>&1; then
+    # Host-local provisioning uses the bridge-owned session-bus door. Identity
+    # is derived from bus policy; never replay a bearer token or self-asserted
+    # footprint into the cognitive path. Keep the seed file as a recoverable
+    # fallback when the bridge/session bus is unavailable.
+    _call_args=$(jq -cn \
+        --arg tool_name "cognitive_memory" \
+        --arg namespace "$NS" \
+        --arg key "$KEY" \
+        --argjson value "$VAL" \
+        '{tool_name:$tool_name,arguments:{operation:"store",namespace:$namespace,key:$key,value:$value}}' \
+        2>/dev/null || true)
+    if [ -n "$_call_args" ] && \
+        busctl --address="$COGNITIVE_BUS_ADDRESS" call \
+            org.opdbus.v1.plugins \
+            /org/opdbus/v1/plugins/cognitive_mcp \
+            org.opdbus.v1.PluginV1 Call ss invoke_tool "$_call_args" \
+            >/dev/null 2>&1; then
         echo "    ok: $NS/$KEY"
     else
         _seed="$IDENTITY_DIR/memory-seed.jsonl"
         printf '%s\n' "{\"namespace\":\"$NS\",\"key\":\"$KEY\",\"value\":$VAL}" >> "$_seed"
-        echo "    seed-file: $NS/$KEY → $_seed (cognitive-mcp unreachable)"
+        echo "    seed-file: $NS/$KEY → $_seed (bridge session-bus path unavailable)"
     fi
 }
 

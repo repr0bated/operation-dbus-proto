@@ -44,13 +44,12 @@ use crate::proto::{
     GetSnapshotRequest, GetSnapshotResponse, GetStateRequest, GetStateResponse,
     ListPluginsResponse, MerkleProofSibling, MutateRequest, MutateResponse,
     MutationError as ProtoMutationError, NumaNode as ProtoNumaNode,
-    OperationType as ProtoOperationType, OvsdbBridge as ProtoOvsdbBridge, OvsdbDumpDbRequest,
-    OvsdbDumpDbResponse, OvsdbEchoRequest, OvsdbEchoResponse, OvsdbGetBridgeStateRequest,
-    OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest, OvsdbGetDatapathHealthResponse,
-    OvsdbAttachControllerSafeRequest, OvsdbAttachControllerSafeResponse,
-    OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
-    OvsdbDelControllerRequest, OvsdbDelControllerResponse,
-    OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
+    OperationType as ProtoOperationType, OvsdbAttachControllerSafeRequest,
+    OvsdbAttachControllerSafeResponse, OvsdbBridge as ProtoOvsdbBridge, OvsdbDelControllerRequest,
+    OvsdbDelControllerResponse, OvsdbDumpDbRequest, OvsdbDumpDbResponse, OvsdbEchoRequest,
+    OvsdbEchoResponse, OvsdbEnsureFallbackNormalRequest, OvsdbEnsureFallbackNormalResponse,
+    OvsdbGetBridgeStateRequest, OvsdbGetBridgeStateResponse, OvsdbGetDatapathHealthRequest,
+    OvsdbGetDatapathHealthResponse, OvsdbGetSchemaRequest, OvsdbGetSchemaResponse,
     OvsdbInterface as ProtoOvsdbInterface, OvsdbListDbsResponse, OvsdbMonitorRequest,
     OvsdbPort as ProtoOvsdbPort, OvsdbTransactRequest, OvsdbTransactResponse, OvsdbUpdate,
     PluginInfo, ProveTagImmutabilityRequest, ProveTagImmutabilityResponse,
@@ -80,27 +79,14 @@ pub trait PluginSchemaProvider: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SchemaMethodCapability {
-    required_capability: Option<String>,
-    grants_declared: bool,
-    granted_by_footprint: bool,
+    required_capability: String,
 }
 
 fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
-    if let Some(schema) = op_blob::catalog::read_plugin_schema_shm(plugin_id) {
-        return serde_json::to_value(&schema).ok();
-    }
-    inventory_plugin_schema_json(plugin_id)
-}
-
-fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
-    use op_state::StatePlugin;
-    let schema = match plugin_id {
-        "human_principal" => op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
-            .schema()?,
-        "identity_sled" => op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
-            .schema()?,
-        _ => return None,
-    };
+    let catalog_dir = std::env::var("OP_BLOB_CATALOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
+    let schema = op_blob::catalog::read_plugin_state_store_schema(&catalog_dir, plugin_id)?;
     serde_json::to_value(&schema).ok()
 }
 
@@ -108,53 +94,25 @@ fn inventory_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
 ///
 /// `enforce_bridge_capability` requires the declaration to match the method's
 /// `required_capability`; a mismatch or an absent header denies. This keeps the gRPC
-/// check two-factor — the caller states intent, and must also carry a Ghostbridge
-/// identity — which is stricter than the D-Bus path, where possession of the grant
-/// alone suffices.
+/// check explicit: the caller states intent, carries an authenticated identity,
+/// and that exact footprint must be present in the independent grant store.
 pub const DECLARED_CAPABILITY_HEADER: &str = "x-opdbus-capability";
 
 fn method_capability_from_schema(
     schema: &JsonValue,
     method_name: &str,
-    footprint: Option<&str>,
 ) -> Option<SchemaMethodCapability> {
     let method = schema.get("methods")?.as_object()?.get(method_name)?;
-    let required_capability = match method.get("required_capability") {
-        Some(JsonValue::String(capability)) if !capability.is_empty() => Some(capability.clone()),
-        _ => None,
-    };
-
-    let Some(capability) = required_capability.as_deref() else {
-        return Some(SchemaMethodCapability {
-            required_capability: None,
-            grants_declared: false,
-            granted_by_footprint: true,
-        });
-    };
-
-    let mut grants_declared = false;
-    let mut granted_by_footprint = false;
-    if let Some(grants) = schema
-        .get("capability_grants")
-        .and_then(JsonValue::as_object)
-    {
-        grants_declared = true;
-        if let Some(footprint) = footprint {
-            granted_by_footprint = grants
-                .get(footprint)
-                .or_else(|| grants.get("*"))
-                .and_then(JsonValue::as_array)
-                .is_some_and(|caps| caps.iter().any(|cap| cap.as_str() == Some(capability)));
-        }
-    } else if let Some(footprint) = footprint {
-        grants_declared = true;
-        granted_by_footprint = load_capability_grants(footprint).contains(capability);
+    let required_capability = method
+        .get("required_capability")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if required_capability.is_empty() {
+        return None;
     }
-
     Some(SchemaMethodCapability {
         required_capability,
-        grants_declared,
-        granted_by_footprint,
     })
 }
 
@@ -176,8 +134,10 @@ fn enforce_bridge_capability(
 
 /// The decision half of [`enforce_bridge_capability`], split out so tests can
 /// drive the gate against an explicit schema document; the production half
-/// reads the sealed schema from the SHM blob catalog. Behavior is identical:
-/// `None` schema means the plugin is not sealed and the gate stays open.
+/// reads the sealed schema from the SHM blob catalog. Missing target schema,
+/// method metadata, request identity, capability declaration, or exact grant
+/// all deny. Embedded `PluginSchema.capability_grants` never confer runtime
+/// authority.
 pub(crate) fn enforce_bridge_capability_with_schema(
     schema: Option<&JsonValue>,
     plugin_id: &str,
@@ -185,39 +145,59 @@ pub(crate) fn enforce_bridge_capability_with_schema(
     capability_id: Option<&str>,
     identity: Option<&GhostbridgeIdentity>,
 ) -> Result<(), ProtoMutationError> {
-    let footprint = identity.map(|ctx| ctx.footprint.as_str());
-    let Some(method_capability) =
-        schema.and_then(|schema| method_capability_from_schema(schema, method_name, footprint))
-    else {
-        return Ok(());
-    };
-    let Some(required) = method_capability.required_capability else {
-        return Ok(());
-    };
-
+    let method_capability = schema
+        .and_then(|schema| method_capability_from_schema(schema, method_name))
+        .ok_or_else(|| {
+            capability_denied(
+                plugin_id,
+                method_name,
+                capability_id,
+                "authoritative method capability metadata is unavailable",
+            )
+        })?;
+    let required = method_capability.required_capability;
+    let identity = identity
+        .filter(|identity| !identity.footprint.is_empty() && !identity.session_id.is_empty())
+        .ok_or_else(|| {
+            capability_denied(
+                plugin_id,
+                method_name,
+                Some(&required),
+                "authenticated request identity is unavailable",
+            )
+        })?;
     let capability_matches = capability_id == Some(required.as_str());
-    let footprint_grants = if method_capability.grants_declared {
-        method_capability.granted_by_footprint
-    } else {
-        identity.is_some() && capability_matches
-    };
+    let footprint_grants = load_capability_grants(&identity.footprint).contains(&required);
 
     if capability_matches && footprint_grants {
         Ok(())
     } else {
-        Err(ProtoMutationError {
-            code: ProtoErrorCode::PermissionDenied as i32,
-            message: format!(
-                "AccessDenied: method {plugin_id}.{method_name} requires capability {required}"
-            ),
-            deny_reason: Some(ProtoDenyReason {
-                reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
-                    ProtoCapabilityMissing {
-                        capability: required,
-                    },
-                )),
-            }),
-        })
+        Err(capability_denied(
+            plugin_id,
+            method_name,
+            Some(&required),
+            "matching request capability and exact-footprint grant are required",
+        ))
+    }
+}
+
+fn capability_denied(
+    plugin_id: &str,
+    method_name: &str,
+    capability: Option<&str>,
+    detail: &str,
+) -> ProtoMutationError {
+    let capability = capability.unwrap_or("<undeclared>").to_string();
+    ProtoMutationError {
+        code: ProtoErrorCode::PermissionDenied as i32,
+        message: format!(
+            "AccessDenied: method {plugin_id}.{method_name} requires authoritative capability metadata and grant ({detail})"
+        ),
+        deny_reason: Some(ProtoDenyReason {
+            reason: Some(crate::proto::deny_reason::Reason::CapabilityMissing(
+                ProtoCapabilityMissing { capability },
+            )),
+        }),
     }
 }
 
@@ -310,6 +290,7 @@ fn read_schema_catalog_plugins() -> Vec<PluginInfo> {
     store
         .plugin_object_blobs()
         .iter()
+        .filter(|blob| !op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id))
         .filter_map(|blob| {
             let schema: JsonValue = serde_json::from_str(&blob.schema_json).ok()?;
             Some(plugin_info_from_schema(&blob.manifest.plugin_id, &schema))
@@ -318,6 +299,9 @@ fn read_schema_catalog_plugins() -> Vec<PluginInfo> {
 }
 
 fn read_schema(plugin_id: &str) -> Option<(String, String, String)> {
+    if op_plugins::default_registry::is_retired_plugin(plugin_id) {
+        return None;
+    }
     let schema = read_plugin_schema_json(plugin_id)?;
     schema_response_from_value(&schema)
 }
@@ -439,6 +423,10 @@ impl OperationGrpcServer {
         }
     }
 
+    pub(crate) fn mutation_engine(&self) -> Arc<MutationEngine> {
+        self.mutation_engine.clone()
+    }
+
     pub fn with_plugin_provider(
         mutation_engine: Arc<MutationEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
@@ -475,7 +463,13 @@ impl OperationGrpcServer {
                 return 0;
             }
         };
-        let blobs = store.plugin_object_blobs();
+        let blobs = store
+            .plugin_object_blobs()
+            .into_iter()
+            .filter(|blob| {
+                !op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id)
+            })
+            .collect::<Vec<_>>();
         let count = blobs.len();
         for blob in blobs {
             self.active_reflection.upsert_blob(blob).await;
@@ -554,6 +548,9 @@ impl OperationGrpcServer {
         plugin_id: String,
         schema: &PluginSchema,
     ) -> Result<Vec<MethodServiceRegistry>, anyhow::Error> {
+        if op_plugins::default_registry::is_retired_plugin(&plugin_id) {
+            anyhow::bail!("plugin '{}' is retired and cannot be registered", plugin_id);
+        }
         // Create frozen services for all methods
         let registries = self
             .per_method_services
@@ -630,7 +627,7 @@ impl OperationGrpcServer {
         // `enforce_bridge_capability` compare `None == Some(required)`, which is
         // always false — and since the decision is `capability_matches &&
         // footprint_grants`, every capability-gated method was permanently denied
-        // over gRPC/gRPC-Web. All 16 cognitive_mcp methods are gated, so none were
+        // over gRPC/gRPC-Web. Every cognitive_mcp method is gated, so none were
         // reachable despite the services being mounted.
         //
         // Declaration is deliberate rather than derived from the schema: it keeps the
@@ -789,7 +786,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 /// Adding a new domain service: add one `.add_service(...)` here and it appears on
 /// BOTH endpoints at once.
 pub fn build_operation_routes(server: OperationGrpcServer) -> tonic::service::Routes {
-    let validator = Arc::new(AssertionValidator::new(DecoyTrustStore::load()));
+    let validator = Arc::new(AssertionValidator::from_env(DecoyTrustStore::load()));
     build_operation_routes_with_validator(server, validator)
 }
 
@@ -1267,6 +1264,10 @@ impl PluginService for OperationGrpcServer {
                 error: Some(error),
             }));
         }
+        let authenticated_actor_id = identity
+            .as_ref()
+            .map(|identity| identity.session_id.clone())
+            .ok_or_else(|| Status::unauthenticated("authenticated request identity is required"))?;
         let mut args: Vec<simd_json::OwnedValue> = req
             .arguments
             .into_iter()
@@ -1307,7 +1308,7 @@ impl PluginService for OperationGrpcServer {
                 &req.method_name,
                 &json_args,
                 capability_id.as_deref(),
-                &req.actor_id,
+                &authenticated_actor_id,
             )
             .await;
 
@@ -2821,8 +2822,7 @@ impl RuntimeMirror for OperationGrpcServer {
         let mut sockets = Vec::new();
         for path in request.into_inner().paths {
             let exists = std::path::Path::new(&path).exists();
-            let connectable = exists
-                && std::os::unix::net::UnixStream::connect(&path).is_ok();
+            let connectable = exists && std::os::unix::net::UnixStream::connect(&path).is_ok();
             sockets.push(crate::proto::RuntimeUnixSocketStatus {
                 path,
                 exists,
@@ -2830,10 +2830,12 @@ impl RuntimeMirror for OperationGrpcServer {
                 detail: String::new(),
             });
         }
-        Ok(Response::new(crate::proto::RuntimeCheckUnixSocketsResponse {
-            sockets,
-            queried_at: Some(proto_timestamp(Utc::now())),
-        }))
+        Ok(Response::new(
+            crate::proto::RuntimeCheckUnixSocketsResponse {
+                sockets,
+                queried_at: Some(proto_timestamp(Utc::now())),
+            },
+        ))
     }
 }
 

@@ -2,8 +2,4 @@
 name = "op-notebook-tools"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = [
-    "grpcio>=1.82.1",
-    "grpcio-tools>=1.82.1",
-    "protobuf>=7.35.1",
-]
+dependencies = []

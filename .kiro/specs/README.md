@@ -18,9 +18,8 @@ Quick status map. Prefer the **Active (locked topology)** pair for mesh / identi
 | Spec | Notes |
 |------|-------|
 | [`zeroclaw-router-wiring/`](./zeroclaw-router-wiring/) | **Final** — router ZeroClaw → op-web `:8080/v1` as machine Ghostbridge mesh client; gates in tasks.md |
+| [`unified-authenticated-mcp-cognitive-control-plane/`](./unified-authenticated-mcp-cognitive-control-plane/) | **Canonical** — one authenticated MCP/cognitive/blob/memory/context ingress at `op-grpc-bridge` TLS `:8090`; supersedes the four cognitive-MCP/blob specs below |
 | `accountability-audit-trail/` | UI audit trail |
-| `cognitive-mcp-bridge-only-door/` | Bridge-only door to cognitive MCP |
-| `cognitive-mcp-only-door-phase2/` | Kill :3003/:50052; fan-in proxy design |
 | `dbus-service-manager/` | D-Bus service manager |
 | `netmaker-custom-json-render-ui/` | json-render networking UI — **must stay mesh-private for gRPC** |
 | `op-web/` | op-web UI design/tasks |
@@ -28,14 +27,16 @@ Quick status map. Prefer the **Active (locked topology)** pair for mesh / identi
 | `remove-projection-static-tree/` | Projection removal (shipped; see tasks checkmarks) |
 | `runit-sv-migration/` | s6 → runit (requirements-only) |
 | `schemars-to-reflection-plugin-pipeline/` | Plugin schema pipeline |
-| `unified-blob-catalog-mcp/` | Blob catalog / MCP context |
-| `voyage-plugin-cognitive-mcp-boundaries/` | Voyage / cognitive-mcp boundaries |
 
 ## Superseded / do not implement
 
 | Spec | Points to |
 |------|-----------|
 | `op-dbus-mirror-event-session-refactor/` | → `remove-projection-static-tree/` (see `SUPERSEDED.md`) |
+| `cognitive-mcp-bridge-only-door/` (deleted) | → `unified-authenticated-mcp-cognitive-control-plane/` |
+| `cognitive-mcp-only-door-phase2/` (deleted) | → `unified-authenticated-mcp-cognitive-control-plane/` |
+| `unified-blob-catalog-mcp/` (deleted) | → `unified-authenticated-mcp-cognitive-control-plane/` |
+| `voyage-plugin-cognitive-mcp-boundaries/` (deleted) | → `unified-authenticated-mcp-cognitive-control-plane/` |
 
 ## Incomplete stubs (not actionable as-is)
 

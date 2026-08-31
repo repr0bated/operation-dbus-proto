@@ -201,7 +201,10 @@ async fn wireguard_auth_middleware(
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
-    let connect_info = request.extensions().get::<ConnectInfo<SocketAddr>>().copied();
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
     let headers = request.headers().clone();
     // /health is always open
     if request.uri().path() == "/health" {
@@ -566,7 +569,9 @@ fn apply_socket_acl(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::{chown, PermissionsExt};
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
     let owner = std::env::var("OP_MCP_SOCK_OWNER").unwrap_or_else(|_| "jeremy:jeremy".into());
-    let (user, group) = owner.split_once(':').unwrap_or((owner.as_str(), owner.as_str()));
+    let (user, group) = owner
+        .split_once(':')
+        .unwrap_or((owner.as_str(), owner.as_str()));
     let uid = lookup_uid(user);
     let gid = lookup_gid(group);
     if uid.is_some() || gid.is_some() {

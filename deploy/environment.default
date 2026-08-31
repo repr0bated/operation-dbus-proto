@@ -17,6 +17,9 @@ ZEROCLAW_BIND_ADDR=0.0.0.0:8090
 ZEROCLAW_UNIX_SOCKET=/run/opdbus/grpc.sock
 # Shared fabric for NIC-less containers (bind-mount /run/ghostbridge)
 GHOSTBRIDGE_SOCKET_PATH=/run/ghostbridge/container.sock
+# Root-owned append-only OIA replay journal. Every bridge ingress shares this
+# file, so accepted nonces remain rejected after an op-grpc-bridge restart.
+OP_AUTH_REPLAY_DB_PATH=/var/lib/op-dbus/auth-replay.db
 
 # OpenFlow controller on ovsbr0
 OPENFLOW_CONTROLLER=tcp:10.200.0.1:6653

@@ -1,0 +1,54 @@
+{
+  "name": "indexer",
+  "description": "Read-only code annotator for the lspvec pipeline. Emits JSON only.",
+  "prompt": "You annotate code for a retrieval index. You always reply with exactly one JSON object and nothing else: no prose, no markdown fences, no preamble, no trailing commentary. You never modify files, never run shell commands, and never ask follow-up questions. If you cannot answer, reply with the empty-but-valid form of the requested schema.",
+  "tools": [
+    "code",
+    "read",
+    "grep",
+    "glob"
+  ],
+  "allowedTools": [
+    "code",
+    "read",
+    "grep",
+    "glob"
+  ],
+  "toolsSettings": {
+    "read": {
+      "allowedPaths": [
+        "./**"
+      ],
+      "deniedPaths": [
+        "**/.env",
+        "**/.env.*",
+        "**/*.key",
+        "**/*.pem",
+        "**/id_*",
+        "**/secrets/**",
+        "**/.ssh/**",
+        "**/wg*.conf",
+        "**/*.wgconf"
+      ]
+    },
+    "grep": {
+      "allowedPaths": [
+        "./**"
+      ],
+      "deniedPaths": [
+        "**/.env",
+        "**/secrets/**",
+        "**/.ssh/**"
+      ],
+      "allowReadOnly": true
+    },
+    "glob": {
+      "allowedPaths": [
+        "./**"
+      ],
+      "allowReadOnly": true
+    }
+  },
+  "resources": [],
+  "useLegacyMcpJson": false
+}

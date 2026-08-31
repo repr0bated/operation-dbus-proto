@@ -1,0 +1,275 @@
+# Netclient Container Netns — Requirements
+
+> Give the Netmaker container a native OVS attachment and real Internet egress
+> through xray without reducing Netmaker functionality. The accepted result is
+> a working data path, not merely correct-looking links, routes, rules, or
+> counters.
+
+| Field | Value |
+| --- | --- |
+| Status | Partial live implementation; egress remediation and durable supervision remain |
+| Live-state checkpoint | 2026-08-03 |
+| Phase 1 | Netmaker attachment, xray transit, durable egress, adapter, and Netclient health |
+| Phase 2 | Separately gated xray NIC migration |
+| Related crates | `op-network`, `op-plugins`, `op-grpc-adapters`, `op-grpc-bridge` |
+
+`spec.md` remains the fixed-name/value reference. This document records which
+parts are live, which assumptions were disproved, and the acceptance criteria
+for completing Phase 1.
+
+---
+
+## 1 · Required Outcome and Hard Constraints
+
+1. The `netmaker` container SHALL have real working Internet egress through
+   xray. DNS, TCP, TLS, Netmaker licensing/control-plane traffic, and Netclient
+   WireGuard peer traffic SHALL work as applicable to the installed product.
+2. No workaround may disable, downgrade, bypass, or remove Netmaker EE/Pro or
+   licensing functionality. Feature/license downgrades are not an alternative
+   to fixing the network path.
+3. The existing Netmaker API, broker, metrics, UI, and Netclient functions
+   SHALL remain available. A policy that permits only WireGuard UDP while
+   breaking licensing HTTPS does not satisfy this specification.
+4. Host service supervision SHALL remain runit and operators SHALL use
+   `sudo sv ...`. Container-local services MAY use the containers' existing
+   systemd PID 1 to remove startup races, but lifecycle calls SHALL go through
+   the container system bus with `busctl`, never `systemctl`.
+5. Xray application configuration is not part of this change. Its live config
+   remains only `/etc/xray/xray_config.json` inside the container, and models
+   do not write or reload it directly.
+6. Phase 2 SHALL remain separately approved and SHALL NOT be triggered by
+   Phase 1 completion.
+
+---
+
+## 2 · Verified Current Live State
+
+The following state was read back from code and the host on 2026-08-03.
+Checkbox completion in `tasks.md` is based on this evidence.
+
+| Area | Verified state | Completion meaning |
+| --- | --- | --- |
+| OVS/netns attachment | `netmk` and `grpc0` are OVS `internal` ports on `ovsbr0`; `netmk` is in the Netmaker netns and `grpc0` is in the xray netns | Attachment mechanism is implemented |
+| Addresses/routes | Netmaker has `netmk=10.200.1.1/30`, UP, default via `10.200.1.2`; xray has `grpc0=10.200.0.1/24` plus `10.200.1.2/30`, default via `10.200.0.2`; host has `10.200.1.0/30 via 10.200.0.1 dev svc0` | Fixed values in `spec.md` §1 are live |
+| Native implementation | `OciPlugin` creates/verifies OVS internal ports through the OVSDB D-Bus client, resolves fresh Incus PIDs, moves links with rtnetlink, and configures/reads namespace state natively | No `ip`/`ovs-vsctl` mutation is required by reconciliation |
+| Capability grants | The operator identity hash has scoped rtnetlink move/link-state/address/default-route/route-add and OVSDB port-add/list capabilities; these network capabilities are not in the wildcard grant | Current attachment authority is identity-scoped |
+| Xray host access | Xray's default route is restored through `10.200.0.2`; xray's own egress works | Removal of the old veth did not leave xray route-less |
+| Kernel forwarding | Host and xray `net.ipv4.ip_forward=1`; host `rp_filter` is `0` for `all`, `default`, `svc0`, and `pub0`; xray `all.rp_filter=0` | Reverse-path filtering is not the observed failure cause |
+| Upstream | Contrary to the earlier absence assumption, `wgcf-egress` is currently UP at MTU 1280 and table `51820` has a default route through it | The live path currently uses wgcf, not direct `pub0` egress |
+| Interim NAT/policy | Xray has an ad hoc `MASQUERADE` for `10.200.1.1/32` on `grpc0`; host therefore sees the flow as `10.200.0.1` and sends it through the existing xray mark/table-51820 path | This is an interim compatibility path, not the source-preserving target |
+| Bypass chains | Host `OP_NETMK_BYPASS_FWD`/`OP_NETMK_BYPASS_NAT` have no built-in references and zero counters. Xray `FORWARD` has two active references to `OP_NETMK_BYPASS_FWD` with non-zero counters, plus active feature-subnet MASQUERADE | Xray bypass jumps and SNAT are the carrying interim path and must be removed atomically during convergence |
+| Probe result | Netmaker-netns ICMP, DNS resolution, TCP connect, and an HTTP response work; xray and host MASQUERADE counters increment | L3 transit exists now |
+| Remaining transport failure | TLS connects but stalls after ClientHello. `netmk` and `grpc0` are MTU 1500, `wgcf-egress` is MTU 1280, no TCP MSS clamp exists, and `ss -tin` reports `pmtu:1500`, `advmss:1448`, loss/retransmission, then curl timeout | PMTU/MSS is the strong leading hypothesis; a one-variable MTU A/B probe must prove causality before final attribution |
+| Supervision | Netmaker and xray currently run systemd as PID 1 and expose system bus sockets; installed units include `netmaker.service`, `netclient.service`, and `xray.service`. Proposed host `netmk-*` runit services and container adapter/policy units are not installed | Container-local systemd can remove process/readiness races; host reconciliation still needs runit |
+| Plugin validation | `CXXFLAGS="-include cstdint" cargo check -p op-plugins` passes (warnings only); canonical sealer is `/usr/local/bin/opblob seal-shm` | Compile verification is complete; SHM catalog reseal is not |
+| Migration | `/opt/op-dbus/golden/MANIFEST` and all migration-required artifacts now exist at build `20260802T170227Z`, commit `8afd632f` | The old missing-tree blocker is cleared; migration remains blocked on supervisor decision, baseline capture, approval, and maintenance scheduling |
+
+---
+
+## 3 · Phase 1 Functional Requirements
+
+### FR-1 — Native attachment and namespace state
+
+- `netmk` SHALL remain an OVS `internal` port on `ovsbr0`, owned by the current
+  Netmaker init network namespace, UP, and addressed `10.200.1.1/30`.
+- `grpc0` SHALL remain an OVS `internal` port in the current xray network
+  namespace with both `10.200.0.1/24` and `10.200.1.2/30` preserved.
+- Netmaker's default route SHALL be `via 10.200.1.2 dev netmk`; xray's default
+  route SHALL be `via 10.200.0.2 dev grpc0`.
+- The host return route SHALL remain
+  `10.200.1.0/30 via 10.200.0.1 dev svc0`.
+- Reconciliation SHALL resolve fresh container PIDs and independently verify
+  OVSDB type/membership plus namespace-local addresses, state, MTU, and routes.
+- A durable Phase 1 xray-attachment reconciler SHALL, after every xray restart,
+  ensure `grpc0` is the OVS `internal` port in the current namespace, preserve
+  both required addresses, and replace/read back the exact default route
+  `via 10.200.0.2 dev grpc0` before xray-local policy starts. This is restoration
+  of the current `grpc0` attachment, not the deferred `xray0` migration.
+
+### FR-2 — One explicit, source-attributable final packet path
+
+- The final Phase 1 path SHALL preserve source `10.200.1.1` from xray to host
+  `svc0`, as required by `spec.md` §§4 and 9. The current xray-side
+  `MASQUERADE` is interim and SHALL be removed during an atomic policy cutover.
+- Host feature chains SHALL receive and count the untranslated source. The
+  final path SHALL not depend on matching all xray traffic as `10.200.0.1`.
+- With the currently available upstream, mark `0x51821` SHALL select table
+  `51820` and egress `wgcf-egress`. The existing wgcf interface, configuration,
+  underlay mark `0x51820`, table contents, and lifecycle remain externally
+  owned and read-only to this feature.
+- If the selected upstream is absent, reconciliation SHALL fail closed with an
+  actionable readiness error. It SHALL NOT silently fall through to `pub0`.
+  A future direct-public mode requires an explicit approved design and its own
+  route/NAT ownership; orphan ad hoc bypass chains are not such a design.
+- The source-specific blackhole SHALL remain after the feature lookup so a
+  missed mark or unusable selected table cannot fall through to the main table.
+
+### FR-3 — Path MTU and transport correctness
+
+- Freeze the native method contract as
+  `set_link_mtu(SetLinkMtuInput { name: String, mtu: u32, netns_pid: Option<u32> }) -> RtnetlinkMutationOutput`, capability
+  `cap.network.rtnetlink.mtu.set@v1`, and mutation subid
+  `mut.network.rtnetlink.mtu.set@v1`. Reject zero/invalid MTU, stale/nonexistent
+  PID, missing interface, and read-back mismatch.
+- The effective Netmaker attachment MTU SHALL not exceed the narrowest selected
+  egress link. For the current path, `netmk` SHALL reconcile to MTU 1280 unless
+  a measured lower value is required.
+- MTU SHALL be part of typed, native, namespace-aware rtnetlink desired state
+  and independent verification. The mutation capability SHALL remain scoped to
+  the operator identity, not wildcard.
+- A source/interface-scoped TCPMSS rule MAY be added as defense in depth, but
+  it SHALL not replace correct interface/route MTU. Any clamp SHALL match only
+  the Netmaker flow and derive from the selected egress MTU.
+- Causality SHALL be established with a one-variable A/B test against one fixed
+  TLS endpoint: record a fresh failing MTU-1500 connection, change only `netmk`
+  to MTU 1280 through the native method, then repeat. The second connection
+  SHALL complete TLS and show learned path MTU no greater than 1280, IPv4
+  advertised MSS no greater than 1240, and no retransmission loop. If it does
+  not, packet tracing is required before PMTU is declared causal.
+- UDP verification SHALL include a named Netclient peer, a probe generated
+  after the recorded test start time, a handshake no older than 180 seconds
+  and newer than that start time, plus increasing peer RX/TX counters. Fixing
+  TCP alone is insufficient.
+
+### FR-4 — Functional egress policy, not a license workaround
+
+- A single approved egress-policy manifest SHALL drive OpenFlow, xray, and host
+  filtering so layers cannot disagree. Each entry has the frozen logical form
+  `PolicyClass { id, direction, protocol, src_cidrs, dst_cidrs, src_ports,
+  dst_ports, purpose, positive_probe }`.
+- Validation SHALL require unique IDs, parsed IPv4 CIDRs, valid ports 1–65535,
+  protocol/port compatibility, nonempty resolver destinations for DNS, and an
+  explicit operator-approved destination policy for HTTPS.
+- Peer endpoint ports and local WireGuard listen ports SHALL remain distinct:
+  only peer endpoint ports project to outbound destination-port rules; inbound
+  listen-port allowances, if required, are separate directional classes with
+  their own probes.
+- At minimum the manifest SHALL include:
+  - ARP required for the `/30` gateway;
+  - DNS to the configured resolver set over UDP and TCP as required;
+  - HTTPS required by Netmaker licensing/control-plane functions;
+  - discovered Netclient WireGuard peer/listen UDP ports;
+  - any additional flow proven necessary by a captured healthy Netmaker
+    baseline and explicitly approved by the operator.
+- Catch-all denial MAY be enabled only after the required Netmaker feature
+  matrix passes. The old UDP-only policy is not acceptable if it breaks
+  EE/Pro licensing or control-plane behavior.
+- Existing Netmaker API/broker ingress and existing xray proxy/ingress traffic
+  SHALL remain unaffected.
+
+### FR-5 — Scoped authority and durable state
+
+- Network mutation capabilities SHALL be granted to the exact operator
+  identity footprint. No rtnetlink, OVSDB, netfilter, or service-management
+  capability may be added to the wildcard identity.
+- Presence of scoped grants is not proof that the current direct helper is
+  mediated by them. Final attachment mutations SHALL enter through
+  authenticated projected `rovs_commands`/rtnetlink methods under that
+  operator footprint and produce capability/audit evidence, while their
+  backend remains native. A direct-root exception is not implicit; retaining
+  one requires a separately approved, sandboxed service contract.
+- The durable source that regenerates the identity grant SHALL be identified
+  and updated; the workspace currently exposes the method capability IDs but
+  not a durable grant declaration.
+- `/dev/shm/opdbus/capability-grants.json` and the plugin blob catalog are live
+  materializations, not files to hand-edit as durable configuration.
+- After schema/dispatch changes, the `netmaker`/affected plugin blobs SHALL be
+  resealed with the canonical `op-blob` sealer and the SHM manifest generation
+  and catalog hash SHALL change. Consumers SHALL read the sealed catalog.
+
+### FR-6 — Split host/container supervision
+
+- Host OVS/route/policy reconciliation SHALL run as named runit services and be
+  managed with `sudo sv ...`.
+- Container-local processes SHOULD use the already-running systemd instances:
+  - Netmaker: supervise `op-grpc-adapters` and Netclient with explicit ordering
+    after `netmk` exists, is UP, owns `10.200.1.1/30`, and has the required
+    default route.
+  - Xray: supervise the container-local forwarding/sysctl/netfilter readiness
+    needed after `grpc0` is present, while preserving the xray application
+    service and configuration.
+- Host orchestration SHALL call the container's `org.freedesktop.systemd1`
+  API over its system bus using `busctl`; it SHALL NOT invoke `systemctl`.
+- Unit start limits and bounded readiness checks SHALL prevent restart storms.
+  A container restart SHALL not require a stale PID or host timing assumption.
+- The blocked runit-PID1 migration is separate work. It SHALL NOT block the
+  network fix and SHALL NOT run concurrently with systemd-owned units without
+  an explicit supervisor migration decision.
+
+### FR-7 — Adapter and Netclient control path
+
+- `op-grpc-adapters` SHALL listen on
+  `/var/lib/opdbus-runtime/netmaker/op-grpc-adapters.sock` inside Netmaker.
+- A host runit bridge SHALL expose only `127.0.0.1:50061` and wait for the UDS.
+- `RemoteOperationClient` SHALL retain a dedicated
+  `NETMAKER_ADAPTER_ADDR`; unrelated clients retain `default_address`.
+- Every Netmaker request SHALL carry Ghostbridge metadata.
+- Adapter health, Netmaker health, Netclient process state, and a recent
+  WireGuard handshake SHALL all be independently verified.
+
+### FR-8 — Idempotence, rollback, and observability
+
+- Every stage SHALL be idempotent and own only named routes, rules, chains,
+  ports, unit definitions, and readiness markers.
+- The source-preserving cutover SHALL capture pre-state and define an immediate
+  rollback to the current xray-SNAT path if HTTPS, licensing health, xray
+  ingress, or Netclient handshake fails.
+- Counters SHALL be interpreted against the packet identity at each hop.
+  A zero counter on a rule that cannot match the translated packet is a rule
+  design error, not evidence of an earlier kernel drop.
+- Validation SHALL use independent reads: OVSDB, namespace rtnetlink, policy
+  rules/routes, netfilter counters, transport sockets, external application
+  probes, adapter health, and `wg show`.
+
+---
+
+## 4 · Phase 1 Acceptance Matrix
+
+Phase 1 is complete only when all rows pass after a container restart and a
+host policy-service restart.
+
+| Check | Required result |
+| --- | --- |
+| OVS/netns | `netmk` and `grpc0` are `internal`; fixed addresses/routes are exact; `netmk` effective MTU is compatible with the selected upstream |
+| Source identity | Host `svc0` observes source `10.200.1.1`; no xray-side feature SNAT remains |
+| Routing | Marked source resolves through table `51820`/`wgcf-egress`; unmarked or failed lookup is denied; no inner flow uses `pub0` |
+| DNS | Netmaker resolves a public hostname using its configured resolver |
+| TCP/HTTP | A bounded TCP connect and HTTP response succeed from the Netmaker netns |
+| TLS | A bounded HTTPS request completes, not merely connects; socket telemetry shows no PMTU retransmission loop |
+| Netmaker features | Existing API, broker, UI, metrics, licensing/EE/Pro health, and any captured baseline flows remain healthy |
+| Netclient | Join/list/restart controls work through the dedicated adapter endpoint and `wg show` reports a recent peer handshake |
+| Policy | OVS, xray, and host rules are generated from the same approved manifest and their counters increment on positive probes |
+| Negative path | Unapproved traffic is denied without direct main-table/`pub0` fallback |
+| Existing services | Xray domains/proxy, host networking, and externally owned wgcf state remain healthy and unchanged |
+| Restart behavior | Container-local systemd units wait for network readiness; host runit stages recover using fresh PIDs without a race or restart storm |
+
+---
+
+## 5 · Non-functional Requirements
+
+| ID | Requirement |
+| --- | --- |
+| NFR-1 | Provisioning and reconciliation are repeatable and idempotent. |
+| NFR-2 | Current container init PIDs are resolved per transaction; stale PIDs are never desired state. |
+| NFR-3 | Target-netns operations run on dedicated OS threads whose netlink sockets are created after namespace entry. |
+| NFR-4 | Phase 1 fails closed; it has no implicit main-table or `pub0` fallback. |
+| NFR-5 | OVS mutations use native OVSDB, OpenFlow uses the native controller, and link/route/MTU mutations use rtnetlink. |
+| NFR-6 | Host lifecycle uses runit; container systemd lifecycle uses D-Bus through `busctl`. |
+| NFR-7 | Capability grants and policy matches use least privilege and exact identities/sources. |
+| NFR-8 | Existing wgcf configuration, lifecycle, underlay mark, and table contents remain unmodified. |
+| NFR-9 | No network workaround changes Netmaker license tier or disables product functions. |
+
+---
+
+## 6 · Out of Scope
+
+- Disabling or downgrading Netmaker EE/Pro/licensing features.
+- Managing or repairing `wgcf-egress` itself.
+- Replacing WARP credentials or provider configuration.
+- Changing host `3tched` membership.
+- Modifying xray application routing or writing/reloading its live JSON outside
+  the prescribed control plane.
+- A general host firewall redesign outside feature-owned chains/rules.
+- Automatically running Phase 2.
+- Running `deploy/runit/migrate-netmaker-to-runit.sh` before its golden
+  artifacts exist or before the container-supervisor decision is explicit.

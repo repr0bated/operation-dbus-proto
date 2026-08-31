@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
 };
-use op_state_store::{FieldSchema, FieldType, CapabilityDecl, PluginSchema};
+use op_state_store::{CapabilityDecl, FieldSchema, FieldType, PluginSchema};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;

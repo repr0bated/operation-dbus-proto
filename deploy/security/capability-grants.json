@@ -35,8 +35,6 @@
       "tched-router.write",
       "cognitive_mcp.invoke",
       "cognitive_mcp.read",
-      "compact_mcp.read",
-      "compact_mcp.write",
       "mcp.read",
       "mcp.write",
       "agent.read",

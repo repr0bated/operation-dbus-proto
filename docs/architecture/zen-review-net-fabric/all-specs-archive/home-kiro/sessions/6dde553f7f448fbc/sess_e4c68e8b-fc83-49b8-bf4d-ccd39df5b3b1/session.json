@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_e4c68e8b-fc83-49b8-bf4d-ccd39df5b3b1",
+  "title": "Revising identity-handoff spec",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T04:46:12.176Z",
+  "lastModifiedAt": "2026-08-04T04:52:33.955Z",
+  "modelId": "claude-opus-4.5",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "Completed revision of all three netmaker-xray-identity-handoff spec files with the three corrections: wg-lan interface, removed xray injection, added per-registration identity containers.",
+  "status": "idle"
+}

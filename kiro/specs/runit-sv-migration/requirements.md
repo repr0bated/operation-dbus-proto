@@ -1,5 +1,12 @@
 # Requirements: runit-sv-migration
 
+> **MCP services note:** the `op-cognitive-mcp` / `op-mcp-*` services referenced
+> here are being retired or reduced to listenerless bridge-calling shims by
+> `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/` (single `:8090`
+> ingress). Stale `/run/service` (s6) paths are historical; host services are
+> runit-managed via `sudo sv`. Treat this spec's runit-migration mechanics as valid,
+> but the retired MCP service set is governed by the canonical spec (Phase 10).
+
 ## Purpose
 
 Finish the host's migration from s6 to **runit**, controlled with `sv`. The host

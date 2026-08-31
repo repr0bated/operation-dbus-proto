@@ -1,4 +1,7 @@
-//! ⚖️ CognitiveToolService — gRPC ingress for NotebookLM MCP
+//! CognitiveToolService compatibility implementation.
+//!
+//! The active external ingress is owned by `op-grpc-bridge`; this module keeps
+//! the generated service contract usable by embedded/internal consumers only.
 //!
 //! # Requirements
 //! Implements R1-R3 (core querying), R9-R11 (resilience/auth), and stubs for
@@ -600,7 +603,11 @@ impl CognitiveToolService for CognitiveGrpcService {
         info!(notebook_id = %req.notebook_id, "ListSources");
 
         let namespace = format!("project:{}", req.notebook_id);
-        let limit = if req.limit > 0 { req.limit as usize } else { 100 };
+        let limit = if req.limit > 0 {
+            req.limit as usize
+        } else {
+            100
+        };
         let offset = req.offset.max(0) as usize;
 
         let all_entries = self

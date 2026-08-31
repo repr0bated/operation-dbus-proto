@@ -3,6 +3,10 @@
 **For:** Jeremy  
 **Date context:** Fable 5 promotional window (through July 7, 2026). Sessions ran July 3–4, 2026 across `operation-dbus-proto` and related trees. This doc merges commentary from Fable handoffs, spec review, UI work, and SIGNALS — not raw transcripts.
 
+> **Superseded identity note (2026-08-31):** references below to reading
+> Ghostbridge identity headers from the former raw shared-memory record are
+> historical. Current callers resolve a per-session `identity_sled` projection.
+
 ---
 
 ## What these sessions covered

@@ -1,0 +1,37 @@
+{
+  "session_id": "b21f68ac-700f-4069-a4db-61f07c43b6ec",
+  "cwd": "/srv/git/odbus",
+  "created_at": "2026-08-02T01:57:39.987960262Z",
+  "updated_at": "2026-08-02T01:57:46.896260332Z",
+  "title": "Independently review the NetMaker runit migration implementation in /srv/git/odbus. Focus on concrete blockers that could make a live cutover unsaf...",
+  "parent_session_id": "54b2fac7-7380-4ce8-bada-0c5cf4cba778",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "b21f68ac-700f-4069-a4db-61f07c43b6ec",
+      "model_info": null,
+      "context_usage_percentage": null
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/srv/git/odbus"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": null,
+    "goal": null
+  }
+}

@@ -174,6 +174,9 @@ mod tests {
             }
         });
         let routes = model_route_values(&state).expect("nested projection");
-        assert_eq!(routes[0].get("model").and_then(|v| v.as_str()), Some("qwen3.6-27b"));
+        assert_eq!(
+            routes[0].get("model").and_then(|v| v.as_str()),
+            Some("qwen3.6-27b")
+        );
     }
 }

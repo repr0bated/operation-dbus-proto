@@ -1,9 +1,12 @@
 //! Oracle identity assertion validation for op-grpc-bridge.
 //!
 //! Pipeline order (contractual): parse → trusted decoy key → signature →
-//! expiry → replay cache → source-IP binding → HumanPrincipal resolution.
+//! expiry → non-mutating replay lookup → configured transport binding →
+//! HumanPrincipal/session resolution → durable nonce consumption.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -17,8 +20,41 @@ use op_identity::session::derive_principal_id;
 use thiserror::Error;
 
 pub const DEFAULT_DECOY_TRUST_STORE: &str = "/etc/opdbus/decoy-trust.json";
+pub const DEFAULT_AUTH_REPLAY_DB_PATH: &str = "/var/lib/op-dbus/auth-replay.db";
+pub const AUTH_REPLAY_DB_PATH_ENV: &str = "OP_AUTH_REPLAY_DB_PATH";
+pub const SOURCE_BINDING_ENV: &str = "OP_ORACLE_ASSERTION_SOURCE_BINDING";
 pub const CLOCK_LEEWAY_SECS: i64 = 30;
 pub const HUMAN_FOOTPRINT_KDF_CONTEXT: &str = "op-identity human-footprint v1";
+
+/// How a decoy-signed assertion is bound to its transport.
+///
+/// `ExactPeerIp` is the legacy/static-WireGuard mode and remains the default.
+/// `TrustedDecoySignature` is for proxy transports where NAT replaces the
+/// human WireGuard inner address before the request reaches tonic. It still
+/// requires the trusted decoy signature, lifetime checks, one-time nonce, and
+/// registered human public key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssertionSourceBinding {
+    ExactPeerIp,
+    TrustedDecoySignature,
+}
+
+impl AssertionSourceBinding {
+    fn from_env() -> Self {
+        match std::env::var(SOURCE_BINDING_ENV).as_deref() {
+            Ok("trusted-decoy-signature") => Self::TrustedDecoySignature,
+            Ok("exact-peer-ip") | Err(_) => Self::ExactPeerIp,
+            Ok(value) => {
+                tracing::error!(
+                    env = SOURCE_BINDING_ENV,
+                    %value,
+                    "unknown oracle assertion source binding; using strict exact-peer-ip"
+                );
+                Self::ExactPeerIp
+            }
+        }
+    }
+}
 
 /// Validated human identity carried in request extensions after assertion
 /// validation succeeds.
@@ -58,12 +94,21 @@ pub enum AssertionRejection {
     RevokedPrincipal,
     #[error("RegistryUnavailable")]
     RegistryUnavailable,
+    #[error("ReplayStoreUnavailable")]
+    ReplayStoreUnavailable,
 }
 
 impl AssertionRejection {
-    /// Map every variant to `tonic::Status::unauthenticated` with its exact tag.
+    /// Authentication failures are `Unauthenticated`; persistence failures are
+    /// `Unavailable` so callers can distinguish invalid credentials from a
+    /// fail-closed infrastructure condition.
     pub fn into_unauthenticated_status(self) -> tonic::Status {
-        tonic::Status::new(tonic::Code::Unauthenticated, self.to_string())
+        let code = if self == Self::ReplayStoreUnavailable {
+            tonic::Code::Unavailable
+        } else {
+            tonic::Code::Unauthenticated
+        };
+        tonic::Status::new(code, self.to_string())
     }
 }
 
@@ -170,40 +215,300 @@ impl DecoyTrustStore {
     }
 }
 
-/// In-process replay cache keyed globally by the 16-byte nonce field.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct ReplayStoreError(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ReplayKey {
+    issuer_key_id: String,
+    nonce: [u8; 16],
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct DurableReplayRecord {
+    envelope_kind: String,
+    issuer_key_id: String,
+    nonce_hex: String,
+    expires_at: i64,
+}
+
+#[derive(Debug)]
+struct DurableReplayState {
+    file: File,
+    seen: HashMap<ReplayKey, i64>,
+    failure: Option<String>,
+}
+
+#[derive(Debug)]
+enum ReplayBackend {
+    Memory(Mutex<HashMap<ReplayKey, i64>>),
+    Durable(Mutex<DurableReplayState>),
+    Unavailable(String),
+}
+
+/// Replay state shared by every ingress attached to one validator.
+///
+/// Production uses the append-only durable backend. Each accepted record is
+/// flushed before validation succeeds; a partial/corrupt journal or any write
+/// failure makes the backend unavailable and all protected requests fail closed.
 #[derive(Debug)]
 pub struct AssertionReplayCache {
-    seen: Mutex<HashMap<[u8; 16], i64>>,
+    backend: ReplayBackend,
     leeway_secs: i64,
 }
 
 impl AssertionReplayCache {
+    /// In-memory backend for focused tests and explicitly injected validators.
     pub fn new(leeway_secs: i64) -> Self {
         Self {
-            seen: Mutex::new(HashMap::new()),
+            backend: ReplayBackend::Memory(Mutex::new(HashMap::new())),
             leeway_secs,
         }
     }
 
-    /// Lazy purge on access only; returns `false` when the nonce is a replay.
-    pub fn check_and_insert(&self, nonce: [u8; 16], expires_at: i64, now: i64) -> bool {
-        let mut seen = self
-            .seen
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        seen.retain(|_, entry_expires| *entry_expires + self.leeway_secs > now);
-        if seen.contains_key(&nonce) {
-            return false;
+    pub fn persistent(path: &Path, leeway_secs: i64) -> Result<Self, ReplayStoreError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                ReplayStoreError(format!(
+                    "create replay-store parent {}: {error}",
+                    parent.display()
+                ))
+            })?;
         }
-        seen.insert(nonce, expires_at);
-        true
+
+        #[cfg(unix)]
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut options = OpenOptions::new();
+        options.create(true).read(true).append(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(path).map_err(|error| {
+            ReplayStoreError(format!("open replay store {}: {error}", path.display()))
+        })?;
+        #[cfg(unix)]
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |error| {
+                ReplayStoreError(format!(
+                    "secure replay store permissions {}: {error}",
+                    path.display()
+                ))
+            },
+        )?;
+
+        let reader_file = file.try_clone().map_err(|error| {
+            ReplayStoreError(format!("clone replay store {}: {error}", path.display()))
+        })?;
+        let mut seen: HashMap<ReplayKey, i64> = HashMap::new();
+        for (index, line) in BufReader::new(reader_file).lines().enumerate() {
+            let line = line.map_err(|error| {
+                ReplayStoreError(format!(
+                    "read replay store {} line {}: {error}",
+                    path.display(),
+                    index + 1
+                ))
+            })?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: DurableReplayRecord = serde_json::from_str(&line).map_err(|error| {
+                ReplayStoreError(format!(
+                    "parse replay store {} line {}: {error}",
+                    path.display(),
+                    index + 1
+                ))
+            })?;
+            if record.envelope_kind != "OIA1" || record.issuer_key_id.is_empty() {
+                return Err(ReplayStoreError(format!(
+                    "invalid replay-store domain at {} line {}",
+                    path.display(),
+                    index + 1
+                )));
+            }
+            let nonce = hex::decode(&record.nonce_hex)
+                .ok()
+                .and_then(|bytes| <[u8; 16]>::try_from(bytes).ok())
+                .ok_or_else(|| {
+                    ReplayStoreError(format!(
+                        "invalid replay nonce at {} line {}",
+                        path.display(),
+                        index + 1
+                    ))
+                })?;
+            let key = ReplayKey {
+                issuer_key_id: record.issuer_key_id,
+                nonce,
+            };
+            seen.entry(key)
+                .and_modify(|expires| *expires = (*expires).max(record.expires_at))
+                .or_insert(record.expires_at);
+        }
+        file.seek(SeekFrom::End(0)).map_err(|error| {
+            ReplayStoreError(format!("seek replay store {}: {error}", path.display()))
+        })?;
+
+        Ok(Self {
+            backend: ReplayBackend::Durable(Mutex::new(DurableReplayState {
+                file,
+                seen,
+                failure: None,
+            })),
+            leeway_secs,
+        })
+    }
+
+    fn unavailable(error: impl Into<String>, leeway_secs: i64) -> Self {
+        Self {
+            backend: ReplayBackend::Unavailable(error.into()),
+            leeway_secs,
+        }
+    }
+
+    fn replay_key(issuer_key_id: &str, nonce: [u8; 16]) -> ReplayKey {
+        ReplayKey {
+            issuer_key_id: issuer_key_id.to_string(),
+            nonce,
+        }
+    }
+
+    fn retain_unexpired(seen: &mut HashMap<ReplayKey, i64>, leeway_secs: i64, now: i64) {
+        seen.retain(|_, entry_expires| *entry_expires + leeway_secs >= now);
+    }
+
+    /// Non-mutating existence lookup. Expired entries do not count as replay;
+    /// durable cleanup is intentionally deferred so lookup cannot mutate disk.
+    pub fn contains(
+        &self,
+        issuer_key_id: &str,
+        nonce: [u8; 16],
+        now: i64,
+    ) -> Result<bool, ReplayStoreError> {
+        let key = Self::replay_key(issuer_key_id, nonce);
+        let active = |seen: &HashMap<ReplayKey, i64>| {
+            seen.get(&key)
+                .is_some_and(|expires| *expires + self.leeway_secs >= now)
+        };
+        match &self.backend {
+            ReplayBackend::Memory(seen) => {
+                let seen = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                Ok(active(&seen))
+            }
+            ReplayBackend::Durable(state) => {
+                let state = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(error) = &state.failure {
+                    return Err(ReplayStoreError(error.clone()));
+                }
+                Ok(active(&state.seen))
+            }
+            ReplayBackend::Unavailable(error) => Err(ReplayStoreError(error.clone())),
+        }
+    }
+
+    /// Atomically check and consume one issuer-scoped nonce. Returns `false`
+    /// for replay and an error for any persistence failure.
+    pub fn check_and_insert_for_issuer(
+        &self,
+        issuer_key_id: &str,
+        nonce: [u8; 16],
+        expires_at: i64,
+        now: i64,
+    ) -> Result<bool, ReplayStoreError> {
+        let key = Self::replay_key(issuer_key_id, nonce);
+        match &self.backend {
+            ReplayBackend::Memory(seen) => {
+                let mut seen = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                Self::retain_unexpired(&mut seen, self.leeway_secs, now);
+                if seen.contains_key(&key) {
+                    return Ok(false);
+                }
+                seen.insert(key, expires_at);
+                Ok(true)
+            }
+            ReplayBackend::Durable(state) => {
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(error) = &state.failure {
+                    return Err(ReplayStoreError(error.clone()));
+                }
+                Self::retain_unexpired(&mut state.seen, self.leeway_secs, now);
+                if state.seen.contains_key(&key) {
+                    return Ok(false);
+                }
+                let record = DurableReplayRecord {
+                    envelope_kind: "OIA1".to_string(),
+                    issuer_key_id: issuer_key_id.to_string(),
+                    nonce_hex: hex::encode(nonce),
+                    expires_at,
+                };
+                let result = (|| -> Result<(), ReplayStoreError> {
+                    serde_json::to_writer(&mut state.file, &record).map_err(|error| {
+                        ReplayStoreError(format!("append replay record: {error}"))
+                    })?;
+                    state.file.write_all(b"\n").map_err(|error| {
+                        ReplayStoreError(format!("terminate replay record: {error}"))
+                    })?;
+                    state.file.sync_data().map_err(|error| {
+                        ReplayStoreError(format!("sync replay record: {error}"))
+                    })?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    state.failure = Some(error.to_string());
+                    return Err(error);
+                }
+                state.seen.insert(key, expires_at);
+                Ok(true)
+            }
+            ReplayBackend::Unavailable(error) => Err(ReplayStoreError(error.clone())),
+        }
+    }
+
+    /// Compatibility helper for low-level cache tests.
+    pub fn check_and_insert(
+        &self,
+        nonce: [u8; 16],
+        expires_at: i64,
+        now: i64,
+    ) -> Result<bool, ReplayStoreError> {
+        self.check_and_insert_for_issuer("test-issuer", nonce, expires_at, now)
     }
 
     pub fn entry_count(&self) -> usize {
-        self.seen
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .len()
+        match &self.backend {
+            ReplayBackend::Memory(seen) => seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            ReplayBackend::Durable(state) => state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .seen
+                .len(),
+            ReplayBackend::Unavailable(_) => 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingAssertion {
+    identity: HumanPrincipalIdentity,
+    issuer_key_id: String,
+    nonce: [u8; 16],
+    expires_at: i64,
+    now: i64,
+}
+
+impl PendingAssertion {
+    pub(crate) fn identity(&self) -> &HumanPrincipalIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn identity_mut(&mut self) -> &mut HumanPrincipalIdentity {
+        &mut self.identity
     }
 }
 
@@ -214,6 +519,7 @@ pub struct AssertionValidator {
     replay_cache: AssertionReplayCache,
     leeway_secs: i64,
     max_lifetime_secs: i64,
+    source_binding: AssertionSourceBinding,
 }
 
 impl AssertionValidator {
@@ -223,7 +529,32 @@ impl AssertionValidator {
             replay_cache: AssertionReplayCache::new(CLOCK_LEEWAY_SECS),
             leeway_secs: CLOCK_LEEWAY_SECS,
             max_lifetime_secs: MAX_LIFETIME_SECS as i64,
+            source_binding: AssertionSourceBinding::ExactPeerIp,
         }
+    }
+
+    /// Construct the production validator, reading only the explicit
+    /// transport-binding selector. Missing or invalid configuration remains
+    /// strict and fail-closed.
+    pub fn from_env(trust_store: DecoyTrustStore) -> Self {
+        let path = std::env::var(AUTH_REPLAY_DB_PATH_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_AUTH_REPLAY_DB_PATH));
+        let replay_cache = match AssertionReplayCache::persistent(&path, CLOCK_LEEWAY_SECS) {
+            Ok(cache) => cache,
+            Err(error) => {
+                tracing::error!(path = %path.display(), %error, "durable auth replay store unavailable");
+                AssertionReplayCache::unavailable(error.to_string(), CLOCK_LEEWAY_SECS)
+            }
+        };
+        Self::new(trust_store)
+            .with_replay_cache(replay_cache)
+            .with_source_binding(AssertionSourceBinding::from_env())
+    }
+
+    pub fn with_source_binding(mut self, source_binding: AssertionSourceBinding) -> Self {
+        self.source_binding = source_binding;
+        self
     }
 
     pub fn with_replay_cache(mut self, replay_cache: AssertionReplayCache) -> Self {
@@ -259,6 +590,18 @@ impl AssertionValidator {
         now: i64,
         registration_bootstrap: bool,
     ) -> Result<HumanPrincipalIdentity, AssertionRejection> {
+        let pending =
+            self.validate_pending_with_bootstrap(wire, source, now, registration_bootstrap)?;
+        self.consume_pending(pending)
+    }
+
+    pub(crate) fn validate_pending_with_bootstrap(
+        &self,
+        wire: &[u8],
+        source: Option<SocketAddr>,
+        now: i64,
+        registration_bootstrap: bool,
+    ) -> Result<PendingAssertion, AssertionRejection> {
         let signed = match SignedAssertion::from_wire(wire) {
             Ok(value) => value,
             Err(_) => return Err(AssertionRejection::Malformed),
@@ -290,29 +633,58 @@ impl AssertionValidator {
             return Err(AssertionRejection::LifetimeTooLong);
         }
 
-        if !self
+        if self
             .replay_cache
-            .check_and_insert(assertion.nonce, assertion.expires_at, now)
+            .contains(&assertion.decoy_key_id, assertion.nonce, now)
+            .map_err(|_| AssertionRejection::ReplayStoreUnavailable)?
         {
             return Err(AssertionRejection::Replay);
         }
 
-        let peer = match source {
-            Some(addr) => addr,
-            None => return Err(AssertionRejection::MissingConnectInfo),
-        };
-        if peer.ip() != assertion.netmaker_inner_ip {
-            return Err(AssertionRejection::SourceIpMismatch {
-                expected: assertion.netmaker_inner_ip,
-                actual: peer.ip(),
-            });
+        if self.source_binding == AssertionSourceBinding::ExactPeerIp {
+            let peer = match source {
+                Some(addr) => addr,
+                None => return Err(AssertionRejection::MissingConnectInfo),
+            };
+            if peer.ip() != assertion.netmaker_inner_ip {
+                return Err(AssertionRejection::SourceIpMismatch {
+                    expected: assertion.netmaker_inner_ip,
+                    actual: peer.ip(),
+                });
+            }
         }
 
-        self.resolve_principal(
+        let identity = self.resolve_principal(
             &assertion.human_pubkey,
             assertion.expires_at,
             registration_bootstrap,
-        )
+        )?;
+        Ok(PendingAssertion {
+            identity,
+            issuer_key_id: assertion.decoy_key_id.clone(),
+            nonce: assertion.nonce,
+            expires_at: assertion.expires_at,
+            now,
+        })
+    }
+
+    pub(crate) fn consume_pending(
+        &self,
+        pending: PendingAssertion,
+    ) -> Result<HumanPrincipalIdentity, AssertionRejection> {
+        if !self
+            .replay_cache
+            .check_and_insert_for_issuer(
+                &pending.issuer_key_id,
+                pending.nonce,
+                pending.expires_at,
+                pending.now,
+            )
+            .map_err(|_| AssertionRejection::ReplayStoreUnavailable)?
+        {
+            return Err(AssertionRejection::Replay);
+        }
+        Ok(pending.identity)
     }
 
     fn resolve_principal(
@@ -437,7 +809,7 @@ pub mod tests {
     use tonic::Code;
 
     use super::*;
-    use crate::human_principal_dispatch::tests::{pk, register, revoke, temp_cozo};
+    use crate::human_principal_dispatch::tests::{pk, register, revoke, temp_cozo, TempCozo};
 
     const TEST_KEY_BYTES: [u8; 32] = [7u8; 32];
     const SAMPLE_PUBKEY_LOCAL: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=";
@@ -461,8 +833,8 @@ pub mod tests {
     }
 
     fn write_trust_store(dir: &tempfile::TempDir, issuer: &DecoyIssuer) -> std::path::PathBuf {
-        let b64 = base64::engine::general_purpose::STANDARD
-            .encode(issuer.verifying_key().to_bytes());
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
         let json = format!(
             "{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}",
             issuer.key_id(),
@@ -503,7 +875,7 @@ pub mod tests {
     pub(crate) async fn validator_with_registered(
         issuer: &DecoyIssuer,
         pubkey: &str,
-    ) -> (tempfile::TempDir, AssertionValidator) {
+    ) -> (TempCozo, AssertionValidator) {
         let cozo = temp_cozo();
         register(pubkey, "test").await.expect("register");
         (
@@ -576,8 +948,8 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn trust_store_malformed_json_fails_closed() {
         let issuer = test_issuer();
-        let good_b64 = base64::engine::general_purpose::STANDARD
-            .encode(issuer.verifying_key().to_bytes());
+        let good_b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
         let dir = tempfile::tempdir().expect("tempdir");
         let wrong_len = format!(
             "{{\"decoy_keys\": {{\"decoy-key-1\": \"{}\"}}}}",
@@ -623,11 +995,7 @@ pub mod tests {
             None,
         );
         let identity = validator
-            .validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100,
-            )
+            .validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("valid assertion");
         assert_eq!(identity.human_pubkey, pubkey);
         assert_eq!(identity.expires_at, signed.assertion.expires_at);
@@ -673,11 +1041,7 @@ pub mod tests {
             Some("unknown-key"),
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::UnknownDecoyKey)
         );
     }
@@ -698,11 +1062,7 @@ pub mod tests {
         );
         signed.signature[0] ^= 0x01;
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::BadSignature)
         );
 
@@ -735,7 +1095,15 @@ pub mod tests {
         let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
-        let signed = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x05; 16], None);
+        let signed = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            issued,
+            expires,
+            [0x05; 16],
+            None,
+        );
         let wire = signed.to_wire();
         assert_eq!(
             validator.validate(&wire, Some(source_at(test_ip())), expires + 31),
@@ -763,16 +1131,21 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                now
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), now),
             Err(AssertionRejection::NotYetValid)
         );
         validator
             .validate(
-                &signed_with_fields(&issuer, &pubkey, test_ip(), now + 30, now + 330, [0x07; 16], None).to_wire(),
+                &signed_with_fields(
+                    &issuer,
+                    &pubkey,
+                    test_ip(),
+                    now + 30,
+                    now + 330,
+                    [0x07; 16],
+                    None,
+                )
+                .to_wire(),
                 Some(source_at(test_ip())),
                 now,
             )
@@ -796,11 +1169,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &over.to_wire(),
-                Some(source_at(test_ip())),
-                issued + 1
-            ),
+            validator.validate(&over.to_wire(), Some(source_at(test_ip())), issued + 1),
             Err(AssertionRejection::LifetimeTooLong)
         );
         let exact = signed_with_fields(
@@ -843,20 +1212,111 @@ pub mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn durable_replay_survives_validator_reopen() {
+        let issuer = test_issuer();
+        let pubkey = pk(54);
+        let _cozo = temp_cozo();
+        register(&pubkey, "durable-replay")
+            .await
+            .expect("register principal");
+        let dir = tempfile::tempdir().expect("replay dir");
+        let path = dir.path().join("auth-replay.db");
+        let signed = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0x6A; 16],
+            None,
+        );
+        let wire = signed.to_wire();
+        let now = 1_700_000_100;
+
+        {
+            let replay = AssertionReplayCache::persistent(&path, CLOCK_LEEWAY_SECS)
+                .expect("open durable replay store");
+            let validator =
+                AssertionValidator::new(trust_store_for_issuer(&issuer)).with_replay_cache(replay);
+            validator
+                .validate(&wire, Some(source_at(test_ip())), now)
+                .expect("first process accepts nonce");
+        }
+
+        let replay = AssertionReplayCache::persistent(&path, CLOCK_LEEWAY_SECS)
+            .expect("reopen durable replay store");
+        let validator =
+            AssertionValidator::new(trust_store_for_issuer(&issuer)).with_replay_cache(replay);
+        assert_eq!(
+            validator.validate(&wire, Some(source_at(test_ip())), now),
+            Err(AssertionRejection::Replay)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path)
+                    .expect("replay metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unavailable_replay_store_fails_closed() {
+        let issuer = test_issuer();
+        let blocker = tempfile::NamedTempFile::new().expect("blocking file");
+        let bad_path = blocker.path().join("auth-replay.db");
+        let error = AssertionReplayCache::persistent(&bad_path, CLOCK_LEEWAY_SECS)
+            .expect_err("file parent cannot contain replay store");
+        let validator = AssertionValidator::new(trust_store_for_issuer(&issuer)).with_replay_cache(
+            AssertionReplayCache::unavailable(error.to_string(), CLOCK_LEEWAY_SECS),
+        );
+        let signed = signed_with_fields(
+            &issuer,
+            SAMPLE_PUBKEY_LOCAL,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0x6B; 16],
+            None,
+        );
+        let rejection =
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100);
+        assert_eq!(rejection, Err(AssertionRejection::ReplayStoreUnavailable));
+        let status: tonic::Status = AssertionRejection::ReplayStoreUnavailable.into();
+        assert_eq!(status.code(), Code::Unavailable);
+    }
+
     /// VAL-BRIDGE-012
     #[tokio::test(flavor = "multi_thread")]
     async fn replay_cache_lazy_purge_no_background_task() {
         let cache = AssertionReplayCache::new(CLOCK_LEEWAY_SECS);
         let nonce = [0xBB; 16];
         let expires_at = 1_700_000_100i64;
-        assert!(cache.check_and_insert(nonce, expires_at, 1_700_000_000));
+        assert!(cache
+            .check_and_insert(nonce, expires_at, 1_700_000_000)
+            .expect("insert nonce"));
         assert_eq!(cache.entry_count(), 1);
         // TTL passes without cache access — entry remains (no background purge).
         assert_eq!(cache.entry_count(), 1);
-        // Next access at/after expiry+leeway purges and allows reuse.
-        assert!(cache.check_and_insert([0xCC; 16], expires_at + 1000, expires_at + CLOCK_LEEWAY_SECS));
+        // The nonce remains active through the last second in which the
+        // assertion itself is time-valid. Access one second later purges it.
+        assert!(cache
+            .check_and_insert(
+                [0xCC; 16],
+                expires_at + 1000,
+                expires_at + CLOCK_LEEWAY_SECS + 1
+            )
+            .expect("insert after purge"));
         assert_eq!(cache.entry_count(), 1, "expired nonce purged on access");
-        assert!(cache.check_and_insert(nonce, expires_at + 1000, expires_at + CLOCK_LEEWAY_SECS + 1));
+        assert!(cache
+            .check_and_insert(nonce, expires_at + 1000, expires_at + CLOCK_LEEWAY_SECS + 1)
+            .expect("reuse expired nonce"));
     }
 
     /// VAL-BRIDGE-013
@@ -883,6 +1343,9 @@ pub mod tests {
                 actual: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             })
         );
+        validator
+            .validate(&signed.to_wire(), Some(source_at(test_ip())), now)
+            .expect("wrong source must not consume the nonce");
         let signed_mapped = signed_with_fields(
             &issuer,
             &pubkey,
@@ -936,6 +1399,50 @@ pub mod tests {
         );
     }
 
+    /// A NAT/proxy transport replaces the human inner address, so this mode
+    /// binds the request to the trusted decoy signature instead of an
+    /// impossible TCP source-address equality check.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn trusted_decoy_binding_accepts_proxy_source_or_missing_connect_info() {
+        let issuer = test_issuer();
+        let pubkey = pk(27);
+        let cozo = temp_cozo();
+        register(&pubkey, "warp-user").await.expect("register");
+        let validator = AssertionValidator::new(trust_store_for_issuer(&issuer))
+            .with_source_binding(AssertionSourceBinding::TrustedDecoySignature);
+        let now = 1_700_000_100;
+        let proxied = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0xD1; 16],
+            None,
+        );
+        validator
+            .validate(
+                &proxied.to_wire(),
+                Some(source_at(IpAddr::V4(Ipv4Addr::new(104, 28, 196, 79)))),
+                now,
+            )
+            .expect("trusted decoy signature survives WARP source NAT");
+
+        let no_connect_info = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0xD2; 16],
+            None,
+        );
+        validator
+            .validate(&no_connect_info.to_wire(), None, now)
+            .expect("proxy/UDS handoff may not expose TCP ConnectInfo");
+        drop(cozo);
+    }
+
     /// VAL-BRIDGE-015
     #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_unknown_principal() {
@@ -952,11 +1459,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::UnknownPrincipal)
         );
     }
@@ -990,7 +1493,11 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(&signed2.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
+            validator.validate(
+                &signed2.to_wire(),
+                Some(source_at(test_ip())),
+                1_700_000_100
+            ),
             Err(AssertionRejection::RevokedPrincipal)
         );
     }
@@ -998,6 +1505,7 @@ pub mod tests {
     /// VAL-BRIDGE-017
     #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_when_registry_unavailable() {
+        let _registry_guard = crate::human_principal_dispatch::tests::test_registry_guard();
         let blocker = tempfile::NamedTempFile::new().expect("blocker");
         std::env::set_var(
             "OP_HUMAN_PRINCIPAL_COZO_DB_PATH",
@@ -1015,11 +1523,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::RegistryUnavailable)
         );
     }
@@ -1087,11 +1591,7 @@ pub mod tests {
             Some("missing"),
         );
         assert_eq!(
-            validator.validate(
-                &inverted.to_wire(),
-                Some(source_at(test_ip())),
-                issued
-            ),
+            validator.validate(&inverted.to_wire(), Some(source_at(test_ip())), issued),
             Err(AssertionRejection::Malformed)
         );
 
@@ -1128,17 +1628,15 @@ pub mod tests {
         );
         validator
             .replay_cache()
-            .check_and_insert(replay_nonce, expired.assertion.expires_at, issued + 1);
+            .check_and_insert(replay_nonce, expired.assertion.expires_at, issued + 1)
+            .expect("seed replay cache");
         assert_eq!(
-            validator.validate(
-                &expired.to_wire(),
-                Some(source_at(test_ip())),
-                issued + 400
-            ),
+            validator.validate(&expired.to_wire(), Some(source_at(test_ip())), issued + 400),
             Err(AssertionRejection::Expired)
         );
 
-        // replay + IP mismatch => Replay
+        // A binding failure does not consume the nonce. Repeated wrong-source
+        // attempts remain binding failures, and the valid source can still use it.
         let _cozo = temp_cozo();
         register(&pk(11), "m").await.expect("register");
         let replay_first = signed_with_fields(
@@ -1164,8 +1662,14 @@ pub mod tests {
                 Some(source_at(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)))),
                 issued + 1
             ),
-            Err(AssertionRejection::Replay)
+            Err(AssertionRejection::SourceIpMismatch {
+                expected: test_ip(),
+                actual: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+            })
         );
+        validator
+            .validate(&replay_wire, Some(source_at(test_ip())), issued + 1)
+            .expect("correct source consumes nonce after binding succeeds");
 
         // IP mismatch + unknown principal => SourceIpMismatch
         let ip_bad = signed_with_fields(
@@ -1207,16 +1711,15 @@ pub mod tests {
             None,
         );
         let identity = validator
-            .validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100,
-            )
+            .validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("valid");
         assert_eq!(identity.expires_at, expires);
         assert_eq!(identity.principal_id, derive_principal_id(&pubkey));
         assert_eq!(identity.footprint, derive_human_footprint(&pubkey));
-        assert_ne!(identity.footprint, blake3::derive_key("op-identity human-principal v1", pubkey.as_bytes()));
+        assert_ne!(
+            identity.footprint,
+            blake3::derive_key("op-identity human-principal v1", pubkey.as_bytes())
+        );
         assert_ne!(identity.principal_id, derive_session_id(&pubkey));
     }
 
@@ -1266,11 +1769,7 @@ pub mod tests {
             None,
         );
         validator
-            .validate(
-                &first.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100,
-            )
+            .validate(&first.to_wire(), Some(source_at(test_ip())), 1_700_000_100)
             .expect("first");
         let second = signed_with_fields(
             &issuer,
@@ -1282,16 +1781,12 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &second.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&second.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::Replay)
         );
     }
 
-    pub async fn nonce_consumed_even_when_later_step_fails_impl() {
+    pub async fn nonce_not_consumed_when_principal_check_fails_impl() {
         let _cozo = temp_cozo();
         let issuer = test_issuer();
         let validator = AssertionValidator::new(trust_store_for_issuer(&issuer));
@@ -1311,16 +1806,15 @@ pub mod tests {
             Err(AssertionRejection::UnknownPrincipal)
         );
         register(&pubkey, "late").await.expect("register");
-        assert_eq!(
-            validator.validate(&wire, Some(source_at(test_ip())), 1_700_000_100),
-            Err(AssertionRejection::Replay)
-        );
+        validator
+            .validate(&wire, Some(source_at(test_ip())), 1_700_000_100)
+            .expect("failed principal resolution must not consume nonce");
     }
 
     pub async fn corrupted_store_rejects_unknown_decoy_key_at_validate_impl() {
         let issuer = test_issuer();
-        let good_b64 = base64::engine::general_purpose::STANDARD
-            .encode(issuer.verifying_key().to_bytes());
+        let good_b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer.verifying_key().to_bytes());
         let dir = tempfile::tempdir().expect("tempdir");
         let variants: Vec<Vec<u8>> = vec![
             br#"{"decoy_keys": []}"#.to_vec(),
@@ -1351,11 +1845,7 @@ pub mod tests {
             std::fs::write(&path, &bytes).expect("write");
             let validator = AssertionValidator::new(DecoyTrustStore::load_from_path(&path));
             assert_eq!(
-                validator.validate(
-                    &signed.to_wire(),
-                    Some(source_at(test_ip())),
-                    1_700_000_100
-                ),
+                validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
                 Err(AssertionRejection::UnknownDecoyKey),
                 "variant {idx}"
             );
@@ -1392,7 +1882,15 @@ pub mod tests {
         let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
-        let base = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x25; 16], None);
+        let base = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            issued,
+            expires,
+            [0x25; 16],
+            None,
+        );
         let wire = base.to_wire();
         validator
             .validate(&wire, Some(source_at(test_ip())), expires + 30)
@@ -1411,11 +1909,7 @@ pub mod tests {
             None,
         );
         validator
-            .validate(
-                &future.to_wire(),
-                Some(source_at(test_ip())),
-                issued,
-            )
+            .validate(&future.to_wire(), Some(source_at(test_ip())), issued)
             .expect("issued_at == now+30 passes");
         let future_bad = signed_with_fields(
             &issuer,
@@ -1427,11 +1921,7 @@ pub mod tests {
             None,
         );
         assert_eq!(
-            validator.validate(
-                &future_bad.to_wire(),
-                Some(source_at(test_ip())),
-                issued
-            ),
+            validator.validate(&future_bad.to_wire(), Some(source_at(test_ip())), issued),
             Err(AssertionRejection::NotYetValid)
         );
     }
@@ -1450,11 +1940,7 @@ pub mod tests {
             Some("missing"),
         );
         assert_eq!(
-            validator.validate(
-                &inverted.to_wire(),
-                Some(source_at(test_ip())),
-                issued
-            ),
+            validator.validate(&inverted.to_wire(), Some(source_at(test_ip())), issued),
             Err(AssertionRejection::Malformed)
         );
         let mut inverted_bad_sig = signed_with_fields(
@@ -1495,11 +1981,7 @@ pub mod tests {
         );
         let validator = AssertionValidator::new(store);
         assert_eq!(
-            validator.validate(
-                &signed.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            ),
+            validator.validate(&signed.to_wire(), Some(source_at(test_ip())), 1_700_000_100),
             Err(AssertionRejection::UnknownDecoyKey)
         );
     }
@@ -1510,15 +1992,22 @@ pub mod tests {
         let (_cozo, validator) = validator_with_registered(&issuer, &pubkey).await;
         let issued = 1_700_000_000i64;
         let expires = issued + 300;
-        let signed = signed_with_fields(&issuer, &pubkey, test_ip(), issued, expires, [0x2B; 16], None);
+        let signed = signed_with_fields(
+            &issuer,
+            &pubkey,
+            test_ip(),
+            issued,
+            expires,
+            [0x2B; 16],
+            None,
+        );
         let wire = signed.to_wire();
         validator
             .validate(&wire, Some(source_at(test_ip())), issued + 1)
             .expect("first use");
         let edge = expires + CLOCK_LEEWAY_SECS;
         let result = validator.validate(&wire, Some(source_at(test_ip())), edge);
-        assert_ne!(result, Err(AssertionRejection::Replay));
-        result.expect("edge still passes expiry");
+        assert_eq!(result, Err(AssertionRejection::Replay));
     }
 
     pub async fn cross_principal_assertion_ip_swap_matrix_impl() {
@@ -1550,18 +2039,10 @@ pub mod tests {
             None,
         );
         validator
-            .validate(
-                &assertion_a.to_wire(),
-                Some(source_at(ip_a)),
-                1_700_000_100,
-            )
+            .validate(&assertion_a.to_wire(), Some(source_at(ip_a)), 1_700_000_100)
             .expect("A from A");
         validator
-            .validate(
-                &assertion_b.to_wire(),
-                Some(source_at(ip_b)),
-                1_700_000_100,
-            )
+            .validate(&assertion_b.to_wire(), Some(source_at(ip_b)), 1_700_000_100)
             .expect("B from B");
         let assertion_a_swap = signed_with_fields(
             &issuer,
@@ -1680,7 +2161,8 @@ pub mod tests {
             Err(AssertionRejection::UnknownDecoyKey)
         );
 
-        let other_b64 = base64::engine::general_purpose::STANDARD.encode(other.verifying_key().to_bytes());
+        let other_b64 =
+            base64::engine::general_purpose::STANDARD.encode(other.verifying_key().to_bytes());
         std::fs::write(
             &path,
             format!("{{\"decoy_keys\": {{\"other-key\": \"{}\"}}}}", other_b64),
@@ -1700,12 +2182,13 @@ pub mod tests {
         keys.insert("other-key".to_string(), other.verifying_key());
         let validator_v2 = AssertionValidator::new(DecoyTrustStore::from_decoy_keys(keys));
         assert_eq!(
-            validator_v1.validate(
-                &signed_v1.to_wire(),
-                Some(source_at(test_ip())),
-                1_700_000_100
-            )
-            .err(),
+            validator_v1
+                .validate(
+                    &signed_v1.to_wire(),
+                    Some(source_at(test_ip())),
+                    1_700_000_100
+                )
+                .err(),
             validator_v1
                 .validate(
                     &signed_v1.to_wire(),
@@ -1735,7 +2218,7 @@ pub mod tests {
             .validate(
                 &signed_other.to_wire(),
                 Some(source_at(test_ip())),
-                1_700_000_100
+                1_700_000_100,
             )
             .expect_err("unknown principal");
     }
@@ -1744,13 +2227,22 @@ pub mod tests {
         let dir1 = tempfile::tempdir().expect("tempdir1");
         let dir2 = tempfile::tempdir().expect("tempdir2");
         let issuer1 = test_issuer();
-        let issuer2 = DecoyIssuer::new(SigningKey::from_bytes(&[8u8; 32]), "decoy-key-2", Duration::from_secs(900));
+        let issuer2 = DecoyIssuer::new(
+            SigningKey::from_bytes(&[8u8; 32]),
+            "decoy-key-2",
+            Duration::from_secs(900),
+        );
         write_trust_store(&dir1, &issuer1);
         let path2 = dir2.path().join("decoy-trust.json");
-        let b64 = base64::engine::general_purpose::STANDARD.encode(issuer2.verifying_key().to_bytes());
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(issuer2.verifying_key().to_bytes());
         std::fs::write(
             &path2,
-            format!("{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}", issuer2.key_id(), b64),
+            format!(
+                "{{\"decoy_keys\": {{\"{}\": \"{}\"}}}}",
+                issuer2.key_id(),
+                b64
+            ),
         )
         .expect("write2");
         let path1 = dir1.path().join("decoy-trust.json");
@@ -1761,5 +2253,4 @@ pub mod tests {
         assert!(v2.trust_store().contains_key("decoy-key-2"));
         assert!(!v2.trust_store().contains_key("decoy-key-1"));
     }
-
 }

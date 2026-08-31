@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_3cd565e0-3994-4513-8479-227e10218394",
+  "title": "test",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/odbus"
+  ],
+  "createdAt": "2026-08-04T03:35:14.742Z",
+  "lastModifiedAt": "2026-08-04T03:35:15.456Z",
+  "modelId": "auto",
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "status": "in_progress"
+}

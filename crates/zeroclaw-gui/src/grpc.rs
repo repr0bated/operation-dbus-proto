@@ -490,31 +490,34 @@ pub async fn invoke_unary(
     Ok(serde_json::to_value(&resp_msg)?)
 }
 
-// ----------------- ghostbridge identity sled -----------------
+// ----------------- ghostbridge session identity -----------------
 
-/// op-grpc-bridge rejects calls without the Ghostbridge Identity Sled headers.
-/// The sled is a shared-memory blob (`/dev/shm/plugin_schema.dat`, same layout
-/// `bin/zcall` reads): footprint at bytes 40..72, trace id at 72..88.
+/// Resolve an explicit environment identity or the configured local session.
 fn ghostbridge_identity() -> Option<(String, String)> {
-    let path =
-        std::env::var("ZCALL_SLED_PATH").unwrap_or_else(|_| "/dev/shm/plugin_schema.dat".into());
-    let data = std::fs::read(path).ok()?;
-    if data.len() < 88 {
-        return None;
+    let env_genesis = std::env::var("X_GHOSTBRIDGE_GENESIS")
+        .or_else(|_| std::env::var("X_GHOSTBRIDGE_FOOTPRINT"))
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let env_trace = std::env::var("X_GHOSTBRIDGE_TRACE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if let (Some(genesis), Some(trace)) = (env_genesis, env_trace) {
+        return Some((genesis, trace));
     }
-    let footprint = &data[40..72];
-    let trace_id = &data[72..88];
-    if footprint.iter().all(|&b| b == 0) || trace_id.iter().all(|&b| b == 0) {
-        return None;
-    }
-    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    Some((hex(footprint), hex(trace_id)))
+    let identity = op_identity::configured_identity_session().ok()?;
+    Some((
+        identity.genesis.filter(|value| !value.is_empty())?,
+        identity.trace_id,
+    ))
 }
 
 pub fn attach_ghostbridge_identity<T>(request: &mut Request<T>) {
-    if let Some((footprint, trace_id)) = ghostbridge_identity() {
+    if let Some((genesis, trace_id)) = ghostbridge_identity() {
         let md = request.metadata_mut();
-        if let Ok(v) = footprint.parse() {
+        if let Ok(v) = genesis.parse() {
+            md.insert("x-ghostbridge-genesis", v);
+        }
+        if let Ok(v) = genesis.parse() {
             md.insert("x-ghostbridge-footprint", v);
         }
         if let Ok(v) = trace_id.parse() {

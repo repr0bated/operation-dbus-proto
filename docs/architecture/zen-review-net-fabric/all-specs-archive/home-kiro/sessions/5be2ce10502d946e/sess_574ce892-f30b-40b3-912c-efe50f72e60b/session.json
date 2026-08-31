@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_574ce892-f30b-40b3-912c-efe50f72e60b",
+  "title": "Set up lspvec for all repos",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/srv/git/repos-bulk/.venv"
+  ],
+  "createdAt": "2026-08-10T17:00:40.169Z",
+  "lastModifiedAt": "2026-08-10T21:50:57.759Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "semanticReviewEnabled": true,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "description": "voyage-code-4 exists on user's account with 200M free tokens. It's just under heavy load right now on the API. I need to update lspvec.py to use voyage-code-4, then set up the run to poll/retry until the model becomes available.",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "codeIntelligence": {
+          "enabled": true
+        },
+        "knowledge": {
+          "enabled": true
+        },
+        "thinking": {
+          "enabled": true
+        },
+        "subagentOrchestration": {
+          "enabled": true
+        },
+        "workflowNotifications": {
+          "enabled": false,
+          "delivery": "steer"
+        }
+      },
+      "executionTarget": {
+        "kind": "local"
+      }
+    }
+  }
+}

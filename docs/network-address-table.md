@@ -27,6 +27,6 @@
 *   **Identity Pinning:** `X-Ghostbridge-Footprint` (Hex-encoded 32-byte hash)
 *   **Trace Context:** `X-Ghostbridge-Trace-ID` (UUID)
 *   **Control Plane:** JSON-RPC 2.0 over Unix Sockets (`/var/run/openvswitch/db.sock`)
-*   **Identity State:** Shared Memory (`/dev/shm/plugin_schema.dat`) mapped via `memmap2`
+*   **Identity State:** Per-session `identity_sled` projection backed by durable Cozo records
 *   **Fabric Policy:** OpenFlow 1.3 (via `tcp:10.88.88.1:6653`)
 *   **Privacy:** DNS-over-HTTPS (DoH) to `nextdns.io` via Xray `dns-out` tagging

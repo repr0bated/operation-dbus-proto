@@ -8,9 +8,9 @@
 //! Regression this guards: `run_zeroclaw_server` (the path the `op-grpc-bridge`
 //! binary actually takes) called `hydrate_reflection_from_shm()` but not
 //! `freeze_plugin_method_reflection()`, so the bridge advertised every sealed
-//! plugin while serving none of their per-method services. Separately,
-//! `cognitive_mcp`'s availability check looked for an s6 service definition on a
-//! runit host, marking the plugin unavailable.
+//! plugin while serving none of their per-method services. `cognitive_mcp` is
+//! bridge-owned and compiled in, so activation must remain independent of the
+//! deliberately absent standalone service definition.
 //!
 //! Ignored by default: requires a running bridge.
 //!   cargo test -p op-grpc-bridge --test live_reflection_probe -- --nocapture --ignored

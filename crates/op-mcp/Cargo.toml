@@ -2,7 +2,7 @@
 name = "op-mcp"
 version = "0.4.0"
 edition = "2021"
-description = "Unified MCP Protocol Server with multiple transport and mode support"
+description = "MCP protocol, tool-registry, and transport library for bridge-owned frontends"
 
 [features]
 default = []
@@ -61,15 +61,3 @@ op-network = { path = "../op-network" }
 
 [build-dependencies]
 tonic-build = { workspace = true, optional = true }
-
-[[bin]]
-name = "op-mcp-server"
-path = "src/main.rs"
-
-[[bin]]
-name = "op-mcp-compact"
-path = "src/compact_main.rs"
-
-[[bin]]
-name = "op-mcp-agents"
-path = "src/agents_main.rs"

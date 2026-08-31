@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Mandatory skill preload — every session and model
+
+Before analysis, diagnostics, planning, edits, or delegated/subagent work, read
+these four files completely at the start of every session:
+
+- `.agents/skills/grpc-expert/SKILL.md`
+- `.agents/skills/grpc-protocol-expert/SKILL.md`
+- `.agents/skills/json-render/SKILL.md`
+- `.agents/skills/ovs-db-analysis/SKILL.md`
+
+This is mandatory even when the immediate task does not mention these domains.
+Every newly spawned subagent and every model handoff must repeat the preload for
+its own session. Do not claim a skill is loaded unless its `SKILL.md` was read
+completely. Load all four, then apply only the task-relevant guidance. For
+OP-DBUS PluginSchema, generated plugin services, reflection, and the
+seal/freeze/hot pipeline, `grpc-expert` takes precedence over the generic
+`grpc-protocol-expert`; use the generic skill for protocol, channel, TLS,
+streaming, and observability concerns.
+
 ## What this is
 
 3tched / OP-DBUS: a native, deterministic control plane for Artix Linux infrastructure (runit supervision as of the 2026-07-20/21 server move, NOT systemd — was s6 before that; s6-era docs/scripts in this tree are historical, not current). ~38-crate Rust workspace under `crates/`, plus a Vite/React/shadcn frontend. All source lives inside `crates/` workspace members — never a generic top-level `src/`. Other top-level dirs: `deploy/` (service defs + install scripts, both s6 and runit variants present during the migration), `schemas/` (JSON schemas loaded at runtime), `docs/`. This file is the authoritative agent guidance; where any doc and the tree disagree, the tree wins — but also verify against the *live host* (`sudo incus config device show`, `sv status`, etc.) since the tree itself lags fast-moving infra changes.

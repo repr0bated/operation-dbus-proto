@@ -1,0 +1,36 @@
+{
+  "session_id": "5ac29834-c4ee-4ce1-8df3-ca0fd53bfe76",
+  "cwd": "/srv/git/odbus",
+  "created_at": "2026-08-09T00:24:10.035265324Z",
+  "updated_at": "2026-08-09T00:24:10.035265324Z",
+  "title": null,
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "5ac29834-c4ee-4ce1-8df3-ca0fd53bfe76",
+      "model_info": null,
+      "context_usage_percentage": null
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/srv/git/odbus"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": null,
+    "goal": null
+  }
+}

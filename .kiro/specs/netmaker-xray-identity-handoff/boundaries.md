@@ -1,4 +1,4 @@
-# Boundaries — NetMaker / Xray Identity Handoff
+# Boundaries — WireGuard / WARP / Xray Identity Handoff
 
 This document is the authoritative boundary statement for the corrected
 identity handoff. It has three parts: non-negotiable architecture boundaries,
@@ -10,8 +10,10 @@ mission documents but does not deploy.
 1. **Oracle decoy is the sole incoming WireGuard termination point.** The
    main host has no incoming identity WireGuard interface; never add
    `wg-lan` or any host WG interface.
-2. **Exactly one NetMaker transport.** NetMaker is transport, not the human
-   identity authority. Multiple tunnels caused MTU issues.
+2. **NetMaker is absent.** Human WireGuard terminates on the decoy. The
+   decoy's independent `wgcf-ingress` interface supplies WARP egress only;
+   it is transport, not the human identity authority. This removes the nested
+   tunnel and the MTU failure it caused.
 3. **Assertion carriage is INNER.** The short-lived Ed25519-signed
    `OracleIdentityAssertion` rides as gRPC metadata
    (`x-oracle-identity-assertion-bin`) inside the existing TLS channel.
@@ -19,8 +21,10 @@ mission documents but does not deploy.
 4. **`op-grpc-bridge` is the sole validator and the application
    authorization boundary.** Validation order: parse → structural lifetime
    (`expires_at <= issued_at`) → trusted decoy key → signature → expiry →
-   replay cache → source-IP binding → HumanPrincipal resolution → existing
-   capability gate. Every step fail-closed.
+   replay cache → configured source-binding policy → HumanPrincipal resolution
+   → existing capability gate. Production uses `trusted-decoy-signature`
+   because WARP replaces the transport source; strict source-IP equality
+   remains available for direct deployments. Every step fails closed.
 5. **Human identity, WireGuard key, login session, workspace container, and
    display alias are separate concepts.** A workspace container is not the
    human. System containers are never users. The display alias is
@@ -77,22 +81,23 @@ stand-ins.
   (`OP_DECOY_TRUST_STORE`, default `/etc/opdbus/decoy-trust.json`) by an
   operational process outside this mission.
 
-### 3.2 NetMaker transport (EXTERNAL)
+### 3.2 WARP transport (EXTERNAL)
 
-- Exactly one tunnel carries decoy→host traffic.
-- **Inner-IP preservation assumption**: the human's NetMaker inner IP
-  (`netmaker_inner_ip`) must be the source IP observed by the bridge on the
-  TLS connection — i.e., no NAT rewrites the inner source address along the
-  decoy → NetMaker → xray → bridge path. If a deployment cannot preserve
-  this, the source-IP binding step must be re-specified before enabling the
-  assertion path there.
-- NetMaker ACLs (`OP_NETMK_*`) remain the transport-level policy; they are
-  not identity.
+- The decoy's `wgcf-ingress` is self-contained Cloudflare WARP with fwmark and
+  policy table `51820`; destinations in `10.0.0.0/24` bypass WARP exactly.
+- WARP does not mint, carry, or inject identity. It changes the network source
+  seen by the origin, so production trusts the short-lived decoy signature,
+  nonce/replay checks, and registered HumanPrincipal rather than TCP-source
+  equality.
+- The WG-authenticated client requests OIA1 from `10.10.0.1:51888` and carries
+  the returned bytes inside its gRPC metadata. SSH and noVNC sessions do not
+  create that metadata and therefore do not establish application identity.
 
 ### 3.3 Xray container (EXTERNAL, unchanged)
 
-- Passthrough only: SNI/protocol sniffing, no TLS termination for this
-  traffic, no header injection, no identity logic.
+- Xray may terminate its outer VLESS/XHTTP transport envelope, but the inner
+  gRPC TLS channel and OIA1 metadata stay opaque. Xray performs no application
+  header injection and no identity logic.
 - Live config only at `/etc/xray/xray_config.json` inside the container;
   models never write or reload xray.
 
@@ -105,7 +110,7 @@ stand-ins.
 | Public CF surface, mail half-and-half, REALITY camouflage ops | control-plane spec |
 | Thin email enroll *channel* (not assertion crypto) | control-plane spec |
 | Human WG terminates at Oracle decoy; no host `wg-lan` | BOTH (this mission enforces in code gates) |
-| NetMaker = transport only, not identity authority | BOTH |
+| WARP = transport only, not identity authority | BOTH |
 | `OracleIdentityAssertion` / HumanPrincipal / bridge validator | THIS mission |
 | OpenFlow IP:port demux (non-identity) | control-plane / existing OVS work |
 

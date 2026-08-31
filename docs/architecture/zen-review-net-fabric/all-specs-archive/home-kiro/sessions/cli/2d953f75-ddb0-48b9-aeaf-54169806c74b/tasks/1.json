@@ -1,0 +1,6 @@
+{
+  "id": "1",
+  "subject": "Load relevant skills and read full spec (design.md + tasks.md)",
+  "description": "Load grpc expert, network/OVS skills, and read the complete spec to understand implementation details",
+  "status": "pending"
+}

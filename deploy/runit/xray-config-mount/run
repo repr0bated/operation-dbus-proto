@@ -1,5 +1,5 @@
 #!/bin/sh
-# runit: supervise xray SHM config bind into xray container
+# Policy guard for Xray's one legal live configuration path.
 exec 2>&1
 
 wait_dep() {
@@ -15,22 +15,15 @@ wait_dep() {
     done
 }
 
-wait_dep opdbus-rundirs
-wait_dep incusd
+wait_dep incus-ct-xray
 
-export XRAY_CT="${XRAY_CT:-xray}"
-export XRAY_CONF_HOST="${XRAY_CONF_HOST:-/dev/shm/xray_config.json}"
-export XRAY_CONF_CT="${XRAY_CONF_CT:-/dev/shm/xray_config.json}"
-export XRAY_DEVICE="${XRAY_DEVICE:-xrayconf}"
-export XRAY_RELOAD="${XRAY_RELOAD:-1}"
+XRAY_CT="${XRAY_CT:-xray}"
+XRAY_CONF_CT="/etc/xray/xray_config.json"
 
-# Initial attach
-/usr/local/libexec/3tched/xray-config-mount-up once || true
-
-# Poll: Incus file binds go stale when host replaces the inode.
-# inotify is ideal but not always installed; 5s poll is enough for control plane.
-INTERVAL="${XRAY_MOUNT_POLL_SEC:-5}"
-while true; do
-    /usr/local/libexec/3tched/xray-config-mount-up once || true
-    sleep "$INTERVAL"
-done
+incus exec "$XRAY_CT" -- test -s "$XRAY_CONF_CT" || {
+    echo "missing canonical Xray config: $XRAY_CT:$XRAY_CONF_CT" >&2
+    exit 1
+}
+incus exec "$XRAY_CT" -- /usr/local/bin/xray run -test -config "$XRAY_CONF_CT"
+/usr/local/libexec/3tched/runit-ready-signal xray-config-mount
+exec pause

@@ -1,0 +1,6 @@
+{
+  "id": "8",
+  "subject": "Build and verify compilation",
+  "description": "cargo build --workspace to ensure no compilation errors",
+  "status": "pending"
+}

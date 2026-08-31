@@ -81,6 +81,14 @@ impl Tool for CodeSearchTool {
         tool_input_schema("code_search")
     }
 
+    fn required_capability(&self) -> Option<&str> {
+        Some("cognitive_mcp.read")
+    }
+
+    fn subid(&self) -> Option<&str> {
+        Some("obs.service.code-rag.search@v1")
+    }
+
     async fn execute(&self, input: Value) -> Result<Value> {
         let query = input
             .get("query")
@@ -150,6 +158,14 @@ impl Tool for CodeContextTool {
 
     fn input_schema(&self) -> Value {
         tool_input_schema("code_context")
+    }
+
+    fn required_capability(&self) -> Option<&str> {
+        Some("cognitive_mcp.read")
+    }
+
+    fn subid(&self) -> Option<&str> {
+        Some("obs.service.code-context.get@v1")
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {
@@ -249,6 +265,14 @@ impl Tool for CodeIndexTool {
 
     fn input_schema(&self) -> Value {
         tool_input_schema("code_index")
+    }
+
+    fn required_capability(&self) -> Option<&str> {
+        Some("cognitive_mcp.invoke")
+    }
+
+    fn subid(&self) -> Option<&str> {
+        Some("mut.service.code-rag.index@v1")
     }
 
     async fn execute(&self, input: Value) -> Result<Value> {

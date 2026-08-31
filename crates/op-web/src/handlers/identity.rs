@@ -1,52 +1,56 @@
-//! Identity Sled Handler — Read the live identity sled from shared memory.
+//! Read-only access to one projected identity session.
 //!
-//! GET /api/identity/sled — returns the current sled contents as JSON.
-//! Readable by any WireGuard-connected device without root access.
+//! `GET /api/identity/sled?session_id=...` retains the existing route while
+//! resolving a session-scoped `identity_sled` record. Omitting the selector is
+//! accepted only when the projection contains exactly one current session.
 
 use axum::{
     body::Body,
-    extract::Extension,
+    extract::{Extension, Query},
     http::{header, StatusCode},
     response::Response,
 };
-use op_identity::schema_bridge::{read_sled, IdentitySled};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::state::AppState;
 
-/// GET /api/identity/sled
-pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    match read_sled() {
-        Ok((ptr, _mmap)) => {
-            // SAFETY: `ptr` is derived from a live `memmap2::Mmap` (`_mmap`). The mapping
-            // outlives this borrow because `_mmap` is dropped after `sled` goes out of
-            // scope. `IdentitySled` is a plain-data struct (no padding gaps, no references)
-            // so a bitwise read from the mmap is valid as long as the backing file was
-            // written with a canonical `IdentitySled` layout.
-            let sled: &IdentitySled = unsafe { &*ptr };
+#[derive(Debug, Default, Deserialize)]
+pub struct IdentityQuery {
+    pub session_id: Option<String>,
+}
 
+/// Return a single active, unexpired identity record from the shared projection.
+pub async fn identity_sled_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+    Query(query): Query<IdentityQuery>,
+) -> Response {
+    match op_identity::resolve_identity_session(query.session_id.as_deref()) {
+        Ok(identity) => {
+            let genesis = identity.genesis.clone().unwrap_or_default();
             let schema_catalog_hash = op_identity::schema_bridge::schema_catalog_hash()
                 .map(hex::encode)
                 .unwrap_or_else(|| "(missing)".to_string());
-
-            let is_valid = sled.hashed_footprint != [0u8; 32] && sled.trace_id != [0u8; 16];
+            let projection_path = op_core::projection_shm::projection_file_path("identity_sled");
 
             let body = json!({
-                "path": op_identity::schema_bridge::SHM_SLED_PATH,
-                "is_valid": is_valid,
-                "wireguard_pubkey": encode_b64(&sled.wireguard_pubkey),
-                "wireguard_pubkey_hex": hex::encode(sled.wireguard_pubkey),
-                "mutation_index": sled.mutation_index,
-                "hashed_footprint": hex::encode(sled.hashed_footprint),
-                "trace_id": sled.trace_id_hex(),
-                "schema_version": sled.schema_version,
+                "path": projection_path,
+                "is_valid": identity.is_current(),
+                "session_id": identity.session_id,
+                "wireguard_pubkey": identity.wireguard_pubkey,
+                "mutation_index": identity.mutation_index,
+                "genesis": genesis,
+                // Compatibility alias for clients being migrated to `genesis`.
+                "hashed_footprint": genesis,
+                "trace_id": identity.trace_id,
+                "schema_version": identity.schema_version,
                 "schema_catalog_hash": schema_catalog_hash,
                 "backend": false,
             });
 
-            info!("Served identity sled from shared memory");
+            info!("Served projected identity session");
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json")
@@ -55,21 +59,19 @@ pub async fn identity_sled_handler(Extension(_state): Extension<Arc<AppState>>) 
                 ))
                 .expect("response with valid body should not fail")
         }
-        Err(e) => {
-            warn!(error = %e, "Identity sled not available");
+        Err(error) => {
+            warn!(%error, "Identity session not available");
             Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"error":"Identity sled not available","detail":"{}"}}"#,
-                    e
-                )))
+                .body(Body::from(
+                    json!({
+                        "error": "Identity session not available",
+                        "detail": error.to_string(),
+                    })
+                    .to_string(),
+                ))
                 .expect("response with valid body should not fail")
         }
     }
-}
-
-fn encode_b64(bytes: &[u8; 32]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
 }

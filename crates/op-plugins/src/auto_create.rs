@@ -49,7 +49,7 @@ impl SystemdAutoCreator {
         }
 
         if plugins.is_empty() {
-            let fallback_units = ["op-grpc-bridge", "op-web", "op-cognitive-mcp"];
+            let fallback_units = ["op-grpc-bridge", "op-web"];
             for unit in fallback_units {
                 plugins.push((
                     unit.to_string(),

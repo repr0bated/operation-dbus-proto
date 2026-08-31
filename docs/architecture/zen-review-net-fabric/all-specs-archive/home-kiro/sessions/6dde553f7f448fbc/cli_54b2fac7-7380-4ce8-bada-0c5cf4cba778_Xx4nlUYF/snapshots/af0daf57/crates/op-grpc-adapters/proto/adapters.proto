@@ -1,0 +1,181 @@
+syntax = "proto3";
+
+package op.adapters.v1;
+
+// ── Mail ─────────────────────────────────────────────────────────────────────
+
+service MailService {
+  // IMAP
+  rpc ListFolders(ListFoldersRequest) returns (ListFoldersResponse);
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  rpc GetMessage(GetMessageRequest) returns (GetMessageResponse);
+  rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
+  rpc MoveMessage(MoveMessageRequest) returns (MoveMessageResponse);
+  rpc DeleteMessage(DeleteMessageRequest) returns (DeleteMessageResponse);
+  rpc StreamInbox(StreamInboxRequest) returns (stream MailEvent);
+
+  // SMTP
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+}
+
+message ListFoldersRequest {}
+message ListFoldersResponse { repeated string folders = 1; }
+
+message ListMessagesRequest {
+  string folder = 1;
+  uint32 limit = 2;
+  uint32 offset = 3;
+}
+
+message MailHeader {
+  string subject = 1;
+  string from = 2;
+  string to = 3;
+  string date = 4;
+  uint64 uid = 5;
+  bool seen = 6;
+}
+
+message ListMessagesResponse { repeated MailHeader messages = 1; }
+
+message GetMessageRequest { uint64 uid = 1; string folder = 2; }
+message GetMessageResponse {
+  MailHeader header = 1;
+  string body_text = 2;
+  string body_html = 3;
+  repeated Attachment attachments = 4;
+}
+
+message Attachment { string filename = 1; string mime_type = 2; bytes data = 3; }
+message SearchMessagesRequest { string query = 1; string folder = 2; }
+message SearchMessagesResponse { repeated MailHeader messages = 1; }
+message MoveMessageRequest { uint64 uid = 1; string from_folder = 2; string to_folder = 3; }
+message MoveMessageResponse { bool success = 1; }
+message DeleteMessageRequest { uint64 uid = 1; string folder = 2; }
+message DeleteMessageResponse { bool success = 1; }
+message StreamInboxRequest {}
+message MailEvent {
+  string event_type = 1; // "new_message" | "deleted" | "seen"
+  MailHeader message = 2;
+}
+
+message SendMessageRequest {
+  string to = 1;
+  string subject = 2;
+  string body_text = 3;
+  string body_html = 4;
+  repeated string cc = 5;
+  repeated string bcc = 6;
+}
+message SendMessageResponse { bool success = 1; string message_id = 2; }
+
+// ── Netmaker ──────────────────────────────────────────────────────────────────
+
+service NetmakerService {
+  rpc GetServerHealth(HealthRequest) returns (HealthResponse);
+  rpc ListNetworks(ListNetworksRequest) returns (ListNetworksResponse);
+  rpc GetNetwork(GetNetworkRequest) returns (GetNetworkResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+  rpc ListHosts(ListHostsRequest) returns (ListHostsResponse);
+  rpc JoinNetwork(JoinNetworkRequest) returns (JoinNetworkResponse);
+  rpc LeaveNetwork(LeaveNetworkRequest) returns (LeaveNetworkResponse);
+  rpc RestartService(RestartServiceRequest) returns (RestartServiceResponse);
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
+  rpc StreamEvents(StreamEventsRequest) returns (stream NetmakerEvent);
+}
+
+message HealthRequest {}
+message HealthResponse { string status = 1; string version = 2; }
+message ListNetworksRequest {}
+message Network {
+  string name = 1;
+  string address_range = 2;
+  string address_range6 = 3;
+  bool is_local = 4;
+}
+message ListNetworksResponse { repeated Network networks = 1; }
+message GetNetworkRequest { string name = 1; }
+message GetNetworkResponse { Network network = 1; }
+message ListNodesRequest { string network = 1; }
+message Node {
+  string id = 1;
+  string name = 2;
+  string address = 3;
+  string public_key = 4;
+  bool connected = 5;
+  string last_checkin = 6;
+}
+message ListNodesResponse { repeated Node nodes = 1; }
+message GetNodeRequest { string id = 1; }
+message GetNodeResponse { Node node = 1; }
+message ListHostsRequest {}
+message Host { string id = 1; string name = 2; string public_key = 3; string version = 4; }
+message ListHostsResponse { repeated Host hosts = 1; }
+message JoinNetworkRequest { string network = 1; string token = 2; }
+message JoinNetworkResponse { bool success = 1; string message = 2; }
+message LeaveNetworkRequest { string network = 1; }
+message LeaveNetworkResponse { bool success = 1; string message = 2; }
+message RestartServiceRequest { string service = 1; }
+message RestartServiceResponse { bool success = 1; string message = 2; }
+message ExecuteCommandRequest {
+  oneof command {
+    JoinNetworkRequest join = 1;
+    LeaveNetworkRequest leave = 2;
+    RestartServiceRequest restart = 3;
+    ConnectRequest connect = 4;
+    DisconnectRequest disconnect = 5;
+    ListRequest list = 6;
+    PeersRequest peers = 7;
+    PingRequest ping = 8;
+    PullRequest pull = 9;
+    PushRequest push = 10;
+    RegisterRequest register = 11;
+    ServerRequest server = 12;
+    InstallRequest install = 13;
+    UninstallRequest uninstall = 14;
+    UseRequest use = 15;
+    VersionRequest version = 16;
+  }
+}
+message ConnectRequest { string network = 1; }
+message DisconnectRequest { string network = 1; }
+message ListRequest {}
+message PeersRequest {}
+message PingRequest { string peer = 1; }
+message PullRequest {}
+message PushRequest {}
+message RegisterRequest { string instance = 1; }
+message ServerRequest { string subcommand = 1; repeated string args = 2; }
+message InstallRequest {}
+message UninstallRequest {}
+message UseRequest { string version = 1; }
+message VersionRequest {}
+message ExecuteCommandResponse {
+  bool success = 1;
+  int32 exit_code = 2;
+  string stdout = 3;
+  string stderr = 4;
+}
+message StreamEventsRequest {}
+message NetmakerEvent { string event_type = 1; string payload_json = 2; }
+
+// ── MQTT / Message Queue ──────────────────────────────────────────────────────
+
+service MqService {
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc Subscribe(SubscribeRequest) returns (stream MqMessage);
+  rpc ListTopics(ListTopicsRequest) returns (ListTopicsResponse);
+}
+
+message PublishRequest {
+  string topic = 1;
+  bytes payload = 2;
+  uint32 qos = 3;
+  bool retain = 4;
+}
+message PublishResponse { bool success = 1; }
+message SubscribeRequest { repeated string topics = 1; uint32 qos = 2; }
+message MqMessage { string topic = 1; bytes payload = 2; uint64 timestamp = 3; }
+message ListTopicsRequest {}
+message ListTopicsResponse { repeated string topics = 1; }

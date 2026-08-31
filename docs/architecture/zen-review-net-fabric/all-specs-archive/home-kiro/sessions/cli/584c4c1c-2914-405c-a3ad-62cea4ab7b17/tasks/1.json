@@ -1,0 +1,6 @@
+{
+  "id": "1",
+  "subject": "Add netmakerService wrapper to src/grpc/client.ts (T-1)",
+  "description": "",
+  "status": "completed"
+}

@@ -1,0 +1,6 @@
+{
+  "id": "5",
+  "subject": "Inspect Cargo dependencies and deploy/runit service patterns",
+  "description": "Read op-network/op-plugins dependency manifests and representative/current runit scripts, including ready-stamp conventions.",
+  "status": "pending"
+}

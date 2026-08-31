@@ -6,6 +6,17 @@
 
 ---
 
+> **Canonical MCP architecture:** MCP tool discovery/execution is owned solely by
+> `op-grpc-bridge` on TLS `:8090`. See
+> `.kiro/specs/unified-authenticated-mcp-cognitive-control-plane/`. `op-web :8080`
+> serves the dashboard/UI and ordinary REST only and MUST expose **zero** MCP
+> execution endpoints. Any `/mcp` execution route or MCP proxy described below is
+> superseded and slated for removal (canonical FR-1, Phase 9). The MCP *dashboard*
+> (read-only status/telemetry views) may remain, but it reads bridge state via the
+> authenticated gRPC path, never by hosting an MCP executor.
+
+---
+
 ## Architecture Overview
 
 The UI is **embedded directly into the Rust binary** using `rust-embed`. No external static files - the entire frontend is compiled into the `op-web` binary for single-binary deployment.
@@ -119,7 +130,9 @@ pub fn create_router(state: AppState) -> Router {
         // API routes (existing)
         .nest("/api", api_routes())
         .route("/ws", get(websocket_handler))
-        .route("/mcp", post(mcp_handler))
+        // REMOVED (canonical FR-1 / Phase 9): op-web MUST NOT serve an MCP
+        // execution route. `.route("/mcp", post(mcp_handler))` is superseded by the
+        // single authenticated ingress at op-grpc-bridge :8090. Do not reintroduce.
         
         // Embedded UI - catch-all for SPA
         .fallback(serve_embedded_ui)
@@ -1559,7 +1572,8 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8080',
       '/ws': { target: 'ws://localhost:8080', ws: true },
-      '/mcp': 'http://localhost:8080',
+      // NOTE: no '/mcp' proxy — MCP is served only by op-grpc-bridge :8090
+      // (canonical FR-1). op-web exposes no MCP execution route.
     },
   },
 });

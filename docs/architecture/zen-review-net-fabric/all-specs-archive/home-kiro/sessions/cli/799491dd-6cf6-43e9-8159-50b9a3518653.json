@@ -1,0 +1,94 @@
+{
+  "session_id": "799491dd-6cf6-43e9-8159-50b9a3518653",
+  "cwd": "/home/admin/git/odbus",
+  "created_at": "2026-08-01T18:04:48.431135398Z",
+  "updated_at": "2026-08-01T18:04:53.763141656Z",
+  "title": "resume",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 2737593919
+          },
+          "result": {
+            "Ok": {
+              "id": "ffb5abe7-6bfa-46da-83d3-a8d746eeba31",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "I don't have context from a previous conversation to resume. Could you tell me what you'd like to pick up on? For example:\n\n- A specific task you were working on\n- A file or crate you want to continue editing\n- A build/test issue you were debugging\n\nWhat would you like to work on?"
+                }
+              ],
+              "meta": {
+                "timestamp": 1785607493
+              }
+            }
+          },
+          "message_ids": [
+            "38f65504-4ed9-4b57-aaf6-85f6340635cc",
+            "f090df55-4572-48d8-baf5-207d93de6f83"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 4,
+            "nanos": 988497018
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-08-01T18:04:53.760744262Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "cache_read_input_token_count": 0,
+          "cache_write_input_token_count": 0,
+          "model": "auto",
+          "assistant_response_length": 281,
+          "request_attempts": 1,
+          "context_usage_percentage": 6.6947,
+          "metering_usage": [
+            {
+              "value": 0.2185645086235489,
+              "unit": "credit",
+              "unitPlural": "credits"
+            }
+          ],
+          "user_prompt_length": 6
+        }
+      ],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "799491dd-6cf6-43e9-8159-50b9a3518653",
+      "model_info": {
+        "model_id": "auto",
+        "context_window_tokens": 200000
+      },
+      "context_usage_percentage": 6.6947
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/home/admin/git/odbus"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}
