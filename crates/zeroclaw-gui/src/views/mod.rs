@@ -282,7 +282,12 @@ fn grpc_view(ui: &mut egui::Ui, registry: &ReflectionRegistry) {
                 .size(12.0),
             );
             ui.add_space(4.0);
-            ui.label(RichText::new("Set ZEROCLAW_GRPC=http://host:port and restart. Server must register tonic_reflection::server::Builder with FILE_DESCRIPTOR_SET.").color(MUTED).size(11.0).italics());
+            ui.label(
+                RichText::new("Set ZEROCLAW_GRPC (for example `unix:/run/ghostbridge/container.sock` or `http://host:port`) and restart. Server must register tonic_reflection::server::Builder with FILE_DESCRIPTOR_SET.")
+                    .color(MUTED)
+                    .size(11.0)
+                    .italics(),
+            );
         } else {
             ui.label(
                 RichText::new(format!("{} services", services.len()))

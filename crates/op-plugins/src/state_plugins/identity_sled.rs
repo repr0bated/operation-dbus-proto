@@ -65,17 +65,20 @@ pub struct ContainerIdentitySled {
     /// Hex trace id propagated across the session.
     #[serde(default)]
     pub trace_id: String,
-    /// Published schema catalog version the footprint was etched against.
+    /// Published sled record schema version captured at identity arrival.
     #[serde(default)]
     pub schema_version: u32,
     /// Semantic vector id for the session, when embedded.
     #[serde(default)]
     pub vector_id: String,
-    /// Sealed identity blob backing this sled in the SHM catalog
-    /// (`<plugin_id>.<schema_hash16>.blob`). The blob seeds the container.
+    /// MutationEngine-authored inline SID1 identity envelope. This metadata is
+    /// sealed at session arrival and is never supplied or rebuilt by callers.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "src.service.identity-sled.blob-ref@v1"))]
-    pub blob_ref: Option<String>,
+    #[schemars(
+        extend("readOnly" = true),
+        extend("x-oscal-subid" = "src.service.identity-sled.sealed-id@v1")
+    )]
+    pub sealed_id: Option<String>,
     /// The sled's persistence: an immutable sealed btrfs image, registered as
     /// a first-class btrfs device record in Cozo and attached via
     /// `btrfs device add` — no overlay layers, no subvolumes.
@@ -94,7 +97,9 @@ pub struct ContainerIdentitySled {
     /// Unix seconds of the last heartbeat / arrival.
     #[serde(default)]
     pub last_seen_at: i64,
-    /// Whether the identity is currently live (container running / host up).
+    /// Whether the identity has a live authenticated session term. For a
+    /// provisioned container this is also its power policy: active means
+    /// running; inactive means stopped and parked (never deleted).
     #[serde(default)]
     pub active: bool,
     /// Unix seconds the *current visit/term* stops being valid. The account
@@ -318,9 +323,6 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub interface: String,
         #[serde(default)]
         pub peer_ip: Option<String>,
-        /// Sealed identity blob reference seeding this container.
-        #[serde(default)]
-        pub blob_ref: Option<String>,
         /// btrfs device (Cozo-registered, `btrfs device add`-attached) that is
         /// this sled's persistence.
         #[serde(default)]
@@ -335,15 +337,16 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         /// is Argon2(PSK, salt=pubkey).
         #[serde(default)]
         pub psk: Option<String>,
-        /// Sealed identity blob reference seeding this container.
-        #[serde(default)]
-        pub blob_ref: Option<String>,
         /// btrfs persistence device to register for this sled.
         #[serde(default)]
         pub btrfs_device: Option<SledBtrfsDevice>,
         /// Incus instance definition overrides (image, profiles, config,
         /// devices…). `name` is ignored and forced to the derived session_id;
-        /// `nic`-type devices are rejected (containers get no NIC or IP).
+        /// `status` is forced to `Stopped`, `boot.autostart` is forced to
+        /// `false`, and `nic`-type devices are rejected. The container starts
+        /// only when this identity completes authenticated session activation.
+        /// An omitted profile list defaults to the NIC-less `identity` profile
+        /// (root disk plus shared fabric UDS), never Incus `default`.
         #[serde(default)]
         pub instance: Option<super::incus::IncusInstance>,
     }

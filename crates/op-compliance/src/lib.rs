@@ -91,7 +91,6 @@ pub mod attorneys {
     }
 }
 
-use jsonschema::JSONSchema;
 
 pub struct LawFirm;
 
@@ -103,11 +102,13 @@ impl LawFirm {
         let meta_schema = include_str!("../../../schemas/opdbus-plugin-schema.json");
         let meta_v: Value = serde_json::from_str(meta_schema)?;
 
-        let compiled = JSONSchema::compile(&meta_v)
+        let compiled = jsonschema::validator_for(&meta_v)
             .map_err(|e| ComplianceError::Validation(format!("Schema error: {e}")))?;
 
-        if let Err(errors) = compiled.validate(&v) {
-            let error_msgs: Vec<String> = errors.map(|e| e.to_string()).collect();
+        // jsonschema >= 0.20: `validate` yields one error; `iter_errors` is the
+        // all-errors iterator the old `JSONSchema::validate` returned.
+        let error_msgs: Vec<String> = compiled.iter_errors(&v).map(|e| e.to_string()).collect();
+        if !error_msgs.is_empty() {
             return Err(ComplianceError::Validation(format!(
                 "Structural validation failed: {}",
                 error_msgs.join(", ")

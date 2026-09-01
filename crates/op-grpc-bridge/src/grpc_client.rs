@@ -42,7 +42,7 @@ pub struct RemoteEndpoint {
 /// adapter into the canonical gRPC method call.
 #[derive(Debug, Clone)]
 pub struct GhostbridgeCallMetadata {
-    pub footprint: String,
+    pub session_genesis: String,
     pub trace_id: Option<String>,
     pub wireguard_pubkey: Option<String>,
 }
@@ -597,14 +597,6 @@ fn attach_ghostbridge_metadata<T>(request: &mut Request<T>) -> Result<(), GrpcCl
             GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
         })?,
     );
-    // Phase-1 compatibility: the old header name carries the same session
-    // genesis. It is not sourced from a separate compatibility store.
-    metadata.insert(
-        "x-ghostbridge-footprint",
-        MetadataValue::try_from(genesis).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
-        })?,
-    );
     metadata.insert(
         "x-ghostbridge-trace-id",
         MetadataValue::try_from(identity.trace_id)
@@ -629,14 +621,8 @@ fn attach_supplied_ghostbridge_metadata<T>(
     let metadata = request.metadata_mut();
     metadata.insert(
         "x-ghostbridge-genesis",
-        MetadataValue::try_from(identity.footprint.as_str()).map_err(|e| {
+        MetadataValue::try_from(identity.session_genesis.as_str()).map_err(|e| {
             GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
-        })?,
-    );
-    metadata.insert(
-        "x-ghostbridge-footprint",
-        MetadataValue::try_from(identity.footprint.as_str()).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid footprint metadata: {e}"))
         })?,
     );
     if let Some(trace_id) = identity.trace_id.as_deref() {

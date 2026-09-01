@@ -44,7 +44,7 @@ const PINNED_PROTO_FILES: &[&str] = &[
     "crates/op-chat/proto/orchestration.proto",
     "crates/op-cognitive-mcp/proto/cognitive.proto",
     "crates/op-grpc-adapters/proto/adapters.proto",
-    "crates/op-grpc-bridge/proto/emqx_exhook_v2.proto",
+    "crates/op-grpc-bridge/proto/emqx_exhook_v3.proto",
     "crates/op-grpc-bridge/proto/mail.proto",
     "crates/op-grpc-bridge/proto/operation.proto",
     "crates/op-grpc-bridge/proto/privacy_network.proto",
@@ -64,7 +64,7 @@ const PINNED_PROTO_FILES: &[&str] = &[
 
 const PINNED_GRPC_PACKAGES: &[&str] = &[
     "assistant.v1",
-    "emqx.exhook.v2",
+    "emqx.exhook.v3",
     "op.adapters.v1",
     "op.mcp.v1",
     "op.waypipe.v1",

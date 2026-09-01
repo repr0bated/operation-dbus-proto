@@ -1,6 +1,6 @@
 //! Throwaway tool to exercise the RegistrationService bootstrap path
 //! (SendMagicLink) directly, to confirm the registration/pairing flow works
-//! end-to-end independent of the host's shared identity footprint.
+//! end-to-end independent of the host's shared identity session.
 use op_grpc_bridge::proto::registration::registration_service_client::RegistrationServiceClient;
 use op_grpc_bridge::proto::registration::SendMagicLinkRequest;
 

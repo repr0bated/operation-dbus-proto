@@ -3,7 +3,7 @@
 //! Serves the identical gRPC service stack over a single host-side UDS that
 //! thousands of containers connect to. Identity is resolved from the peer
 //! credentials (via tonic's native `UdsConnectInfo`) and mapped to the
-//! canonical Ghostbridge footprint for the same interceptor gating.
+//! canonical Ghostbridge session identity for the same interceptor gating.
 //!
 //! ## Identity Model
 //!

@@ -8,7 +8,7 @@
 //! - Plugin schema catalog with JSON Schema 2026 support
 //! - Disaster recovery export/import
 //! - OpenTelemetry tracing integration
-//! - Blockchain-style event chain for compliance and reproducibility
+//! - Snowball-style event chain for compliance and reproducibility
 //! - Schema-aware canonical hashing with Merkle batching
 
 pub mod disaster_recovery;
@@ -59,5 +59,5 @@ pub struct StoredObject {
 pub struct CanonicalDbExport {
     pub objects: Vec<StoredObject>,
     pub executions: Vec<simd_json::OwnedValue>,
-    pub blockchain: Vec<simd_json::OwnedValue>,
+    pub snowball: Vec<simd_json::OwnedValue>,
 }

@@ -16,12 +16,14 @@ static GRPC_CLIENT: OnceLock<RemoteOperationClient> = OnceLock::new();
 
 /// Lazily initialize a singleton RemoteOperationClient backed by the
 /// MutationEngine's gRPC endpoint (env `OP_DBUS_GRPC_ADDR`, default
-/// `https://127.0.0.1:8090` — the bridge's TLS-only tonic door; trust anchor
+/// `https://10.0.0.3:8090` — the fabric/TCP TLS-only tonic door; trust anchor
 /// via `OP_DBUS_GRPC_CA_FILE`, see GrpcClientPool::configure_endpoint).
 fn client() -> &'static RemoteOperationClient {
     GRPC_CLIENT.get_or_init(|| {
         let grpc_addr = std::env::var("OP_DBUS_GRPC_ADDR")
-            .unwrap_or_else(|_| "https://127.0.0.1:8090".to_string());
+            .or_else(|_| std::env::var("FABRIC_GRPC_ADDR"))
+            .or_else(|_| std::env::var("OP_FABRIC_GRPC_ADDR"))
+            .unwrap_or_else(|_| "https://10.0.0.3:8090".to_string());
         let pool = Arc::new(GrpcClientPool::new());
         RemoteOperationClient::new(pool, &grpc_addr, "op-web")
     })

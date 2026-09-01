@@ -9,7 +9,7 @@
 //! `StateStore::export_canonical()` on the *same shared store handle* the rest
 //! of the process uses (injected at registration via `PluginCtx::state_store`),
 //! so there is no second DB open / lock contention. It reports the real object
-//! index (id/type/namespace), per-namespace counts and execution/blockchain row
+//! index (id/type/namespace), per-namespace counts and execution/snowball row
 //! counts.
 //!
 //! The store is mutable, but writes flow through the MutationEngine and the
@@ -55,13 +55,13 @@ pub struct DataStoreState {
         extend("x-oscal-subid" = "obs.software.plugin.datastore.execution-count@v1")
     )]
     pub execution_count: usize,
-    /// Total blockchain count.
+    /// Total snowball count.
     #[serde(default)]
     #[schemars(
-        description = "Total blockchain count",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.blockchain-count@v1")
+        description = "Total snowball count",
+        extend("x-oscal-subid" = "obs.software.plugin.datastore.snowball-count@v1")
     )]
-    pub blockchain_count: usize,
+    pub snowball_count: usize,
     /// Namespaces with counts.
     #[serde(default)]
     #[schemars(
@@ -157,7 +157,7 @@ impl DataStorePlugin {
             status: "active".to_string(),
             object_count: export.objects.len(),
             execution_count: export.executions.len(),
-            blockchain_count: export.blockchain.len(),
+            snowball_count: export.snowball.len(),
             namespaces,
             objects,
         })
@@ -169,7 +169,7 @@ impl DataStorePlugin {
             status: "active".to_string(),
             object_count: 0,
             execution_count: 0,
-            blockchain_count: 0,
+            snowball_count: 0,
             namespaces: vec![NamespaceCount {
                 namespace: "default".to_string(),
                 count: 0,
@@ -264,7 +264,7 @@ pub(crate) fn datastore_schema() -> PluginSchema {
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "datastore",
         "1.0.0",
-        "Canonical state store — object index, per-namespace counts, execution/blockchain rows",
+        "Canonical state store — object index, per-namespace counts, execution/snowball rows",
         &root,
     );
 

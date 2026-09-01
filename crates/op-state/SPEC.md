@@ -34,7 +34,7 @@ op-state/src/dbus_server.rs
 ### Key Dependencies
 ```toml
 op-core = { path = "../op-core" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-state-store = { path = "../op-state-store" }
 tokio = { workspace = true }
@@ -96,7 +96,7 @@ State management system with plugin infrastructure, crypto, and schema validatio
 ## Related Crates
 Internal dependencies:
 - op-core
-- op-blockchain
+- op-snowball
 - op-jsonrpc
 - op-state-store
 

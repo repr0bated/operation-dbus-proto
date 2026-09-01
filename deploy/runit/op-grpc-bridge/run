@@ -18,6 +18,7 @@ wait_dep() {
 wait_dep opdbus-rundirs
 wait_dep opdbus-grants
 wait_dep dbus
+wait_dep op-runit-systemctl
 wait_dep op-session-bus
 wait_dep ovsdb-server
 # Qdrant is optional here. The bridge initializes its semantic shuttle
@@ -26,7 +27,6 @@ wait_dep ovsdb-server
 
 set -a
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
-[ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
 set +a
 
 has_ipv4() {
@@ -71,25 +71,38 @@ wait_for_ipv4() {
 # the network-critical owner has not materialized the address yet.
 wait_for_ipv4 svc0 10.0.0.3 "${OP_GRPC_SVC0_WAIT_SECS:-90}"
 
-# One bridge-owned TLS TCP door for gRPC-Web, native gRPC, and MCP. Netmaker is
-# conditional: bind it only when the host currently owns the configured
-# address. The bridge parses this as a comma-separated bind list.
-NETMAKER_MESH_IP="${NETMAKER_MESH_IP:-100.69.0.1}"
+# `:8090` is the fabric: one bridge-owned TLS surface for gRPC-Web, native
+# gRPC, MCP, generated plugin methods, and mutation/control traffic. 3tched
+# identities (10.0.0.2 tonic-web, 10.200.0.2 gRPC) arrive through Xray; this
+# process must not bind them. Loopback and the UDS are internal transports,
+# not additional fabric surfaces.
 FABRIC_BIND="127.0.0.1:8090,10.0.0.3:8090"
-if has_local_ipv4 "$NETMAKER_MESH_IP"; then
-    FABRIC_BIND="$FABRIC_BIND,$NETMAKER_MESH_IP:8090"
-else
-    echo "Netmaker address $NETMAKER_MESH_IP is not locally present; skipping conditional bind"
-fi
 export ZEROCLAW_BIND_ADDR="$FABRIC_BIND"
 export GRPC_BIND="$FABRIC_BIND"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
 export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
+/usr/local/libexec/3tched/emqx-prepare
+export OP_EMQX_EXHOOK_ENABLE=1
+export OP_EMQX_EXHOOK_BIND_ADDR=127.0.0.1:9000
+export OP_EMQX_EXHOOK_SERVER_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE}"
+export OP_EMQX_EXHOOK_SERVER_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE}"
+export OP_EMQX_EXHOOK_CLIENT_CA_FILE=/etc/emqx/certs/opdbus-ca.crt
+export OP_EMQX_EXHOOK_CLIENT_CERT_FILE=/etc/emqx/certs/emqx-exhook-client.crt
 # The bridge opens this append-only journal with mode 0600 and syncs every
 # accepted nonce before dispatch. Keeping it outside tmpfs preserves replay
 # rejection across service/process restarts.
 export OP_AUTH_REPLAY_DB_PATH="${OP_AUTH_REPLAY_DB_PATH:-/var/lib/op-dbus/auth-replay.db}"
+export OP_MCP_AUDIENCE_POLICY_PATH="${OP_MCP_AUDIENCE_POLICY_PATH:-/etc/opdbus/mcp-audience-policy.json}"
+export OP_MCP_TOOLSETS_PATH="${OP_MCP_TOOLSETS_PATH:-/etc/opdbus/mcp-toolsets.json}"
+export OP_IDENTITY_PROJECTION_GROUP="${OP_IDENTITY_PROJECTION_GROUP:-secrets}"
+# Protected local MCP client identity.  These are public selectors, not
+# credentials: the MutationEngine re-derives and exact-checks both IDs before
+# sealing the identity into the chatbot sled.  The OIB1 blob in that sled is
+# the only value the short-lived native HTTP header helper forwards.
+export OP_MCP_IDENTITY_WIREGUARD_PUBKEY="${OP_MCP_IDENTITY_WIREGUARD_PUBKEY:-VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=}"
+export OP_MCP_IDENTITY_SESSION_ID="${OP_MCP_IDENTITY_SESSION_ID:-bea37ecb-92be-197c-660f-09e806f1a34f}"
+export OP_MCP_IDENTITY_PRINCIPAL_ID="${OP_MCP_IDENTITY_PRINCIPAL_ID:-87b0decc-8464-5abf-05d8-b52ec88ff9f1}"
 # WARP + Xray necessarily replace the decoy's human-WG inner source address.
 # Bind OIA1 to the trusted decoy signature, short lifetime, one-time nonce, and
 # registered human key rather than the legacy Netmaker TCP-source equality.
@@ -100,4 +113,5 @@ export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6
 # Phase 2: tool dispatch is in-process ToolRegistry — no HTTP MCP loopback URL.
 
 /usr/local/libexec/3tched/runit-ready-signal op-grpc-bridge
+umask 0077
 exec /usr/local/bin/op-grpc-bridge

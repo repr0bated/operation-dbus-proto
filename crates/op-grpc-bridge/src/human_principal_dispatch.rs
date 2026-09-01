@@ -401,6 +401,17 @@ pub(crate) mod tests {
         _dir: tempfile::TempDir,
     }
 
+    pub(crate) struct TempShm {
+        _guard: MutexGuard<'static, ()>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Drop for TempShm {
+        fn drop(&mut self) {
+            std::env::remove_var("OP_SHM_STATE_DIR");
+        }
+    }
+
     pub(crate) fn test_engine() -> Arc<MutationEngine> {
         let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
         let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
@@ -422,10 +433,17 @@ pub(crate) mod tests {
 
     /// Unique temp projection dir per test so MutationEngine-driving tests
     /// never write the live `/dev/shm/opdbus/state` tree.
-    pub(crate) fn temp_shm() -> tempfile::TempDir {
+    pub(crate) fn temp_shm() -> TempShm {
+        static TEST_SHM: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = TEST_SHM
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         std::env::set_var("OP_SHM_STATE_DIR", dir.path());
-        dir
+        TempShm {
+            _guard: guard,
+            _dir: dir,
+        }
     }
 
     /// A valid WireGuard pubkey: base64 of 32 repeated bytes.
@@ -878,10 +896,11 @@ pub(crate) mod tests {
             .clone();
         assert_eq!(methods.len(), 6, "exactly the six contract methods");
 
-        let footprint = "ab".repeat(32);
+        let principal_id = "did:op:human:gate-matrix-test".to_string();
         let identity = GhostbridgeIdentity {
-            footprint: footprint.clone(),
+            principal_id: principal_id.clone(),
             session_id: "gate-matrix-test".to_string(),
+            session_genesis: "ab".repeat(32),
         };
         let grants_dir = tempfile::tempdir().expect("grants dir");
         let grants_path = grants_dir.path().join("capability-grants.json");
@@ -895,7 +914,7 @@ pub(crate) mod tests {
             // Embedded schema grants never authorize. With an empty external
             // exact-principal store, no header value may open the method.
             schema_json["capability_grants"] =
-                serde_json::json!({ footprint.clone(): [capability] });
+                serde_json::json!({ principal_id.clone(): [capability] });
             std::fs::write(&grants_path, b"{}").expect("write empty grants");
             for header in [None, Some("unrelated.capability"), Some(capability)] {
                 assert!(
@@ -911,13 +930,13 @@ pub(crate) mod tests {
                 );
             }
 
-            // The authoritative exact-footprint store permits the matching
+            // The authoritative exact-principal store permits the matching
             // declaration even when the embedded schema contains only `*`.
             schema_json["capability_grants"] = serde_json::json!({ "*": [capability] });
             std::fs::write(
                 &grants_path,
                 serde_json::to_vec(&serde_json::json!({
-                    footprint.clone(): { "capabilities": [capability] }
+                    principal_id.clone(): { "capabilities": [capability] }
                 }))
                 .expect("serialize grants"),
             )
@@ -1034,14 +1053,14 @@ pub(crate) mod tests {
     async fn plugin_service_input_validation() {
         let _cozo = temp_cozo();
         let _shm = temp_shm();
-        // The test-only dispatcher supplies an explicit caller footprint; grant
+        // The test-only dispatcher supplies an explicit caller principal; grant
         // only that identity the capabilities required by this validation test.
         let grants_dir = tempfile::tempdir().expect("grants dir");
         let grants_path = grants_dir.path().join("capability-grants.json");
         std::fs::write(
             &grants_path,
             serde_json::to_vec(&serde_json::json!({
-                (SchemaBackedInterface::TEST_CALLER_FOOTPRINT): {
+                (SchemaBackedInterface::TEST_CALLER_PRINCIPAL): {
                     "capabilities": ["human_principal.write", "human_principal.read"]
                 }
             }))

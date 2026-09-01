@@ -1,5 +1,6 @@
 #!/bin/sh
-# Xray starts after its host service address and WARP egress are ready.
+# Xray starts after its host service address is ready. Egress is provided by
+# the fabric; this service must not create or depend on a host WireGuard link.
 exec 2>&1
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/usr/sbin:/usr/lib/incus:${PATH:-}"
@@ -17,7 +18,6 @@ wait_dep() {
 
 wait_dep incusd
 wait_dep ovsbr0-svc-addr
-wait_dep wgcf-egress
 
 NAME=xray
 START_PID=

@@ -17,13 +17,13 @@ use op_grpc_bridge::grpc_server::{
 use op_grpc_bridge::interceptor::{connect_info_peer_addr, ASSERTION_METADATA_KEY};
 use op_grpc_bridge::mutation_engine::MutationEngine;
 use op_grpc_bridge::oracle_assertion::{
-    derive_human_footprint, AssertionValidator, DecoyTrustStore,
+    AssertionSourceBinding, AssertionValidator, DecoyTrustStore,
 };
 use op_grpc_bridge::proto::ovsdb_mirror_client::OvsdbMirrorClient;
-use op_grpc_bridge::proto::plugin_methods::blockchain_plugin_methods_client::BlockchainPluginMethodsClient;
 use op_grpc_bridge::proto::plugin_methods::human_principal_plugin_methods_client::HumanPrincipalPluginMethodsClient;
+use op_grpc_bridge::proto::plugin_methods::snowball_plugin_methods_client::SnowballPluginMethodsClient;
 use op_grpc_bridge::proto::plugin_methods::{
-    BlockchainQueryEventsRequest, HumanPrincipalResolveKeyRequest,
+    HumanPrincipalResolveKeyRequest, SnowballQueryEventsRequest,
 };
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
 use op_grpc_bridge::proto::{
@@ -96,12 +96,12 @@ fn write_grants(path: &std::path::Path, doc: &serde_json::Value) {
     std::env::set_var("OP_GRANTS_PATH", path);
 }
 
-fn footprint_hex(pubkey: &str) -> String {
-    hex::encode(derive_human_footprint(pubkey))
+fn principal_id_for(pubkey: &str) -> String {
+    derive_principal_id(pubkey)
 }
 
 fn grants_for(pubkey: &str, caps: &[&str]) -> serde_json::Value {
-    let fp = footprint_hex(pubkey);
+    let fp = principal_id_for(pubkey);
     let caps: Vec<_> = caps.iter().map(|c| (*c).to_string()).collect();
     serde_json::json!({ fp: { "capabilities": caps } })
 }
@@ -207,10 +207,10 @@ fn attach_capability(meta: &mut MetadataMap, cap: &str) {
     );
 }
 
-fn attach_ghostbridge(meta: &mut MetadataMap, footprint: &str, trace: &str) {
+fn attach_ghostbridge(meta: &mut MetadataMap, genesis: &str, trace: &str) {
     meta.insert(
-        "x-ghostbridge-footprint",
-        MetadataValue::try_from(footprint).expect("fp"),
+        "x-ghostbridge-genesis",
+        MetadataValue::try_from(genesis).expect("genesis"),
     );
     meta.insert(
         "x-ghostbridge-trace-id",
@@ -252,10 +252,10 @@ impl TestEnv {
                     .expect("identity sled schema"),
             ),
             (
-                "blockchain",
-                op_plugins::state_plugins::blockchain_plugin::BlockchainPlugin::new()
+                "snowball",
+                op_plugins::state_plugins::snowball_plugin::SnowballPlugin::new()
                     .schema()
-                    .expect("blockchain schema"),
+                    .expect("snowball schema"),
             ),
         ] {
             let blob = op_blob::blobify_plugin_schema(plugin_id, schema);
@@ -361,6 +361,31 @@ async fn start_server_with_env_and_engine(
     env: TestEnv,
     engine: Arc<MutationEngine>,
 ) -> (RunningServer, TestEnv) {
+    start_server_with_binding(strip_connect_info, env, engine, None).await
+}
+
+async fn start_server_legacy_peer_ip(
+    strip_connect_info: bool,
+    env: TestEnv,
+) -> (RunningServer, TestEnv) {
+    let event_chain = Arc::new(RwLock::new(EventChain::new(ChainConfig::default())));
+    let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+    let engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    start_server_with_binding(
+        strip_connect_info,
+        env,
+        engine,
+        Some(AssertionSourceBinding::ExactPeerIp),
+    )
+    .await
+}
+
+async fn start_server_with_binding(
+    strip_connect_info: bool,
+    env: TestEnv,
+    engine: Arc<MutationEngine>,
+    source_binding: Option<AssertionSourceBinding>,
+) -> (RunningServer, TestEnv) {
     install_crypto_provider();
     let ck =
         rcgen::generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
@@ -369,7 +394,11 @@ async fn start_server_with_env_and_engine(
     let identity = Identity::from_pem(ck.cert.pem(), ck.key_pair.serialize_pem());
 
     let server = OperationGrpcServer::new(engine.clone());
-    let validator = Arc::new(AssertionValidator::from_env(DecoyTrustStore::load()));
+    let mut validator = AssertionValidator::from_env(DecoyTrustStore::load());
+    if let Some(binding) = source_binding {
+        validator = validator.with_source_binding(binding);
+    }
+    let validator = Arc::new(validator);
     let routes = build_operation_routes_with_validator(server, validator);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -667,7 +696,7 @@ async fn happy_path_registered_human_gated_call_over_tls() {
     )
     .await;
     assert_ok(out);
-    let legacy_footprint = "aa".repeat(32);
+    let legacy_genesis = "aa".repeat(32);
     let no_meta = call_method(
         ch,
         CallOpts {
@@ -679,7 +708,7 @@ async fn happy_path_registered_human_gated_call_over_tls() {
                 prost_str(&pubkey),
             )])),
             assertion: None,
-            ghostbridge: Some((&legacy_footprint, "legacy-trace")),
+            ghostbridge: Some((&legacy_genesis, "legacy-trace")),
             wireguard_pubkey: None,
             extra_assertion: None,
         },
@@ -733,17 +762,17 @@ async fn generated_plugin_route_preserves_integer_arguments() {
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(67);
     register_human(ch.clone(), &env, &pubkey, "typed-number-user", [0x67; 16]).await;
-    env.grant_human(&pubkey, &["blockchain.read"]);
+    env.grant_human(&pubkey, &["snowball.read"]);
 
-    let mut client = BlockchainPluginMethodsClient::new(ch);
-    let mut request = Request::new(BlockchainQueryEventsRequest {
+    let mut client = SnowballPluginMethodsClient::new(ch);
+    let mut request = Request::new(SnowballQueryEventsRequest {
         decision: String::new(),
         from_event_id: 0,
         limit: 1,
         plugin_id: String::new(),
         to_event_id: 0,
     });
-    attach_capability(request.metadata_mut(), "blockchain.read");
+    attach_capability(request.metadata_mut(), "snowball.read");
     attach_assertion(
         request.metadata_mut(),
         &fresh_signed(&env.issuer, &pubkey, [0x68; 16]).to_wire(),
@@ -982,7 +1011,7 @@ async fn rejects_replayed_nonce() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn rejects_source_ip_substitution() {
-    let (srv, env) = start_server(false).await;
+    let (srv, env) = start_server_legacy_peer_ip(false, TestEnv::new().await).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(6);
     register_human(ch.clone(), &env, &pubkey, "ip", [0x0C; 16]).await;
@@ -1646,7 +1675,7 @@ async fn e2e_full_trust_chain_generated_surface() {
 // ?? VAL-CROSS-003 ???????????????????????????????????????????????????????????
 
 #[tokio::test(flavor = "multi_thread")]
-async fn e2e_assertion_precedence_over_footprint_headers() {
+async fn e2e_assertion_precedence_over_legacy_session_headers() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(32);
@@ -1731,7 +1760,7 @@ async fn e2e_container_and_human_never_cross_authenticate() {
     );
     let human_pk = pk(35);
     register_human(ch.clone(), &env, &human_pk, "human", [0x3A; 16]).await;
-    let hfp = footprint_hex(&human_pk);
+    let hfp = principal_id_for(&human_pk);
     env.set_grants(
         &serde_json::json!({ hfp.clone(): { "capabilities": ["human_principal.read"] } }),
     );
@@ -1765,7 +1794,7 @@ async fn e2e_human_grants_same_mechanism() {
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(36);
     register_human(ch.clone(), &env, &pubkey, "grants", [0x3B; 16]).await;
-    let fp = footprint_hex(&pubkey);
+    let fp = principal_id_for(&pubkey);
     let args = prost_struct(BTreeMap::from([(
         "human_pubkey".to_string(),
         prost_str(&pubkey),
@@ -2068,10 +2097,7 @@ async fn e2e_alias_mutation_has_no_auth_effect() {
     );
     assert_eq!(principal_id_from(&before), principal_id_from(&after));
     assert_eq!(human_pubkey_from(&before), human_pubkey_from(&after));
-    assert_eq!(
-        footprint_hex(&pubkey),
-        hex::encode(derive_human_footprint(&pubkey))
-    );
+    assert_eq!(principal_id_for(&pubkey), derive_principal_id(&pubkey));
 }
 
 // ?? VAL-CROSS-011 ???????????????????????????????????????????????????????????
@@ -2136,7 +2162,7 @@ async fn e2e_missing_connect_info_fails_closed() {
     let pubkey = pk(43);
     register_human(ch_ok, &env, &pubkey, "ci", [0x4F; 16]).await;
     drop(srv);
-    let (srv2, env2) = start_server_with_env(true, env).await;
+    let (srv2, env2) = start_server_legacy_peer_ip(true, env).await;
     let ch_bad = tls_channel(srv2.addr, &srv2.ca_pem).await;
     env2.grant_human(&pubkey, &["human_principal.read"]);
     assert_unauthenticated(
@@ -2174,14 +2200,14 @@ async fn e2e_revocation_durable_across_restart() {
     register_human(ch.clone(), &env, &k1, "k1", [0x51; 16]).await;
     register_human(ch.clone(), &env, &k2, "k2", [0x52; 16]).await;
     env.set_grants(&serde_json::json!({
-        footprint_hex(&k1): { "capabilities": ["human_principal.read", "human_principal.write"] },
-        footprint_hex(&k2): { "capabilities": ["human_principal.read"] },
+        principal_id_for(&k1): { "capabilities": ["human_principal.read", "human_principal.write"] },
+        principal_id_for(&k2): { "capabilities": ["human_principal.read"] },
     }));
     resolve_human(ch.clone(), &env, &k1, [0x53; 16]).await;
     resolve_human(ch.clone(), &env, &k2, [0x54; 16]).await;
     env.set_grants(&serde_json::json!({
-        footprint_hex(&k1): { "capabilities": ["human_principal.read", "human_principal.write"] },
-        footprint_hex(&k2): { "capabilities": ["human_principal.read"] },
+        principal_id_for(&k1): { "capabilities": ["human_principal.read", "human_principal.write"] },
+        principal_id_for(&k2): { "capabilities": ["human_principal.read"] },
     }));
     assert_ok(
         call_method(
@@ -2208,8 +2234,8 @@ async fn e2e_revocation_durable_across_restart() {
     let (srv2, env) = start_server_with_env(false, env).await;
     let ch2 = tls_channel(srv2.addr, &srv2.ca_pem).await;
     env.set_grants(&serde_json::json!({
-        footprint_hex(&k1): { "capabilities": ["human_principal.read"] },
-        footprint_hex(&k2): { "capabilities": ["human_principal.read"] },
+        principal_id_for(&k1): { "capabilities": ["human_principal.read"] },
+        principal_id_for(&k2): { "capabilities": ["human_principal.read"] },
     }));
     assert_unauthenticated(
         call_method(
@@ -2263,8 +2289,8 @@ async fn e2e_concurrent_multi_principal_interleaving() {
     register_human(ch.clone(), &env, &a, "A", [0x58; 16]).await;
     register_human(ch.clone(), &env, &b, "B", [0x59; 16]).await;
     env.set_grants(&serde_json::json!({
-        footprint_hex(&a): { "capabilities": ["human_principal.read"] },
-        footprint_hex(&b): { "capabilities": ["human_principal.read"] },
+        principal_id_for(&a): { "capabilities": ["human_principal.read"] },
+        principal_id_for(&b): { "capabilities": ["human_principal.read"] },
     }));
     let (ra, rb) = tokio::join!(
         call_method(

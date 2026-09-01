@@ -17,6 +17,16 @@
       "sled_source": true,
       "notes": "Host WireGuard public key; session identity is projected by identity_sled"
     },
+    "anna-scribe": {
+      "role": "service-persona",
+      "label": "A.N.N.A. Scribe",
+      "email": "anna.scribe@3tched.com",
+      "principal_id": "did:op:service:anna-scribe",
+      "persona_id": "anna-scribe",
+      "plugin_ref": "wg_opdbus",
+      "credential_ref": "host",
+      "notes": "Persistent service persona; reuses the existing host credential by reference and owns no duplicate key"
+    },
     "jeremy": {
       "role": "user",
       "label": "jeremy",

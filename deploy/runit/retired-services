@@ -8,6 +8,8 @@ netmaker-op-grpc-adapters
 nm-endpoint-guard
 nm-identity-route
 nm-warp-egress-proxy
+wgcf-egress
+wgcf-uiStream
 ptap-watch
 fwd-8090
 op-mcp-cognitive

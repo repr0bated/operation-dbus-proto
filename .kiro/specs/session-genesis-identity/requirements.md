@@ -1,17 +1,17 @@
 # Requirements — Session Genesis Identity
 
 > **Split the two meanings.** Genesis is the session anchor — minted once, at
-> login, never recomputed. Footprint goes back to meaning the blockchain record
+> login, never recomputed. Footprint goes back to meaning the snowball record
 > — one per mutation, carrying the genesis as its session stamp. The header is on
 > every packet. Constant for the life of the session. Verified with a single
 > equality. Fail closed.
 
 | | |
 |---|---|
-| Status | Draft — amended after review 2026-08-16. **Amendments are binding; do not revert them.** FR-4 rewritten (one authoritative store), OQ-1 reopened for the xray-terminated path, FR-11 added (replay), FR-12 added (session lifetime), FR-6 consequence stated, §9 schema-version row corrected, one deletion rationale corrected |
+| Status | Draft — amended after review 2026-08-16 and identity/footprint correction 2026-09-01. **Amendments are binding; do not revert them.** FR-4 rewritten (one authoritative store), OQ-1 reopened for the xray-terminated path, FR-11 added (replay), FR-12 added (session lifetime), FR-6 consequence stated, §9 schema-version row corrected, and footprint locked to sled/Shuttle payload rather than identity/authorization |
 | Extends | `netmaker-xray-identity-handoff/` (locked) |
 | Respects | `3tched-ghostbridge-control-plane/` (topology lock) |
-| Crates | `op-identity`, `op-grpc-bridge`, `op-state-store`, `op-blockchain` |
+| Crates | `op-identity`, `op-grpc-bridge`, `op-state-store`, `op-snowball` |
 | Supersedes | The "footprint = identity anchor" interpretation; `anna_scribe.rs` duplicate reader; `etch_footprint`'s index+port terms; the zeros sentinel; all seven global-sled writer sites |
 
 ---
@@ -27,7 +27,7 @@ Mismatch" because the header is stale before the client can present it.
 Two unrelated concepts share the name "footprint":
 1. The **identity anchor** (the header the interceptor checks), which chases a
    moving global counter and therefore cannot stay stable.
-2. The **blockchain record** (`PluginFootprint` in `op-blockchain`), which
+2. The **snowball record** (`PluginFootprint` in `op-snowball`), which
    carries no session identity at all — no pubkey, no session_id, no genesis —
    making the chain unsliceable per session and unverifiable offline.
 
@@ -134,11 +134,12 @@ removed**; absent identity is a hard rejection, not a degraded pass.
 - [ ] A request with a genesis that differs from the session record is rejected.
 - [ ] The zeros sentinel code path is deleted.
 
-### FR-3: Chain record carries session identity for per-session slicing
+### FR-3: Chain record carries principal/session metadata for slicing
 
-**When** the mutation engine persists an audit event to the blockchain,
+**When** the mutation engine persists an audit event to the snowball,
 **the system shall** include in the `PluginFootprint` metadata:
 
+- `actor_id` — the stable registered `principal_id` resolved by the assertion path.
 - `session_genesis` — the genesis hash of the session that delivered this mutation.
 - `session_id` — the session identifier (container name / derived id).
 - `wireguard_pubkey` — the pubkey that owns this session.
@@ -150,9 +151,37 @@ removed**; absent identity is a hard rejection, not a degraded pass.
    an unbroken prev_hash chain anchored at the genesis's committed head.
 
 **Acceptance criteria:**
-- [ ] `event_to_footprint` includes `session_genesis`, `session_id`, `wireguard_pubkey` in the metadata map.
+- [ ] `event_to_footprint` includes `actor_id = principal_id`, `session_genesis`, `session_id`, and `wireguard_pubkey` in the metadata map.
 - [ ] A test demonstrates slicing: given two sessions' interleaved mutations, filtering by `session_genesis` recovers each session's chain segment.
 - [ ] A test demonstrates offline re-verification: from the stored genesis fields and the chain segment, the genesis can be recomputed and the prev_hash linkage validated without any SHM read.
+
+### FR-3a: Footprint is payload transport, never identity or a prehashed chain event
+
+`principal_id`, `session_id`, `session_genesis`, `PluginFootprint`, and `event_hash`
+are distinct namespaces. The stable registered `principal_id` is the only identity/
+authorization key; it is copied into footprint metadata as `actor_id`. Session genesis
+anchors one term. `PluginFootprint` is exclusively the canonical per-mutation payload
+envelope emitted by the sled and delivered by the Shuttle to Snowball and asynchronous
+vectorization.
+
+No code shall derive identity, grants, audience, OAuth subject, D-Bus binding, or
+session authentication from a footprint, genesis, chain head, `data_hash`,
+`content_hash`, `event_hash`, or another digest. A footprint/hash MUST NOT be hashed to
+manufacture an identity.
+
+Snowball is the sole current-event chain-hash author. It hashes the domain, previous
+link, and canonical current payload bytes once and returns `event_id`/`event_hash` as
+the receipt. The sled/Shuttle do not prehash the current payload into a footprint hash
+and then ask Snowball to hash that hash. Vectorization consumes deterministic payload
+text and stores the receipt as provenance, not as the semantic body. The existing
+`ChainEvent.json_args_footprint` (a Blake3 arguments digest) is removed; canonical
+bounded/redacted arguments travel in the footprint payload instead.
+
+**Acceptance criteria:**
+- [ ] One canonical `PluginFootprint` payload type remains; `json_args_footprint`, the duplicate legacy generator, and the `data_hash → content_hash` current-payload hash-of-hash path are removed.
+- [ ] `derive_human_footprint` and auth-facing footprint fields/lookups are removed; grants are keyed by registered `principal_id`.
+- [ ] Two sessions for one principal retain identical grants while producing distinct genesis-stamped footprints.
+- [ ] One sled-emitted payload reaches both Snowball append and vectorization; Snowball authors the current event hash exactly once.
 
 ### FR-4: Exactly one authoritative store for gate decisions
 
@@ -169,12 +198,12 @@ The gate therefore already reads SHM today, and per HC-3 it **should** — the
 sealed blob in SHM is the record.
 
 **The system shall** designate exactly one authoritative store for gate
-decisions: **the sealed per-session identity blob in the SHM catalog** (HC-3).
+decisions: **the sealed per-session sealed ID in the SHM catalog** (HC-3).
 Every other representation is a projection with a stated role:
 
 | Store | Role | May the gate read it? |
 |---|---|---|
-| Sealed identity blob in the SHM catalog | **Authoritative** for gate decisions | Yes — this is the read |
+| Sealed sealed ID in the SHM catalog | **Authoritative** for gate decisions | Yes — this is the read |
 | Cozo (`/var/lib/op-dbus/identity-cozo`) | Durability + hydration on cold start | No — hydration only, never per-request |
 | `/dev/shm/plugin_schema.dat` (global 152-byte sled) | **Dead.** Retired by FR-6 | No — never |
 
@@ -205,7 +234,7 @@ sled) or be refactored to use the same lookup.
 
 **Acceptance criteria:**
 - [ ] `anna_scribe::notarize_arrival` is deleted or deprecated (its `File::open("/dev/shm/plugin_schema.dat")` is the duplicate reader).
-- [ ] `etch_footprint` is no longer called for identity-anchor purposes (it may survive for the blockchain footprint record if needed, renamed for clarity).
+- [ ] `etch_footprint` is deleted. Snowball footprints are payload envelopes emitted by the canonical mutation path; no identity-anchor hash helper is repurposed.
 - [ ] `CanonicalPeerIdentity::from_sled()` no longer reads the global 152-byte SHM file; it reads the session-specific record.
 - [ ] A grep-based gate confirms at most one function whose name or doc says "genesis" / "session anchor".
 
@@ -284,7 +313,7 @@ genesis inline before returning success.
 **The system shall** deliver identity to the xray container as a sealed blob in
 the SHM catalog, not as an in-band header injection. The component that first
 sees the WireGuard key (the oracle decoy / bridge arrival path) seals an
-identity blob; the bridge's UDS injector joins on it and stamps the header
+sealed ID; the bridge's UDS injector joins on it and stamps the header
 after TLS termination.
 
 Xray remains a stock passthrough (HC from handoff spec: "Xray remains
@@ -293,7 +322,7 @@ its inbound socket would corrupt the ClientHello.
 
 **Acceptance criteria:**
 - [ ] No code in `op-xray-daemon` injects identity headers or reads identity state.
-- [ ] The identity blob is written to the SHM catalog at session arrival.
+- [ ] The sealed ID is written to the SHM catalog at session arrival.
 - [ ] The UDS injector reads from the session-specific record (FR-5), not from a global sled.
 
 ### FR-9: Nothing restated — single-author, generation-only derivation
@@ -397,6 +426,31 @@ expiry (`interceptor.rs:243-247`).
 - [ ] A test confirms an expired session's genesis is rejected even though it is otherwise well-formed.
 - [ ] The session's chain span has a defined end, so the "complete account of the session" is bounded at both ends.
 
+### FR-12A: Provisioned container parking follows authenticated bindings
+
+- `identity_sled.provision_container` shall force the derived UUID-named Incus
+  instance to `Stopped` and `boot.autostart=false`, regardless of caller
+  overrides. An omitted profile list shall use the NIC-less `identity` profile
+  (root disk plus shared fabric UDS), not the empty host `default` profile.
+  Provisioning shall persist the sled as inactive/parked.
+- The first successfully authenticated binding for that session shall start
+  the container through the native Incus Unix-socket API and mark the sled
+  active. Additional bindings shall not issue additional starts.
+- Logout and D-Bus sender exit shall remove only that binding. The last binding
+  shall stop the container, preserve it as a provisioned instance, mark the
+  sled inactive, and remove its in-memory session context.
+- The exit-monitor stream ending shall drain all bindings and park each unique
+  affected session. Lifecycle calls shall never shell out to the Incus CLI.
+- A parked sled may be resolved only inside the fresh authenticated activation
+  transaction; it shall not be cached as an active `SessionContext` until proof
+  consumption, authoritative revalidation, binding insertion, and final peer
+  credential verification all succeed.
+
+**Acceptance criteria:**
+- [ ] Pure/unit tests verify forced stopped/non-autostart provisioning without creating an Incus instance.
+- [ ] An injected lifecycle recorder verifies one start per active term and one stop after deactivation.
+- [ ] A binding test verifies that the first of two logouts does not park the shared session and the second does.
+
 ---
 
 ## 4 · Non-Functional Requirements
@@ -415,7 +469,7 @@ expiry (`interceptor.rs:243-247`).
 
 ## 5 · Open Questions — Resolved, except OQ-1 Path B
 
-### OQ-1: Join key (how the sealed identity blob ties to the connection xray hands over)
+### OQ-1: Join key (how the sealed identity ties to the connection xray hands over)
 
 **Partially resolved. One of the two paths is still open and design.md must
 close it.**
@@ -493,7 +547,7 @@ zeros sentinel is removed in Phase 2, not Phase 1.
 **Resolution: out of scope for this spec.** Replacing `sni-demux.py` and
 `socket-relay` with a Rust terminator is a separate spec. The current Python
 byte relays are transparent forwarders; they neither read nor inject identity.
-The identity blob and UDS-per-session binding (OQ-1) work regardless of
+The sealed ID and UDS-per-session binding (OQ-1) work regardless of
 whether the outermost relay is Python or Rust — the stamp happens at the
 bridge after termination, not at the edge.
 
@@ -537,8 +591,9 @@ and what state* (this peer, at this chain head, at this moment). Together they
 close both the identity gap (solved by the assertion) and the temporal
 instability gap (solved by genesis).
 
-The `HumanPrincipalIdentity` extension inserted by the assertion validator
-gains a `genesis: [u8; 32]` field that is populated after genesis mint/lookup.
+The `HumanPrincipalIdentity` extension inserted by the assertion validator carries
+the registered `principal_id` and a separate `session_genesis` populated after genesis
+mint/lookup. It has no derived human-footprint identity field.
 
 ### With `3tched-ghostbridge-control-plane/` (respects)
 
@@ -561,9 +616,12 @@ For each fact the design introduces, the spec must:
 
 | Fact | Single author | Consumers (derive, never restate) |
 |------|---------------|-----------------------------------|
+| Principal identity | Authoritative HumanPrincipal/service-principal registration; human IDs use the one `derive_principal_id(raw_wireguard_pubkey)` author | assertion/request context, exact grant lookup, audience, D-Bus binding, `actor_id` metadata |
 | Genesis formula | `op_identity::session_genesis::mint_genesis` | interceptor (compares output), chain stamper (embeds output), UDS injector (reads stored output) |
 | Session record shape | `ContainerIdentitySled` in `identity_sled.rs` (PluginSchema) | `#[repr(C)]` layout (generated), Cozo relation (derived), gRPC reflection (derived from schema) |
-| Chain position (mutation_index) | `MutationEngine::advance_identity_sled` | `event_to_footprint` (reads from engine state), per-session record (written by engine) |
+| Chain position (mutation_index) | `MutationEngine::advance_session_record` | `event_to_footprint` (reads from engine state), per-session record (written by engine) |
+| Footprint payload shape | One canonical `PluginFootprint` schema/type | sled emitter, Shuttle, Snowball append, deterministic vector renderer |
+| Current event hash | Snowball append function | receipt/outbox, chain verifier, vector provenance; never identity/auth |
 | Catalog binding | `schema_catalog_hash()` in `schema_bridge.rs` | `mint_genesis` (reads it as input), no other site computes or caches it |
 | Schema version | **Derived from the record definition's content hash (FR-10), not a hand-bumped constant.** A hand-maintained `SLED_SCHEMA_VERSION` with two consumers mirroring it is exactly the pattern FR-9 deletes. If a human-readable ordinal is still wanted, it is generated alongside the hash from the same definition, and no consumer declares it independently | Cozo record `schema_version` field (derived), `#[repr(C)]` layout (generated, embeds it), gate compatibility check (compares hashes) |
 

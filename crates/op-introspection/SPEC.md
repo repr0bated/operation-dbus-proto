@@ -33,7 +33,7 @@ op-introspection/src/cache.rs
 ### Key Dependencies
 ```toml
 op-core = { workspace = true }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 tokio = { workspace = true }
 serde = { workspace = true }
 simd-json = { workspace = true }
@@ -89,7 +89,7 @@ DBus introspection capabilities for op-dbus-v2
 
 ## Related Crates
 Internal dependencies:
-- op-blockchain
+- op-snowball
 
 ---
 *Generated from crate analysis*

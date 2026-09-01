@@ -30,7 +30,7 @@ pub struct GrpcConfig {
     pub keepalive_timeout: Duration,
     pub cache_path: Option<PathBuf>,
     pub state_db_path: Option<PathBuf>,
-    pub blockchain_path: Option<PathBuf>,
+    pub snowball_path: Option<PathBuf>,
 }
 
 impl Default for GrpcConfig {
@@ -50,7 +50,7 @@ impl Default for GrpcConfig {
             keepalive_timeout: Duration::from_secs(10),
             cache_path: Some(PathBuf::from("/var/lib/op-dbus/cache/grpc")),
             state_db_path: Some(PathBuf::from("/var/lib/op-dbus/state/grpc.db")),
-            blockchain_path: Some(PathBuf::from("/var/lib/op-dbus/blockchain/grpc")),
+            snowball_path: Some(PathBuf::from("/var/lib/op-dbus/snowball/grpc")),
         }
     }
 }
@@ -88,15 +88,15 @@ impl GrpcConfig {
         self
     }
 
-    pub fn with_blockchain_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.blockchain_path = Some(path.into());
+    pub fn with_snowball_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.snowball_path = Some(path.into());
         self
     }
 
     pub fn without_infrastructure(mut self) -> Self {
         self.cache_path = None;
         self.state_db_path = None;
-        self.blockchain_path = None;
+        self.snowball_path = None;
         self
     }
 }
@@ -114,7 +114,7 @@ impl GrpcTransport {
         let infrastructure = GrpcInfrastructure::from_paths(
             config.cache_path.clone(),
             config.state_db_path.clone(),
-            config.blockchain_path.clone(),
+            config.snowball_path.clone(),
         )
         .await?;
 

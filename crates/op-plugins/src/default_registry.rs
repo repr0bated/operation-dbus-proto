@@ -33,6 +33,12 @@ use crate::AutoPlugin;
 /// plugin. The sealed blob catalog and generated gRPC routes are both derived
 /// from [`DefaultPluginRegistry::available_plugins`], so this is the common
 /// fail-closed boundary.
+///
+/// - `netmaker`: overlay/mesh is gone. Keep the id fail-closed so a leftover
+///   blob cannot reappear as a callable plugin.
+/// - `compact_mcp`: retired as a PluginV1 / MCP *plugin*. Compact *mode* for
+///   the singleton control-plane chatbot is in-process in op-web, not a
+///   reflected plugin and not a second MCP listener.
 pub const RETIRED_PLUGIN_IDS: &[&str] = &["compact_mcp", "netmaker"];
 
 pub fn is_retired_plugin(plugin_id: &str) -> bool {

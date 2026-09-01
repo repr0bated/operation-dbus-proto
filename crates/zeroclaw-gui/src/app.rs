@@ -354,12 +354,12 @@ impl eframe::App for ZeroClawApp {
                 // No transport connected — show error in store.
                 self.explorer
                     .chat_store
-                    .append_part(crate::chat::store::ChatMessage {
-                        id: crate::chat::store::nanoid_pub(),
-                        role: "system".into(),
-                        kind: "text".into(),
-                        payload: serde_json::json!({
-                            "content": "No gRPC connection. Set ZEROCLAW_GRPC and restart."
+                        .append_part(crate::chat::store::ChatMessage {
+                            id: crate::chat::store::nanoid_pub(),
+                            role: "system".into(),
+                            kind: "text".into(),
+                            payload: serde_json::json!({
+                            "content": "No gRPC connection. Set ZEROCLAW_GRPC (for example `unix:/run/ghostbridge/container.sock` or `http://host:port`) and restart."
                         }),
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)

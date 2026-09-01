@@ -156,8 +156,8 @@ per-connection, so HTTP/2 multiplexing is irrelevant — each request carries
 its own assertion with its own nonce, expiry, and source-IP binding. The
 bridge resolves `human_pubkey → HumanPrincipal → session record → genesis`.
 
-The join key for Path B is the assertion itself. No sealed identity blob, no
-UDS peer credential, no PROXY v2 needed. FR-8 (sealed identity blob) applies
+The join key for Path B is the assertion itself. No sealed identity, no
+UDS peer credential, no PROXY v2 needed. FR-8 (sealed identity) applies
 only to Path A (session containers on the shared ghostbridge socket).
 
 **What the assertion gives that a join key would:**
@@ -168,7 +168,7 @@ only to Path A (session containers on the shared ghostbridge socket).
 
 **What does NOT happen on Path B:**
 - No `x-ghostbridge-genesis` header on the wire (genesis looked up server-side)
-- No sealed identity blob (unnecessary — assertion is the per-request proof)
+- No sealed identity (unnecessary — assertion is the per-request proof)
 - No per-connection session binding (impossible with H2 mux; unnecessary with
   per-request assertion)
 
@@ -181,7 +181,17 @@ only to Path A (session containers on the shared ghostbridge socket).
 | **Start** | First authenticated mutation (arrival). Genesis minted. `session_started_at` set. `expires_at` set (configurable TTL, default 24h). Chain event recorded. |
 | **Renewal** | Re-authentication (new assertion with same pubkey, after expiry or explicit teardown). Mints a **new genesis** — new chain head, new arrival timestamp, new anchor. The old session's chain span is bounded; the new session's span begins fresh. |
 | **Expiry** | `now > expires_at`. Interceptor rejects with `PERMISSION_DENIED("Identity term has expired. Re-authenticate to renew.")` — existing behavior at `interceptor.rs:243-247`. In-flight requests that started before expiry but arrive after are rejected (no grace period beyond what the assertion's 30s leeway provides). |
-| **Teardown** | Container stop / explicit revocation. Sets `active = false`; interceptor rejects. Genesis is never reused. |
+| **Teardown** | Last authenticated D-Bus binding logout/disconnect stops a provisioned container and sets `active = false`; interceptor rejects. The stopped instance remains provisioned (parked), and boot never starts it. |
+
+Provisioned identity containers are deliberately not host services. Incus
+creates them stopped with `boot.autostart=false`; omitted profiles resolve to
+the NIC-less `identity` profile (root disk plus shared fabric UDS), not the
+device-empty host `default` profile. The first authenticated binding for a
+session starts the exact UUID-named instance; additional bindings share the
+same live term. Logout or `NameOwnerChanged` removes only that sender, and the
+last binding parks the instance through the native Incus Unix-socket API. Host
+identities have no `instance`, so the same transition only updates their sled
+liveness. No lifecycle path shells out to the Incus CLI.
 
 **`expires_at` semantics for version 3 records:**
 - `None` / `0` = session has no expiry (long-lived host/system identity).
@@ -204,7 +214,7 @@ durability gain (every login is auditable and sliceable) outweighs the cost.
 file (`/dev/shm/opdbus/state/identity_sled.json`) holding ALL session records,
 not one blob per session. The plugin-blobs catalog
 (`/dev/shm/opdbus/plugin-blobs/`) holds the plugin *schema* blob, not
-per-session identity blobs. The per-request read path never opens a file —
+per-session sealed IDs. The per-request read path never opens a file —
 it reads the in-process deserialized state cache.
 
 ### 5.1 Store hierarchy
@@ -339,7 +349,8 @@ atomic rename.
 |------|--------|
 | `crates/op-identity/src/lib.rs` | Add `pub mod session_genesis;`. Remove re-export of `anna_scribe`, `write_sled_from_wg`, `write_sled_full`, `watch_wireguard_handshakes`. |
 | `crates/op-identity/src/schema_bridge.rs` | Remove `write_sled_from_wg`, `write_sled_full`, `watch_wireguard_handshakes`. `etch_footprint` is **deleted** (not renamed — see §6.4). `SLED_SCHEMA_VERSION` replaced by content-hash-derived version (FR-10, §8). |
-| `crates/op-grpc-bridge/src/interceptor.rs` | Genesis verification path: after assertion validation, look up session's stored genesis from state cache. Compare presented header. Reject on mismatch. Add `x-ghostbridge-genesis` header reading alongside existing `x-ghostbridge-footprint`. Remove the `verify_ghostbridge_footprint` call from the fallback path. For assertion-carrying traffic: genesis looked up server-side after assertion validation, no header required from client. |
+| `crates/op-grpc-bridge/src/interceptor.rs` | Genesis verification path: after assertion validation, look up session's stored genesis from state cache. Compare presented header. Reject on mismatch. Add `x-ghostbridge-genesis` header reading alongside existing `x-ghostbridge-footprint`. Remove the `verify_ghostbridge_footprint` call from the fallback path. For assertion-carrying traffic: genesis looked up server-side after assertion validation, no header required from client. Carry explicit `principal_id`, `session_id`, and `session_genesis`; do not expose an auth-facing footprint field. |
+| `crates/op-grpc-bridge/src/oracle_assertion.rs` and `mcp_frontend.rs` | Remove `derive_human_footprint`/`HumanPrincipalIdentity.footprint` and footprint-keyed grant lookup. Resolve grants/audience by the registered `principal_id`; genesis remains session context only. |
 | `crates/op-grpc-bridge/src/mutation_engine.rs` | `advance_identity_sled` → `advance_session_record`: writes genesis (once) + mutation_index to the session's entry in the state cache. Add `mint_and_store_genesis` called on first mutation of a session. Remove `write_sled_full` import and call. `event_to_footprint` gains `session_genesis`, `session_id`, `wireguard_pubkey` in metadata. `event_to_footprint` takes a `SessionContext` parameter (derived from request extensions). |
 | `crates/op-grpc-bridge/src/identity_sled_dispatch.rs` | **Lines 388 and 428** (both in `write_identity`): replace `etch_footprint(&pubkey_bytes, 0, 0)` with `mint_genesis(...)`. These are the initial genesis mint for provisioned sessions (backfill at :388, creation at :428). They now call `mint_genesis` with the current chain head + arrival timestamp, making provisioning equivalent to arrival. Remove `write_sled_from_wg` call at :465. `write_identity` (stream path) writes only liveness fields. `ensure_hydrated` **changed** (§5.2): a hydrated record whose `genesis` is absent is treated as "session exists, not yet minted" so the next authenticated request re-mints; it also compares the record's stored schema hash against `SCHEMA_CONTENT_HASH` and skips stale-shaped records (§8). |
 | `crates/op-grpc-bridge/src/shared_socket.rs` | `CanonicalPeerIdentity::from_sled()` replaced by `CanonicalPeerIdentity::from_session(engine, session_id)`. Derives `session_id` from peer credential: `SO_PEERCRED` gives uid → lookup uid-to-container mapping (Incus rootfs owner) → container name = session_id. For the host (uid 0 or the bridge's own uid), uses the host's session_id. The lookup is a static map built at startup from `incus list` output (reactive: built once, not polled). The `uds_identity_interceptor` uses `block_in_place` + `Handle::current().block_on(...)` (same pattern as `verify_per_identity` at interceptor.rs:236) since it's a sync `Interceptor::call`. |
@@ -347,6 +358,7 @@ atomic rename.
 | `crates/op-grpc-bridge/src/grpc_web.rs` | Add `HeaderName::from_static("x-ghostbridge-genesis")` to `ALLOW_HEADERS`. |
 | `crates/op-grpc-bridge/src/grpc_client.rs` | Add `x-ghostbridge-genesis` to outbound header injection alongside existing footprint. |
 | `crates/op-plugins/src/state_plugins/identity_sled.rs` | `ContainerIdentitySled` gains: `genesis: Option<String>` (hex, immutable after first write), `arrival_timestamp: i64`, `chain_head_at_arrival: String`, `catalog_hash_at_arrival: String`, `head_timestamp_at_arrival: i64`. Remove `hashed_footprint` field — `genesis` replaces it (§6.5). |
+| `crates/op-state-store/src/event_chain.rs`, `crates/op-snowball/src/footprint.rs`, legacy `plugin_footprint.rs`, and append/vector wiring | Replace `json_args_footprint` with bounded/redacted canonical arguments, keep one footprint payload envelope, delete duplicate hash generators, make Snowball the sole current-event hash author, and vectorize payload text with receipt provenance. |
 | `crates/op-plugins/src/state_plugins/oscal_subid_registry.rs` | Register: `mut.service.session-genesis.mint@v1`, `evt.service.event-chain.session-stamp@v1`, `obs.service.identity-sled.genesis-verify@v1`, `evt.service.session-genesis.arrival@v1`. |
 | `crates/op-cognitive-mcp/src/main.rs` | Remove `write_sled_from_wg` call at :66. |
 | `crates/op-mcp/src/main.rs` | Remove `write_sled_from_wg` call at :113. |
@@ -370,22 +382,22 @@ atomic rename.
 
 The design's earlier draft proposed renaming `etch_footprint` to
 `etch_chain_footprint` on the assumption its only live consumer was the
-blockchain record path. That was wrong.
+snowball record path. That was wrong.
 
 **Actual live callers:**
 1. `identity_sled_dispatch.rs:388` — backfills empty hashed_footprint on
-   re-registration (identity-anchor usage, not blockchain).
+   re-registration (identity-anchor usage, not snowball).
 2. `identity_sled_dispatch.rs:428` — mints footprint at initial provisioning
    (identity-anchor usage).
 3. `anna_scribe.rs` — deleted.
 4. The `advance_identity_sled` / `write_sled_full` path — deleted.
 
-The blockchain path (`event_to_footprint`) never calls `etch_footprint`. It
+The snowball path (`event_to_footprint`) never calls `etch_footprint`. It
 assembles `PluginFootprint` metadata from the chain event fields directly.
 
 With callers 1 and 2 replaced by `mint_genesis` and callers 3 and 4 deleted,
 `etch_footprint` has **zero live consumers**. Renaming a dead function to
-something blockchain-sounding would create a misleading zombie. Delete it.
+something snowball-sounding would create a misleading zombie. Delete it.
 
 ### 6.5 `hashed_footprint` → `genesis` (no dual storage)
 
@@ -410,9 +422,12 @@ migration:
 
 | Fact | Single author | Consumers (derive, never restate) |
 |------|---------------|-----------------------------------|
+| Principal identity | Authoritative HumanPrincipal/service-principal registration; human IDs use `derive_principal_id(raw_wireguard_pubkey)` once | assertion/request context, principal-grant projection, audience, D-Bus binding, footprint `actor_id` metadata |
 | Genesis formula | `op_identity::session_genesis::mint_genesis` | interceptor (compares stored output), chain stamper `event_to_footprint` (embeds stored output), UDS injector (reads stored output from session record), offline verifier (recomputes from stored inputs), `identity_sled_dispatch` write_identity (calls mint_genesis for initial provisioning) |
 | Session record shape | `ContainerIdentitySled` in `identity_sled.rs` (PluginSchema, schemars-derived) | In-process state cache (deserialized), SHM projection (serialized JSON), Cozo relation (derived from schemars), gRPC reflection (derived from schema) |
 | Chain position (mutation_index) | `MutationEngine::advance_session_record` | `event_to_footprint` (reads from session context on engine), per-session record (written by engine only) |
+| Footprint payload shape | One canonical `PluginFootprint` schema/type | sled emitter, Shuttle, Snowball append, deterministic vector renderer |
+| Current event hash | Snowball append function | receipt/outbox, chain verifier, vector provenance; never principal/session authorization |
 | Catalog binding | `schema_catalog_hash()` in `schema_bridge.rs` | `mint_genesis` (reads as input at arrival), no other site computes or caches it |
 | Schema version / shape hash | Content hash of `ContainerIdentitySled`'s canonical schemars serialization (`SCHEMA_CONTENT_HASH`) | SHM projection (carries hash in manifest for drift detection), Cozo record (embeds hash), gate cold-start hydration (compares hash to reject stale records) |
 | Genesis inputs (arrival_ts, chain_head, catalog_hash, head_ts) | Stored immutably in the session record at mint time by `mint_and_store_genesis` | Offline re-verification (reads stored inputs, recomputes genesis), audit tooling |
@@ -589,7 +604,7 @@ pub struct ContainerIdentitySled {
     pub active: bool,
     pub peer_ip: Option<String>,
     pub session_started_at: i64,
-    // ... other existing fields (interface, vector_id, blob_ref, etc.)
+    // ... other existing fields (interface, vector_id, sealed_id, etc.)
 
     // REPLACES hashed_footprint (§6.5):
     #[serde(alias = "hashed_footprint")]
@@ -625,7 +640,11 @@ pub struct ContainerIdentitySled {
 ```rust
 fn event_to_footprint(event: &ChainEvent, session: &SessionContext) -> PluginFootprint {
     let mut metadata: HashMap<String, simd_json::OwnedValue> = HashMap::new();
-    // ... existing fields (actor_id, capability_id, method_name, etc.) ...
+    metadata.insert(
+        "actor_id".to_string(),
+        simd_json::OwnedValue::from(event.actor_id.as_str()), // registered principal_id
+    );
+    // ... existing fields (capability_id, method_name, etc.) ...
 
     // Session identity stamp (FR-3)
     metadata.insert(
@@ -648,7 +667,31 @@ fn event_to_footprint(event: &ChainEvent, session: &SessionContext) -> PluginFoo
 The `SessionContext` is derived from the request's extensions
 (`GhostbridgeIdentity` or `HumanPrincipalIdentity`), which carry the genesis
 after verification. The chain stamper never recomputes the genesis — it embeds
-the stored output.
+the stored output. `ChainEvent.actor_id` is the already-resolved registered
+`principal_id`; no footprint/genesis/hash derivation occurs here.
+
+### 13.1 Footprint and Snowball Hash Boundary
+
+```text
+VerifiedIdentity { principal_id, session_id, session_genesis }
+  → authorized MutationEngine event
+  → sled emits canonical PluginFootprint payload
+       metadata.actor_id = principal_id
+       metadata.session_id = session_id
+       metadata.session_genesis = session_genesis
+  → Shuttle delivers the same payload
+       ├─ Snowball append computes
+       │    H(domain || previous_event_hash || canonical_payload_bytes) once
+       │    and returns {event_id, event_hash}
+       └─ vectorization renders canonical payload text and records the receipt
+```
+
+The footprint is the envelope shown above, not an identity and not a precomputed
+current-event digest. The previous event hash is the normal chain-link input; the
+current payload itself is not first reduced to `json_args_footprint`, `data_hash`, or
+`content_hash` and then hashed again. `json_args_footprint` is removed and canonical
+bounded/redacted arguments occupy the payload. The receipt never feeds back into
+authentication or authorization.
 
 ---
 
@@ -768,7 +811,11 @@ record.
 | `absent_header_rejected` | interceptor unit | No genesis header → UNAUTHENTICATED |
 | `mismatched_genesis_rejected` | interceptor unit | Wrong genesis → UNAUTHENTICATED |
 | `sentinel_removed` | grep gate | No `SENTINEL_FOOTPRINT` in codebase |
-| `chain_carries_session_identity` | mutation_engine unit | `event_to_footprint` metadata has all three fields |
+| `chain_carries_session_identity` | mutation_engine unit | `event_to_footprint` metadata has principal plus all three session fields |
+| `chain_carries_principal_metadata` | mutation_engine unit | `actor_id` is the resolved `principal_id`, not a derived footprint/hash |
+| `one_payload_one_chain_hash` | op-snowball integration | Sled/Shuttle payload is hashed by Snowball once; no prehashed current-event body |
+| `vectorization_uses_payload` | chain-vector integration | Embedding text contains canonical payload; receipt is provenance only |
+| `single_plugin_footprint_type` | semantic/grep gate | Duplicate legacy footprint generator and `data_hash → content_hash` path are gone |
 | `chain_sliceable_by_session` | integration | Two sessions interleaved, filter recovers each |
 | `offline_reverification_with_gap` | integration | Ancestor check passes when intervening events exist between head and arrival |
 | `stream_does_not_overwrite_genesis` | identity_sled_dispatch | Stream write preserves genesis + mutation_index |

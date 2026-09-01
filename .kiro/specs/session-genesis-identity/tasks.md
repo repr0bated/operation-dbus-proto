@@ -123,17 +123,44 @@ cargo test -p op-grpc-bridge identity_sled
 
 **Work:**
 1. Change `event_to_footprint` signature to accept `session: &SessionContext`.
-2. Add `session_genesis`, `session_id`, `wireguard_pubkey` to the metadata map.
+2. Copy `actor_id = principal_id` from the admitted `ChainEvent`, then add `session_genesis`, `session_id`, and `wireguard_pubkey` to the metadata map.
 3. Update all call sites to pass the session context (derived from request extensions or engine state).
 4. `advance_identity_sled` → rename to `advance_session_record`, remove `write_sled_full` call, replace with in-process cache mutation_index update.
+5. Treat `PluginFootprint` as the canonical payload envelope; do not prehash the current payload into a footprint/content hash before Snowball append.
+6. Deliver the same canonical payload through the Shuttle to Snowball and vectorization. Snowball alone computes the current `event_hash`; vectorization renders payload text and records the receipt as provenance.
+7. Remove `ChainEvent.json_args_footprint`; carry canonical bounded/redacted arguments in the footprint payload.
+8. Consolidate the duplicate `op-snowball` footprint types/generators and remove the legacy `data_hash → content_hash` hash-of-hash path.
 
 **Test:**
 ```bash
 cargo test -p op-grpc-bridge event_to_footprint
 cargo test -p op-grpc-bridge chain_carries_session_identity
+cargo test -p op-snowball one_payload_one_chain_hash
+cargo test -p op-cognitive-mcp vectorization_uses_payload
 ```
 
-**Acceptance:** Footprint metadata includes all three session fields. `chain_sliceable_by_session` test passes.
+**Acceptance:** Footprint metadata includes the registered principal as `actor_id` and all three session fields. `chain_sliceable_by_session`, `one_payload_one_chain_hash`, and `vectorization_uses_payload` pass; one canonical footprint type remains.
+
+---
+
+## Task 6A: Remove footprint-derived identity and grant lookup (FR-3a)
+
+**Files:** `crates/op-grpc-bridge/src/oracle_assertion.rs`, `interceptor.rs`,
+`mcp_frontend.rs`, D-Bus identity binding, and capability-grant materialization.
+
+**Work:**
+1. Remove `HUMAN_FOOTPRINT_KDF_CONTEXT`, `derive_human_footprint`, and `HumanPrincipalIdentity.footprint`.
+2. Replace auth-facing `GhostbridgeIdentity.footprint` with explicit `principal_id`, `session_id`, and `session_genesis`.
+3. Replace footprint-keyed `AuthenticatedCaller` and capability lookups with the exact registered `principal_id`.
+4. Reject wildcard and 64-hex footprint/genesis/hash grant keys; migrate only entries whose registered principal can be resolved unambiguously.
+5. Keep the legacy `x-ghostbridge-footprint` name only as the time-bounded genesis-header alias in Task 15; it never selects grants or audience.
+6. Add semantic gates that forbid any footprint/genesis/hash-to-principal derivation.
+
+**Tests:** `session_churn_does_not_change_grants`,
+`same_payload_does_not_transfer_authority`, and `digest_grant_keys_rejected`.
+
+**Acceptance:** The stable registered `principal_id` is the sole authorization key;
+identity is injected into footprint metadata and is never derived back from it.
 
 ---
 
@@ -247,6 +274,8 @@ grep -rn 'SENTINEL_FOOTPRINT' crates/ --include='*.rs'
 2. Grep gate test: `mint_genesis` blake3 invocation only in `session_genesis.rs`.
 3. Grep gate test: no `write_sled_from_wg` / `write_sled_full` / `etch_footprint` / `SENTINEL_FOOTPRINT` / `anna_scribe` outside comments/docs.
 4. Grep gate test: `hashed_footprint` only appears in `#[serde(alias)]` context.
+5. Semantic gate: no `derive_human_footprint`, auth-facing `.footprint` identity field, footprint/genesis/hash-keyed grant lookup, or digest-to-principal derivation.
+6. Semantic gate: one `PluginFootprint` payload type, one Snowball current-event hash author, no `json_args_footprint` or legacy `data_hash → content_hash` generator, and no digest-only vectorization body.
 
 **Test:**
 ```bash
@@ -299,6 +328,31 @@ cargo test -p op-grpc-bridge session_lifetime
 
 ---
 
+## Task 13A: Authenticated identity-container parking (FR-12A)
+
+**Files:** `identity_sled_dispatch.rs`, `dbus_identity.rs`, `incus.rs`, `server.rs`
+
+**Work:**
+1. Force provisioned identity instances to `Stopped` with
+   `boot.autostart=false`; persist their sleds inactive.
+2. Start through typed Incus REST only on inactive-to-active authenticated
+   transition. Stop only after the final D-Bus binding disappears.
+3. Invalidate and durably persist the sled before stop; always forget the
+   in-memory context even if Incus stop fails.
+4. Before exposing the unified fabric listener after restart, park every
+   active instance-backed sled left without its process-local binding. Do not
+   park host/no-instance identities.
+5. Roll back a successful physical start if activation projection fails.
+
+**Test:** focused unit tests use injected lifecycle/projection recorders and
+must not create, start, or stop a real Incus instance.
+
+**Acceptance:** one start per active term; first shared-binding logout does not
+stop; last logout stops; stop failure leaves authority inactive; activation
+failure restores inactive authority; startup parks orphaned containers.
+
+---
+
 ## Task 14: OSCAL subid registration
 
 **File:** `crates/op-plugins/src/state_plugins/oscal_subid_registry.rs`
@@ -348,7 +402,8 @@ Task 3  (content hash)           ← depends on Task 2
 Task 4  (mint_and_store)         ← depends on Tasks 1, 2
 Task 5  (replace etch_footprint) ← depends on Task 4
 Task 6  (chain stamping)         ← depends on Task 4
-Task 7  (interceptor Phase 1)    ← depends on Tasks 4, 6
+Task 6A (principal/footprint split) ← depends on Tasks 4, 6
+Task 7  (interceptor Phase 1)    ← depends on Tasks 4, 6, 6A
 Task 8  (UDS injector)           ← depends on Task 7
 Task 9  (delete old code)        ← depends on Tasks 5, 7, 8
 Task 10 (header migration)       ← depends on Task 7
@@ -366,8 +421,10 @@ graph TD
     T2 --> T4
     T4 --> T5[Task 5: replace etch_footprint]
     T4 --> T6[Task 6: chain stamping]
+    T6 --> T6A[Task 6A: principal/footprint split]
     T4 --> T7[Task 7: interceptor Phase 1]
     T6 --> T7
+    T6A --> T7
     T7 --> T8[Task 8: UDS injector]
     T5 --> T9[Task 9: delete old code]
     T7 --> T9

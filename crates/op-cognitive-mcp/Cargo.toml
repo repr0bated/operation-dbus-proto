@@ -13,7 +13,7 @@ op-state-store = { path = "../op-state-store" }
 op-plugins = { path = "../op-plugins" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-cache = { path = "../op-cache" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-cozo-store = { workspace = true }
 hex = { workspace = true }
 memmap2 = { workspace = true }

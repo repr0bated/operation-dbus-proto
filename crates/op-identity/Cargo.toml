@@ -3,6 +3,10 @@ name = "op-identity"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "op-identity-headers"
+path = "src/bin/op-identity-headers.rs"
+
 [dependencies]
 anyhow = "1"
 thiserror = { workspace = true }
@@ -15,7 +19,6 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = { workspace = true }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 tracing = "0.1"
-keyring = "2"
 op-core = { path = "../op-core" }
 op-compliance = { path = "../op-compliance" }
 dashmap = { workspace = true }

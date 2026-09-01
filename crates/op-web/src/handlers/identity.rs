@@ -42,8 +42,6 @@ pub async fn identity_sled_handler(
                 "wireguard_pubkey": identity.wireguard_pubkey,
                 "mutation_index": identity.mutation_index,
                 "genesis": genesis,
-                // Compatibility alias for clients being migrated to `genesis`.
-                "hashed_footprint": genesis,
                 "trace_id": identity.trace_id,
                 "schema_version": identity.schema_version,
                 "schema_catalog_hash": schema_catalog_hash,

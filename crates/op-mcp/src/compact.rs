@@ -567,17 +567,29 @@ pub async fn run_compact_stdio_server() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    let wg_iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
-    let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
-    let peer_pubkey = match wg_id.get_local_pubkey() {
-        Ok(pubkey) => {
-            info!(interface = %wg_iface, pubkey = %pubkey, "WG identity resolved");
-            Some(pubkey)
+    let peer_pubkey = if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
+        info!(pubkey = %pubkey, "WG_PUBKEY configured; using injected WireGuard identity");
+        Some(pubkey)
+    } else if let Ok(wg_iface) = std::env::var("WG_INTERFACE").or_else(|_| std::env::var("FABRIC_WG_INTERFACE")) {
+        tracing::warn!(
+            interface = %wg_iface,
+            "WG_INTERFACE/FABRIC_WG_INTERFACE identity path is deprecated; prefer explicit pubkey injection"
+        );
+        let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
+        match wg_id.get_local_pubkey() {
+            Ok(pubkey) => Some(pubkey),
+            Err(e) => {
+                tracing::warn!(
+                    interface = %wg_iface,
+                    error = %e,
+                    "Could not read WG public key; set WG_PUBKEY env var to override"
+                );
+                None
+            }
         }
-        Err(e) => {
-            tracing::warn!(interface = %wg_iface, error = %e, "Could not read WG public key; set WG_PUBKEY env var to override");
-            None
-        }
+    } else {
+        tracing::info!("No WG interface or WG_PUBKEY configured; running compact MCP without peer pubkey");
+        None
     };
 
     let executor: Arc<dyn ToolExecutor> = Arc::new(PrewarmedOpToolsExecutor::new().await?);
@@ -602,17 +614,34 @@ pub async fn run_compact_unix_server(unix_path: &std::path::Path) -> Result<()> 
     // ── WireGuard identity ────────────────────────────────────────────────────
     // Read the local WG pubkey and resolve its projected identity session,
     // and stamp peer_pubkey into the session so tools can use it for auth.
-    let wg_iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
-    let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
-    let peer_pubkey = match wg_id.get_local_pubkey() {
-        Ok(pubkey) => {
-            info!(interface = %wg_iface, pubkey = %pubkey, "WG identity resolved");
-            Some(pubkey)
+    let peer_pubkey = if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
+        info!(pubkey = %pubkey, "WG_PUBKEY configured; using injected WireGuard identity");
+        Some(pubkey)
+    } else if let Ok(wg_iface) =
+        std::env::var("WG_INTERFACE").or_else(|_| std::env::var("FABRIC_WG_INTERFACE"))
+    {
+        tracing::warn!(
+            interface = %wg_iface,
+            "WG_INTERFACE/FABRIC_WG_INTERFACE identity path is deprecated; prefer explicit pubkey injection"
+        );
+        let wg_id = op_identity::WireGuardIdentity::with_interface(&wg_iface);
+        match wg_id.get_local_pubkey() {
+            Ok(pubkey) => {
+                info!(interface = %wg_iface, pubkey = %pubkey, "WG identity resolved");
+                Some(pubkey)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    interface = %wg_iface,
+                    error = %e,
+                    "Could not read WG public key; set WG_PUBKEY env var to override"
+                );
+                None
+            }
         }
-        Err(e) => {
-            tracing::warn!(interface = %wg_iface, error = %e, "Could not read WG public key; set WG_PUBKEY env var to override");
-            None
-        }
+    } else {
+        tracing::info!("No WG interface or WG_PUBKEY configured; running compact MCP without peer pubkey");
+        None
     };
 
     // Load the authoritative op-tools registry lazily per request so the

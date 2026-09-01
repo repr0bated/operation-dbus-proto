@@ -9,10 +9,14 @@ pub mod oracle_assertion;
 pub mod recovery;
 pub mod registration;
 pub mod schema_bridge;
+pub mod sealed_id;
 pub mod session;
 pub mod session_genesis;
 pub mod session_projection;
-pub mod token; // Keeping for now if needed internally
+#[deprecated(
+    note = "This module is deprecated; WG interface discovery is kept for compatibility only and should be moved to explicit identity injection paths."
+)]
+pub mod wg;
 pub mod wireguard;
 
 pub use gcloud_auth::GCloudAuth;
@@ -23,12 +27,15 @@ pub use recovery::{
 pub use registration::{generate_magic_link_token, generate_wireguard_keypair, WireGuardKeyPair};
 pub use schema_bridge::{
     resolve_verified_session, schema_catalog_hash, schema_catalog_hash_previous,
-    verify_session_genesis, FootprintVerifyError, SubidCategory, SubidTaxonomy,
+    verify_session_genesis, SessionGenesisVerifyError, SubidCategory, SubidTaxonomy,
 };
 pub use session::{Session, SessionManager};
 pub use session_projection::{
-    configured_identity_session, read_identity_sessions, resolve_identity_session, SessionIdentity,
+    configured_identity_session, read_identity_credential_sessions, read_identity_sessions,
+    resolve_identity_credential_session, resolve_identity_session, SessionIdentity,
     SessionProjectionError, SESSION_SELECTOR_ENV,
 };
-pub use token::{CachedToken, TokenManager};
+
+#[allow(deprecated)]
+pub use wg::{get_local_pubkey, get_peer_pubkey};
 pub use wireguard::{PeerInfo, WireGuardIdentity};

@@ -8,7 +8,7 @@
 //!
 //! ## Use Cases
 //!
-//! - **Blockchain Logging**: Immutable audit trail on blockchain
+//! - **Snowball Logging**: Immutable audit trail on snowball
 //! - **Metrics/Observability**: Prometheus, Grafana integration
 //! - **Alerting**: Real-time notifications for critical operations
 //! - **Replay/Debugging**: Record and replay orchestration sessions
@@ -16,13 +16,13 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! struct BlockchainActivityPlugin { /* ... */ }
+//! struct SnowballActivityPlugin { /* ... */ }
 //!
 //! #[async_trait]
-//! impl OrchestrationActivityPlugin for BlockchainActivityPlugin {
+//! impl OrchestrationActivityPlugin for SnowballActivityPlugin {
 //!     async fn on_tool_executed(&self, event: ToolExecutedEvent) {
-//!         // Write to blockchain
-//!         self.blockchain.write_event(event).await;
+//!         // Write to snowball
+//!         self.snowball.write_event(event).await;
 //!     }
 //! }
 //! ```

@@ -23,7 +23,7 @@
 ## Current Implementation Overview
 
 - DBus introspection capabilities for op-dbus-v2
-- Internal crate integrations: op-core, op-blockchain.
+- Internal crate integrations: op-core, op-snowball.
 
 ## Module / File Comparison
 
@@ -59,7 +59,7 @@
 
 ### Internal Workspace Dependencies
 - `op-core` - documented in SPEC
-- `op-blockchain` - documented in SPEC
+- `op-snowball` - documented in SPEC
 
 ### External Runtime Dependencies
 - `tokio` - documented in SPEC

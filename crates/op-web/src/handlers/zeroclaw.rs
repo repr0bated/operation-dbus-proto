@@ -34,8 +34,8 @@ fn identity_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
 }
 
 fn ghostbridge_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, Response> {
-    let footprint = identity_header(headers, "x-ghostbridge-footprint")?.ok_or_else(|| {
-        json_error_response(StatusCode::UNAUTHORIZED, "missing x-ghostbridge-footprint")
+    let session_genesis = identity_header(headers, "x-ghostbridge-genesis")?.ok_or_else(|| {
+        json_error_response(StatusCode::UNAUTHORIZED, "missing x-ghostbridge-genesis")
     })?;
     let trace_id = identity_header(headers, "x-ghostbridge-trace-id")?;
     let wireguard_pubkey = identity_header(headers, "x-wireguard-pubkey")?;
@@ -46,7 +46,7 @@ fn ghostbridge_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, 
         ));
     }
     Ok(GhostbridgeCallMetadata {
-        footprint,
+        session_genesis,
         trace_id,
         wireguard_pubkey,
     })

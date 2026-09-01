@@ -74,7 +74,7 @@ pub fn read_all_from_path(base: &str) -> HashMap<String, Value> {
 /// Read initial state from Btrfs seed volume (cold start).
 ///
 /// The seed volume is produced externally at deploy time (Btrfs snapshot of
-/// the state tree) — it has no relationship to `op-blockchain`.
+/// the state tree) — it has no relationship to `op-snowball`.
 /// Returns empty map if snapshot is missing (first boot — correct per REQ-3.4).
 /// Called once at startup, then push-only via Updated signal.
 pub fn read_seed_volume() -> HashMap<String, Value> {

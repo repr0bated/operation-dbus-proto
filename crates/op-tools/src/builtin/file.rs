@@ -8,7 +8,7 @@
 //!
 //! The chatbot is a FULL SYSTEM ADMINISTRATOR.
 //! Admin users can read/write any file (except path traversal).
-//! Audit logging is handled by the blockchain plugin.
+//! Audit logging is handled by the snowball plugin.
 
 use async_trait::async_trait;
 use simd_json::prelude::*;

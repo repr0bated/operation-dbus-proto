@@ -19,14 +19,14 @@ This document contains researched official sources + key structured types for th
 
 ---
 
-## 1. blockchain (blockchain_plugin)
+## 1. snowball (snowball_plugin)
 
-**Nature:** Internal `op-blockchain` crate (`StreamingBlockchain`).
+**Nature:** Internal `op-snowball` crate (`StreamingSnowball`).
 
 **Official / Authoritative Sources (in-repo):**
-- `crates/op-blockchain/src/streaming_blockchain.rs`
-- `crates/op-blockchain/src/retention.rs`
-- `crates/op-blockchain/src/snapshot.rs`
+- `crates/op-snowball/src/streaming_snowball.rs`
+- `crates/op-snowball/src/retention.rs`
+- `crates/op-snowball/src/snapshot.rs`
 
 **Key Structured Types (use these, do not invent):**
 
@@ -45,15 +45,15 @@ pub struct BlockEvent { /* timestamp, category, action, data, hash, vector */ }
 pub struct SnapshotEntry { name, created, ... }
 ```
 
-Current weak points in `blockchain_plugin.rs`:
+Current weak points in `snowball_plugin.rs`:
 - `snapshot_interval: String` (should become the enum)
 - `retention: RetentionView` (align exactly with `RetentionPolicy`)
 - `current_state: Value` (opaque is acceptable here, but document it)
-- `mut.service.blockchain.snapshot-interval` is mut.* → **must** expose `actor_id` + `capability_id` via `ensure...`
+- `mut.service.snowball.snapshot-interval` is mut.* → **must** expose `actor_id` + `capability_id` via `ensure...`
 
 **Migration Notes:**
-- Make `BlockchainState` use the real types from `op_blockchain`.
-- The "official" structure for this plugin comes from the op-blockchain crate, not an external standard.
+- Make `SnowballState` use the real types from `op_snowball`.
+- The "official" structure for this plugin comes from the op-snowball crate, not an external standard.
 
 ---
 
@@ -364,7 +364,7 @@ Last updated: 2026-07-03 (during execution of the 7 parallel migrators)
 - btrfs.readthedocs.io: https://btrfs.readthedocs.io/en/latest/btrfs-subvolume.html , btrfs-scrub.html, btrfs-balance.html, btrfs-filesystem.html, btrfs-device.html, Subvolumes.html
 - btrfs-ioctl(2): https://btrfs.readthedocs.io/en/latest/btrfs-ioctl.html + kernel uapi/linux/btrfs.h (btrfs_ioctl_vol_args_v2, btrfs_ioctl_scrub_args + btrfs_scrub_progress, btrfs_ioctl_balance_args + btrfs_balance_progress, btrfs_ioctl_dev_info_args, btrfs_ioctl_get_subvol_info_args)
 - man pages: btrfs-subvolume(8), btrfs-scrub(8), btrfs(8), btrfs-filesystem(8)
-- Cross-ref: op-blockchain/src/streaming_blockchain.rs RetentionPolicy (for snapshot retention in config)
+- Cross-ref: op-snowball/src/streaming_snowball.rs RetentionPolicy (for snapshot retention in config)
 - XAI model assist (via https://api.x.ai/v1 with XAI_API_KEY): summarized exact output formats + ioctl fields for structs.
 
 **Key Structured Output Formats (use these for typed state; no invention):**
@@ -375,7 +375,7 @@ Last updated: 2026-07-03 (during execution of the 7 parallel migrators)
 - `btrfs filesystem df`: Data,<profile>: total=.. used=.. ; Metadata,<p>: ... ; System,<p>: ... ; GlobalReserve,single: ...
 - `btrfs filesystem usage`: Device size/allocated/unallocated/used/free, per-type Size/Used, Unallocated per dev.
 - `btrfs balance status`: Balance ... is running/finished , Started, Status: ... chunks balanced (pct%)
-- Retention in config aligns with op-blockchain: hourly/daily/weekly/quarterly counts (for snapshot_schedule/retention).
+- Retention in config aligns with op-snowball: hourly/daily/weekly/quarterly counts (for snapshot_schedule/retention).
 
 **Key ioctl structs (for modeling input effects in state):**
 - subvol/snap: btrfs_ioctl_vol_args_v2 { fd, transid, flags (BTRFS_SUBVOL_RDONLY etc), name or subvolid }
@@ -397,7 +397,7 @@ pub struct BtrfsDevice { devid, path, size, used, ... }
 **Migration Notes for gb_btrfs:**
 - State: use PluginMetadata (flatten from common_schema_fields) + typed vecs for subvolumes/snapshots (leave send/dr/config as structured objects; avoid loose top-level Value except for opaque).
 - Component-type: use "software" or "this-system" for btrfs plugin subids (per 7 allowed; old used invalid "storage" as component-type -> fix to "software.plugin.btrfs" or "this-system.storage.btrfs" but stick to listed: software/this-system).
-- Retention: embed or reference RetentionPolicy shape from op-blockchain where config.retention present.
+- Retention: embed or reference RetentionPolicy shape from op-snowball where config.retention present.
 - Methods: keep the 12, but typed inputs/outputs, use common AckOutput etc.
 - MUST call plugin_schema_from_json + apply_state_defaults + ensure_category_metadata_fields (for mut.* actor_id/capability_id).
 - Use inventory submit with PLUGIN_NAME.

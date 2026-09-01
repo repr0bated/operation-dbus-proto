@@ -1,45 +1,55 @@
-//! EMQX present-state plugin — GB.Emqx.
+//! Standalone local EMQX broker plugin — GB.Emqx.
 //!
-//! Present-state for the live NIC-less NetMaker broker: sockets, ExHook target,
-//! registered hook names. ExHook RPCs stay on HookProvider
-//! (`emqx.exhook.v2` on `container.sock`). NetMaker reads this payload; it does
-//! not own EMQX. MQTT is payload, not a plugin. Inspector Gadget on
-//! `/srv/git/emqx/emqx.xml` produced messages, not plugin methods.
+//! This PluginSchema is the single typed present-state/control contract used
+//! by D-Bus and generated/generic gRPC. EMQX ExHook callbacks remain a
+//! separate `emqx.exhook.v3.HookProvider` protocol in `op-grpc-bridge`.
+//! EMQX is not owned by, installed in, or coupled to Netmaker.
 
 use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-use super::unix_socket::SHARED_CONTAINER_SOCKET;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{PluginSchema, SideEffect};
+use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
+use reqwest::Method;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::net::SocketAddr;
+use std::time::Duration;
+use zbus::{Connection, Proxy};
 
 const PLUGIN_NAME: &str = "emqx";
-const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_VERSION: &str = "2.0.0";
 const PLUGIN_CATEGORY: &str = "net";
 const PLUGIN_DESCRIPTION: &str =
-    "EMQX present-state for the NIC-less NetMaker container: broker.sock, api.sock, container.sock, ExHook target on :8090";
+    "Standalone local EMQX broker: status, listeners, hooks, and fixed-service lifecycle";
 const PLUGIN_DISPLAY_NAME: &str = "GB.Emqx";
 
-pub const CONTAINER_NAME: &str = "NetMaker";
-pub const BROKER_SOFTWARE: &str = "emqx";
-pub const BROKER_TYPE: &str = "emqx";
-pub const BROKER_SOCKET: &str = "/run/ghostbridge/NetMaker/broker.sock";
-pub const API_SOCKET: &str = "/run/ghostbridge/NetMaker/api.sock";
-pub const HOST_BROKER_ALIAS: &str = "/run/ghostbridge/netmaker-broker.sock";
-pub const EXHOOK_PROTO: &str = "emqx.exhook.v2";
-pub const EXHOOK_SERVICE: &str = "emqx.exhook.v2.HookProvider";
-pub const EXHOOK_TARGET: &str = "unix:/run/ghostbridge/container.sock";
-pub const MQTT_WS_URL: &str = "ws://100.69.0.1:8090/mqtt";
-pub const MQTT_TCP: &str = "127.0.0.1:1883";
-pub const DASHBOARD_URL: &str = "http://127.0.0.1:18083";
+pub const EMQX_RELEASE_VERSION: &str = "6.2.2";
+pub const EMQX_SERVICE: &str = "emqx";
+pub const EMQX_DATA_DIR: &str = "/var/lib/emqx";
+pub const EMQX_CONFIG_DIR: &str = "/etc/emqx";
+pub const EMQX_LOG_DIR: &str = "/var/log/emqx";
+pub const EMQX_DASHBOARD_URL: &str = "http://127.0.0.1:18083";
+pub const EMQX_API_BASE: &str = "http://127.0.0.1:18083/api/v5";
+pub const EMQX_MQTT_TCP_BIND: &str = "127.0.0.1:1883";
+pub const EXHOOK_PROTO: &str = "emqx.exhook.v3";
+pub const EXHOOK_SERVICE: &str = "emqx.exhook.v3.HookProvider";
+pub const EXHOOK_SERVER_NAME: &str = "opdbus";
+pub const EXHOOK_TARGET: &str = "https://127.0.0.1:9000";
 
-/// HookSpec.name values from `exhook.proto`. RPCs stay on HookProvider.
-const REGISTERED_HOOKS: &[&str] = &[
+const API_KEY_FILE: &str = "/etc/opdbus/secrets/emqx-api-key";
+const API_SECRET_FILE: &str = "/etc/opdbus/secrets/emqx-api-secret";
+const RUNIT_BUS_NAME: &str = "org.opdbus.v1.Runit.Systemctl";
+const RUNIT_OBJECT_PATH: &str = "/org/opdbus/v1/plugins/runit/systemctl";
+const RUNIT_INTERFACE: &str = "org.opdbus.v1.Runit.Systemctl";
+const API_RESPONSE_LIMIT: usize = 1024 * 1024;
+
+/// HookSpec names advertised by the bridge. Configuration accepts exactly this
+/// set because the ExHook protocol does not support a caller-selected subset.
+pub const REGISTERED_HOOKS: &[&str] = &[
     "client.connect",
     "client.connack",
     "client.connected",
@@ -61,148 +71,84 @@ const REGISTERED_HOOKS: &[&str] = &[
     "message.dropped",
 ];
 
-fn socket_present(path: &str) -> bool {
-    Path::new(path).is_file() || Path::new(path).exists()
-}
-
 fn typed_input<T: serde::de::DeserializeOwned>(args: &JsonValue) -> Result<T> {
     serde_json::from_value(if args.is_null() {
         JsonValue::Object(Default::default())
     } else {
         args.clone()
     })
-    .map_err(|err| anyhow::anyhow!("emqx method input must match the typed schema: {err}"))
+    .map_err(|error| anyhow::anyhow!("emqx method input does not match its schema: {error}"))
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct EmqxSocket {
-    /// Socket identity tag.
-    #[serde(default)]
-    pub name: String,
-    /// Filesystem path of the published Unix socket.
-    #[serde(default)]
-    pub path: String,
-    /// Whether the path exists on the host now.
-    #[serde(default)]
-    pub present: bool,
-    /// Why this socket exists.
-    #[serde(default)]
-    pub purpose: String,
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct EmqxDeclaredListener {
+    pub id: String,
+    pub r#type: String,
+    pub bind: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct EmqxExhook {
-    /// ExHook proto package. Live is `emqx.exhook.v2`.
-    #[serde(default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct EmqxExhookDeclaration {
     pub proto: String,
-    /// HookProvider service name EMQX calls.
-    #[serde(default)]
     pub service: String,
-    /// One gRPC door. Not a second TCP listener.
-    #[serde(default)]
+    pub server_name: String,
     pub target: String,
-    /// Whether live `exhook.servers` has been pointed at HookProvider.
-    #[serde(default)]
-    pub servers_configured: bool,
-    /// HookSpec.name values advertised on OnProviderLoaded.
-    #[serde(default)]
+    pub transport: String,
     pub registered_hooks: Vec<String>,
 }
 
-/// Plugin-wide OSCAL lives here: one schema subid + category.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.emqx.schema@v1"))]
+/// Deterministic declared state. No live probe or credential is allowed here;
+/// schema generation and blob sealing must produce identical output offline.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.emqx.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "network"))]
-#[schemars(extend("x-immutable-paths" = ["software", "broker_type", "container_name", "nic"]))]
+#[schemars(extend("x-immutable-paths" = ["software", "service_name", "data_dir", "config_dir", "log_dir", "api_base"]))]
 pub struct EmqxState {
-    /// Authoritative broker process. Live is EMQX.
-    #[serde(default)]
     pub software: String,
-    /// Broker implementation. Live is `emqx`, never Mosquitto.
-    #[serde(default)]
-    pub broker_type: String,
-    /// Plugin/schema version, not the EMQX package version.
-    #[serde(default)]
-    pub version: String,
-    /// Incus container that runs EMQX + NetMaker.
-    #[serde(default)]
-    pub container_name: String,
-    /// Containers have no NIC by design.
-    #[serde(default)]
-    pub nic: bool,
-    /// Shared gRPC door bind-mounted into the container.
-    #[serde(default)]
-    pub container_socket: String,
-    /// EMQX MQTT/WS payload socket.
-    #[serde(default)]
-    pub broker_socket: String,
-    /// NetMaker REST API socket.
-    #[serde(default)]
-    pub api_socket: String,
-    /// Loopback MQTT TCP listener inside the container.
-    #[serde(default)]
-    pub mqtt_tcp: String,
-    /// Mesh MQTT websocket URL.
-    #[serde(default)]
-    pub mqtt_ws: String,
-    /// EMQX dashboard URL. Not a control-plane door.
-    #[serde(default)]
-    pub dashboard: String,
-    /// Published Unix sockets (container / broker / api).
-    #[serde(default)]
-    pub sockets: Vec<EmqxSocket>,
-    /// ExHook tap that EMQX should call on the one gRPC door.
-    #[serde(default)]
-    pub exhook: EmqxExhook,
+    pub plugin_version: String,
+    pub broker_version: String,
+    pub service_name: String,
+    pub data_dir: String,
+    pub config_dir: String,
+    pub log_dir: String,
+    pub dashboard_url: String,
+    pub api_base: String,
+    pub listeners: Vec<EmqxDeclaredListener>,
+    pub exhook: EmqxExhookDeclaration,
+    /// EMQX's MCP Bridge is intentionally not installed. The only external
+    /// MCP endpoint is the bridge-owned `https://10.0.0.3:8090/mcp`.
+    pub mcp_gateway_installed: bool,
 }
 
 impl EmqxState {
-    pub fn observed() -> Self {
+    pub fn declared() -> Self {
         Self {
-            software: BROKER_SOFTWARE.to_string(),
-            broker_type: BROKER_TYPE.to_string(),
-            version: PLUGIN_VERSION.to_string(),
-            container_name: CONTAINER_NAME.to_string(),
-            nic: false,
-            container_socket: SHARED_CONTAINER_SOCKET.to_string(),
-            broker_socket: BROKER_SOCKET.to_string(),
-            api_socket: API_SOCKET.to_string(),
-            mqtt_tcp: MQTT_TCP.to_string(),
-            mqtt_ws: MQTT_WS_URL.to_string(),
-            dashboard: DASHBOARD_URL.to_string(),
-            sockets: vec![
-                EmqxSocket {
-                    name: "container".to_string(),
-                    path: SHARED_CONTAINER_SOCKET.to_string(),
-                    present: socket_present(SHARED_CONTAINER_SOCKET),
-                    purpose: "one gRPC door / HookProvider".to_string(),
-                },
-                EmqxSocket {
-                    name: "broker".to_string(),
-                    path: BROKER_SOCKET.to_string(),
-                    present: socket_present(BROKER_SOCKET),
-                    purpose: "EMQX MQTT/WS payload".to_string(),
-                },
-                EmqxSocket {
-                    name: "api".to_string(),
-                    path: API_SOCKET.to_string(),
-                    present: socket_present(API_SOCKET),
-                    purpose: "NetMaker REST via UDS relay".to_string(),
-                },
-                EmqxSocket {
-                    name: "broker-alias".to_string(),
-                    path: HOST_BROKER_ALIAS.to_string(),
-                    present: socket_present(HOST_BROKER_ALIAS),
-                    purpose: "host alias for broker.sock".to_string(),
-                },
-            ],
-            exhook: EmqxExhook {
+            software: "emqx".to_string(),
+            plugin_version: PLUGIN_VERSION.to_string(),
+            broker_version: EMQX_RELEASE_VERSION.to_string(),
+            service_name: EMQX_SERVICE.to_string(),
+            data_dir: EMQX_DATA_DIR.to_string(),
+            config_dir: EMQX_CONFIG_DIR.to_string(),
+            log_dir: EMQX_LOG_DIR.to_string(),
+            dashboard_url: EMQX_DASHBOARD_URL.to_string(),
+            api_base: EMQX_API_BASE.to_string(),
+            listeners: vec![EmqxDeclaredListener {
+                id: "tcp:default".to_string(),
+                r#type: "tcp".to_string(),
+                bind: EMQX_MQTT_TCP_BIND.to_string(),
+            }],
+            exhook: EmqxExhookDeclaration {
                 proto: EXHOOK_PROTO.to_string(),
                 service: EXHOOK_SERVICE.to_string(),
+                server_name: EXHOOK_SERVER_NAME.to_string(),
                 target: EXHOOK_TARGET.to_string(),
-                servers_configured: false,
-                registered_hooks: REGISTERED_HOOKS.iter().map(|s| (*s).to_string()).collect(),
+                transport: "loopback_mtls".to_string(),
+                registered_hooks: REGISTERED_HOOKS
+                    .iter()
+                    .map(|hook| (*hook).to_string())
+                    .collect(),
             },
+            mcp_gateway_installed: false,
         }
     }
 }
@@ -215,7 +161,7 @@ impl EmqxPlugin {
     }
 
     pub fn current_state() -> EmqxState {
-        EmqxState::observed()
+        EmqxState::declared()
     }
 }
 
@@ -230,57 +176,616 @@ pub struct GetStatusInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GetStatusOutput {
-    pub software: String,
-    pub broker_type: String,
-    pub container_name: String,
-    pub nic: bool,
-    pub container_socket: String,
-    pub broker_socket: String,
-    pub api_socket: String,
-    pub broker_socket_present: bool,
-    pub api_socket_present: bool,
-    pub container_socket_present: bool,
-    pub exhook_service: String,
-    pub exhook_target: String,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub uptime_seconds: Option<u64>,
+    pub version: String,
+    pub node_name: String,
+    pub cluster_status: String,
+    pub data_dir: String,
+    pub config_dir: String,
+    pub listeners_active: usize,
+    pub connections_current: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct ListSocketsInput {}
+pub struct GetMcpStatusInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ListSocketsOutput {
-    pub sockets: Vec<EmqxSocket>,
+pub struct GetMcpStatusOutput {
+    pub gateway_installed: bool,
+    pub gateway_enabled: bool,
+    pub gateway_version: Option<String>,
+    pub topic_prefix: Option<String>,
+    pub internal_transport_only: bool,
+    pub external_mcp_endpoint: String,
 }
 
-/// Typed present-state methods only. ExHook RPCs stay on HookProvider.
-pub async fn dispatch_emqx_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
-    match method {
-        "get_status" => {
-            let _input: GetStatusInput = typed_input(args)?;
-            let state = EmqxPlugin::current_state();
-            Ok(serde_json::to_value(GetStatusOutput {
-                software: state.software,
-                broker_type: state.broker_type,
-                container_name: state.container_name,
-                nic: state.nic,
-                container_socket: state.container_socket,
-                broker_socket: state.broker_socket,
-                api_socket: state.api_socket,
-                broker_socket_present: socket_present(BROKER_SOCKET),
-                api_socket_present: socket_present(API_SOCKET),
-                container_socket_present: socket_present(SHARED_CONTAINER_SOCKET),
-                exhook_service: state.exhook.service,
-                exhook_target: state.exhook.target,
-            })?)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EmqxListener {
+    pub id: String,
+    pub r#type: String,
+    pub bind: String,
+    pub running: bool,
+    pub current_connections: u64,
+    pub max_connections: u64,
+    pub is_loopback_or_uds: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ListListenersInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListListenersOutput {
+    pub listeners: Vec<EmqxListener>,
+    pub total_connections: u64,
+    pub all_loopback_or_uds: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EmqxExhookServer {
+    pub name: String,
+    pub url: String,
+    pub enable: bool,
+    pub status: String,
+    pub hooks: Vec<String>,
+    pub is_local: bool,
+    pub transport_authenticated: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ListHooksInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListHooksOutput {
+    pub exhook_servers: Vec<EmqxExhookServer>,
+    pub total_hooks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetHookStatusInput {
+    pub server_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetHookStatusOutput {
+    pub server: Option<EmqxExhookServer>,
+    pub found: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExhookTarget {
+    /// The pinned EMQX release accepts only HTTP(S) ExHook URLs, so the local
+    /// production transport is loopback TLS with a dedicated client identity.
+    LoopbackMtls,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigureHooksInput {
+    pub server_name: String,
+    pub target: ExhookTarget,
+    pub enable: bool,
+    pub hooks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigureHooksOutput {
+    pub configured: bool,
+    pub server_name: String,
+    pub is_local: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct StartInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StartOutput {
+    pub started: bool,
+    pub pid: Option<u32>,
+    pub uptime_seconds: Option<u64>,
+    pub node_name: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct StopInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StopOutput {
+    pub stopped: bool,
+    pub was_running: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RestartInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RestartOutput {
+    pub restarted: bool,
+    pub pid: Option<u32>,
+    pub uptime_seconds: Option<u64>,
+    pub node_name: String,
+    pub previous_uptime: Option<u64>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RunitStatus {
+    active_state: String,
+    main_pid: Option<u32>,
+    up_time: Option<String>,
+}
+
+impl RunitStatus {
+    fn running(&self) -> bool {
+        self.active_state == "active"
+    }
+
+    fn uptime_seconds(&self) -> Option<u64> {
+        self.up_time.as_deref().and_then(parse_uptime_seconds)
+    }
+}
+
+fn parse_uptime_seconds(value: &str) -> Option<u64> {
+    let token = value.split_whitespace().next()?;
+    token.trim_end_matches('s').parse().ok()
+}
+
+async fn runit_status() -> Result<RunitStatus> {
+    let connection = Connection::system()
+        .await
+        .context("runit D-Bus boundary is unavailable")?;
+    let proxy = Proxy::new(
+        &connection,
+        RUNIT_BUS_NAME,
+        RUNIT_OBJECT_PATH,
+        RUNIT_INTERFACE,
+    )
+    .await
+    .context("runit D-Bus proxy creation failed")?;
+    let encoded: String = proxy
+        .call("Status", &(EMQX_SERVICE,))
+        .await
+        .context("runit D-Bus status call failed")?;
+    serde_json::from_str(&encoded).context("runit D-Bus returned an invalid status document")
+}
+
+/// `action` is the D-Bus member name, which is CamelCase on the wire: the
+/// runit service declares `async fn start/stop/restart`, and zbus's
+/// `#[interface]` macro converts those to `Start`/`Stop`/`Restart`. `Proxy::call`
+/// sends the literal member name it is given, so the caller must match the
+/// converted spelling exactly or the call fails with UnknownMethod.
+async fn runit_lifecycle(action: &'static str) -> Result<String> {
+    debug_assert!(matches!(action, "Start" | "Stop" | "Restart"));
+    let connection = Connection::system()
+        .await
+        .context("runit D-Bus boundary is unavailable")?;
+    let proxy = Proxy::new(
+        &connection,
+        RUNIT_BUS_NAME,
+        RUNIT_OBJECT_PATH,
+        RUNIT_INTERFACE,
+    )
+    .await
+    .context("runit D-Bus proxy creation failed")?;
+    let (success, message): (bool, String) = proxy
+        .call(action, &(EMQX_SERVICE,))
+        .await
+        .with_context(|| format!("runit D-Bus {action} call failed"))?;
+    if !success {
+        anyhow::bail!("runit D-Bus rejected EMQX {action}: {message}");
+    }
+    Ok(message)
+}
+
+fn api_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to construct bounded EMQX API client")
+}
+
+fn api_credentials() -> Result<(String, String)> {
+    let key =
+        std::fs::read_to_string(API_KEY_FILE).context("EMQX management API key is unavailable")?;
+    let secret = std::fs::read_to_string(API_SECRET_FILE)
+        .context("EMQX management API secret is unavailable")?;
+    let key = key.trim().to_string();
+    let secret = secret.trim().to_string();
+    if key.is_empty() || secret.is_empty() {
+        anyhow::bail!("EMQX management API credential is empty");
+    }
+    Ok((key, secret))
+}
+
+async fn emqx_api(
+    method: Method,
+    path: &'static str,
+    body: Option<JsonValue>,
+) -> Result<JsonValue> {
+    let (api_key, api_secret) = api_credentials()?;
+    let url = format!("{EMQX_API_BASE}{path}");
+    let mut request = api_client()?
+        .request(method, &url)
+        .basic_auth(api_key, Some(api_secret));
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("EMQX API request to {path} failed"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("EMQX API request to {path} returned HTTP {status}");
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("EMQX API response from {path} could not be read"))?;
+    if bytes.len() > API_RESPONSE_LIMIT {
+        anyhow::bail!("EMQX API response from {path} exceeded the size limit");
+    }
+    if bytes.is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("EMQX API response from {path} was not valid JSON"))
+}
+
+fn response_array(value: &JsonValue) -> &[JsonValue] {
+    value
+        .as_array()
+        .or_else(|| value.get("data").and_then(JsonValue::as_array))
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn string_field(value: &JsonValue, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| value.get(*name).and_then(JsonValue::as_str))
+        .map(str::to_string)
+}
+
+fn u64_field(value: &JsonValue, names: &[&str]) -> u64 {
+    names
+        .iter()
+        .find_map(|name| {
+            value
+                .get(*name)
+                .and_then(|field| field.as_u64().or_else(|| field.as_str()?.parse().ok()))
+        })
+        .unwrap_or(0)
+}
+
+fn local_endpoint(value: &str) -> bool {
+    if value.starts_with("unix:") || value.starts_with('/') {
+        return true;
+    }
+    let address = value
+        .strip_prefix("http://")
+        .or_else(|| value.strip_prefix("https://"))
+        .unwrap_or(value);
+    address
+        .parse::<SocketAddr>()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+async fn query_listeners() -> Result<ListListenersOutput> {
+    let status = runit_status().await?;
+    if !status.running() {
+        let listeners = EmqxState::declared()
+            .listeners
+            .into_iter()
+            .map(|listener| EmqxListener {
+                id: listener.id,
+                r#type: listener.r#type,
+                is_loopback_or_uds: local_endpoint(&listener.bind),
+                bind: listener.bind,
+                running: false,
+                current_connections: 0,
+                max_connections: 0,
+            })
+            .collect::<Vec<_>>();
+        return Ok(ListListenersOutput {
+            all_loopback_or_uds: listeners.iter().all(|listener| listener.is_loopback_or_uds),
+            listeners,
+            total_connections: 0,
+        });
+    }
+
+    let payload = emqx_api(Method::GET, "/listeners", None).await?;
+    let listeners = response_array(&payload)
+        .iter()
+        .map(|item| {
+            let id = string_field(item, &["id", "name"]).unwrap_or_else(|| "unknown".into());
+            let listener_type = string_field(item, &["type"])
+                .or_else(|| id.split(':').next().map(str::to_string))
+                .unwrap_or_else(|| "unknown".into());
+            let bind = string_field(item, &["bind", "listen_on"]).unwrap_or_default();
+            EmqxListener {
+                id,
+                r#type: listener_type,
+                is_loopback_or_uds: local_endpoint(&bind),
+                bind,
+                running: item
+                    .get("running")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(true),
+                current_connections: u64_field(item, &["current_connections", "current_conns"]),
+                max_connections: u64_field(item, &["max_connections", "max_conns"]),
+            }
+        })
+        .collect::<Vec<_>>();
+    let total_connections = listeners
+        .iter()
+        .map(|listener| listener.current_connections)
+        .sum();
+    let all_loopback_or_uds = listeners.iter().all(|listener| listener.is_loopback_or_uds);
+    if !all_loopback_or_uds {
+        anyhow::bail!("EMQX reported a listener outside loopback/UDS policy");
+    }
+    Ok(ListListenersOutput {
+        listeners,
+        total_connections,
+        all_loopback_or_uds,
+    })
+}
+
+fn exhook_from_json(item: &JsonValue) -> EmqxExhookServer {
+    let url = string_field(item, &["url"]).unwrap_or_else(|| EXHOOK_TARGET.to_string());
+    EmqxExhookServer {
+        name: string_field(item, &["name"]).unwrap_or_default(),
+        is_local: local_endpoint(&url),
+        transport_authenticated: url.starts_with("https://"),
+        url,
+        enable: item
+            .get("enable")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        status: string_field(item, &["status"]).unwrap_or_else(|| "unknown".into()),
+        hooks: REGISTERED_HOOKS
+            .iter()
+            .map(|hook| (*hook).to_string())
+            .collect(),
+    }
+}
+
+async fn query_hooks() -> Result<ListHooksOutput> {
+    let status = runit_status().await?;
+    if !status.running() {
+        return Ok(ListHooksOutput {
+            exhook_servers: vec![EmqxExhookServer {
+                name: EXHOOK_SERVER_NAME.to_string(),
+                url: EXHOOK_TARGET.to_string(),
+                enable: true,
+                status: "broker_stopped".to_string(),
+                hooks: REGISTERED_HOOKS
+                    .iter()
+                    .map(|hook| (*hook).to_string())
+                    .collect(),
+                is_local: true,
+                transport_authenticated: true,
+            }],
+            total_hooks: REGISTERED_HOOKS.len(),
+        });
+    }
+    let payload = emqx_api(Method::GET, "/exhooks", None).await?;
+    let servers = response_array(&payload)
+        .iter()
+        .map(exhook_from_json)
+        .collect::<Vec<_>>();
+    if servers
+        .iter()
+        .any(|server| !server.is_local || !server.transport_authenticated)
+    {
+        anyhow::bail!("EMQX reported an unauthenticated or non-local ExHook target");
+    }
+    Ok(ListHooksOutput {
+        total_hooks: servers.iter().map(|server| server.hooks.len()).sum(),
+        exhook_servers: servers,
+    })
+}
+
+fn validate_hook_selection(input: &ConfigureHooksInput) -> Result<()> {
+    if input.server_name != EXHOOK_SERVER_NAME {
+        anyhow::bail!("only the fixed 'opdbus' ExHook server may be configured");
+    }
+    if input.target != ExhookTarget::LoopbackMtls {
+        anyhow::bail!("unsupported ExHook transport");
+    }
+    let requested = input.hooks.iter().cloned().collect::<BTreeSet<_>>();
+    let allowed = REGISTERED_HOOKS
+        .iter()
+        .map(|hook| (*hook).to_string())
+        .collect::<BTreeSet<_>>();
+    if requested != allowed || requested.len() != input.hooks.len() {
+        anyhow::bail!("hooks must be the exact supported HookProvider hook set");
+    }
+    Ok(())
+}
+
+async fn configure_hooks(input: ConfigureHooksInput) -> Result<ConfigureHooksOutput> {
+    validate_hook_selection(&input)?;
+    let body = serde_json::json!({
+        "name": EXHOOK_SERVER_NAME,
+        "url": EXHOOK_TARGET,
+        "enable": input.enable,
+        "request_timeout": "5s",
+        "failed_action": "ignore",
+        "auto_reconnect": "5s",
+        "pool_size": 4,
+        "ssl": {
+            "enable": true,
+            "verify": "verify_peer",
+            "cacertfile": "/etc/op-dbus/tls/tonic-svc0-ca.crt",
+            "certfile": "/etc/op-dbus/tls/emqx-exhook-client.crt",
+            "keyfile": "/etc/op-dbus/tls/emqx-exhook-client.key"
         }
-        "list_sockets" => {
-            let _input: ListSocketsInput = typed_input(args)?;
-            Ok(serde_json::to_value(ListSocketsOutput {
-                sockets: EmqxPlugin::current_state().sockets,
-            })?)
+    });
+    let _ = emqx_api(Method::PUT, "/exhooks/opdbus", Some(body)).await?;
+    let verified = query_hooks()
+        .await?
+        .exhook_servers
+        .into_iter()
+        .find(|server| server.name == EXHOOK_SERVER_NAME)
+        .ok_or_else(|| anyhow::anyhow!("EMQX did not return the configured ExHook server"))?;
+    if verified.enable != input.enable || !verified.is_local || !verified.transport_authenticated {
+        anyhow::bail!("EMQX ExHook verification did not match the requested local mTLS state");
+    }
+    Ok(ConfigureHooksOutput {
+        configured: true,
+        server_name: EXHOOK_SERVER_NAME.to_string(),
+        is_local: true,
+        message: "EMQX accepted and verified the fixed loopback-mTLS ExHook configuration"
+            .to_string(),
+    })
+}
+
+async fn query_status() -> Result<GetStatusOutput> {
+    let runit = runit_status().await?;
+    if !runit.running() {
+        return Ok(GetStatusOutput {
+            running: false,
+            pid: None,
+            uptime_seconds: runit.uptime_seconds(),
+            version: EMQX_RELEASE_VERSION.to_string(),
+            node_name: "emqx@127.0.0.1".to_string(),
+            cluster_status: "stopped".to_string(),
+            data_dir: EMQX_DATA_DIR.to_string(),
+            config_dir: EMQX_CONFIG_DIR.to_string(),
+            listeners_active: 0,
+            connections_current: 0,
+        });
+    }
+    let api = emqx_api(Method::GET, "/status", None).await?;
+    let listeners = query_listeners().await?;
+    Ok(GetStatusOutput {
+        running: true,
+        pid: runit.main_pid,
+        uptime_seconds: runit.uptime_seconds(),
+        version: string_field(&api, &["version", "rel_vsn"])
+            .unwrap_or_else(|| EMQX_RELEASE_VERSION.to_string()),
+        node_name: string_field(&api, &["node_name", "node"])
+            .unwrap_or_else(|| "emqx@127.0.0.1".to_string()),
+        cluster_status: string_field(&api, &["cluster_status", "status"])
+            .unwrap_or_else(|| "running".to_string()),
+        data_dir: EMQX_DATA_DIR.to_string(),
+        config_dir: EMQX_CONFIG_DIR.to_string(),
+        listeners_active: listeners
+            .listeners
+            .iter()
+            .filter(|listener| listener.running)
+            .count(),
+        connections_current: listeners.total_connections,
+    })
+}
+
+/// Typed standalone-EMQX dispatcher used by every projected transport.
+pub async fn dispatch_emqx_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
+    let output = match method {
+        "get_status" => {
+            let _: GetStatusInput = typed_input(args)?;
+            serde_json::to_value(query_status().await?)?
+        }
+        "get_mcp_status" => {
+            let _: GetMcpStatusInput = typed_input(args)?;
+            serde_json::to_value(GetMcpStatusOutput {
+                gateway_installed: false,
+                gateway_enabled: false,
+                gateway_version: None,
+                topic_prefix: None,
+                internal_transport_only: true,
+                external_mcp_endpoint: "https://10.0.0.3:8090/mcp".to_string(),
+            })?
+        }
+        "list_listeners" => {
+            let _: ListListenersInput = typed_input(args)?;
+            serde_json::to_value(query_listeners().await?)?
+        }
+        "list_hooks" => {
+            let _: ListHooksInput = typed_input(args)?;
+            serde_json::to_value(query_hooks().await?)?
+        }
+        "get_hook_status" => {
+            let input: GetHookStatusInput = typed_input(args)?;
+            let server = query_hooks()
+                .await?
+                .exhook_servers
+                .into_iter()
+                .find(|server| server.name == input.server_name);
+            serde_json::to_value(GetHookStatusOutput {
+                found: server.is_some(),
+                server,
+            })?
+        }
+        "configure_hooks" => {
+            let input: ConfigureHooksInput = typed_input(args)?;
+            serde_json::to_value(configure_hooks(input).await?)?
+        }
+        "start" => {
+            let _: StartInput = typed_input(args)?;
+            let before = runit_status().await?;
+            let message = if before.running() {
+                "EMQX was already running".to_string()
+            } else {
+                runit_lifecycle("Start").await?
+            };
+            let after = runit_status().await?;
+            let node_name = query_status()
+                .await
+                .map(|status| status.node_name)
+                .unwrap_or_default();
+            serde_json::to_value(StartOutput {
+                started: after.running(),
+                pid: after.main_pid,
+                uptime_seconds: after.uptime_seconds(),
+                node_name,
+                message,
+            })?
+        }
+        "stop" => {
+            let _: StopInput = typed_input(args)?;
+            let before = runit_status().await?;
+            let message = if before.running() {
+                runit_lifecycle("Stop").await?
+            } else {
+                "EMQX was already stopped".to_string()
+            };
+            let after = runit_status().await?;
+            serde_json::to_value(StopOutput {
+                stopped: !after.running(),
+                was_running: before.running(),
+                message,
+            })?
+        }
+        "restart" => {
+            let _: RestartInput = typed_input(args)?;
+            let before = runit_status().await?;
+            let message = runit_lifecycle("Restart").await?;
+            let after = runit_status().await?;
+            let node_name = query_status()
+                .await
+                .map(|status| status.node_name)
+                .unwrap_or_default();
+            serde_json::to_value(RestartOutput {
+                restarted: after.running(),
+                pid: after.main_pid,
+                uptime_seconds: after.uptime_seconds(),
+                node_name,
+                previous_uptime: before.uptime_seconds(),
+                message,
+            })?
         }
         other => anyhow::bail!("unknown emqx method: {other}"),
-    }
+    };
+    Ok(output)
 }
 
 #[async_trait]
@@ -318,8 +823,9 @@ impl StatePlugin for EmqxPlugin {
         })
     }
 
-    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+    async fn verify_state(&self, desired: &Value) -> Result<bool> {
+        let declared = simd_json::serde::to_owned_value(EmqxState::declared())?;
+        Ok(&declared == desired)
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
@@ -327,7 +833,7 @@ impl StatePlugin for EmqxPlugin {
             id: format!("{PLUGIN_NAME}-checkpoint"),
             plugin: PLUGIN_NAME.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
+            state_snapshot: simd_json::serde::to_owned_value(EmqxState::declared())?,
             backend_checkpoint: None,
         })
     }
@@ -346,9 +852,39 @@ impl StatePlugin for EmqxPlugin {
     }
 }
 
+fn add_method<I, O>(
+    schema: &mut PluginSchema,
+    name: &str,
+    side_effect: SideEffect,
+    idempotent: bool,
+    capability: &str,
+    subid: &str,
+) where
+    I: JsonSchema,
+    O: JsonSchema,
+{
+    schema.methods.insert(
+        name.to_string(),
+        method_decl_from_schemars_with_output::<I, O>(
+            name,
+            side_effect,
+            idempotent,
+            capability,
+            subid,
+        ),
+    );
+    schema.capabilities.insert(
+        capability.to_string(),
+        CapabilityDecl {
+            id: capability.to_string(),
+            description: format!("Grants: {name}."),
+        },
+    );
+}
+
 pub(crate) fn emqx_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(EmqxState))
-        .expect("schemars schema serializes to JSON");
+        .expect("EMQX state schema serializes");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         PLUGIN_NAME,
         PLUGIN_VERSION,
@@ -357,43 +893,82 @@ pub(crate) fn emqx_schema() -> PluginSchema {
     );
     schema.category = PLUGIN_CATEGORY.to_string();
     schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
-    if let Ok(defaults) = simd_json::serde::to_owned_value(EmqxPlugin::current_state()) {
-        super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
-        schema.example = Some(defaults);
-    }
-    schema.methods.insert(
-        "get_status".to_string(),
-        method_decl_from_schemars_with_output::<GetStatusInput, GetStatusOutput>(
-            "get_status",
-            SideEffect::Read,
-            true,
-            "cap.network.emqx.status.get@v1",
-            "obs.network.emqx.status.get@v1",
-        ),
+    let declared = simd_json::serde::to_owned_value(EmqxState::declared())
+        .expect("declared EMQX state serializes");
+    super::schemars_adapter::apply_state_defaults(&mut schema, &declared);
+    schema.example = Some(declared);
+
+    add_method::<GetStatusInput, GetStatusOutput>(
+        &mut schema,
+        "get_status",
+        SideEffect::Read,
+        true,
+        "cap.network.emqx.status.get@v1",
+        "obs.network.emqx.status.get@v2",
     );
-    schema.methods.insert(
-        "list_sockets".to_string(),
-        method_decl_from_schemars_with_output::<ListSocketsInput, ListSocketsOutput>(
-            "list_sockets",
-            SideEffect::Read,
-            true,
-            "cap.network.emqx.sockets.list@v1",
-            "obs.network.emqx.sockets.list@v1",
-        ),
+    add_method::<GetMcpStatusInput, GetMcpStatusOutput>(
+        &mut schema,
+        "get_mcp_status",
+        SideEffect::Read,
+        true,
+        "cap.network.emqx.mcp.status.get@v1",
+        "obs.network.emqx.mcp.status.get@v1",
     );
-    schema.capabilities.insert(
-        "cap.network.emqx.status.get@v1".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "cap.network.emqx.status.get@v1".to_string(),
-            description: "Grants: get_status.".to_string(),
-        },
+    add_method::<ListListenersInput, ListListenersOutput>(
+        &mut schema,
+        "list_listeners",
+        SideEffect::Read,
+        true,
+        "cap.network.emqx.listeners.list@v1",
+        "obs.network.emqx.listeners.list@v1",
     );
-    schema.capabilities.insert(
-        "cap.network.emqx.sockets.list@v1".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "cap.network.emqx.sockets.list@v1".to_string(),
-            description: "Grants: list_sockets.".to_string(),
-        },
+    add_method::<ListHooksInput, ListHooksOutput>(
+        &mut schema,
+        "list_hooks",
+        SideEffect::Read,
+        true,
+        "cap.network.emqx.hooks.list@v1",
+        "obs.network.emqx.hooks.list@v1",
+    );
+    add_method::<GetHookStatusInput, GetHookStatusOutput>(
+        &mut schema,
+        "get_hook_status",
+        SideEffect::Read,
+        true,
+        "cap.network.emqx.hooks.status.get@v1",
+        "obs.network.emqx.hooks.status.get@v1",
+    );
+    add_method::<ConfigureHooksInput, ConfigureHooksOutput>(
+        &mut schema,
+        "configure_hooks",
+        SideEffect::Mutation,
+        true,
+        "cap.network.emqx.hooks.configure@v1",
+        "mut.network.emqx.hooks.configure@v1",
+    );
+    add_method::<StartInput, StartOutput>(
+        &mut schema,
+        "start",
+        SideEffect::Mutation,
+        true,
+        "cap.network.emqx.lifecycle.start@v1",
+        "mut.network.emqx.lifecycle.start@v1",
+    );
+    add_method::<StopInput, StopOutput>(
+        &mut schema,
+        "stop",
+        SideEffect::Mutation,
+        true,
+        "cap.network.emqx.lifecycle.stop@v1",
+        "mut.network.emqx.lifecycle.stop@v1",
+    );
+    add_method::<RestartInput, RestartOutput>(
+        &mut schema,
+        "restart",
+        SideEffect::Mutation,
+        false,
+        "cap.network.emqx.lifecycle.restart@v1",
+        "mut.network.emqx.lifecycle.restart@v1",
     );
 
     schema
@@ -406,37 +981,92 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simd_json::prelude::*;
 
     #[test]
-    fn schema_is_present_state_only() {
-        let schema = emqx_schema();
-        assert_eq!(schema.name, "emqx");
-        assert!(schema.methods.contains_key("get_status"));
-        assert!(schema.methods.contains_key("list_sockets"));
-        assert!(!schema.methods.contains_key("on_provider_loaded"));
-        assert!(!schema.methods.contains_key("record_hook"));
+    fn schema_is_standalone_deterministic_and_complete() {
+        let first = emqx_schema();
+        let second = emqx_schema();
         assert_eq!(
-            schema.subids.get("__schema__").map(String::as_str),
-            Some("sch.software.plugin.emqx.schema@v1")
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
         );
-        let example = schema.example.expect("emqx schema seeds present-state");
-        let blob = simd_json::serde::to_owned_value(example).expect("example value");
-        assert_eq!(blob.get("software").and_then(|v| v.as_str()), Some("emqx"));
-        assert_eq!(
-            blob.get("broker_socket").and_then(|v| v.as_str()),
-            Some(BROKER_SOCKET)
-        );
+        let expected = [
+            "get_status",
+            "get_mcp_status",
+            "list_listeners",
+            "list_hooks",
+            "get_hook_status",
+            "configure_hooks",
+            "start",
+            "stop",
+            "restart",
+        ];
+        assert_eq!(first.methods.len(), expected.len());
+        for method in expected {
+            assert!(first.methods.contains_key(method), "missing {method}");
+        }
+        let encoded = serde_json::to_string(&first).unwrap().to_ascii_lowercase();
+        assert!(!encoded.contains("netmaker"));
+        assert!(!encoded.contains("broker.sock"));
+        assert!(!encoded.contains("api.sock"));
+        assert!(!encoded.contains("100.69.0.1"));
+    }
+
+    #[test]
+    fn declared_endpoints_are_local_and_mcp_gateway_is_absent() {
+        let state = EmqxState::declared();
+        assert!(state
+            .listeners
+            .iter()
+            .all(|listener| local_endpoint(&listener.bind)));
+        assert!(local_endpoint(&state.exhook.target));
+        assert!(!state.mcp_gateway_installed);
+    }
+
+    #[test]
+    fn hook_selection_rejects_partial_or_unknown_sets() {
+        let partial = ConfigureHooksInput {
+            server_name: EXHOOK_SERVER_NAME.to_string(),
+            target: ExhookTarget::LoopbackMtls,
+            enable: true,
+            hooks: vec!["message.publish".to_string()],
+        };
+        assert!(validate_hook_selection(&partial).is_err());
+
+        let exact = ConfigureHooksInput {
+            server_name: EXHOOK_SERVER_NAME.to_string(),
+            target: ExhookTarget::LoopbackMtls,
+            enable: true,
+            hooks: REGISTERED_HOOKS
+                .iter()
+                .map(|hook| (*hook).to_string())
+                .collect(),
+        };
+        validate_hook_selection(&exact).expect("exact hook set");
     }
 
     #[tokio::test]
-    async fn dispatch_typed_status() {
-        let result = dispatch_emqx_method("get_status", &serde_json::json!({}))
+    async fn unknown_method_fails_without_fallback_echo() {
+        let error = dispatch_emqx_method("not_a_method", &serde_json::json!({}))
             .await
-            .expect("typed get_status");
-        assert_eq!(
-            result.get("broker_type").and_then(|v| v.as_str()),
-            Some("emqx")
-        );
+            .expect_err("unknown method must fail");
+        assert!(error.to_string().contains("unknown emqx method"));
+    }
+
+    #[test]
+    fn lifecycle_inputs_cannot_select_a_service() {
+        let schema = serde_json::to_value(schemars::schema_for!(StartInput)).unwrap();
+        let encoded = schema.to_string();
+        assert!(!encoded.contains("service_name"));
+        assert!(!encoded.contains("service"));
+    }
+
+    #[test]
+    fn secret_files_never_enter_declared_state() {
+        let encoded = serde_json::to_string(&EmqxState::declared()).unwrap();
+        assert!(!encoded.contains("password"));
+        assert!(!encoded.contains("credential"));
+        assert!(!encoded.contains(API_KEY_FILE));
+        assert!(!encoded.contains(API_SECRET_FILE));
     }
 }

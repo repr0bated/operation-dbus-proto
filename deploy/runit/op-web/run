@@ -26,7 +26,7 @@ set +a
 
 export PORT="${PORT:-8080}"
 export OP_WEB_STATIC_DIR="${OP_WEB_STATIC_DIR:-/usr/local/share/op-dbus/dashboard}"
-export OP_DBUS_GRPC_ADDR="${OP_DBUS_GRPC_ADDR:-https://localhost:8090}"
+export OP_DBUS_GRPC_ADDR="${OP_DBUS_GRPC_ADDR:-https://10.0.0.3:8090}"
 export OP_DBUS_GRPC_CA_FILE="${OP_DBUS_GRPC_CA_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
 export COGNITIVE_MCP_CONTEXT_HTTP_DISABLED=1
 export RUST_LOG="${RUST_LOG:-op_web=info,info}"

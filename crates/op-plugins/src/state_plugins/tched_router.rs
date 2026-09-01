@@ -2082,8 +2082,9 @@ pub fn dispatch_tched_router_method(
         "SetVectorizationModel" => set_role_model_handler(json_args, state, "vectorization"),
         "SetQdrantRetrievalModel" => set_role_model_handler(json_args, state, "qdrant_retrieval"),
         "SetCozoRetrievalModel" => set_role_model_handler(json_args, state, "cozo_retrieval"),
-        "config_list" | "config_get" | "config_set" | "config_patch" | "config_init"
-        | "config_migrate" => run_zeroclaw_config(method, json_args),
+        config_method if zeroclaw_config_subcommand(config_method).is_some() => {
+            run_zeroclaw_config(config_method, json_args)
+        }
         other => {
             super::tched_router_config_surface::dispatch_config_method(other, json_args, state)
                 .unwrap_or_else(|| {
@@ -2115,7 +2116,10 @@ fn run_zeroclaw_config(
         Some(JsonValue::Null) | None => None,
         Some(other) => Some(other.to_string()),
     };
-    let sub = method.strip_prefix("config_").unwrap_or(method);
+    let sub =
+        zeroclaw_config_subcommand(method).ok_or_else(|| TchedRouterError::ExecutionDenied {
+            reason: format!("undeclared zeroclaw config method: {method}"),
+        })?;
     if matches!(sub, "set" | "get") && path.is_empty() {
         return Err(TchedRouterError::ExecutionDenied {
             reason: format!("{method} requires a nonempty string path"),
@@ -2207,6 +2211,21 @@ fn run_zeroclaw_config(
         "message": stdout,
         "changed": method != "config_list" && method != "config_get",
     })))
+}
+
+/// Exact CLI method inventory shared by dispatch and hermetic dispatcher tests.
+/// Keeping this mapping pure avoids invoking or mutating a host-installed CLI
+/// merely to prove that a schema declaration has an implementation route.
+fn zeroclaw_config_subcommand(method: &str) -> Option<&'static str> {
+    match method {
+        "config_list" => Some("list"),
+        "config_get" => Some("get"),
+        "config_set" => Some("set"),
+        "config_patch" => Some("patch"),
+        "config_init" => Some("init"),
+        "config_migrate" => Some("migrate"),
+        _ => None,
+    }
 }
 
 trait IfEmpty {
@@ -2513,11 +2532,23 @@ mod tests {
                 // never exercised by a dispatch test.
                 continue;
             }
+            if let Some(subcommand) = zeroclaw_config_subcommand(method) {
+                assert_eq!(
+                    subcommand,
+                    method.trim_start_matches("config_"),
+                    "{method} has the wrong sealed CLI subcommand"
+                );
+                continue;
+            }
             let args = match method.as_str() {
                 "ResolveRoute" => serde_json::json!({ "hint": "balanced" }),
                 "ListModels" => serde_json::json!({ "provider": "salad" }),
                 "SetProvider" => serde_json::json!({ "provider_id": "salad" }),
                 "SetModel" => serde_json::json!({ "model_id": "qwen3.6-27b" }),
+                "SetSelection" => serde_json::json!({
+                    "provider_id": "salad",
+                    "model_id": "qwen3.6-27b"
+                }),
                 name if name.starts_with("Set") => {
                     serde_json::json!({ "model_id": "qwen3.6-27b" })
                 }

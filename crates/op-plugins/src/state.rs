@@ -97,7 +97,7 @@ pub struct StateChange {
     pub new_value: Option<Value>,
     /// Human-readable description
     pub description: String,
-    /// Hash of this change for blockchain
+    /// Hash of this change for snowball
     pub hash: String,
     /// Timestamp of the change
     pub timestamp: DateTime<Utc>,

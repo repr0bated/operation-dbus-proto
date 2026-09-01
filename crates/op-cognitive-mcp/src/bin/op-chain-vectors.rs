@@ -1,4 +1,4 @@
-//! Operator CLI for the blockchain vector pipeline (`blockchain_footprints` only).
+//! Operator CLI for the snowball vector pipeline (`snowball_footprints` only).
 //!
 //! Strict automatic Qdrant policy applies **only** to this collection — not to
 //! `blob_vectors`, user_memory, or RAG shuttle traffic.
@@ -17,18 +17,18 @@
 //! ```
 //!
 //! Configuration is env-driven and shared with the rest of the workspace:
-//! `OPDBUS_BLOCKCHAIN_PATH`, `OPDBUS_QDRANT_URL` (or `COGNITIVE_MCP_QDRANT_URL`),
-//! `OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION`, `OPDBUS_QDRANT_BLOCKCHAIN_DIM`.
+//! `OPDBUS_SNOWBALL_PATH`, `OPDBUS_QDRANT_URL` (or `COGNITIVE_MCP_QDRANT_URL`),
+//! `OPDBUS_QDRANT_SNOWBALL_COLLECTION`, `OPDBUS_QDRANT_SNOWBALL_DIM`.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use op_blockchain::{btrfs_delta, StreamingBlockchain};
 use op_cognitive_mcp::ChainVectorIndex;
+use op_snowball::{btrfs_delta, StreamingSnowball};
 
 #[derive(Parser)]
 #[command(
     name = "op-chain-vectors",
-    about = "Embed blockchain blocks into the chain's vector subvolume and index them in Qdrant"
+    about = "Embed snowball blocks into the chain's vector subvolume and index them in Qdrant"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -41,19 +41,19 @@ enum Cmd {
     Status,
     /// Origin: embed pending blocks into the chain `vectors` subvolume.
     ///
-    /// Default does **not** write Qdrant (`blockchain_footprints` is filled by
+    /// Default does **not** write Qdrant (`snowball_footprints` is filled by
     /// replica `ingest` after `btrfs receive`). Pass `--upsert-qdrant` for a
     /// manual direct index write that bypasses send/receive.
     Project {
         /// Cap this pass (default: all pending blocks).
         #[arg(long)]
         limit: Option<usize>,
-        /// Manual exception: also upsert `blockchain_footprints` on this host.
+        /// Manual exception: also upsert `snowball_footprints` on this host.
         /// Does not affect other Qdrant collections.
         #[arg(long, default_value_t = false)]
         upsert_qdrant: bool,
     },
-    /// Manual: rebuild `blockchain_footprints` from chain vectors (no Voyage, no receive).
+    /// Manual: rebuild `snowball_footprints` from chain vectors (no Voyage, no receive).
     Reindex,
     /// Replica: index the vectors that arrived since the last indexed block.
     Ingest {
@@ -121,10 +121,10 @@ async fn main() -> Result<()> {
         Cmd::Snapshot => {
             let chain = open_chain().await?;
             let counter = chain.create_snapshot_aligned().await?;
-            for label in op_blockchain::SNAPSHOT_LABELS {
+            for label in op_snowball::SNAPSHOT_LABELS {
                 println!(
                     "{}",
-                    op_blockchain::StreamingBlockchain::snapshot_name(label, counter)
+                    op_snowball::StreamingSnowball::snapshot_name(label, counter)
                 );
             }
             Ok(())
@@ -190,10 +190,10 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn open_chain() -> Result<StreamingBlockchain> {
-    let path = std::env::var("OPDBUS_BLOCKCHAIN_PATH")
-        .unwrap_or_else(|_| "/var/lib/opdbus/blockchain".to_string());
-    StreamingBlockchain::new(&path)
+async fn open_chain() -> Result<StreamingSnowball> {
+    let path = std::env::var("OPDBUS_SNOWBALL_PATH")
+        .unwrap_or_else(|_| "/var/lib/opdbus/snowball".to_string());
+    StreamingSnowball::new(&path)
         .await
         .with_context(|| format!("failed to open chain at {path}"))
 }

@@ -20,7 +20,7 @@ import {
   Copy,
 } from "lucide-react";
 
-// ── Mock blockchain data ──────────────────────────────────────
+// ── Mock snowball data ──────────────────────────────────────
 
 const MOCK_BLOCKS = [
   {
@@ -166,9 +166,9 @@ function timeAgo(iso: string) {
   return `${hrs}h ago`;
 }
 
-// ── Blockchain Tab ────────────────────────────────────────────
+// ── Snowball Tab ────────────────────────────────────────────
 
-function BlockchainTab() {
+function SnowballTab() {
   const [verifying, setVerifying] = useState<number | null>(null);
 
   const handleVerify = (idx: number) => {
@@ -355,24 +355,24 @@ export default function StatePage() {
           State & Audit
         </h1>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Blockchain audit trail &amp; BTRFS state management
+          Snowball audit trail &amp; BTRFS state management
         </p>
       </header>
 
       <div className="flex-1 overflow-hidden px-6 py-4">
-        <Tabs defaultValue="blockchain" className="h-full flex flex-col">
+        <Tabs defaultValue="snowball" className="h-full flex flex-col">
           <TabsList className="w-fit">
-            <TabsTrigger value="blockchain" className="text-xs gap-1.5">
+            <TabsTrigger value="snowball" className="text-xs gap-1.5">
               <Link2 className="h-3.5 w-3.5" />
-              Blockchain / Audit
+              Snowball / Audit
             </TabsTrigger>
             <TabsTrigger value="state" className="text-xs gap-1.5">
               <HardDrive className="h-3.5 w-3.5" />
               State Management
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="blockchain" className="flex-1 overflow-auto mt-3">
-            <BlockchainTab />
+          <TabsContent value="snowball" className="flex-1 overflow-auto mt-3">
+            <SnowballTab />
           </TabsContent>
           <TabsContent value="state" className="flex-1 overflow-auto mt-3">
             <StateTab />

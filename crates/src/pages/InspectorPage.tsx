@@ -420,7 +420,7 @@ export default function InspectorPage() {
                 </span>
               </div>
               <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Blockchain Event</span>
+                <span className="text-muted-foreground">Snowball Event</span>
                 <Badge variant="secondary" className="text-[10px]">
                   dbus.schema.update
                 </Badge>

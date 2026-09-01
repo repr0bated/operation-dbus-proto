@@ -7,3 +7,5 @@ op-mcp-compact
 op-mcp-server
 op-waypipe-grpc
 op-chat
+op-mcp-shim
+zeroclaw-gui

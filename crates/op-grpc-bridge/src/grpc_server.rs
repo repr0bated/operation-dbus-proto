@@ -95,7 +95,7 @@ fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
 /// `enforce_bridge_capability` requires the declaration to match the method's
 /// `required_capability`; a mismatch or an absent header denies. This keeps the gRPC
 /// check explicit: the caller states intent, carries an authenticated identity,
-/// and that exact footprint must be present in the independent grant store.
+/// and that exact principal must be present in the independent grant store.
 pub const DECLARED_CAPABILITY_HEADER: &str = "x-opdbus-capability";
 
 fn method_capability_from_schema(
@@ -157,7 +157,7 @@ pub(crate) fn enforce_bridge_capability_with_schema(
         })?;
     let required = method_capability.required_capability;
     let identity = identity
-        .filter(|identity| !identity.footprint.is_empty() && !identity.session_id.is_empty())
+        .filter(|identity| !identity.principal_id.is_empty() && !identity.session_id.is_empty())
         .ok_or_else(|| {
             capability_denied(
                 plugin_id,
@@ -167,16 +167,16 @@ pub(crate) fn enforce_bridge_capability_with_schema(
             )
         })?;
     let capability_matches = capability_id == Some(required.as_str());
-    let footprint_grants = load_capability_grants(&identity.footprint).contains(&required);
+    let principal_grants = load_capability_grants(&identity.principal_id).contains(&required);
 
-    if capability_matches && footprint_grants {
+    if capability_matches && principal_grants {
         Ok(())
     } else {
         Err(capability_denied(
             plugin_id,
             method_name,
             Some(&required),
-            "matching request capability and exact-footprint grant are required",
+            "matching request capability and exact-principal grant are required",
         ))
     }
 }
@@ -626,7 +626,7 @@ impl OperationGrpcServer {
         // Passing `None` here (as this previously did) made `capability_matches` in
         // `enforce_bridge_capability` compare `None == Some(required)`, which is
         // always false — and since the decision is `capability_matches &&
-        // footprint_grants`, every capability-gated method was permanently denied
+        // principal_grants`, every capability-gated method was permanently denied
         // over gRPC/gRPC-Web. Every cognitive_mcp method is gated, so none were
         // reachable despite the services being mounted.
         //
@@ -696,14 +696,24 @@ impl OperationGrpcServer {
         )
         .map_err(|error| Status::permission_denied(error.message))?;
 
+        let authenticated_actor_id = identity
+            .as_ref()
+            .map(|identity| identity.principal_id.as_str())
+            .ok_or_else(|| Status::unauthenticated("authenticated principal is required"))?;
         let result = self
             .mutation_engine
-            .dispatch_method_call(
+            .dispatch_method_call_with_identity(
                 plugin_id,
                 method_name,
                 &json_args,
-                None,
-                "grpc:operation.plugin.v1",
+                declared_capability.as_deref(),
+                authenticated_actor_id,
+                identity
+                    .as_ref()
+                    .map(|identity| identity.session_id.as_str()),
+                identity
+                    .as_ref()
+                    .map(|identity| identity.session_genesis.as_str()),
             )
             .await
             .map_err(|error| {
@@ -863,14 +873,7 @@ pub fn build_operation_routes_with_validator(
             crate::chat_service::ChatServiceImpl::new(server.mutation_engine.clone()),
             legacy_intercept,
         ),
-    ))
-    // EMQX is the gRPC client and does not carry Ghostbridge identity headers.
-    // ExHook is an audit tap, not an authorization or mutation surface.
-    .add_service(
-        crate::proto::emqx_exhook::hook_provider_server::HookProviderServer::new(
-            crate::emqx_hook_provider::HookProviderService::new(server.mutation_engine.clone()),
-        ),
-    );
+    ));
 
     let routes = add_routes(routes, server.clone(), validator);
     routes.add_service(crate::grpc_web::enable(reflection_v1))
@@ -1157,7 +1160,7 @@ impl StateSync for OperationGrpcServer {
         request: Request<GetStateRequest>,
     ) -> Result<Response<GetStateResponse>, Status> {
         let req = request.into_inner();
-        let state = self.mutation_engine.get_state(&req.plugin_id).await;
+        let state = self.mutation_engine.get_public_state(&req.plugin_id).await;
 
         let state_struct = state
             .map(|v| simd_to_prost_struct(&v))
@@ -1266,7 +1269,7 @@ impl PluginService for OperationGrpcServer {
         }
         let authenticated_actor_id = identity
             .as_ref()
-            .map(|identity| identity.session_id.clone())
+            .map(|identity| identity.principal_id.clone())
             .ok_or_else(|| Status::unauthenticated("authenticated request identity is required"))?;
         let mut args: Vec<simd_json::OwnedValue> = req
             .arguments
@@ -1303,12 +1306,18 @@ impl PluginService for OperationGrpcServer {
         // envelope; gRPC is a transport adapter, not a second implementation.
         let result = self
             .mutation_engine
-            .dispatch_method_call(
+            .dispatch_method_call_with_identity(
                 &req.plugin_id,
                 &req.method_name,
                 &json_args,
                 capability_id.as_deref(),
                 &authenticated_actor_id,
+                identity
+                    .as_ref()
+                    .map(|identity| identity.session_id.as_str()),
+                identity
+                    .as_ref()
+                    .map(|identity| identity.session_genesis.as_str()),
             )
             .await;
 
@@ -1638,7 +1647,7 @@ impl EventChainService for OperationGrpcServer {
         let req = request.into_inner();
         let state = self
             .mutation_engine
-            .get_state(&req.plugin_id)
+            .get_public_state(&req.plugin_id)
             .await
             .unwrap_or_else(|| simd_json::json!({}));
         let chain = self.mutation_engine.event_chain.clone();

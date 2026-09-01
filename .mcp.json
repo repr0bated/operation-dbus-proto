@@ -2,9 +2,9 @@
   "mcpServers": {
     "op-dbus-unified": {
       "type": "http",
-      "url": "https://127.0.0.1:8090/mcp",
+      "url": "https://10.0.0.3:8090/mcp",
       "timeout": 120000,
-      "description": "Unified authenticated MCP control plane; the client must obtain a fresh Oracle identity assertion for each request"
+      "description": "Unified :8090 fabric endpoint; use the client's native per-request header helper to forward the selected sled's sealed OIB1 identity"
     }
   }
 }

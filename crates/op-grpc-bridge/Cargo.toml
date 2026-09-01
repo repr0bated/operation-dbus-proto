@@ -21,6 +21,7 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
+rustls-pemfile = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }
@@ -33,7 +34,6 @@ zbus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 simd-json = { workspace = true }
-schemars = { workspace = true }
 jsonschema = { workspace = true }
 # HTTP client used by the ZeroClaw runtime integration. Cognitive-tool dispatch
 # itself is in-process behind MutationEngine and does not use this dependency.
@@ -42,7 +42,7 @@ reqwest = { workspace = true }
 # Internal crates
 op-state-store = { path = "../op-state-store" }
 op-blob = { path = "../op-blob" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-state = { path = "../op-state" }
 op-plugins = { path = "../op-plugins" }
 op-identity = { path = "../op-identity" }
@@ -50,10 +50,11 @@ op-network = { path = "../op-network" }
 op-cozo-store = { path = "../op-cozo-store" }
 op-grpc-adapters = { path = "../op-grpc-adapters" }
 op-jsonrpc = { path = "../op-jsonrpc" }
+op-mcp.workspace = true
 op-cognitive-mcp = { path = "../op-cognitive-mcp" }
 op-llm = { path = "../op-llm" }
 op-xray-daemon = { path = "../op-xray-daemon" }
-nix = { version = "0.28", features = ["signal"] }
+nix = { version = "0.28", features = ["fs", "signal", "user"] }
 
 # Zero-copy shared memory (1:1 Direct Read)
 memmap2 = { workspace = true }
@@ -83,6 +84,10 @@ path = "src/bin/op-grpc-bridge.rs"
 [[bin]]
 name = "dump-protos"
 path = "src/bin/dump-protos.rs"
+
+[[bin]]
+name = "op-grants-materializer"
+path = "src/bin/op-grants-materializer.rs"
 
 [build-dependencies]
 tonic-build = { workspace = true }

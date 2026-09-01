@@ -9,7 +9,7 @@
 //! - Run-on-connection agent support
 //! - BTRFS cache integration
 //! - StateStore execution tracking
-//! - Blockchain audit trail
+//! - Snowball audit trail
 
 #[cfg(feature = "grpc")]
 mod client;

@@ -64,12 +64,15 @@ root-only, outside git, integrity-hashed, and deleted after acceptance. If the s
 snapshot cannot be created and verified, deployment is blocked fail closed.
 **Deps:** none.
 
-### T0.2 — Capture the working tool inventory (compact/full)
+### T0.2 — Capture the pre-migration typed and retired-tool inventory
 **Reqs:** CR-1, FR-3
 **Steps:** with an authenticated client, capture `tools/list` (all pages) and
 generated `operation.method.*` reflection into `baseline-tools.json` /
-`baseline-reflection.txt`. If no authenticated client path exists yet, capture via
-the current UDS shim (`op-mcp-server --mode cognitive`) and note the method.
+`baseline-reflection.txt`. If the current authenticated network path is broken,
+derive a deterministic structural inventory from the sealed manifests and registry
+registration sources; label it as structural rather than runtime evidence. Do not
+start or retain an MCP shim. Record the four former compact names separately as an
+explicit removal set, not as a post-migration count floor.
 **Verify:** `jq '.tools|length' baseline-tools.json` ≥ 1; reflection list non-empty.
 **DoD:** the pre-consolidation tool/method name set is frozen as the migration oracle.
 **Deps:** T0.1.
@@ -80,7 +83,7 @@ FR-3g, FR-8b, FR-9, FR-9a, FR-2a, SEC-2, SEC-3, SEC-9, SEC-13, SEC-14,
 DR-1, DR-1a, DR-2, DR-7, DR-8, DR-9, DEP-5, TR-4, TR-5, NFR-7
 **Files:** `crates/op-grpc-bridge/tests/unified_mcp_e2e.rs` (new),
 `crates/op-grpc-bridge/tests/mcp_modern_2026_07_28.rs` (new),
-`crates/op-grpc-bridge/tests/mcp_legacy_stateful.rs` (new),
+`crates/op-grpc-bridge/tests/mcp_native_codex.rs` (new),
 `crates/op-mcp/tests/tool_authz.rs` (new),
 `crates/op-blob/tests/blob_resolution.rs` (new),
 `crates/op-cognitive-mcp/tests/memory_schema.rs` (new),
@@ -92,18 +95,19 @@ DR-1, DR-1a, DR-2, DR-7, DR-8, DR-9, DEP-5, TR-4, TR-5, NFR-7
 - **`only_8090_is_mcp_listener`** — asserts no `:3003/:50051/:50052/:11438` and
   `:8090` present, AND (FR-1) the only PID bound to every `:8090` address is the
   bridge — no `python3`/`socket-relay`/`fwd-8090`.
-- `code_tools_are_real` — `execute_tool{code_search}` returns code-search shape.
+- `code_tools_are_real` — direct typed `tools/call` for `code_search` returns its
+  declared code-search shape after authorized set selection.
 - `in_process_dispatch_no_loopback` — tool call succeeds with no `:3003` process.
 - `per_tool_capability_enforced` — broad-invoke-but-not-shell identity is denied
   `agent_shell_executor_exec`.
-- **`session_id_not_auth`** (FR-2a/SEC-2) — a request bearing a valid MCP
-  `Mcp-Session-Id` but no fresh OIA1 assertion is REJECTED; a replayed session id
-  does not grant access.
+- **`session_id_not_auth`** (FR-2a/SEC-2) — a request bearing an MCP
+  `Mcp-Session-Id` but no exact active-sled SID1 or fresh OIA1 is rejected; replaying
+  a session id grants nothing.
 - **`execution_context_unforgeable`** (FR-3d) — a caller cannot inject or override
   any `ExecutionContext` field (actor/scope/capability/deadline/approval/binding)
-  via `arguments`; a meta-tool creates a target-specific attenuated child context
-  that cannot widen scope/capability/deadline/transport binding or reuse an approval
-  not bound to that exact target and diff.
+  via `arguments`; direct typed dispatch creates the target-specific context and
+  cannot widen scope/capability/deadline/transport binding or reuse an approval not
+  bound to that exact target and diff.
 - **`output_schema_validated`** (FR-3e) — a tool returning output that violates its
   `output_schema` yields an error; the malformed output is never returned,
   persisted, vectorized, or prompt-injected, while a redacted intent/outcome failure
@@ -118,7 +122,8 @@ DR-1, DR-1a, DR-2, DR-7, DR-8, DR-9, DEP-5, TR-4, TR-5, NFR-7
   sealed `PluginSchema.capability_grants`; the caller-supplied `x-opdbus-capability`
   header alone (no resolved grant) is denied; a method with no resolvable grant is
   denied (degraded allow-path removed).
-- `nested_args_validated` — `execute_tool` with bad nested args rejected pre-exec.
+- `nested_args_validated` — direct typed `tools/call` with bad arguments is rejected
+  before execution.
 - `register_rejects_duplicate` — duplicate tool name → `Err`.
 - `blob_catalog_full_covers_manifest`.
 - **`exact_hash_blob_resolution`** (DR-8) — with two blobs for one plugin id present,
@@ -153,11 +158,18 @@ DR-1, DR-1a, DR-2, DR-7, DR-8, DR-9, DEP-5, TR-4, TR-5, NFR-7
 - `cancellation_classifies_commit_races` — pre-admission, prepared, committed, and
   non-transactional partial-effect cancellation fixtures produce the correct durable
   outcome/reconciliation state without claiming a committed effect was rolled back.
-- `mcp_notifications_and_origin` — notifications handled; missing/invalid `Origin` on
-  the HTTP AND gRPC-Web transports rejected (FR-2a).
-- `modern_stateless_has_no_session_authority` and
-  `legacy_session_requires_fresh_assertion` cover the modern and legacy protocols as
-  separate fixtures, not conditionals inside one lifecycle test.
+- `mcp_notifications_and_origin` — notifications are handled; every present Origin
+  is exact-allowlisted, browser gRPC-Web requires Origin, and non-browser native Codex
+  may omit it (FR-2a).
+- `native_codex_initialize_same_router` drives the installed Codex binary through
+  `initialize`/`notifications/initialized`/`tools/list` with native
+  `http_headers_helper`, and `stateless_requests_have_no_session_authority` proves
+  every protected message still requires exactly one accepted credential.
+- `sid1_exact_selected_sled` proves the helper forwards the exact MutationEngine-
+  authored blob without resealing; wrong/stale/inactive sleds and dual SID1+OIA1 fail.
+- `toolsets_requires_real_client_relist` proves a client must capture the selector,
+  re-list with `_meta`, install typed schemas, and carry the selector on calls. If the
+  installed Codex or Grok lacks this extension, its catalog remains exactly HOT five.
 - `context_cursor_survives_process_restart`, `approval_requires_authorized_approver`,
   `active_call_completes_across_hot_seal`, and `blob_vector_catalog_hash_matches`
   establish the durable-context, approval-authority, route-generation, and vector
@@ -196,11 +208,13 @@ the catalog without another listener or authority.
 Axum and Tonic projections share authentication, limits, cancellation, and audit.
 **Deps:** T0.3.
 
-### T1.2 — Authoritative capability/subid registry; remove wildcard + degraded allow-path
-**Reqs:** FR-4a, SEC-2, SEC-3, FR-3b, NFR-5, NFR-7
+### T1.2 — Authoritative capability/subid registry; exact-principal grants; remove wildcard + degraded allow-path
+**Reqs:** FR-4a, FR-4b, SEC-2, SEC-3, FR-3b, NFR-5, NFR-7
 **Files:** `deploy/config/opdbus-grants*` / grants materialization; `interceptor.rs`
 `load_capability_grants`; `crates/op-grpc-bridge/src/grpc_server.rs`
 (`enforce_bridge_capability`, `enforce_bridge_capability_with_schema`);
+`crates/op-grpc-bridge/src/oracle_assertion.rs` and `mcp_frontend.rs` (remove derived
+human-footprint auth fields and key grants by registered `principal_id`);
 `crates/op-state-store/src/plugin_schema.rs` (`capability_grants` resolution,
 `grants.get(footprint).or_else(|| grants.get("*"))`);
 `crates/op-plugins/src/state_plugins/tched_router.rs` (removes the `"*"` insert);
@@ -210,10 +224,15 @@ Axum and Tonic projections share authentication, limits, cancellation, and audit
 `crates/op-state-store/tests/capability_grants.rs` (new).
 **Tests first:**
 - `sealed_embedded_grants_absent` — every active sealed
-  `PluginSchema.capability_grants` is empty/non-authoritative; identity grants exist
-  only in the sanitized-versioned `identity_sled` projection.
+  `PluginSchema.capability_grants` is empty/non-authoritative; grants exist only in
+  the sanitized/versioned protected principal-grant projection.
 - `sealed_wildcard_grant_absent` (T0.3) → green: `"*"` absent from all active grant
   sources and schemas.
+- `grant_keys_are_registered_principals` — 64-hex footprint/genesis/hash keys,
+  unknown principal IDs, and caller-selected IDs are rejected; an exact active
+  registered `principal_id` succeeds.
+- `session_churn_does_not_change_grants` — two sessions/geneses/footprints for one
+  principal resolve identical grants; equal payload digests for two principals do not.
 - `caller_header_not_authority` — a request whose only claim is the
   `x-opdbus-capability` header (no resolved grant) is denied.
 - `no_grant_denies_not_allows` — a method/tool with no resolvable grant is DENIED
@@ -221,27 +240,39 @@ Axum and Tonic projections share authentication, limits, cancellation, and audit
 - `unknown_capability_registration_rejected` — registering a tool/method/plugin whose
   capability or subid is unknown to the registry is rejected.
 - `auth_ordering` — signature → expiry → replay → binding → capability →
-  input-validation → dispatch.
+  input-validation → dispatch for OIA1; SID1 exact active-sled match → capability →
+  input-validation → dispatch for the selected-sled path.
+- `anna_scribe_identity_preserved_without_mmap` — A.N.N.A. Scribe's established
+  persona/name and email attribution are unchanged while its unsafe duplicate
+  `/dev/shm/plugin_schema.dat` mmap reader and duplicate identity derivation are absent.
 **Steps:** make tool/method `required_capability`+`subid` resolve against the
-authoritative registry (reject unknown); make `identity_sled` the only identity-grant
-authority; migrate then remove every embedded `PluginSchema.capability_grants` value,
+authoritative registry (reject unknown); make the protected exact-`principal_id`
+projection the only identity-grant authority while `identity_sled` supplies only
+session/genesis context; migrate then remove every embedded `PluginSchema.capability_grants` value,
 including the `"*"` insert in `tched_router.rs`, and delete
-`or_else(|| grants.get("*"))`; remove the degraded allow-path so an undeclared grant
-denies; treat `x-opdbus-capability` as intent-only, never authority. Record only the
-sanitized identity-grant version/hash in checkpoints and schema projections.
+`or_else(|| grants.get("*"))`; replace footprint-keyed lookup with registered
+`principal_id`; remove `derive_human_footprint` and auth-facing footprint fields;
+reject wildcard/digest/unknown-principal keys; remove the degraded allow-path so an
+undeclared grant denies; treat `x-opdbus-capability` as intent-only, never authority.
+Preserve A.N.N.A. Scribe's persona/email surface and route any identity read it needs
+through the canonical selected-sled projection; remove only the unsafe duplicate mmap
+reader and derivation. If an earlier revision deleted the whole Scribe surface,
+restore the presentation/email contract without restoring that reader.
+Record only the sanitized identity-grant version/hash in checkpoints and schema projections.
 **Verify:** `cargo test -p op-grpc-bridge --test authz_pipeline -- --nocapture`;
 `cargo test -p op-plugins --test plugin_subid_validation -- --nocapture`;
 `cargo test -p op-state-store --test capability_grants -- --nocapture`; then inspect the materialized grants:
-`jq '.["*"].capabilities' /dev/shm/opdbus/capability-grants.json` contains no
-MCP/cognitive/agent execution capability; a catalog test asserts every sealed
+`jq 'has("*")' /dev/shm/opdbus/capability-grants.json` is `false`, and a validator
+confirms every remaining key is an active registered `principal_id`; a catalog test asserts every sealed
 `capability_grants` is empty; `rg -n '"\*"'
 crates/op-plugins/src/state_plugins/tched_router.rs` → none.
-**DoD:** identity_sled is the only grant authority; sealed schemas carry no embedded
-identity grants or wildcard; degraded allow-path is gone; header is non-authoritative.
+**DoD:** the principal-grant projection is the only grant authority; identity_sled
+supplies session/genesis only; sealed schemas carry no embedded identity grants;
+wildcard/digest keys and the degraded allow-path are gone; the header is non-authoritative.
 **Deps:** T1.1.
 **Rollback:** T0.1's exact grant snapshot is forensic input only and MUST NOT be
 blindly restored if it contains wildcard/sentinel/schema-assigned authority. Restore
-only a verified identity_sled projection that preserves the tightened invariants and
+only a verified registered-principal grant projection that preserves the tightened invariants and
 re-seal/verify its sanitized version/hash; if the prior binary cannot operate without
 removed authority, keep protected traffic fail closed rather than reintroducing it.
 
@@ -252,7 +283,7 @@ removed authority, keep protected traffic fail closed rather than reintroducing 
 (`set_permissions(0o666)` → restricted mode);
 `crates/op-grpc-bridge/tests/uds_binding.rs` (new).
 **Tests first:**
-- `uds_requires_assertion_and_peercred` — a UDS peer with no valid assertion is
+- `uds_requires_credential_and_peercred` — a UDS peer with no valid SID1 or OIA1 is
   rejected; peer uid/gid/pid + socket ownership are captured and bound.
 - `uds_not_world_writable` (T0.3) → green: `stat` shows the socket is not `0o666`.
 - `uds_userns_uid_maps_to_principal` — a container peer's namespaced uid/gid maps to
@@ -263,7 +294,8 @@ removed authority, keep protected traffic fail closed rather than reintroducing 
   before application dispatch; the same configured CA validates TLS on UDS and TCP.
 **Steps:** obtain `SO_PEERCRED` for UDS connections; map namespaced uid/gid/pid
 through user namespaces to the resolved principal; feed into the same authorization
-decision; adapt OIA source binding to peer-credential/session binding for UDS
+decision; exact-match SID1 to its active sled or adapt OIA1 source binding to
+peer-credential/session binding for UDS
 (TR-2); tighten the socket to the minimal owner/group mode (not world-writable);
 require TLS-over-UDS with certificate verification, explicit SNI/authority
 `op-grpc-bridge.internal`, and a matching DNS SAN; reject plaintext/wrong-name/
@@ -287,24 +319,23 @@ signature — trait change adding an `ExecutionContext` param), `op_core`
 **Tests first:**
 - `execution_context_unforgeable` (T0.3) → green: caller cannot inject/override any
   ctx field via `arguments`.
-- `meta_tool_attenuates_context` — a meta-tool (`execute_tool`) derives a child
-  context for the selected target: actor, resolved scope, trace, transport binding,
-  cancellation, and the earlier deadline are preserved; selected capability is
-  narrowed to the target; broad outer capability is not reusable; approval survives
-  only when it is bound to the exact target/suggestion/diff/base revision.
+- `direct_target_context_is_narrow` — a direct typed target receives actor, resolved
+  scope, trace, transport binding, cancellation, and deadline from the bridge;
+  selected capability is exact to that target and approval survives only when bound
+  to the exact target/suggestion/diff/base revision.
 **Steps:** define an immutable `ExecutionContext { actor, resolved_identity,
 container/workspace/session scope, granted_capability, selected_capability, trace_id,
 event_correlation_id, deadline, cancel_token, verified_approval, transport_binding }`
 set only by the bridge; change `Tool::execute(&self, ctx: &ExecutionContext, input:
 Value)`; thread the context through `PluginService.CallMethod`; expose one
-`ExecutionContext::attenuate_for_target(descriptor, approval_binding)` constructor
-that can only narrow scope/capability/deadline and drops an inapplicable approval.
-Require both the outer meta-tool and target capabilities; set parent invocation,
-increment bounded delegation depth, and reject recursion/depth overflow or any
-requested widening before the T4.3 audit intent/dispatch.
+`ExecutionContext::for_target(descriptor, approval_binding)` constructor that can
+only narrow scope/capability/deadline and drops an inapplicable approval. Require the
+direct target capability and reject any requested widening before the T4.3 audit
+intent/dispatch. `toolsets` changes catalog selection only; it never dispatches or
+creates a nested context.
 **Verify:** `CXXFLAGS="-include cstdint" cargo build -p op-mcp -p op-cognitive-mcp -p op-grpc-bridge`; `cargo test -p op-grpc-bridge --test exec_context -- --nocapture`.
 **DoD:** execution receives an unforgeable, bridge-built context; target-specific
-attenuation is the only meta-dispatch path and cannot widen authority.
+target construction cannot widen authority; there is no meta-dispatch path.
 **Deps:** T1.2.
 
 ### T1.5 — Durable, cross-transport replay cache + pre-auth telemetry + rate limits
@@ -354,18 +385,17 @@ set; `load_tls_identity` SANs), TLS cert SAN material,
 `deploy/runit/op-grpc-bridge/run` and its checked-in env template,
 `deploy/runit/{fwd-8090,fwd-nm-mesh-8090}` (retire), checked-in nftables policy,
 `crates/op-grpc-bridge/tests/direct_bind.rs` (new).
-**Tests first:** `bridge_binds_canonical_set` — the bridge binds loopback plus the
-canonical mesh-facing address(es) with TLS; `no_relay_fronts_8090` — no
+**Tests first:** `bridge_binds_canonical_set` — the bridge binds exactly loopback and
+svc0 with TLS; `no_relay_fronts_8090` — no
 `python3`/`socket-relay`/`fwd-8090` process fronts `:8090`.
-**Steps:** make one runit variable authoritative for
-`127.0.0.1:8090,10.0.0.3:8090,${NETMAKER_MESH_IP}:8090` (deployment default
-`NETMAKER_MESH_IP=100.69.0.1`) and remove conflicting loopback-only overrides. At
-startup verify `10.0.0.3` belongs to svc0 and the configured Netmaker IP belongs to
-the configured Netmaker interface; readiness fails if an applicable address cannot
-bind. Require SANs for `127.0.0.1`, `localhost`, `10.0.0.3`, the configured Netmaker
-IP, and `op-grpc-bridge.internal`. Install a default-deny rule admitting svc0 and
-Netmaker `:8090` only on their named interfaces/from enumerated CIDRs. Stage both
-relay retirements here; T12.1 performs the conflict-safe live order.
+**Steps:** make one runit variable authoritative for exactly
+`127.0.0.1:8090,10.0.0.3:8090` and remove conflicting loopback-only overrides. At
+startup verify `10.0.0.3` belongs to svc0; readiness fails if either address cannot
+bind. Require SANs for `127.0.0.1`, `localhost`, `10.0.0.3`, and
+`op-grpc-bridge.internal`. Install a default-deny rule admitting `10.0.0.3:8090`
+only on svc0/from its enumerated trusted CIDR. No Netmaker bind replaces the retired
+relay. Stage both historical relay retirements here; T12.1 performs the conflict-safe
+live order.
 **Verify:** `CXXFLAGS="-include cstdint" cargo build -p op-grpc-bridge`;
 `cargo test -p op-grpc-bridge --test direct_bind -- --nocapture`; live
 (post-deploy in T12.x) `sudo ss -lntp` shows only the bridge PID on every `:8090`
@@ -464,10 +494,10 @@ HTTP loopback or a standalone `:3003` listener.
 diverges from its sealed method, unknown subid, or duplicate name. Make `execute`
 enforce the target tool's `required_capability` against the resolved identity before
 running and record the decision in the event chain. Implement one sanitized schema
-projection shared by authenticated reflection, MCP `tools/list`/`get_tool_schema`, all
+projection shared by authenticated reflection, MCP `tools/list`, direct typed calls, all
 blob tools/resources/search, vectorization, caching, and logging. It includes callable
 shapes/public descriptions/capability names/subids/side-effect/idempotency/approval
-metadata but strips grants, identity footprints, private org/tenant fields, internal
+metadata but strips grants, private principal/session/footprint fields, private org/tenant fields, internal
 paths/implementation symbols, key material, and sensitive defaults/examples before
 any downstream use. Authenticated reflection returns the complete **sanitized**
 catalog per FR-9a. If raw operations access is retained, add only a separately named
@@ -481,9 +511,10 @@ resources.
 
 ### T4.2 — Nested argument validation (fail closed)
 **Reqs:** FR-5a
-**Files:** the `invoke_tool`/`execute_tool` dispatch path; `tool_registry.rs`.
+**Files:** the direct typed MCP `tools/call` dispatch path; `tool_registry.rs`.
 **Tests first:** `nested_args_validated` (T0.3) → green; `missing_tool_schema_fails_closed`.
-**Steps:** resolve target tool `input_schema`; validate nested `arguments` (draft-07)
+**Steps:** resolve the directly named target tool's `input_schema`; validate its
+`arguments` using the normalized schema dialect
 before execution; missing/invalid schema → reject.
 **Verify:** `cargo test -p op-mcp --test tool_authz nested_args_validated -- --nocapture`;
 `cargo test -p op-mcp --test tool_authz missing_tool_schema_fails_closed -- --nocapture`.
@@ -552,51 +583,143 @@ collection, and bound archive/input sizes.
 size + collection guards enforced.
 **Deps:** T4.1.
 
-### T4.5 — MCP adapter conformance + capability-filtered views + read/execute plugin-method adapter
-**Reqs:** FR-2, FR-2a, FR-3a, FR-4, FR-5, FR-9a, FR-3g, SEC-14, NFR-4
+### T4.5 — MCP adapter conformance + audience/tool-set projections + read/execute plugin-method adapter
+**Reqs:** FR-2, FR-2a, FR-3a, FR-4, FR-5, FR-9a, FR-3g, SEC-14, NFR-4;
+`standalone-emqx-identity-mcp` FR-12 through FR-15
 **Files:** `crates/op-grpc-bridge/src/mcp_frontend.rs` mounted into the shared
 Axum/Tonic frontend; `crates/op-grpc-bridge/tests/mcp_modern_2026_07_28.rs` (new),
-`crates/op-grpc-bridge/tests/mcp_legacy_stateful.rs` (new).
+`crates/op-grpc-bridge/tests/mcp_native_codex.rs` (new),
+`crates/op-identity/src/sealed_id.rs`, `crates/op-identity/src/bin/op-identity-headers.rs`,
+MutationEngine identity-sled wiring, and the project `.codex/config.toml`.
 **Tests first:**
-- Modern suite: `modern_version_negotiation`, `modern_stateless_tools_list_paginated`,
-  `modern_resources_list_read_blob`, `modern_notifications`,
-  `modern_cancellation_aborts_tool`, `modern_body_limit_timeout_origin`,
-  `modern_http_oia_encoding_is_canonical`, and
-  `modern_rejects_session_as_auth`. It sends no `Mcp-Session-Id` and presents a fresh
-  one-use OIA1 assertion on every request/turn.
-- Legacy suite: `legacy_initialize_before_use`, `legacy_session_correlation_only`,
-  `legacy_requires_fresh_assertion_every_request`, `legacy_expiry_and_bounded_state`,
-  and `legacy_origin_checked_http_and_grpcweb`.
-- Shared invariants: `filtered_views_differ_by_identity`,
-  `public_tool_schema_is_sanitized`, and `plugin_adapter_crosses_dbus_once`.
-**Steps:** implement canonical MCP **2026-07-28 stateless** negotiation and required
-headers as the default, without using a server session as lifecycle or authority.
-Implement JSON-RPC errors, notifications, cancellation, body limit, timeout,
-pagination, `resources/*`, and exact-allowlist `Origin`/CORS checks on browser HTTP
-and gRPC-Web. Reject wildcard/reflected/`null`/missing/duplicate/malformed origins
-before assertion parsing; set `Vary: Origin`; allow only required preflight methods
-and headers; never forward OIA/approval headers across an origin-changing redirect or
-log them. Native gRPC/UDS do not manufacture Origin. Define one bounded
-base64url-without-padding OIA1 HTTP header encoding and reject duplicates,
-non-canonical/oversized/trailing/conflicting representations. Put the older
-stateful initialize/`Mcp-Session-Id` behavior behind an explicit compatibility mode
-with bounded TTL/count; the session ID is correlation only and every request still
-requires a fresh one-use OIA1 assertion. Capability-filter `list_tools`/
-`search_tools`; serve only the sanitized T4.1 schema projection. The read/execute
-adapter maps generated sealed-plugin methods to `PluginService.CallMethod → D-Bus →
-MutationEngine` with the attenuated ExecutionContext—never directly to the registry.
-Mount both modes on T1.1's existing TLS acceptor. Retain SSE only if T0.2 records a
+- Native-client suite: `native_codex_initialize_same_router`,
+  `native_codex_initialized_notification`, `native_codex_helper_runs_per_request`,
+  `method_and_target_come_from_jsonrpc_body`, `custom_method_name_headers_optional`,
+  and `mcp_protocol_version_standard_lifecycle`.
+- Identity suite: `mutation_engine_authors_oib_once`, `helper_copies_exact_oib`,
+  `oib_exact_matches_active_sled`, `wrong_or_stale_sled_denied`,
+  `oia_optional_other_caller`, `dual_credentials_denied`, and
+  `no_oauth_or_mcp_shim_path`.
+- Catalog suite: `singleton_initial_catalog_is_exact_hot_five`,
+  `former_compact_tools_absent`, `selection_cannot_grant`,
+  `hidden_call_is_denied`, `public_tool_schema_is_sanitized`,
+  `plugin_adapter_crosses_dbus_once`, and `toolsets_client_relist_contract`.
+- Protocol suite: version negotiation, pagination, resources, notifications,
+  cancellation, body/deadline bounds, conditional Origin/CORS, canonical OIA1
+  encoding, and session-id-is-not-auth negatives.
+
+**Steps:** support native Codex `initialize` and `notifications/initialized` in the
+same `/mcp` router used for all methods. Keep authorization stateless: every protected
+message presents exactly one SID1 or OIA1, and any MCP session identifier is
+correlation only. Parse method and target from the JSON-RPC body; do not require
+native Codex to supply custom `Mcp-Method`/`Mcp-Name` headers. Apply
+`MCP-Protocol-Version` according to standard initialize/subsequent-request behavior.
+
+Make MutationEngine the sole SID1 author and store the immutable envelope once in the
+selected identity sled's `sealed_id`. Keep `op-identity-headers` a short-lived reader:
+publish the full sled only to the root-only identity Cozo tree and private `0640
+root:secrets` tmpfs credential projection; recursively redact `sealed_id` from public
+state, D-Bus/StateSync/subscription/snapshot/method-result/Snowball/vector/schema/web/log
+surfaces. The helper accepts an explicit session selector, reads only the private
+projection with no public/legacy fallback, validates it, emits
+one header JSON object with the exact `x-opdbus-sealed-id-bin` value, and exits.
+Configure Codex natively with only
+`url = "https://10.0.0.3:8090/mcp"` and the per-request
+`http_headers_helper`; add no command/stdio transport, listener, proxy, bearer token,
+static assertion, or OAuth configuration. The bridge exact-matches SID1 bytes/fields
+to the active sled and exact-principal grants. Preserve OIA1 as an optional freshly
+minted, replay-protected path for other callers; reject zero/dual/duplicate/malformed
+credentials.
+
+Implement JSON-RPC errors, notifications, cancellation, bounds, pagination,
+`resources/*`, and exact-allowlist browser Origin/CORS. A present Origin must match;
+browser gRPC-Web requires it; native non-browser clients may omit it. Never forward
+credential/approval headers across an origin-changing redirect or log them.
+
+Project the singleton's initial `tools/list` as exactly
+`memory_recall`, `memory_store`, `workflow_query`, `workflow_run`, and `toolsets`.
+Remove/deny `list_tools`, `search_tools`, `get_tool_schema`, `execute_tool`,
+`invoke_tool`, and aliases for every principal. `toolsets` selects exactly one
+authorized typed WARM/COLD set and returns an opaque selector. The MCP host client—not
+the model—must capture it, re-list with selector `_meta`, install the returned typed
+schemas, and preserve the selector on typed calls. Run this contract against actual
+installed Codex and Grok. If either client cannot perform selector-aware re-listing,
+keep that client on the HOT five and report WARM/COLD drill-down unsupported; schemas
+returned in a tool result do not make tools callable.
+
+Serve only the sanitized T4.1 projection. Map generated sealed-plugin methods through
+`PluginService.CallMethod → D-Bus → MutationEngine` with the direct target
+ExecutionContext, never directly to the registry. Retain SSE only if T0.2 records a
 consumer and cover it with the same auth path.
 **Verify:** `cargo test -p op-grpc-bridge --test mcp_modern_2026_07_28 -- --nocapture`;
-`cargo test -p op-grpc-bridge --test mcp_legacy_stateful -- --nocapture`; a TLS modern
-client performs `tools/list`→`resources/list`→safe `tools/call` without a session
-header; a legacy initialize flow succeeds only with fresh assertion material on each
-request.
-**DoD:** modern stateless and legacy stateful behavior are separately specified and
-tested; session ID never authenticates; HTTP assertion encoding and browser CORS are
-canonical/fail-closed; schemas are sanitized; every call uses the shared ingress and
-canonical D-Bus dispatch.
-**Deps:** T4.2, T4.3, T4.4, T1.1, T1.5.
+`cargo test -p op-grpc-bridge --test mcp_native_codex -- --nocapture`; start the real
+installed Codex client with the project config and prove initialize/list/HOT call over
+the direct URL. Record whether Codex and Grok actually implement selector-aware
+re-listing; no hand-written HTTP fixture substitutes for this client proof.
+**DoD:** native Codex works directly through one router and the header-only helper;
+there is no OAuth or MCP shim/proxy; SID1 and optional OIA1 follow their distinct
+validation semantics; the initial singleton catalog is exactly five HOT tools; typed
+drill-down is claimed only for clients proven to re-list; every call uses shared
+ingress and canonical D-Bus dispatch.
+**Deps:** T4.2, T4.3, T4.4, T1.1, T1.2, T1.5.
+
+### T4.5a — Supervise NotebookLM and MongoDB as authenticated WARM providers
+**Reqs:** FR-4, FR-4c, FR-3a, SEC-2, NFR-4, NFR-7
+**Files:** `deploy/config/{notebooklm-mcp.version,mongodb-mcp-server.version,mcp-toolsets.json}`;
+`deploy/runit/{notebooklm-mcp,mongodb-mcp-server}/`; `deploy/runit/build-golden.sh`;
+`crates/op-mcp/src/external_client.rs`; `crates/op-plugins/src/state_plugins/{notebooklm,mongodb_mcp}.rs`;
+`crates/op-grpc-bridge/src/{mutation_engine,mcp_frontend}.rs`.
+**Tests first:** `provider_artifact_digest_is_pinned`, `providers_bind_loopback_only`,
+`provider_exit_removes_ready`, `notebook_health_is_not_auth`,
+`mongo_env_presence_is_not_auth`, `mongo_read_only_probe_gates_data_set`,
+`provider_failure_does_not_change_hot_five`, and `guessed_warm_call_is_denied`.
+**Steps:** package the already-installed provider dependency trees as immutable pinned
+release inputs; install them through the golden/live btrfs release workflow; supervise
+them with runit; use Streamable HTTP from a reconnecting bridge client; add typed
+sealed plugin methods; split health and authentication markers; keep MongoDB
+read-only with request overrides/server-side JS/telemetry disabled; project local
+context, NotebookLM auth/research, MongoDB knowledge/data, and EMQX as WARM sets.
+Never install at service start and never expose ports 3101–3103 outside loopback.
+**Verify:** `sudo deploy/runit/build-golden.sh --dry-run`, then the normal release
+publish; `sudo sv status notebooklm-mcp mongodb-mcp-server`; loopback listener audit;
+MCP initialize/list/call probes; policy tests proving the HOT list remains exactly
+five and unauthenticated provider sets remain hidden.
+**DoD:** both provider binaries are reproducible release content and runit-owned;
+healthy/authenticated states are not conflated; the only client-visible MCP URL
+remains `https://10.0.0.3:8090/mcp`.
+**Deps:** T4.5, T1.1, T1.2.
+
+### T4.6 — Canonical sled footprint payload; one Snowball hash author
+**Reqs:** FR-4b, SEC-9, DR-5, NFR-7
+**Files:** `crates/op-state-store/src/event_chain.rs`,
+`crates/op-snowball/src/footprint.rs`, legacy
+`crates/op-snowball/src/plugin_footprint.rs`, `crates/op-snowball/src/snowball.rs`,
+`streaming_snowball.rs`, `crates/op-grpc-bridge/src/mutation_engine.rs`
+(`event_to_footprint`), chain-vector projection code, and focused tests.
+**Tests first:**
+- `principal_is_metadata_not_footprint` — admitted identity is copied as
+  `actor_id = principal_id`; neither the envelope nor any digest can alter identity,
+  grants, or audience.
+- `one_payload_one_chain_hash` — sled/Shuttle supply canonical payload bytes and
+  Snowball computes the current event hash once from domain + previous link + payload;
+  no precomputed current-payload hash is passed as the body.
+- `vectorization_uses_payload_not_digest` — deterministic embedding text includes
+  bounded/redacted payload fields and uses `event_id/event_hash` only as provenance.
+- `single_plugin_footprint_type` — the duplicate legacy type/generator and its
+  `data_hash → content_hash` hash-of-hash path are absent.
+**Steps:** define one canonical `PluginFootprint` payload envelope; make the sled emit
+it only after admission and stamp `principal_id`, `session_id`, and `session_genesis`
+as metadata; make the Shuttle deliver the same envelope to Snowball append and async
+vectorization; make Snowball the sole chain `event_hash` author; return/store the
+receipt separately; replace `ChainEvent.json_args_footprint` with canonical
+bounded/redacted argument payload; migrate callers and delete the duplicate legacy generator. Do not
+use footprint/genesis/event hashes in any authentication or authorization path.
+**Verify:** focused `op-snowball` and `op-grpc-bridge` tests plus the semantic gates
+in T14.1.
+**DoD:** footprint means payload transport only; identity is metadata; exactly one
+current-event hash is authored; vectorization receives payload text; no hash-derived
+identity or current-payload hash-of-hash remains.
+**Deps:** T1.2, T4.3.
 
 ---
 
@@ -705,7 +828,7 @@ genesis before an OIA1 exists), cognitive-memory migration files;
   enumeration-safe duplicate responses hold; no public SendMagicLink,
   VerifyMagicLink, admin registration, schema, or reflection route exists.
 - `only_liveness_public` — unauthenticated liveness succeeds; unauthenticated
-  `tools/list`, reflection, context stream, memory, `execute_tool` are rejected before
+  `tools/list`, reflection, context stream, memory, and typed `tools/call` are rejected before
   dispatch.
 - `idle_recovery_fires_once_per_episode` — an idle session fires exactly one recovery
   per idle episode (no repeating timer); a returning session re-arms.
@@ -717,7 +840,7 @@ genesis before an OIA1 exists), cognitive-memory migration files;
   at-least-once retry semantics.
 **Steps:** expose exactly `GET /healthz` and `POST /genesis/complete` in the public
 router. Genesis accepts a bounded canonical OIG1 envelope containing version/purpose,
-human public key, Netmaker inner IP, server derivation inputs, trusted decoy key ID,
+human public key, WireGuard inner IP, server derivation inputs, trusted decoy key ID,
 issued-at, expiry ≤15 minutes, and nonce. Apply pre-signature rate/body/depth limits;
 for browsers enforce exact Origin+CSRF; verify canonical parse, trust/signature,
 purpose/time, transport/Xray source binding, and proof; derive principal/session IDs
@@ -1015,14 +1138,18 @@ http://127.0.0.1:8080/.well-known/mcp.json` → 404/410.
 ⚠️ Gated on Phases 1–9 green AND the client inventory migrated (CR-1). Rollback is via
 the prior btrfs golden snapshot (DEP-2).
 
-### T10.1 — Migrate client configs and Xray routes
+### T10.1 — Migrate clients to the direct fabric URL and native header helper
 **Reqs:** CR-1, CR-4, CR-6
 **Files:** `.mcp.json`, `~/.factory/mcp.json`, `.kiro/settings/mcp.json`,
 `deploy/config/cognitive-mcp-clients.json`, `deploy/config/mcp-servers.json`,
 `deploy/config/factory-mcp.json`, Xray route defs (`schema_bridge.rs` / xray config
 generation).
-**Steps:** repoint every MCP client entry to the `:8090` bridge path; repoint any
-Xray `mcp.internal`/`:50052`/`:3003` route to `:8090`.
+**Steps:** configure the singleton Codex entry with only
+`url = "https://10.0.0.3:8090/mcp"` and native per-request
+`http_headers_helper = "/usr/local/bin/op-identity-headers --session <session-id>"`.
+Repoint every other authorized MCP client to the same external fabric path and repoint
+historical Xray aliases to `:8090`. Remove OAuth, bearer/static identity headers,
+stdio `command` entries, alternate MCP URLs, and proxy configuration.
 **Verify:** `rg -n ':3003|:50052|:50051|:11438' deploy/config .mcp.json ~/.factory/mcp.json .kiro/settings/mcp.json` → matches only in removal/comment context.
 **DoD:** no client points at a retired endpoint.
 **Deps:** T9.2.
@@ -1031,21 +1158,22 @@ Xray `mcp.internal`/`:50052`/`:3003` route to `:8090`.
 **Reqs:** DEP-1, TR-3, CR-4
 **Files:** `crates/op-cognitive-mcp/src/server.rs` (`start_http_server`,
 `start_grpc_server`, `start_dual`, `serve_cognitive_grpc`), `main.rs` invocations;
-`crates/op-mcp/src/main.rs` (reduce to client-only shim: no listener, no registry/DB
-writer, always calls bridge, per CR-4).
-**Tests first:** `no_listener_in_cognitive_mcp`, `op_mcp_server_is_client_shim`.
-**Steps:** delete the deprecated listener fns and their invocations; reduce
-`op-mcp-server` to the bridge-calling shim.
+`crates/op-mcp/src/main.rs` (remove the standalone MCP command/shim path while
+retaining any in-process library APIs needed by the bridge).
+**Tests first:** `no_listener_in_cognitive_mcp`, `no_op_mcp_server_transport_shim`.
+**Steps:** delete deprecated listener functions/invocations and remove the
+`op-mcp-server` client transport/stdio shim. `op-identity-headers` is the only helper:
+it emits header JSON and exits and does not implement MCP.
 **Verify:** `cargo build --workspace`; `rg -n 'start_http_server|serve_cognitive_grpc|:3003|:50052' crates/op-cognitive-mcp/src crates/op-mcp/src` → none.
 **DoD:** no standalone MCP listener code remains.
 **Deps:** T10.1.
 
 ### T10.3 — Retire runit service definitions and forwarders (both spec trees where applicable)
 **Reqs:** DEP-1, TR-3, FR-1, NFR-6
-**Files:** delete `deploy/runit/{op-mcp-agents,op-mcp-compact,op-mcp-blob-schema,op-mcp-cognitive,op-waypipe-grpc}`, `deploy/runit/install-op-mcp-agents.sh`, and forwarders `deploy/runit/{fwd-8090,fwd-nm-mesh-8090,fwd-nm-tonic-8081}` that target retired ports; reduce/retire `deploy/runit/op-cognitive-mcp` to the client shim.
+**Files:** delete `deploy/runit/{op-mcp-agents,op-mcp-compact,op-mcp-blob-schema,op-mcp-cognitive,op-waypipe-grpc}`, `deploy/runit/install-op-mcp-agents.sh`, and historical forwarders that target retired ports; delete `deploy/runit/op-cognitive-mcp`.
 **Steps:** remove the service dirs to match the live host; retire the `fwd-8090`
-Python `socket-relay` now that the bridge directly binds `:8090` (T1.6); keep
-`op-cognitive-mcp` only if it is a listenerless shim (CR-4).
+Python `socket-relay` now that the bridge directly binds `:8090` (T1.6); no cognitive
+or client-only MCP shim survives (CR-4).
 **Verify:** for each remaining `deploy/runit/*/run`, `rg -n ':11438|:3003|:50052|socket-relay|tcp-listen' deploy/runit` → none in an active service;
 `sudo sv status fwd-8090 fwd-nm-mesh-8090` → both down/absent.
 **DoD:** repo `deploy/runit/` matches the target (no standalone MCP listener service,
@@ -1159,35 +1287,34 @@ keep traffic denied and preserve both stores for recovery.
 **Steps:**
 - `CXXFLAGS="-include cstdint" cargo build --workspace --release`
 - `sudo deploy/runit/build-golden.sh --dry-run` (review)
-- Preflight from a persistent console: confirm `10.0.0.3` is on svc0 and configured
-  `${NETMAKER_MESH_IP}` (default `100.69.0.1`) is on the Netmaker interface; verify
-  certificate SANs/CA; syntax-check and install the
+- Preflight from a persistent console: confirm `10.0.0.3` is on svc0; verify
+  certificate SANs/CA for exactly loopback and svc0; syntax-check and install the
   default-deny nftables transaction; run the release bridge temporarily on
-  all three applicable addresses at port `18090` and pass TLS/OIA/reflection/MCP/
-  D-Bus/browser smoke tests, then
+  both canonical addresses at port `18090` and pass TLS/OIB/OIA/reflection/native
+  Codex MCP/D-Bus/browser smoke tests, then
   stop it. Abort without changing `:8090` if any preflight fails.
 - `sudo deploy/runit/build-golden.sh --no-restart` to install the golden artifacts and
   runit config while the old topology still serves. Verify hashes before cutover.
 - From the console, perform the port-conflict-safe cutover in this exact order:
-  `sudo sv down fwd-8090 fwd-nm-mesh-8090`; verify neither relay owns
-  `10.0.0.3:8090` nor `${NETMAKER_MESH_IP}:8090`; then
+  stop both historical relays with `sudo sv down`; verify neither owns
+  `10.0.0.3:8090`; then
   `sudo sv restart op-grpc-bridge`. Do not try to start the direct-bind bridge while
   the relay still owns the address.
-- Verify both canonical binds, TLS/OIA auth, firewall counters, reflection, modern MCP,
-  and memory before restarting `op-web` or declaring success.
+- Verify both canonical binds, TLS/OIB/OIA auth, firewall counters, reflection, native
+  Codex MCP, and memory before restarting `op-web` or declaring success.
 **Verify:** `sudo sv status op-grpc-bridge op-web` running;
 `sudo sv status fwd-8090 fwd-nm-mesh-8090` → both down/absent;
 `sudo ss -lntp 'sport = :8090'` shows only the bridge PID on `127.0.0.1`,
-`10.0.0.3`, and the applicable Netmaker IP (no `python3`/`socket-relay`);
+and `10.0.0.3` (no Netmaker/non-canonical bind and no `python3`/`socket-relay`);
 `sha256sum /usr/local/bin/op-grpc-bridge` matches the built artifact; an unapproved
 source cannot cross the nftables rule.
 **DoD:** deployed via golden image; artifacts match; no hand-copy; `:8090` bound only
 by the bridge; relay retired.
 **Deps:** T12.0.
 **Rollback:** if the new bridge cannot bind/authenticate after the relay is stopped,
-keep the mesh firewall default-deny and the relay down—never re-enable the deprecated
+keep the svc0 firewall default-deny and the relays down—never re-enable the deprecated
 unauthenticated path. Boot/install the prior golden and restore data per T12.0 from
-the console; serve loopback-only until a safe authenticated mesh path is available.
+the console; serve loopback-only until the authenticated svc0 fabric bind is safe.
 
 ### T12.2 — Restart durability
 **Reqs:** DEP-3, SEC-13
@@ -1219,7 +1346,7 @@ CR-6, CR-7; NFR-1, NFR-2, NFR-3, NFR-4, NFR-5, NFR-6, NFR-7
 - `crates/op-cognitive-mcp/tests/e2e_voyage_qdrant.rs` (existing, extend cleanup and
   catalog assertions);
 - `crates/op-grpc-bridge/tests/unified_mcp_e2e.rs`,
-  `mcp_modern_2026_07_28.rs`, and `mcp_legacy_stateful.rs`;
+  `mcp_modern_2026_07_28.rs`, and `mcp_native_codex.rs`;
 - `crates/op-chat/tests/two_turn_memory_e2e.rs`;
 - `scripts/acceptance/btrfs_rollback_e2e.sh`;
 - `tests/fixtures/unified-control-plane/{identities.json,grants.json,
@@ -1236,7 +1363,7 @@ non-destructive configuration. `VOYAGE_API_KEY` and live signing authority come 
 from the test secret provider/environment and are never printed.
 **Verify (all must pass):**
 - `sudo ss -lntp` → `:8090` bound **only by the bridge PID** on loopback, svc0, and
-  the configured/present Netmaker address (no `python3`/`socket-relay`); no
+  no other address (no `python3`/`socket-relay`); no
   `10.200.0.2:8090`; `:3003/:50051/:50052/:11438/:11437` closed (FR-1).
 - `sudo sv status fwd-8090 fwd-nm-mesh-8090` → both down/absent (FR-1).
 - `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/mcp/compact` → 404/410;
@@ -1244,10 +1371,16 @@ from the test secret provider/environment and are never printed.
   `/jsonrpc`, `/rpc` → 404/410 (TR-4).
 - Plaintext gRPC dial to `:8090` fails; a TLS reflection dial succeeds against every
   bound address and the presented cert SANs cover them (FR-1/SEC-1).
-- TLS modern MCP `tools/list`→`get_tool_schema`→safe `tools/call` succeeds under
-  canonical 2026-07-28 stateless negotiation without `Mcp-Session-Id`; the separate
-  legacy initialize/session fixture succeeds only with fresh OIA1 assertion material
-  on every request; a session id alone is rejected (FR-2a/SEC-2).
+- The installed Codex binary connects directly to
+  `https://10.0.0.3:8090/mcp`; native `http_headers_helper` emits the exact selected-
+  sled SID1, and the same router completes initialize/initialized/list/HOT call. No
+  OAuth, stdio command, proxy, or custom `Mcp-Method`/`Mcp-Name` requirement
+  participates. A session id alone is rejected; a separate caller succeeds with fresh
+  OIA1 and replay fails (FR-2a/SEC-2).
+- The singleton's first list is exactly the five HOT typed tools and all former
+  compact/generic names are absent/denied. Actual Codex and Grok runs record whether
+  selector-aware `_meta` re-list is supported; WARM/COLD typed callability is asserted
+  only for a client that installs the re-listed schemas and carries the selector.
 - real-browser exact Origin/CORS matrix passes; its authenticated session/CSRF OIA
   broker issues one no-store target-bound assertion per call, replay is rejected,
   static headers/credentialed redirects fail, and native gRPC needs no Origin
@@ -1263,8 +1396,10 @@ from the test secret provider/environment and are never printed.
 - unauth/fake/expired/inactive/replayed/unauthorized fail before dispatch; a
   caller-supplied `x-opdbus-capability` header alone is denied; a method with no
   resolvable grant is denied (SEC-2/SEC-3/FR-4a).
-- identity_sled is the sole grant authority; no `"*"`/sentinel grant and no non-empty
-  authoritative sealed `PluginSchema.capability_grants` survives (FR-4a/SEC-3).
+- the protected exact-`principal_id` projection is the sole grant authority;
+  `identity_sled` supplies session/genesis only; no `"*"`/sentinel/digest-key grant
+  and no non-empty authoritative sealed `PluginSchema.capability_grants` survives
+  (FR-4a/FR-4b/SEC-3).
 - a caller cannot forge/override any ExecutionContext field or scope
   (identity/container/namespace/workspace/collection/session/path); a coding traversal/
   symlink/oversized-archive request is rejected (FR-3d/FR-3f).
@@ -1316,11 +1451,10 @@ from the test secret provider/environment and are never printed.
 **Required E2E suites (CR-7) — each a release blocker:**
 - Voyage/Qdrant semantic:
   `CXXFLAGS="-include cstdint" cargo test -p op-cognitive-mcp --test e2e_voyage_qdrant -- --nocapture`.
-- authenticated modern + legacy `:8090` (TLS + fresh OIA1 through discovery/
-  execution):
+- authenticated direct `:8090` (native Codex SID1 plus optional other-caller OIA1):
   `CXXFLAGS="-include cstdint" cargo test -p op-grpc-bridge --test unified_mcp_e2e -- --nocapture`;
   `CXXFLAGS="-include cstdint" cargo test -p op-grpc-bridge --test mcp_modern_2026_07_28 -- --nocapture`;
-  `CXXFLAGS="-include cstdint" cargo test -p op-grpc-bridge --test mcp_legacy_stateful -- --nocapture`.
+  `CXXFLAGS="-include cstdint" cargo test -p op-grpc-bridge --test mcp_native_codex -- --nocapture`.
 - two-turn chatbot memory (turn 1 stores; restart bridge; turn 2 recalls with
   provenance and cross-identity isolation):
   `CXXFLAGS="-include cstdint" cargo test -p op-chat --test two_turn_memory_e2e -- --nocapture`.
@@ -1360,6 +1494,13 @@ occurrences of:
   non-canonical bridge bind such as `10.200.0.2:8090` (FR-1);
 - caller-supplied capability header treated as authority / the degraded
   `identity.is_some() && capability_matches` allow path (FR-4a);
+- `derive_human_footprint`, auth-facing `HumanPrincipalIdentity.footprint` /
+  `GhostbridgeIdentity.footprint` / `AuthenticatedCaller.footprint`, grant lookup by
+  footprint/genesis/hash, 64-hex digest grant keys, or any footprint/hash-to-principal
+  derivation (FR-4b);
+- duplicate `PluginFootprint` definitions/generators, legacy `data_hash →
+  content_hash` current-payload hash-of-hash, `json_args_footprint`, vectorization of a digest-only body, or
+  any current-event chain-hash author outside Snowball append (FR-4b);
 - first-prefix blob resolution instead of exact schema-hash (DR-8);
 - raw sealed schema/grant/secret fields reaching ordinary reflection, blob,
   resource, vector, cache, or log surfaces instead of the FR-8b projection;
@@ -1367,9 +1508,17 @@ occurrences of:
   `ToolRegistry::execute` instead of `PluginService.CallMethod → D-Bus →
   MutationEngine`, and any hand-authored cognitive protobuf/method schema that is not
   derived/checked against the authoritative `PluginSchema`;
+- active OAuth discovery/token/callback/PKCE or OAuth-to-OIA exchange code/config;
+  a Codex MCP command/stdio shim, HTTP proxy, helper listener, alternate MCP URL,
+  bearer/static identity header, or any `op-mcp-server` transport path;
+- requiring non-standard `Mcp-Method`/`Mcp-Name` headers instead of deriving the
+  method/target from the parsed JSON-RPC body;
+- active MCP exposure of `list_tools`, `search_tools`, `get_tool_schema`,
+  `execute_tool`, or `invoke_tool` outside removal/negative-test fixtures;
 - committed unredacted baseline grants, assertions, signing keys, or service
   environments; plaintext UDS configuration; or a runit `:8090` bind set that omits
-  svc0/Netmaker-interface/SAN/firewall startup validation; wildcard/reflected/`null`
+  exact loopback+svc0/SAN/firewall startup validation or adds a Netmaker/non-canonical
+  bind; wildcard/reflected/`null`
   browser Origin configuration or logging/redirect forwarding of OIA/approval headers.
 Scope the second-`ToolRegistry` gate to production execution ownership and the polling
 gate to periodic state-discovery only (allow tests, isolated libraries,
@@ -1382,7 +1531,8 @@ regression class (embedded sealed grants, op-web grpc_proxy/jsonrpc/rpc/well-kno
 Python socket-relay fronting `:8090`, caller-supplied-capability authority + degraded
 allow-path, first-prefix blob resolution, parallel non-D-Bus execution, schema drift,
 raw schema projection leakage, unsafe browser Origin policy, plaintext UDS, and
-secret-bearing baseline artifacts).
+secret-bearing baseline artifacts, hash-derived identity, duplicate footprint types,
+and current-payload hash-of-hash).
 **Deps:** T13.1.
 
 ---
@@ -1408,6 +1558,7 @@ Phase 4 detail (descriptor → validation → adapter):
 T4.1 → T4.2 → ┐
 T4.1 → T4.3   ┤→ T4.5   (MCP adapter conformance; needs T1.1 + T1.5)
 T4.1 → T4.4 → ┘
+        T4.3 ───→ T4.6   (sled payload → one Snowball hash + vector projection; needs T1.2)
 ```
 
 Phase 9 detail (TR-4 ordering — dashboard repoint precedes proxy delete):

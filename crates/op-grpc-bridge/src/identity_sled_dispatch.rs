@@ -6,7 +6,7 @@
 //! reaches here, so this module only performs the domain effect.
 //!
 //! Durability: sleds and the session-event "snowball" ledger persist to the
-//! Cozo relations `identity_sleds` / `session_events` (own sled-engine path —
+//! Cozo relations `identity_sessions` / `session_events` (own sled-engine path —
 //! never the users-cozo or cognitive-mcp store, which other processes hold
 //! open). The event chain remains the durable proof; Cozo is the queryable
 //! archive plus the restart-warm source for the state cache. All Cozo I/O is
@@ -21,15 +21,17 @@
 //! IS the identity. The legacy global 152-byte sled at
 //! The retired process-global raw identity file is not written or consulted.
 
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use async_trait::async_trait;
 use base64::Engine;
 use op_cozo_store::{CozoGraphShuttle, GenesisInputsRecord, IdentitySledRecord};
 use op_plugins::state_plugins::identity_sled::{
     ContainerIdentitySled, IdentitySledState, SessionEvent, SledBtrfsDevice, RECORD_FORMAT,
 };
-use op_plugins::state_plugins::incus::{IncusInstance, IncusPlugin};
+use op_plugins::state_plugins::incus::{IdentitySessionPowerState, IncusInstance, IncusPlugin};
 use op_plugins::state_plugins::incus_device::Device;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
@@ -46,6 +48,64 @@ const MAX_EVENTS_IN_STATE: usize = 256;
 /// the cognitive-mcp store are already held by other processes.
 const DEFAULT_SLED_COZO_PATH: &str = "/var/lib/op-dbus/identity-cozo";
 
+/// Narrow lifecycle seam for identity containers. Production uses Incus's
+/// native Unix-socket API; tests inject a recorder and never touch Incus.
+#[async_trait]
+pub(crate) trait IdentityContainerLifecycle: Send + Sync {
+    async fn start(&self, session_id: &str) -> anyhow::Result<()>;
+    async fn stop(&self, session_id: &str) -> anyhow::Result<()>;
+}
+
+struct IncusIdentityContainerLifecycle;
+
+#[async_trait]
+impl IdentityContainerLifecycle for IncusIdentityContainerLifecycle {
+    async fn start(&self, session_id: &str) -> anyhow::Result<()> {
+        IncusPlugin::set_identity_session_power_state(
+            session_id,
+            IdentitySessionPowerState::Running,
+        )
+        .await
+    }
+
+    async fn stop(&self, session_id: &str) -> anyhow::Result<()> {
+        IncusPlugin::set_identity_session_power_state(
+            session_id,
+            IdentitySessionPowerState::Stopped,
+        )
+        .await
+    }
+}
+
+fn harden_identity_store_tree(path: &Path) -> anyhow::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!(
+            "identity store contains a symbolic link: {}",
+            path.display()
+        );
+    }
+    if metadata.is_dir() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        for entry in std::fs::read_dir(path)? {
+            harden_identity_store_tree(&entry?.path())?;
+        }
+    } else if metadata.is_file() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    } else {
+        anyhow::bail!(
+            "identity store contains an unsupported filesystem object: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn prepare_identity_store(path: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(path)?;
+    harden_identity_store_tree(path)
+}
+
 /// In-state snowball ledger key inside the plugin state cache entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct SledCacheState {
@@ -53,6 +113,20 @@ struct SledCacheState {
     sleds: Vec<ContainerIdentitySled>,
     #[serde(default)]
     events: Vec<SessionEvent>,
+}
+
+#[async_trait]
+trait IdentityStatePublisher: Send + Sync {
+    async fn publish(&self, engine: &MutationEngine, cache: &SledCacheState) -> anyhow::Result<()>;
+}
+
+struct MutationEngineStatePublisher;
+
+#[async_trait]
+impl IdentityStatePublisher for MutationEngineStatePublisher {
+    async fn publish(&self, engine: &MutationEngine, cache: &SledCacheState) -> anyhow::Result<()> {
+        write_cache(engine, cache).await
+    }
 }
 
 /// Lazily opened durable store; `None` (with one warning) when the path can't
@@ -63,8 +137,22 @@ fn sled_cozo() -> Option<&'static CozoGraphShuttle> {
         .get_or_init(|| {
             let path = std::env::var("IDENTITY_SLED_COZO_DB_PATH")
                 .unwrap_or_else(|_| DEFAULT_SLED_COZO_PATH.to_string());
-            match CozoGraphShuttle::new_persistent(PathBuf::from(&path)) {
-                Ok(store) => Some(store),
+            let path_buf = PathBuf::from(&path);
+            if let Err(error) = prepare_identity_store(&path_buf) {
+                tracing::error!(%path, %error, "identity sled store permissions rejected");
+                return None;
+            }
+            match CozoGraphShuttle::new_persistent(path_buf.clone()) {
+                Ok(store) => {
+                    // Cozo creates its initial RocksDB files while opening.
+                    // Re-apply the exact modes before exposing the handle;
+                    // the runit service's 0077 umask governs later files.
+                    if let Err(error) = harden_identity_store_tree(&path_buf) {
+                        tracing::error!(%path, %error, "identity sled store hardening failed");
+                        return None;
+                    }
+                    Some(store)
+                }
                 Err(e) => {
                     tracing::warn!(
                         %path,
@@ -85,11 +173,11 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         interface: sled.interface.clone(),
         peer_ip: sled.peer_ip.clone().unwrap_or_default(),
         mutation_index: sled.mutation_index as i64,
-        hashed_footprint: sled.genesis.clone().unwrap_or_default(),
+        session_genesis: sled.genesis.clone().unwrap_or_default(),
         trace_id: sled.trace_id.clone(),
         schema_version: sled.schema_version as i64,
         vector_id: sled.vector_id.clone(),
-        blob_ref: sled.blob_ref.clone().unwrap_or_default(),
+        sealed_id: sled.sealed_id.clone().unwrap_or_default(),
         btrfs_device_json: sled
             .btrfs_device
             .as_ref()
@@ -133,11 +221,11 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         interface: rec.interface.clone(),
         peer_ip: (!rec.peer_ip.is_empty()).then(|| rec.peer_ip.clone()),
         mutation_index: rec.mutation_index.max(0) as u64,
-        genesis: (!rec.hashed_footprint.is_empty()).then(|| rec.hashed_footprint.clone()),
+        genesis: (!rec.session_genesis.is_empty()).then(|| rec.session_genesis.clone()),
         trace_id: rec.trace_id.clone(),
         schema_version: rec.schema_version.max(0) as u32,
         vector_id: rec.vector_id.clone(),
-        blob_ref: (!rec.blob_ref.is_empty()).then(|| rec.blob_ref.clone()),
+        sealed_id: (!rec.sealed_id.is_empty()).then(|| rec.sealed_id.clone()),
         btrfs_device: parse_json("btrfs_device", &rec.btrfs_device_json)
             .and_then(|v| serde_json::from_value(v).ok()),
         instance: parse_json("instance", &rec.instance_json)
@@ -163,7 +251,7 @@ async fn ensure_hydrated(engine: &MutationEngine) {
             let Some(cozo) = sled_cozo() else { return };
             let cozo = cozo.clone();
             let rows = tokio::task::spawn_blocking(move || {
-                let sleds = cozo.list_identity_sleds()?;
+                let sleds = cozo.list_identity_sessions()?;
                 let genesis = cozo.list_identity_genesis()?;
                 Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
             })
@@ -316,6 +404,20 @@ pub(crate) async fn store_genesis(
     engine: &MutationEngine,
     stamp: &GenesisStamp,
 ) -> anyhow::Result<String> {
+    let claims = op_identity::sealed_id::SealedId::from_inline_ref(&stamp.sealed_id)
+        .map_err(|error| anyhow::anyhow!("invalid MutationEngine sealed ID: {error}"))?;
+    if claims.principal_id != op_identity::session::derive_principal_id(&stamp.wireguard_pubkey)
+        || claims.session_id != stamp.session_id
+        || claims.wireguard_pubkey != stamp.wireguard_pubkey
+        || claims.session_genesis != stamp.genesis_hex
+        || claims.trace_id != stamp.trace_id
+        || claims.arrival_timestamp != stamp.arrival_timestamp
+        || claims.chain_head_at_arrival != stamp.chain_head_at_arrival
+        || claims.catalog_hash_at_arrival != stamp.catalog_hash_at_arrival
+        || claims.head_timestamp_at_arrival != stamp.head_timestamp_at_arrival
+    {
+        anyhow::bail!("MutationEngine sealed ID does not match its genesis stamp");
+    }
     ensure_hydrated(engine).await;
     let mut cache = read_cache(engine).await;
     let ts = now();
@@ -326,22 +428,55 @@ pub(crate) async fn store_genesis(
     {
         Some(sled) => {
             // An anchored account is never re-anchored. A record that merely
-            // carries a v2 `hashed_footprint` in `genesis` is NOT anchored —
+            // carries a v2 `session_genesis` in `genesis` is NOT anchored —
             // see `ContainerIdentitySled::is_anchored` — so it gets minted
             // properly here rather than keeping a value nothing can verify.
             if sled.is_anchored() {
-                return Ok(sled.genesis.clone().unwrap_or_default());
+                let stored_genesis = sled.genesis.clone().unwrap_or_default();
+                if stored_genesis != stamp.genesis_hex
+                    || sled.wireguard_pubkey != stamp.wireguard_pubkey
+                    || sled.trace_id != stamp.trace_id
+                    || sled.arrival_timestamp != stamp.arrival_timestamp
+                    || sled.chain_head_at_arrival != stamp.chain_head_at_arrival
+                    || sled.catalog_hash_at_arrival != stamp.catalog_hash_at_arrival
+                    || sled.head_timestamp_at_arrival != stamp.head_timestamp_at_arrival
+                    || claims.schema_version != sled.schema_version
+                    || claims.expires_at != sled.expires_at.unwrap_or(0)
+                {
+                    anyhow::bail!(
+                        "refusing to replace the sealed ID for mismatched anchored session '{}'",
+                        stamp.session_id
+                    );
+                }
+                match sled
+                    .sealed_id
+                    .as_deref()
+                    .filter(|sealed| !sealed.is_empty())
+                {
+                    Some(sealed) if sealed != stamp.sealed_id => {
+                        anyhow::bail!(
+                            "refusing to replace the authored sealed ID for anchored session '{}'",
+                            stamp.session_id
+                        );
+                    }
+                    Some(_) => {}
+                    None => sled.sealed_id = Some(stamp.sealed_id.clone()),
+                }
+                sled.clone()
+            } else {
+                sled.genesis = Some(stamp.genesis_hex.clone());
+                sled.trace_id = stamp.trace_id.clone();
+                sled.arrival_timestamp = stamp.arrival_timestamp;
+                sled.chain_head_at_arrival = stamp.chain_head_at_arrival.clone();
+                sled.catalog_hash_at_arrival = stamp.catalog_hash_at_arrival.clone();
+                sled.head_timestamp_at_arrival = stamp.head_timestamp_at_arrival;
+                sled.schema_version = RECORD_FORMAT;
+                sled.sealed_id = Some(stamp.sealed_id.clone());
+                if sled.wireguard_pubkey.is_empty() {
+                    sled.wireguard_pubkey = stamp.wireguard_pubkey.clone();
+                }
+                sled.clone()
             }
-            sled.genesis = Some(stamp.genesis_hex.clone());
-            sled.arrival_timestamp = stamp.arrival_timestamp;
-            sled.chain_head_at_arrival = stamp.chain_head_at_arrival.clone();
-            sled.catalog_hash_at_arrival = stamp.catalog_hash_at_arrival.clone();
-            sled.head_timestamp_at_arrival = stamp.head_timestamp_at_arrival;
-            sled.schema_version = RECORD_FORMAT;
-            if sled.wireguard_pubkey.is_empty() {
-                sled.wireguard_pubkey = stamp.wireguard_pubkey.clone();
-            }
-            sled.clone()
         }
         None => {
             // Arrival of a session that has no record yet: the arrival IS the
@@ -354,10 +489,10 @@ pub(crate) async fn store_genesis(
                 peer_ip: None,
                 mutation_index: 0,
                 genesis: Some(stamp.genesis_hex.clone()),
-                trace_id: hex::encode(uuid::Uuid::new_v4().as_bytes()),
+                trace_id: stamp.trace_id.clone(),
                 schema_version: RECORD_FORMAT,
                 vector_id: String::new(),
-                blob_ref: None,
+                sealed_id: Some(stamp.sealed_id.clone()),
                 btrfs_device: None,
                 instance: None,
                 session_started_at: ts,
@@ -490,6 +625,268 @@ fn derive_session_id(args: &JsonValue, pubkey: &str) -> anyhow::Result<String> {
     }
 }
 
+/// Apply the non-negotiable identity-container lifecycle policy to a
+/// provision-time Incus definition. `incus init` creates the instance parked;
+/// only authenticated session activation may start it.
+fn prepare_parked_instance(
+    session_id: &str,
+    mut instance: IncusInstance,
+) -> anyhow::Result<IncusInstance> {
+    instance.name = session_id.to_string();
+    instance.instance_type = "container".to_string();
+    instance.status = "Stopped".to_string();
+    if instance.profiles.is_empty() {
+        // The identity profile owns the root disk plus the shared fabric UDS
+        // and intentionally has no NIC. The host's Incus default profile has
+        // no devices and cannot boot an identity container.
+        instance.profiles = vec!["identity".to_string()];
+    }
+    instance
+        .config
+        .get_or_insert_with(Default::default)
+        .insert("boot.autostart".to_string(), "false".to_string());
+
+    if instance
+        .devices
+        .iter()
+        .chain(instance.expanded_devices.iter())
+        .any(|device| matches!(device.device, Device::Nic(_)))
+    {
+        anyhow::bail!(
+            "nic devices are not allowed: containers get no NIC or IP \
+             (all container I/O goes over the UDS socket surface)"
+        );
+    }
+    Ok(instance)
+}
+
+async fn set_session_active_with(
+    engine: &MutationEngine,
+    session_id: &str,
+    active: bool,
+    lifecycle: &dyn IdentityContainerLifecycle,
+) -> anyhow::Result<ContainerIdentitySled> {
+    set_session_active_with_publisher(
+        engine,
+        session_id,
+        active,
+        lifecycle,
+        &MutationEngineStatePublisher,
+    )
+    .await
+}
+
+async fn set_session_active_with_publisher(
+    engine: &MutationEngine,
+    session_id: &str,
+    active: bool,
+    lifecycle: &dyn IdentityContainerLifecycle,
+    publisher: &dyn IdentityStatePublisher,
+) -> anyhow::Result<ContainerIdentitySled> {
+    if session_id.is_empty() {
+        anyhow::bail!("session lifecycle transition requires session_id");
+    }
+    ensure_hydrated(engine).await;
+    let mut cache = read_cache(engine).await;
+    let index = cache
+        .sleds
+        .iter()
+        .position(|sled| sled.session_id == session_id)
+        .ok_or_else(|| anyhow::anyhow!("no identity sled for session '{session_id}'"))?;
+
+    let was_active = cache.sleds[index].active;
+    let previous_record = cache.sleds[index].clone();
+    let has_instance = match cache.sleds[index].instance.as_ref() {
+        Some(instance) if instance.name == session_id => true,
+        Some(instance) => anyhow::bail!(
+            "identity sled '{}' names foreign Incus instance '{}'",
+            session_id,
+            instance.name
+        ),
+        None => false,
+    };
+
+    // Activation is start-first: never publish an active credential for a
+    // container that failed to start. Deactivation is the inverse security
+    // order below: invalidate the sled first, then attempt the physical stop.
+    let newly_active = active && !was_active;
+    let started = newly_active && has_instance;
+    if started {
+        lifecycle.start(session_id).await?;
+    }
+
+    let sled = &mut cache.sleds[index];
+    if active {
+        sled.last_seen_at = now();
+    }
+    sled.active = active;
+    if active {
+        if let Some(instance) = sled.instance.as_mut() {
+            instance.status = "Running".to_string();
+        }
+    }
+    let record = sled.clone();
+    let projection_result = publisher.publish(engine, &cache).await;
+
+    if active {
+        if let Err(projection_error) = projection_result {
+            if newly_active {
+                // A start succeeded but activation could not be projected.
+                // Restore inactive authority before rolling the container
+                // back; never return an activation error with a newly-active
+                // OIB left in cache or durable storage.
+                cache.sleds[index] = previous_record.clone();
+                if let Err(rollback_error) = publisher.publish(engine, &cache).await {
+                    tracing::error!(
+                        %rollback_error,
+                        %session_id,
+                        "failed to republish inactive session after activation rollback"
+                    );
+                }
+                persist_sled(&previous_record).await;
+                if started {
+                    if let Err(stop_error) = lifecycle.stop(session_id).await {
+                        tracing::error!(
+                            %stop_error,
+                            %session_id,
+                            "failed to stop container after activation rollback"
+                        );
+                        // Authority stays inactive, but retain a non-stopped
+                        // physical-state marker so startup reconciliation
+                        // retries the rollback stop.
+                        let mut retry_record = previous_record.clone();
+                        if let Some(instance) = retry_record.instance.as_mut() {
+                            instance.status = "Running".to_string();
+                        }
+                        cache.sleds[index] = retry_record.clone();
+                        if let Err(retry_projection_error) = publisher.publish(engine, &cache).await
+                        {
+                            tracing::error!(
+                                %retry_projection_error,
+                                %session_id,
+                                "failed to project retryable activation rollback state"
+                            );
+                        }
+                        persist_sled(&retry_record).await;
+                    }
+                }
+            } else {
+                // This session was already active for another binding; keep
+                // its durable liveness unchanged while reporting projection
+                // failure to the new registration attempt.
+                persist_sled(&previous_record).await;
+            }
+            return Err(projection_error);
+        }
+        persist_sled(&record).await;
+        return Ok(record);
+    }
+
+    // Cozo receives inactive authority before the physical stop, even when
+    // SHM projection fails. Keep the prior non-stopped status until Incus
+    // confirms success so startup reconciliation can retry a failed stop.
+    persist_sled(&record).await;
+    let needs_stop = has_instance
+        && (was_active
+            || record
+                .instance
+                .as_ref()
+                .is_some_and(|instance| instance.status != "Stopped"));
+    let stop_result = if needs_stop {
+        lifecycle.stop(session_id).await
+    } else {
+        Ok(())
+    };
+
+    let mut stopped_record = record.clone();
+    let stopped_projection = if stop_result.is_ok() && has_instance {
+        if let Some(instance) = cache.sleds[index].instance.as_mut() {
+            instance.status = "Stopped".to_string();
+        }
+        stopped_record = cache.sleds[index].clone();
+        let result = publisher.publish(engine, &cache).await;
+        persist_sled(&stopped_record).await;
+        result
+    } else {
+        Ok(())
+    };
+
+    if let Err(projection_error) = projection_result {
+        if let Err(stop_error) = &stop_result {
+            tracing::error!(%stop_error, %session_id, "container stop also failed after identity projection failure");
+        }
+        if let Err(stopped_projection_error) = &stopped_projection {
+            tracing::error!(%stopped_projection_error, %session_id, "stopped status projection also failed");
+        }
+        return Err(projection_error);
+    }
+    stop_result?;
+    stopped_projection?;
+    Ok(stopped_record)
+}
+
+/// Activate a parked session. Container-backed sleds start through Incus;
+/// host identities have no instance and only change their liveness record.
+pub(crate) async fn activate_session(
+    engine: &MutationEngine,
+    session_id: &str,
+) -> anyhow::Result<ContainerIdentitySled> {
+    set_session_active_with(engine, session_id, true, &IncusIdentityContainerLifecycle).await
+}
+
+/// Park a session after its last authenticated binding is gone.
+pub(crate) async fn deactivate_session(
+    engine: &MutationEngine,
+    session_id: &str,
+) -> anyhow::Result<ContainerIdentitySled> {
+    set_session_active_with(engine, session_id, false, &IncusIdentityContainerLifecycle).await
+}
+
+async fn park_orphaned_container_sessions_with(
+    engine: &MutationEngine,
+    lifecycle: &dyn IdentityContainerLifecycle,
+) -> anyhow::Result<usize> {
+    ensure_hydrated(engine).await;
+    let session_ids: Vec<String> = read_cache(engine)
+        .await
+        .sleds
+        .into_iter()
+        .filter(|sled| {
+            sled.instance
+                .as_ref()
+                .is_some_and(|instance| sled.active || instance.status != "Stopped")
+        })
+        .map(|sled| sled.session_id)
+        .collect();
+    let mut errors = Vec::new();
+    for session_id in &session_ids {
+        if let Err(error) = set_session_active_with(engine, session_id, false, lifecycle).await {
+            errors.push(format!("{session_id}: {error:#}"));
+        }
+        // Contexts are process-local and no binding survived the restart.
+        engine.forget_session_context(session_id).await;
+    }
+    if errors.is_empty() {
+        Ok(session_ids.len())
+    } else {
+        anyhow::bail!(
+            "failed to park {} orphaned identity container(s): {}",
+            errors.len(),
+            errors.join("; ")
+        )
+    }
+}
+
+/// Reconcile durable liveness before any post-restart transport is exposed.
+/// D-Bus bindings are process-local, so every active instance-backed sled is
+/// orphaned after startup; host/no-instance identities are intentionally left
+/// untouched.
+pub(crate) async fn park_orphaned_container_sessions(
+    engine: &MutationEngine,
+) -> anyhow::Result<usize> {
+    park_orphaned_container_sessions_with(engine, &IncusIdentityContainerLifecycle).await
+}
+
 pub async fn dispatch_identity_sled_method(
     engine: &MutationEngine,
     method: &str,
@@ -536,6 +933,9 @@ pub async fn dispatch_identity_sled_method(
 
         "write_identity" => {
             ensure_hydrated(engine).await;
+            if args.get("sealed_id").is_some() {
+                anyhow::bail!("sealed_id is MutationEngine-authored and cannot be supplied");
+            }
             let pubkey = arg_str(args, "wireguard_pubkey");
             if pubkey.is_empty() {
                 anyhow::bail!("write_identity requires wireguard_pubkey");
@@ -545,10 +945,6 @@ pub async fn dispatch_identity_sled_method(
             let interface = arg_str(args, "interface");
             let peer_ip = args
                 .get("peer_ip")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let blob_ref = args
-                .get("blob_ref")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let btrfs_device: Option<SledBtrfsDevice> = args
@@ -573,9 +969,6 @@ pub async fn dispatch_identity_sled_method(
                     }
                     if peer_ip.is_some() {
                         sled.peer_ip = peer_ip;
-                    }
-                    if blob_ref.is_some() {
-                        sled.blob_ref = blob_ref;
                     }
                     if btrfs_device.is_some() {
                         sled.btrfs_device = btrfs_device;
@@ -610,7 +1003,7 @@ pub async fn dispatch_identity_sled_method(
                         trace_id,
                         schema_version: RECORD_FORMAT,
                         vector_id: String::new(),
-                        blob_ref,
+                        sealed_id: None,
                         btrfs_device,
                         instance: None,
                         session_started_at: ts,
@@ -656,6 +1049,9 @@ pub async fn dispatch_identity_sled_method(
         }
 
         "provision_container" => {
+            if args.get("sealed_id").is_some() {
+                anyhow::bail!("sealed_id is MutationEngine-authored and cannot be supplied");
+            }
             let pubkey = arg_str(args, "wireguard_pubkey");
             if pubkey.is_empty() {
                 anyhow::bail!("provision_container requires wireguard_pubkey");
@@ -682,39 +1078,10 @@ pub async fn dispatch_identity_sled_method(
                 }
                 None => IncusInstance::default(),
             };
-            // The container name IS the identity — always the derived id.
-            instance.name = session_id.clone();
-            if instance.instance_type.is_empty() {
-                instance.instance_type = "container".to_string();
-            }
-            if instance.status.is_empty() {
-                instance.status = "Running".to_string();
-            }
-            // No profile override = the Incus "default" profile, which on
-            // this host supplies only the root disk device (no nic) — an
-            // empty profile list would make apply_create pass --no-profiles,
-            // and Incus then fails instance creation outright with no root
-            // device to mount.
-            if instance.profiles.is_empty() {
-                instance.profiles = vec!["default".to_string()];
-            }
-            // Hard rule: no container NIC or IP; all I/O over the UDS surface.
-            if instance
-                .devices
-                .iter()
-                .chain(instance.expanded_devices.iter())
-                .any(|d| matches!(d.device, Device::Nic(_)))
-            {
-                anyhow::bail!(
-                    "nic devices are not allowed: containers get no NIC or IP \
-                     (all container I/O goes over the UDS socket surface)"
-                );
-            }
+            // The container name IS the identity. It is provisioned parked,
+            // with boot autostart forced off; authenticated login owns start.
+            instance = prepare_parked_instance(&session_id, instance)?;
 
-            let blob_ref = args
-                .get("blob_ref")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
             let btrfs_device: Option<SledBtrfsDevice> = args
                 .get("btrfs_device")
                 .cloned()
@@ -724,17 +1091,17 @@ pub async fn dispatch_identity_sled_method(
             if cache
                 .sleds
                 .iter()
-                .any(|s| s.session_id == session_id && s.active)
+                .any(|sled| sled.session_id == session_id && sled.instance.is_some())
             {
                 anyhow::bail!(
-                    "identity sled '{}' is already provisioned and active",
+                    "identity sled '{}' already has a provisioned container",
                     session_id
                 );
             }
             drop(cache);
 
-            // Create the container first: a sled exists ⟺ its container
-            // exists, so an incus failure means no sled row.
+            // `incus init` creates the container stopped. A sled exists ⟺ its
+            // container exists, so an Incus failure means no sled row.
             IncusPlugin::apply_create(&instance)
                 .await
                 .map_err(|e| anyhow::anyhow!("incus create for '{session_id}' failed: {e:#}"))?;
@@ -751,12 +1118,12 @@ pub async fn dispatch_identity_sled_method(
                 trace_id: String::new(),
                 schema_version: RECORD_FORMAT,
                 vector_id: String::new(),
-                blob_ref,
+                sealed_id: None,
                 btrfs_device,
                 instance: Some(instance),
                 session_started_at: ts,
                 last_seen_at: ts,
-                active: true,
+                active: false,
                 expires_at: ttl_seconds.map(|ttl| ts + ttl),
                 arrival_timestamp: 0,
                 chain_head_at_arrival: String::new(),
@@ -830,25 +1197,7 @@ pub async fn dispatch_identity_sled_method(
 
         "touch_session" => {
             let session_id = arg_str(args, "session_id");
-            let mut cache = read_cache(engine).await;
-            let Some(sled) = cache.sleds.iter_mut().find(|s| s.session_id == session_id) else {
-                anyhow::bail!("no identity sled for session '{}'", session_id);
-            };
-            let ts = now();
-            sled.last_seen_at = ts;
-            sled.active = true;
-            write_cache(engine, &cache).await?;
-            if let Some(cozo) = sled_cozo() {
-                let cozo = cozo.clone();
-                let sid = session_id.clone();
-                match tokio::task::spawn_blocking(move || cozo.touch_identity_sled(&sid, ts, true))
-                    .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => tracing::warn!(error = %e, "identity sled touch persist failed"),
-                    Err(e) => tracing::warn!(error = %e, "identity sled touch task failed"),
-                }
-            }
+            activate_session(engine, &session_id).await?;
             Ok(serde_json::json!({ "success": true }))
         }
 
@@ -971,8 +1320,84 @@ pub async fn current_state(engine: &MutationEngine) -> IdentitySledState {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::human_principal_dispatch::tests::{pk, temp_shm, test_engine};
-    use std::sync::Arc;
+    use crate::human_principal_dispatch::tests::{pk, temp_shm, test_engine, TempShm};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct RecordingLifecycle {
+        calls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl IdentityContainerLifecycle for RecordingLifecycle {
+        async fn start(&self, session_id: &str) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .expect("recording lifecycle lock")
+                .push(format!("start:{session_id}"));
+            Ok(())
+        }
+
+        async fn stop(&self, session_id: &str) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .expect("recording lifecycle lock")
+                .push(format!("stop:{session_id}"));
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingStopLifecycle {
+        calls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl IdentityContainerLifecycle for FailingStopLifecycle {
+        async fn start(&self, session_id: &str) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .expect("failing lifecycle lock")
+                .push(format!("start:{session_id}"));
+            Ok(())
+        }
+
+        async fn stop(&self, session_id: &str) -> anyhow::Result<()> {
+            self.calls
+                .lock()
+                .expect("failing lifecycle lock")
+                .push(format!("stop:{session_id}"));
+            anyhow::bail!("injected Incus stop failure")
+        }
+    }
+
+    #[derive(Default)]
+    struct FailFirstProjection {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl IdentityStatePublisher for FailFirstProjection {
+        async fn publish(
+            &self,
+            engine: &MutationEngine,
+            cache: &SledCacheState,
+        ) -> anyhow::Result<()> {
+            // Match write_cache's ordering: authoritative memory changes
+            // before projection publication can fail.
+            engine
+                .update_state_cache(
+                    "identity_sled".to_string(),
+                    simd_json::serde::to_owned_value(cache)?,
+                )
+                .await;
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                anyhow::bail!("injected projection failure");
+            }
+            Ok(())
+        }
+    }
 
     /// One temp Cozo store for the whole test process.
     ///
@@ -993,7 +1418,7 @@ pub(crate) mod tests {
     }
 
     /// An engine with the projection tree and the durable store both sandboxed.
-    pub(crate) fn sled_engine() -> (Arc<MutationEngine>, tempfile::TempDir) {
+    pub(crate) fn sled_engine() -> (Arc<MutationEngine>, TempShm) {
         sled_cozo_sandbox();
         let shm = temp_shm();
         (test_engine(), shm)
@@ -1030,6 +1455,267 @@ pub(crate) mod tests {
         Ok(serde_json::from_value(
             out.get("identity").cloned().expect("identity in output"),
         )?)
+    }
+
+    #[test]
+    fn provision_policy_forces_parked_non_autostart_container() {
+        let session_id = op_identity::session::derive_session_id(&pk(0x60));
+        let instance = IncusInstance {
+            name: "caller-selected".to_string(),
+            status: "Running".to_string(),
+            instance_type: "virtual-machine".to_string(),
+            config: Some(std::collections::HashMap::from([(
+                "boot.autostart".to_string(),
+                "true".to_string(),
+            )])),
+            ..Default::default()
+        };
+
+        let parked = prepare_parked_instance(&session_id, instance).expect("parked instance");
+        assert_eq!(parked.name, session_id);
+        assert_eq!(parked.status, "Stopped");
+        assert_eq!(parked.instance_type, "container");
+        assert_eq!(parked.profiles, ["identity"]);
+        assert_eq!(
+            parked
+                .config
+                .as_ref()
+                .and_then(|config| config.get("boot.autostart"))
+                .map(String::as_str),
+            Some("false")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parked_container_starts_once_and_stops_once_per_active_term() {
+        let (engine, _shm) = sled_engine();
+        let identity = write_identity(&engine, &pk(0x61)).await.expect("write");
+        let session_id = identity.session_id.clone();
+        let mut cache = read_cache(engine.as_ref()).await;
+        let sled = cache
+            .sleds
+            .iter_mut()
+            .find(|sled| sled.session_id == session_id)
+            .expect("identity sled");
+        sled.active = false;
+        sled.instance = Some(
+            prepare_parked_instance(&session_id, IncusInstance::default())
+                .expect("parked instance"),
+        );
+        write_cache(engine.as_ref(), &cache)
+            .await
+            .expect("park cache");
+
+        let lifecycle = RecordingLifecycle::default();
+        let activated = set_session_active_with(engine.as_ref(), &session_id, true, &lifecycle)
+            .await
+            .expect("activate");
+        assert!(activated.active);
+        assert_eq!(
+            activated
+                .instance
+                .as_ref()
+                .map(|instance| instance.status.as_str()),
+            Some("Running")
+        );
+
+        // A second binding/touch for the same live term does not start twice.
+        set_session_active_with(engine.as_ref(), &session_id, true, &lifecycle)
+            .await
+            .expect("repeat activation");
+        let parked = set_session_active_with(engine.as_ref(), &session_id, false, &lifecycle)
+            .await
+            .expect("deactivate");
+        assert!(!parked.active);
+        assert_eq!(
+            parked
+                .instance
+                .as_ref()
+                .map(|instance| instance.status.as_str()),
+            Some("Stopped")
+        );
+
+        // Repeated cleanup/disconnect remains idempotent.
+        set_session_active_with(engine.as_ref(), &session_id, false, &lifecycle)
+            .await
+            .expect("repeat deactivation");
+        assert_eq!(
+            *lifecycle.calls.lock().expect("recorded calls"),
+            vec![format!("start:{session_id}"), format!("stop:{session_id}")]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_failure_still_invalidates_and_persists_session_first() {
+        let (engine, _shm) = sled_engine();
+        let identity = write_identity(&engine, &pk(0x62)).await.expect("write");
+        let session_id = identity.session_id.clone();
+        let mut cache = read_cache(engine.as_ref()).await;
+        let sled = cache
+            .sleds
+            .iter_mut()
+            .find(|sled| sled.session_id == session_id)
+            .expect("identity sled");
+        let mut instance =
+            prepare_parked_instance(&session_id, IncusInstance::default()).expect("instance");
+        instance.status = "Running".to_string();
+        sled.instance = Some(instance);
+        sled.active = true;
+        write_cache(engine.as_ref(), &cache)
+            .await
+            .expect("active cache");
+
+        let lifecycle = FailingStopLifecycle::default();
+        let result = set_session_active_with(engine.as_ref(), &session_id, false, &lifecycle).await;
+        assert!(result.is_err(), "physical stop failure must be reported");
+        let parked = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("parked sled retained");
+        assert!(!parked.active, "credential must fail closed before stop");
+        assert_eq!(
+            parked
+                .instance
+                .as_ref()
+                .map(|instance| instance.status.as_str()),
+            Some("Running"),
+            "failed physical stop remains retryable while authority is inactive"
+        );
+        assert_eq!(
+            *lifecycle.calls.lock().expect("recorded stop"),
+            vec![format!("stop:{session_id}")]
+        );
+
+        let retry = RecordingLifecycle::default();
+        assert_eq!(
+            park_orphaned_container_sessions_with(engine.as_ref(), &retry)
+                .await
+                .expect("startup retry"),
+            1
+        );
+        let stopped = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("stopped sled");
+        assert!(!stopped.active);
+        assert_eq!(
+            stopped
+                .instance
+                .as_ref()
+                .map(|instance| instance.status.as_str()),
+            Some("Stopped")
+        );
+        assert_eq!(
+            *retry.calls.lock().expect("recorded retry"),
+            vec![format!("stop:{session_id}")]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn activation_projection_failure_rolls_back_container_and_authority() {
+        let (engine, _shm) = sled_engine();
+        let identity = write_identity(&engine, &pk(0x65)).await.expect("write");
+        let session_id = identity.session_id.clone();
+        let mut cache = read_cache(engine.as_ref()).await;
+        let sled = cache
+            .sleds
+            .iter_mut()
+            .find(|sled| sled.session_id == session_id)
+            .expect("identity sled");
+        sled.instance = Some(
+            prepare_parked_instance(&session_id, IncusInstance::default())
+                .expect("parked instance"),
+        );
+        sled.active = false;
+        write_cache(engine.as_ref(), &cache)
+            .await
+            .expect("parked cache");
+        let parked_before = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("parked identity");
+        persist_sled(&parked_before).await;
+
+        let lifecycle = RecordingLifecycle::default();
+        let publisher = FailFirstProjection::default();
+        let activation = set_session_active_with_publisher(
+            engine.as_ref(),
+            &session_id,
+            true,
+            &lifecycle,
+            &publisher,
+        )
+        .await;
+        assert!(activation.is_err(), "projection failure must be returned");
+        let after = stored_session(engine.as_ref(), &session_id)
+            .await
+            .expect("rolled-back identity");
+        assert!(
+            !after.active,
+            "failed activation must not leave an active OIB"
+        );
+        assert_eq!(
+            after
+                .instance
+                .as_ref()
+                .map(|instance| instance.status.as_str()),
+            Some("Stopped")
+        );
+        assert_eq!(
+            *lifecycle.calls.lock().expect("activation rollback calls"),
+            vec![format!("start:{session_id}"), format!("stop:{session_id}")]
+        );
+        let durable = sled_cozo()
+            .expect("test Cozo")
+            .get_identity_sled(&session_id)
+            .expect("durable read")
+            .expect("durable row");
+        assert!(!durable.active, "rollback must persist inactive authority");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn startup_parks_orphaned_containers_but_leaves_host_identity_active() {
+        let (engine, _shm) = sled_engine();
+        let container = write_identity(&engine, &pk(0x63))
+            .await
+            .expect("container identity");
+        let host = write_identity(&engine, &pk(0x64))
+            .await
+            .expect("host identity");
+        let mut cache = read_cache(engine.as_ref()).await;
+        let container_sled = cache
+            .sleds
+            .iter_mut()
+            .find(|sled| sled.session_id == container.session_id)
+            .expect("container sled");
+        let mut instance = prepare_parked_instance(&container.session_id, IncusInstance::default())
+            .expect("instance");
+        instance.status = "Running".to_string();
+        container_sled.instance = Some(instance);
+        container_sled.active = true;
+        write_cache(engine.as_ref(), &cache)
+            .await
+            .expect("startup fixture cache");
+
+        let lifecycle = RecordingLifecycle::default();
+        let parked = park_orphaned_container_sessions_with(engine.as_ref(), &lifecycle)
+            .await
+            .expect("startup reconciliation");
+        assert_eq!(parked, 1);
+        assert!(
+            !stored_session(engine.as_ref(), &container.session_id)
+                .await
+                .expect("container retained")
+                .active
+        );
+        assert!(
+            stored_session(engine.as_ref(), &host.session_id)
+                .await
+                .expect("host retained")
+                .active,
+            "host/no-instance identity must not be parked at bridge startup"
+        );
+        assert_eq!(
+            *lifecycle.calls.lock().expect("recorded orphan stop"),
+            vec![format!("stop:{}", container.session_id)]
+        );
     }
 
     /// VAL-SLED-GEN-001 (`write_identity_mints_genesis`): provisioning a new
@@ -1069,6 +1755,23 @@ pub(crate) mod tests {
             "genesis must not be recomputed for an existing session"
         );
         assert_eq!(first.arrival_timestamp, second.arrival_timestamp);
+        assert_eq!(
+            first.sealed_id, second.sealed_id,
+            "the exact authored SID1 bytes must be preserved"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn callers_cannot_write_mutation_engine_sealed_id() {
+        let (engine, _shm) = sled_engine();
+        let args = serde_json::json!({
+            "wireguard_pubkey": pk(0x5a),
+            "sealed_id": "sid1:caller-controlled"
+        });
+        let write = dispatch_identity_sled_method(&engine, "write_identity", &args).await;
+        assert!(write.is_err());
+        let provision = dispatch_identity_sled_method(&engine, "provision_container", &args).await;
+        assert!(provision.is_err());
     }
 
     /// VAL-SLED-GEN-003 (`mutation_does_not_overwrite_liveness`): the mutation

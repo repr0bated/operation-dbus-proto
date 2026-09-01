@@ -23,9 +23,10 @@ use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use crate::dbus_identity::DbusIdentityResolver;
 // Import exact-principal capability enforcement (VAL-ENFORCE-002).
 use crate::interceptor::{load_capability_grants, GhostbridgeIdentity};
-use zbus::{Connection, Proxy};
+use zbus::{message::Header, Connection, Proxy};
 
 use crate::mutation_engine::MutationEngine;
 
@@ -78,6 +79,9 @@ pub struct SchemaRouter {
     /// The MutationEngine used for real method dispatch (Requirement 5).
     /// `None` in unit tests that do not exercise the dispatch path.
     engine: Option<Arc<MutationEngine>>,
+    /// Shared sender/session resolver for every PluginV1 object. Production
+    /// installs it only after the NameOwnerChanged monitor is live.
+    identity_resolver: Option<Arc<DbusIdentityResolver>>,
 }
 
 impl SchemaRouter {
@@ -113,6 +117,11 @@ impl SchemaRouter {
         router
     }
 
+    pub fn with_identity_resolver(mut self, resolver: Arc<DbusIdentityResolver>) -> Self {
+        self.identity_resolver = Some(resolver);
+        self
+    }
+
     /// Create a SchemaRouter with explicit SHM paths.
     ///
     /// In production, use [`new`](Self::new) which targets the canonical
@@ -137,6 +146,7 @@ impl SchemaRouter {
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
             engine: None,
+            identity_resolver: None,
         }
     }
 
@@ -152,11 +162,12 @@ impl SchemaRouter {
 
         let routes = self.routes.read().await;
         for (plugin_id, route) in routes.iter() {
-            let interface = SchemaBackedInterface::with_engine(
+            let mut interface = SchemaBackedInterface::with_engine(
                 plugin_id.clone(),
                 route.clone(),
                 self.engine.clone(),
             );
+            interface.identity_resolver = self.identity_resolver.clone();
             let path = route.dbus_path.clone();
 
             debug!(plugin_id, path, "Registering authoritative D-Bus object");
@@ -533,6 +544,8 @@ pub struct SchemaBackedInterface {
     /// `None` when no engine is wired (unit tests that only exercise
     /// method-existence / property-read paths).
     engine: Option<Arc<MutationEngine>>,
+    /// Exact D-Bus sender binding. `None` keeps production calls fail-closed.
+    identity_resolver: Option<Arc<DbusIdentityResolver>>,
 }
 
 impl SchemaBackedInterface {
@@ -575,6 +588,7 @@ impl SchemaBackedInterface {
             route,
             shm_state_dir: shm_state_dir.as_ref().to_path_buf(),
             engine: None,
+            identity_resolver: None,
         }
     }
 
@@ -719,11 +733,11 @@ impl SchemaBackedInterface {
 
         let identity = identity.ok_or_else(|| {
             zbus::fdo::Error::AccessDenied(
-                "PluginV1.Call has no authoritative sender-to-footprint identity binding"
+                "PluginV1.Call has no authoritative sender-to-principal identity binding"
                     .to_string(),
             )
         })?;
-        if identity.footprint.is_empty() || identity.session_id.is_empty() {
+        if identity.principal_id.is_empty() || identity.session_id.is_empty() {
             return Err(zbus::fdo::Error::AccessDenied(
                 "PluginV1.Call requires a non-empty authenticated identity".to_string(),
             ));
@@ -735,7 +749,7 @@ impl SchemaBackedInterface {
             .map(str::trim)
             .filter(|capability| !capability.is_empty());
         if let Some(required_cap) = required_cap {
-            if !load_capability_grants(&identity.footprint).contains(required_cap) {
+            if !load_capability_grants(&identity.principal_id).contains(required_cap) {
                 return Err(zbus::fdo::Error::AccessDenied(format!(
                     "capability '{}' is not granted to the authenticated caller of method '{}'",
                     required_cap, method
@@ -749,12 +763,14 @@ impl SchemaBackedInterface {
             )
         })?;
         let result = engine
-            .dispatch_method_call(
+            .dispatch_method_call_with_identity(
                 &self.plugin_id,
                 &method,
                 &json_args,
                 required_cap,
-                &identity.session_id,
+                &identity.principal_id,
+                Some(&identity.session_id),
+                Some(&identity.session_genesis),
             )
             .await
             .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
@@ -769,7 +785,7 @@ impl SchemaBackedInterface {
 /// lookup → arg validation → capability gate → dispatch) through this door.
 #[cfg(test)]
 impl SchemaBackedInterface {
-    pub(crate) const TEST_CALLER_FOOTPRINT: &'static str = "schema-router-test-footprint";
+    pub(crate) const TEST_CALLER_PRINCIPAL: &'static str = "schema-router-test-principal";
 
     pub(crate) async fn call_in_test(
         &self,
@@ -780,8 +796,9 @@ impl SchemaBackedInterface {
             method,
             json_args,
             Some(&GhostbridgeIdentity {
-                footprint: Self::TEST_CALLER_FOOTPRINT.to_string(),
+                principal_id: Self::TEST_CALLER_PRINCIPAL.to_string(),
                 session_id: "schema-router-test-session".to_string(),
+                session_genesis: "schema-router-test-genesis".to_string(),
             }),
         )
         .await
@@ -800,12 +817,20 @@ impl SchemaBackedInterface {
     ///   2. Arg validation → reject if invalid (InvalidArgs)
     ///   3. Capability check → reject if required_capability not granted (AccessDenied)
     ///   4. MutationEngine.mutate → record in event chain (Requirement 5)
-    async fn call(&self, method: String, json_args: String) -> zbus::fdo::Result<String> {
-        // zbus authenticates the bus connection, but this interface currently
-        // has no authoritative sender unique-name -> Ghostbridge footprint
-        // resolver. Until that binding exists, the production D-Bus method is
-        // deliberately unavailable rather than borrowing wildcard authority.
-        self.dispatch_call_for_identity(method, json_args, None)
+    async fn call(
+        &self,
+        method: String,
+        json_args: String,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<String> {
+        let resolver = self.identity_resolver.as_ref().ok_or_else(|| {
+            zbus::fdo::Error::AccessDenied("D-Bus identity resolver is not available".to_string())
+        })?;
+        let identity = resolver
+            .resolve(&header)
+            .await
+            .map_err(|error| zbus::fdo::Error::AccessDenied(error.to_string()))?;
+        self.dispatch_call_for_identity(method, json_args, Some(&identity))
             .await
     }
 
@@ -1827,8 +1852,8 @@ mod tests {
     #[tokio::test]
     async fn mutate_receives_verbatim_json_args() {
         // VAL-DISPATCH-004: the json_args argument is the verbatim string
-        // from the caller. We verify by checking the Blake3 footprint in the
-        // event chain matches a footprint computed from the verbatim string.
+        // from the caller. We verify the parsed value is carried directly in
+        // the canonical event payload.
         // No capability check needed since GetStatus has null required_capability.
         let engine = test_engine();
         let route = PluginRoute {
@@ -1866,12 +1891,8 @@ mod tests {
 
         let chain = engine.event_chain.read().await;
         let event = chain.events().last().unwrap();
-        let expected_footprint = blake3::hash(verbatim.as_bytes()).to_hex().to_string();
-        assert_eq!(
-            event.json_args_footprint.as_deref(),
-            Some(expected_footprint.as_str()),
-            "Blake3 footprint must match the verbatim json_args string"
-        );
+        let payload = event.input_payload.as_ref().expect("payload set");
+        assert_eq!(payload["args"]["verbose"], false);
     }
 
     // ── R5.5 / VAL-DISPATCH-005 / VAL-NFR-003: Event chain record ────────
@@ -1879,7 +1900,7 @@ mod tests {
     #[tokio::test]
     async fn mutate_appends_event_chain_record() {
         // VAL-DISPATCH-005: the event chain record includes actor_id,
-        // plugin_id, method_name, capability_id, and a Blake3 footprint.
+        // plugin_id, method_name, capability_id, and canonical input payload.
         // Uses GetStatus (null required_capability) to avoid capability check.
         let engine = test_engine();
         let route = PluginRoute {
@@ -1930,12 +1951,8 @@ mod tests {
             None,
             "event must have null capability_id for methods without required_capability"
         );
-        let footprint = event.json_args_footprint.as_ref().expect("footprint set");
-        assert!(
-            !footprint.is_empty(),
-            "event must carry a Blake3 footprint of json_args"
-        );
-        assert_eq!(footprint.len(), 64, "Blake3 hex footprint must be 64 chars");
+        let payload = event.input_payload.as_ref().expect("payload set");
+        assert_eq!(payload["args"]["verbose"], false);
     }
 
     #[tokio::test]
@@ -2225,23 +2242,23 @@ mod tests {
         cleanup(&base);
     }
 
-    // ── VAL-ENFORCE-001/002: Interceptor extracts footprint and capability grants ──
+    // ── VAL-ENFORCE-001/002: exact-principal capability grants ──
 
     #[tokio::test]
     async fn required_capability_check_denies_ungranted() {
         let _env_guard = test_registry_guard();
         // VAL-ENFORCE-002: When required_capability is declared, the caller's
-        // footprint must grant it. If not granted, the call is denied without
+        // principal must grant it. If not granted, the call is denied without
         // calling mutate (VAL-ENFORCE-003).
         let base = test_base_dir();
 
         std::env::remove_var("OP_GRANTS_PATH");
 
-        // Build the capability grants file with grants for one footprint
+        // Build the capability grants file with grants for one principal
         let grants_path = base.join("opdbus/capability-grants.json");
         std::fs::create_dir_all(grants_path.parent().unwrap()).unwrap();
         let grants_json = json!({
-            "granted-footprint-1": {
+            "did:op:human:ungranted-test": {
                 "capabilities": ["some.other.cap"]
             }
         });
@@ -2281,16 +2298,16 @@ mod tests {
     async fn required_capability_check_allows_granted() {
         let _env_guard = test_registry_guard();
         // VAL-ENFORCE-002: When required_capability is declared and the caller's
-        // footprint grants it, the call proceeds to mutate.
+        // principal grants it, the call proceeds to mutate.
         let base = test_base_dir();
 
         std::env::remove_var("OP_GRANTS_PATH");
 
-        // Build the capability grants file with grants for the sled footprint
+        // Build the capability grants file with grants for the test principal
         let grants_path_cloned = base.join("opdbus/capability-grants.json");
         std::fs::create_dir_all(grants_path_cloned.parent().unwrap()).unwrap();
         let grants_json = json!({
-            (SchemaBackedInterface::TEST_CALLER_FOOTPRINT): {
+            (SchemaBackedInterface::TEST_CALLER_PRINCIPAL): {
                 "capabilities": ["beta.set_key"]
             }
         });
@@ -2371,7 +2388,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dbus_call_without_sender_footprint_binding_fails_closed() {
+    async fn dispatch_without_sender_principal_binding_fails_closed() {
         let engine = test_engine();
         let iface = SchemaBackedInterface::with_engine(
             "beta".to_string(),
@@ -2380,12 +2397,16 @@ mod tests {
         );
 
         let result = iface
-            .call("SetKey".to_string(), r#"{"key":"operator"}"#.to_string())
+            .dispatch_call_for_identity(
+                "SetKey".to_string(),
+                r#"{"key":"operator"}"#.to_string(),
+                None,
+            )
             .await;
 
         assert!(
             matches!(result, Err(zbus::fdo::Error::AccessDenied(_))),
-            "production D-Bus Call must deny until sender identity is bound: {result:?}"
+            "dispatch must deny a call without authoritative identity: {result:?}"
         );
         assert!(engine.event_chain.read().await.events().is_empty());
     }

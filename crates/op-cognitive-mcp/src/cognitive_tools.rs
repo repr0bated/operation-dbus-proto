@@ -7,7 +7,6 @@ use crate::agent_tools::register_agent_tools;
 use crate::blob_catalog_tool::register_blob_catalog_tool;
 use crate::blob_vectors_tool::register_blob_vectors_tools;
 use crate::memory_store::{CognitiveMemoryStore, EntryQuery, NamespaceKind};
-use crate::notebooklm::register_notebooklm_tools;
 use crate::qdrant_shuttle::QdrantSemanticShuttle;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -47,7 +46,9 @@ impl CognitiveToolRegistry {
             .register(Arc::new(RegisterToolTool) as BoxedTool)
             .await?;
         register_agent_tools(registry).await?;
-        register_notebooklm_tools(registry).await?;
+        // Provider-backed MCP tools are projected by the bridge from their
+        // supervised loopback services. They must never delay construction of
+        // the in-process HOT memory/workflow runtime.
         register_blob_catalog_tool(registry).await?;
         register_blob_vectors_tools(registry, qdrant).await?;
         Ok(())

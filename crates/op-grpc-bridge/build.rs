@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/privacy_network.proto",
                 "proto/registration.proto",
                 "proto/registry.proto",
-                "proto/emqx_exhook_v2.proto",
+                "proto/emqx_exhook_v3.proto",
                 "../op-chat/proto/chat.proto",
                 "src/grpc/zeroclaw.proto",
                 generated_proto
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/privacy_network.proto");
     println!("cargo:rerun-if-changed=proto/registration.proto");
     println!("cargo:rerun-if-changed=proto/registry.proto");
-    println!("cargo:rerun-if-changed=proto/emqx_exhook_v2.proto");
+    println!("cargo:rerun-if-changed=proto/emqx_exhook_v3.proto");
     println!("cargo:rerun-if-changed=../op-chat/proto/chat.proto");
     println!("cargo:rerun-if-changed=src/grpc/zeroclaw.proto");
     println!("cargo:rerun-if-changed=../op-plugins/src/state_plugins");

@@ -405,6 +405,72 @@ pub struct MemoryToolInput {
     pub limit: i64,
 }
 
+/// Stable HOT facade for durable memory recall. The operation is fixed by the
+/// server and cannot be changed by caller input.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryRecallInput {
+    #[schemars(description = "Optional durable memory namespace")]
+    pub namespace: Option<String>,
+    #[schemars(description = "Optional substring pattern for entry keys")]
+    pub key_pattern: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Optional exact tag filters")]
+    pub tags: Vec<String>,
+    #[serde(default = "default_memory_limit")]
+    #[schemars(range(min = 1, max = 200), description = "Maximum matches")]
+    pub limit: i64,
+}
+
+/// Stable HOT facade for durable memory storage. The operation is fixed to
+/// `store` after validation.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryStoreInput {
+    #[schemars(description = "Durable memory namespace")]
+    pub namespace: String,
+    #[schemars(description = "Namespace kind, used when creating the namespace")]
+    pub namespace_kind: Option<NamespaceKind>,
+    #[schemars(description = "Entry key within the namespace")]
+    pub key: String,
+    #[schemars(description = "JSON value to store")]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    #[schemars(description = "Tags attached to the entry")]
+    pub tags: Vec<String>,
+}
+
+/// Stable HOT workflow catalog query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkflowQueryInput {
+    #[schemars(description = "Optional exact workflow id")]
+    pub workflow_id: Option<String>,
+}
+
+/// Stable HOT workflow enqueue request.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkflowRunInput {
+    #[schemars(description = "Exact id of a declared workflow")]
+    pub workflow_id: String,
+    #[serde(default)]
+    #[schemars(description = "Typed workflow parameters")]
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolsetsOperation {
+    List,
+    Select,
+}
+
+/// Stateless HOT tool-set operation. Selection is returned to the client and
+/// must be repeated in request `_meta`; it never changes server-side grants.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolsetsInput {
+    pub operation: ToolsetsOperation,
+    #[schemars(description = "Required only for the select operation")]
+    pub toolset_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CodeSearchInput {
     #[schemars(
@@ -556,6 +622,41 @@ pub struct MemoryStoreOutput {
     pub key: String,
 }
 
+/// Output for the memory_recall HOT facade.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemoryRecallOutput {
+    pub results: Vec<serde_json::Value>,
+    pub count: usize,
+}
+
+/// Output for workflow_query. The concrete entries inherit the authoritative
+/// workflow plugin contract.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkflowQueryOutput {
+    pub workflows: Vec<serde_json::Value>,
+    pub count: usize,
+}
+
+/// Output for workflow_run.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkflowRunOutput {
+    pub accepted: bool,
+    pub execution_id: String,
+    pub workflow_id: String,
+    pub status: String,
+    pub accepted_at: String,
+}
+
+/// Public shape of the local tool-set response. Detailed set entries and the
+/// canonical selector are emitted by the bridge after MutationEngine admission.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolsetsOutput {
+    pub operation: String,
+    pub catalog_generation: u64,
+    pub relist_required: bool,
+    pub result: serde_json::Value,
+}
+
 /// Output for MemoryRetrieve method
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MemoryRetrieveOutput {
@@ -654,7 +755,7 @@ pub struct CognitiveMcpState {
 // PLUGIN EXIT: publish the single PluginSchema contract
 // =============================================================================
 
-// Handler audit (all 13 schema methods below) — where each is actually backed:
+// Handler audit — where each method is actually backed:
 // get_health              → op-grpc-bridge/mutation_engine.rs bridge-owned projection
 // list_tools              → op-grpc-bridge/mutation_engine.rs in-process ToolRegistry
 // register_tool           → embedded op_cognitive_mcp::cognitive_tools::RegisterToolTool
@@ -669,6 +770,10 @@ pub struct CognitiveMcpState {
 // code_context            → embedded op_cognitive_mcp::code_tools::CodeContextTool
 // gemini_query            → embedded op_cognitive_mcp::cognitive_tools::AskQuestionTool
 // invoke_tool             → op-grpc-bridge/mutation_engine.rs in-process ToolRegistry
+// memory_recall           → cognitive_memory query operation (HOT facade)
+// workflow_query          → workflows.query_workflows (HOT facade)
+// workflow_run            → workflows.start_workflow (HOT facade)
+// toolsets                → bridge-local deterministic projection policy (HOT)
 pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CognitiveMcpState))
         .expect("schemars schema serializes to JSON");
@@ -716,12 +821,22 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "memory_store".to_string(),
-        method_decl_from_schemars_with_output::<(), MemoryStoreOutput>(
+        method_decl_from_schemars_with_output::<MemoryStoreInput, MemoryStoreOutput>(
             "memory_store",
             SideEffect::Mutation,
             false,
-            "cognitive_mcp.invoke",
+            "cognitive_mcp.memory.write",
             "mut.service.cognitive-mcp.memory.store@v1",
+        ),
+    );
+    schema.methods.insert(
+        "memory_recall".to_string(),
+        method_decl_from_schemars_with_output::<MemoryRecallInput, MemoryRecallOutput>(
+            "memory_recall",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.memory.recall@v1",
         ),
     );
     schema.methods.insert(
@@ -766,7 +881,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "code_search".to_string(),
-        method_decl_from_schemars_with_output::<(), CodeSearchOutput>(
+        method_decl_from_schemars_with_output::<CodeSearchInput, CodeSearchOutput>(
             "code_search",
             SideEffect::Read,
             true,
@@ -776,22 +891,52 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "code_index".to_string(),
-        method_decl_from_schemars_with_output::<(), CodeIndexOutput>(
+        method_decl_from_schemars_with_output::<CodeIndexInput, CodeIndexOutput>(
             "code_index",
             SideEffect::Mutation,
             false,
-            "cognitive_mcp.invoke",
+            "cognitive_mcp.code.write",
             "mut.service.code-rag.index@v1",
         ),
     );
     schema.methods.insert(
         "code_context".to_string(),
-        method_decl_from_schemars_with_output::<(), CodeContextOutput>(
+        method_decl_from_schemars_with_output::<CodeContextInput, CodeContextOutput>(
             "code_context",
             SideEffect::Read,
             true,
             "cognitive_mcp.read",
             "obs.service.code-context.get@v1",
+        ),
+    );
+    schema.methods.insert(
+        "workflow_query".to_string(),
+        method_decl_from_schemars_with_output::<WorkflowQueryInput, WorkflowQueryOutput>(
+            "workflow_query",
+            SideEffect::Read,
+            true,
+            "workflows.read",
+            "obs.service.cognitive-mcp.workflow.query@v1",
+        ),
+    );
+    schema.methods.insert(
+        "workflow_run".to_string(),
+        method_decl_from_schemars_with_output::<WorkflowRunInput, WorkflowRunOutput>(
+            "workflow_run",
+            SideEffect::Mutation,
+            false,
+            "workflows.write",
+            "mut.service.cognitive-mcp.workflow.run@v1",
+        ),
+    );
+    schema.methods.insert(
+        "toolsets".to_string(),
+        method_decl_from_schemars_with_output::<ToolsetsInput, ToolsetsOutput>(
+            "toolsets",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.toolset.project@v1",
         ),
     );
     schema.methods.insert(
@@ -831,7 +976,35 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         "cognitive_mcp.invoke".to_string(),
         op_state_store::CapabilityDecl {
             id: "cognitive_mcp.invoke".to_string(),
-            description: "Grants in-process cognitive tool invocation: register_tool, memory_store, memory_delete, code_index, gemini_query, invoke_tool.".to_string(),
+            description: "Grants legacy in-process cognitive invocation methods; it does not authorize projected MCP tools by itself.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cognitive_mcp.memory.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cognitive_mcp.memory.write".to_string(),
+            description: "Grants the sealed HOT memory_store method.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "cognitive_mcp.code.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "cognitive_mcp.code.write".to_string(),
+            description: "Grants the sealed context-aware code_index method.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "workflows.read".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "workflows.read".to_string(),
+            description: "Grants the HOT workflow catalog query facade.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "workflows.write".to_string(),
+        op_state_store::CapabilityDecl {
+            id: "workflows.write".to_string(),
+            description: "Grants the HOT workflow enqueue facade.".to_string(),
         },
     );
 
@@ -926,12 +1099,12 @@ mod tests {
             );
         }
 
-        assert_eq!(schema.methods.len(), 13);
-        for method in [
+        let expected_methods = [
             "get_health",
             "list_tools",
             "register_tool",
             "memory_store",
+            "memory_recall",
             "memory_retrieve",
             "memory_query",
             "memory_delete",
@@ -939,9 +1112,18 @@ mod tests {
             "code_search",
             "code_index",
             "code_context",
+            "workflow_query",
+            "workflow_run",
+            "toolsets",
             "gemini_query",
             "invoke_tool",
-        ] {
+        ];
+        assert_eq!(
+            schema.methods.len(),
+            expected_methods.len(),
+            "sealed bridge-owned cognitive method inventory drifted"
+        );
+        for method in expected_methods {
             assert!(
                 schema.methods.contains_key(method),
                 "bridge-owned cognitive method {method} must remain sealed"

@@ -55,7 +55,7 @@ pub struct AccountabilityTransport;
 impl AccountabilityTransport {
     /// gRPC endpoint, matching the one `main.rs` uses for reflection and chat.
     pub fn endpoint() -> String {
-        std::env::var("ZEROCLAW_GRPC").unwrap_or_else(|_| "http://127.0.0.1:8090".into())
+        crate::conn::resolve_endpoint()
     }
 
     /// Connect once and reuse. Retries on the next call if connecting failed.

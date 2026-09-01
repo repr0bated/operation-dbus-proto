@@ -113,7 +113,7 @@ const mockServices: DinitService[] = [
   },
   {
     name: "audit-chain",
-    description: "Blockchain audit trail writer",
+    description: "Snowball audit trail writer",
     state: "started",
     type: "bgprocess",
     pid: 1350,

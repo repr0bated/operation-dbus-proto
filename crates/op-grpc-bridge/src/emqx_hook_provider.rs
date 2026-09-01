@@ -1,7 +1,7 @@
-//! EMQX ExHook v2 HookProvider gRPC service implementation.
+//! EMQX ExHook v3 HookProvider gRPC service implementation.
 //!
 //! EMQX acts as a gRPC client, calling this service for MQTT events
-//! (EMQX 5.x fixed the exhook proto package at `emqx.exhook.v2`).
+//! The pinned EMQX 6.2.2 broker requires `emqx.exhook.v3`.
 //! The implementation records events through MutationEngine for
 //! accountability. Authenticate/authorize/publish decisions are left to the
 //! broker (`IGNORE`) — the hook is an audit tap, not the auth gate; identity
@@ -12,27 +12,13 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
+use op_plugins::state_plugins::emqx::REGISTERED_HOOKS;
+
 use crate::mutation_engine::MutationEngine;
 use crate::proto::emqx_exhook::{
     self as exhook, hook_provider_server::HookProvider, valued_response, EmptySuccess, HookSpec,
     LoadedResponse, ValuedResponse,
 };
-
-/// Hooks registered with the broker on OnProviderLoaded.
-const REGISTERED_HOOKS: &[&str] = &[
-    "client.connect",
-    "client.connected",
-    "client.disconnected",
-    "client.authenticate",
-    "client.authorize",
-    "client.subscribe",
-    "client.unsubscribe",
-    "session.created",
-    "session.subscribed",
-    "session.unsubscribed",
-    "session.terminated",
-    "message.publish",
-];
 
 /// HookProvider service implementation for EMQX MQTT event hooks.
 ///
@@ -73,7 +59,7 @@ impl HookProviderService {
                 &format!("hook.{}", event_type),
                 &serde_json::to_string(&event_data)?,
                 None,
-                "grpc:emqx.exhook.v2",
+                "grpc:emqx.exhook.v3",
             )
             .await?;
 

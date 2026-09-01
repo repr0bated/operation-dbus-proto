@@ -70,9 +70,9 @@ use op_agents::agents::{
         SEOMetaOptimizerAgent, SearchSpecialistAgent,
     },
     specialty::{
-        ARMCortexExpertAgent, BlockchainDeveloperAgent, ErrorDetectiveAgent,
-        HybridCloudArchitectAgent, LegacyModernizerAgent, ObservabilityEngineerAgent,
-        QuantAnalystAgent, UIUXDesignerAgent, UnityDeveloperAgent,
+        ARMCortexExpertAgent, ErrorDetectiveAgent, HybridCloudArchitectAgent,
+        LegacyModernizerAgent, ObservabilityEngineerAgent, QuantAnalystAgent,
+        SnowballDeveloperAgent, UIUXDesignerAgent, UnityDeveloperAgent,
     },
     webframeworks::{DjangoProAgent, FastAPIProAgent, TemporalPythonProAgent},
     AgentTrait,
@@ -160,7 +160,7 @@ fn build_agent(agent_type: &str, agent_id: String) -> Option<Box<dyn AgentTrait>
         "seo-meta-optimizer" => Some(Box::new(SEOMetaOptimizerAgent::new(agent_id))),
         // Specialty agents
         "arm-cortex-expert" => Some(Box::new(ARMCortexExpertAgent::new(agent_id))),
-        "blockchain-developer" => Some(Box::new(BlockchainDeveloperAgent::new(agent_id))),
+        "snowball-developer" => Some(Box::new(SnowballDeveloperAgent::new(agent_id))),
         "error-detective" => Some(Box::new(ErrorDetectiveAgent::new(agent_id))),
         "hybrid-cloud-architect" => Some(Box::new(HybridCloudArchitectAgent::new(agent_id))),
         "legacy-modernizer" => Some(Box::new(LegacyModernizerAgent::new(agent_id))),

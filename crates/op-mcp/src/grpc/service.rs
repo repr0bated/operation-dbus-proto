@@ -44,7 +44,7 @@ struct Session {
 pub struct GrpcInfrastructure {
     pub cache_path: Option<PathBuf>,
     pub state_db_path: Option<PathBuf>,
-    pub blockchain_path: Option<PathBuf>,
+    pub snowball_path: Option<PathBuf>,
     pub tool_registry: Option<Arc<op_tools::ToolRegistry>>,
 }
 
@@ -53,7 +53,7 @@ impl Clone for GrpcInfrastructure {
         Self {
             cache_path: self.cache_path.clone(),
             state_db_path: self.state_db_path.clone(),
-            blockchain_path: self.blockchain_path.clone(),
+            snowball_path: self.snowball_path.clone(),
             tool_registry: self.tool_registry.clone(),
         }
     }
@@ -67,7 +67,7 @@ impl GrpcInfrastructure {
     pub async fn from_paths(
         _cache_path: Option<PathBuf>,
         _state_db_path: Option<PathBuf>,
-        _blockchain_path: Option<PathBuf>,
+        _snowball_path: Option<PathBuf>,
     ) -> Result<Self> {
         Ok(Self::default())
     }

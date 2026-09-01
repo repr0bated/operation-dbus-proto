@@ -1,6 +1,8 @@
 {
-  "*": {
+  "937d6d2b-ecae-ed53-f3a2-d7bd09f544ff": {
+    "display_alias": "jeremy-laptop",
     "capabilities": [
+      "cap.identity.dbus.bind@v1",
       "cap.service.lifecycle.init@v1",
       "cap.service.lifecycle.run@v1",
       "cap.service.lifecycle.shutdown@v1",
@@ -35,6 +37,14 @@
       "tched-router.write",
       "cognitive_mcp.invoke",
       "cognitive_mcp.read",
+      "cognitive_mcp.memory.write",
+      "cognitive_mcp.code.write",
+      "workflows.read",
+      "workflows.write",
+      "notebooklm.read",
+      "notebooklm.invoke",
+      "notebooklm.admin",
+      "mongodb_mcp.read",
       "mcp.read",
       "mcp.write",
       "agent.read",
@@ -47,11 +57,7 @@
       "shared_unix_socket.invoke",
       "shared_unix_socket.read",
       "xray.read",
-      "xray.write"
-    ]
-  },
-  "898fbad6ed3fbf0b3b08dc95a61d4f32be4645885c08c7356311eb45486a65ad": {
-    "capabilities": [
+      "xray.write",
       "cap.network.rtnetlink.link.move-netns@v1",
       "cap.network.rtnetlink.link-state.set@v1",
       "cap.network.rtnetlink.mtu.set@v1",
@@ -64,7 +70,30 @@
       "cap.network.ovsdb.port.delete@v1",
       "cap.network.ovsdb.port.list@v1",
       "cap.network.ovsdb.bridge.controller.set@v1",
-      "cap.network.ovsdb.bridge.controller.read@v1"
+      "cap.network.ovsdb.bridge.controller.read@v1",
+      "cap.network.emqx.status.get@v1",
+      "cap.network.emqx.mcp.status.get@v1",
+      "cap.network.emqx.listeners.list@v1",
+      "cap.network.emqx.hooks.list@v1",
+      "cap.network.emqx.hooks.status.get@v1",
+      "cap.network.emqx.hooks.configure@v1",
+      "cap.network.emqx.lifecycle.start@v1",
+      "cap.network.emqx.lifecycle.stop@v1",
+      "cap.network.emqx.lifecycle.restart@v1"
+    ]
+  },
+  "87b0decc-8464-5abf-05d8-b52ec88ff9f1": {
+    "display_alias": "control-plane-chatbot",
+    "capabilities": [
+      "cognitive_mcp.read",
+      "cognitive_mcp.invoke",
+      "cognitive_mcp.memory.write",
+      "cognitive_mcp.code.write",
+      "workflows.read",
+      "workflows.write",
+      "notebooklm.read",
+      "notebooklm.invoke",
+      "mongodb_mcp.read"
     ]
   }
 }

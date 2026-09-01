@@ -11,7 +11,7 @@ export default function SecurityPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Shield className="h-4 w-4 text-primary" />
-              Blockchain Audit Trail
+              Snowball Audit Trail
             </CardTitle>
           </CardHeader>
           <CardContent>

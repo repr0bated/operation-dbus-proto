@@ -1,7 +1,7 @@
 //! Pure in-memory StateStore — no SQLite, no drift.
 //!
 //! Used for plugin projection bootstrap and ephemeral state tracking
-//! where persistence is handled externally (SHM, blockchain, JSON files).
+//! where persistence is handled externally (SHM, snowball, JSON files).
 
 use crate::error::Result;
 use crate::execution_job::ExecutionJob;
@@ -98,7 +98,7 @@ impl StateStore for MemoryStore {
         Ok(CanonicalDbExport {
             objects: objects.values().cloned().collect(),
             executions,
-            blockchain: Vec::new(),
+            snowball: Vec::new(),
         })
     }
 

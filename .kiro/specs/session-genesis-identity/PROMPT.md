@@ -17,14 +17,14 @@ Feature name: `session-genesis-identity`
 
 ## 1 · The problem, in one paragraph
 
-The identity value carried in the per-request header is **recomputed on every mutation**, so it is stale before the client can present it. A.N.N.A. Scribe therefore rejects live callers with "Temporal Hash Mismatch". Two unrelated things are both called "footprint" — the identity anchor and the blockchain record — and the collision is why neither works: the identity anchor chases a moving global counter, and the chain record carries no session identity at all, so the chain cannot be sliced or verified per session.
+The identity value carried in the per-request header is **recomputed on every mutation**, so it is stale before the client can present it. A.N.N.A. Scribe therefore rejects live callers with "Temporal Hash Mismatch". Two unrelated things are both called "footprint" — the identity anchor and the snowball record — and the collision is why neither works: the identity anchor chases a moving global counter, and the chain record carries no session identity at all, so the chain cannot be sliced or verified per session.
 
 ## 2 · Verified live evidence (verified 2026-08-15/16 against the running host, not inferred from docs)
 
 | Fact | Evidence |
 |---|---|
 | The SHM sled is ONE file, 152 bytes, last-write-wins, shared by all sessions | /dev/shm/plugin_schema.dat; SHM_SLED_PATH at op-identity/src/schema_bridge.rs:22 |
-| Its mutation_index is a global counter near 1.9M and moves constantly | live sled dump; blockchain counter 1,822,084 |
+| Its mutation_index is a global counter near 1.9M and moves constantly | live sled dump; snowball counter 1,822,084 |
 | The identity anchor is derived from that counter | etch_footprint, op-identity/src/schema_bridge.rs:1121 — blake3(pubkey ‖ catalog_hash ‖ mutation_index ‖ source_port) |
 | source_port is structurally zero on this host | no wg0; interfaces are wgcf-egress, wgcf-uiStream (WARP), netmaker |
 | The per-session store disagrees with SHM | /dev/shm/opdbus/state/identity_sled.json — record for live container bea37ecb-92be-197c-660f-09e806f1a34f has hashed_footprint "" and mutation_index 0, while SHM holds a real footprint for the same pubkey |
@@ -51,13 +51,13 @@ The identity value carried in the per-request header is **recomputed on every mu
 
   Identity, state-at-arrival, contract-at-arrival, moment. The chain head is a commitment to all prior mutations by hash linkage, so it *is* the current mutation state without walking anything. The arrival timestamp is the uniqueness term that separates two logins landing at the same head; unlike the head timestamp it cannot be re-derived, so it must be **stored** to stay checkable.
 
-- **Footprint** — goes back to meaning the blockchain record (PluginFootprint, op-blockchain/src/footprint.rs:54). One per mutation, delivered by the session, carrying the genesis as its session stamp, free to grow (including vector_features, currently always empty).
+- **Footprint** — goes back to meaning the snowball record (PluginFootprint, op-snowball/src/footprint.rs:54). One per mutation, delivered by the session, carrying the genesis as its session stamp, free to grow (including vector_features, currently always empty).
 
 **The header is on every packet.** Constant for the life of the session, verified with a single equality against the session record. This is the point of the whole design, not an implementation detail. When it is absent the request must **fail closed** — the zeros sentinel is the same as having no gate.
 
-**The mutation engine owns all of it.** Arrival is not a special case; it is mutation one of the session. The engine reads the chain head, mints the genesis, seals the identity blob, writes the session record, and thereafter stamps the genesis onto every footprint that session delivers. No circularity: genesis binds the head *before* the arrival, the arrival records the genesis after.
+**The mutation engine owns all of it.** Arrival is not a special case; it is mutation one of the session. The engine reads the chain head, mints the genesis, seals the sealed ID, writes the session record, and thereafter stamps the genesis onto every footprint that session delivers. No circularity: genesis binds the head *before* the arrival, the arrival records the genesis after.
 
-**Identity reaches xray out-of-band as a sealed blob, not in-band.** The xray in the container is stock Xray-core with Reality and is a passthrough — it cannot inject HTTP headers, and arbitrary preamble bytes on its inbound socket would land where it expects a ClientHello. So the component that first sees the key seals an identity blob into the catalog and splices the stream untouched; the bridge's UDS injector joins on it and stamps the header after termination.
+**Identity reaches xray out-of-band as a sealed blob, not in-band.** The xray in the container is stock Xray-core with Reality and is a passthrough — it cannot inject HTTP headers, and arbitrary preamble bytes on its inbound socket would land where it expects a ClientHello. So the component that first sees the key seals an sealed ID into the catalog and splices the stream untouched; the bridge's UDS injector joins on it and stamps the header after termination.
 
 **Both sled writers, in parallel, with field ownership.** The mutation path owns the exact chain position. The stream feeds per-session accumulation — the span and the tokio/metadata context. They supplement rather than overwrite because they no longer write the same field of the same shared record.
 
@@ -95,7 +95,7 @@ The sled fed only by the mutation-write path holds the last mutation, not an acc
 
 ## 6 · Open questions the spec must resolve (each changes the design)
 
-1. **Join key** — what ties the sealed identity blob to the connection xray hands over. Candidates: source address+port (needs PROXY v2 to survive termination, otherwise lost at the UDS hop); SNI (visible to sni-demux before any decryption, survives to xray, but **the topology lock says no SNI front on public :443** — reconcile or reject); one UDS connection per session (needs nothing from xray, costs a socket per session).
+1. **Join key** — what ties the sealed identity to the connection xray hands over. Candidates: source address+port (needs PROXY v2 to survive termination, otherwise lost at the UDS hop); SNI (visible to sni-demux before any decryption, survives to xray, but **the topology lock says no SNI front on public :443** — reconcile or reject); one UDS connection per session (needs nothing from xray, costs a socket per session).
 2. **Where the mint happens** — Oracle decoy (it is the only place the human WG peer is authenticated), xray, or the bridge. The locked spec makes the bridge the sole validator; that constrains but does not by itself answer where the *mint* lives.
 3. **State term** — chain head hash only, or additionally a root over the sealed blob catalog contents at login. Head proves "these mutations happened" and is free; a blob root proves "the world looked like this" and costs a hash per login. Recommendation: start with the head, add the blob root as a second term if the stronger claim is wanted.
 4. **Header naming and migration** — x-ghostbridge-footprint now carries a genesis, which re-creates the two-meanings collision on the wire. Adding x-ghostbridge-genesis and accepting both during transition avoids a flag day across xray config, op-web handlers, the grpc_web allow-list (grpc_web.rs:31-33) and the UI.

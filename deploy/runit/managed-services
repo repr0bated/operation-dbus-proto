@@ -1,6 +1,10 @@
 # Release-owned definitions changed by the Netmaker removal.
 mail-port-fabric
 op-grpc-bridge
+op-runit-systemctl
+emqx
+notebooklm-mcp
+mongodb-mcp-server
 op-web
 op-of-controller
 sshd

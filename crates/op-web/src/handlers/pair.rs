@@ -4,7 +4,7 @@
 //! - `POST /pair` with `X-Pairing-Code` — exchange code for bearer token + session identity
 //!
 //! Response shape matches zeroclaw-gui `AuthState::pair`:
-//! `{ "token": "...", "hashed_footprint": "...", "trace_id": "..." }`
+//! `{ "token": "...", "genesis": "...", "trace_id": "..." }`
 
 use axum::{
     body::Body,
@@ -43,7 +43,7 @@ struct PairState {
 struct PairedSession {
     device_name: String,
     device_type: String,
-    footprint: String,
+    session_genesis: String,
     trace_id: String,
     created_at: Instant,
 }
@@ -105,7 +105,6 @@ fn request_session(headers: &HeaderMap) -> Result<SessionIdentity, String> {
         "x-ghostbridge-trace-id",
         "x-wireguard-pubkey",
         "x-ghostbridge-genesis",
-        "x-ghostbridge-footprint",
     ]
     .into_iter()
     .find_map(|name| headers.get(name).and_then(|value| value.to_str().ok()))
@@ -191,7 +190,6 @@ fn default_device_type() -> String {
 struct PairResponse {
     token: String,
     genesis: String,
-    hashed_footprint: String,
     trace_id: String,
     device_name: String,
 }
@@ -256,7 +254,7 @@ pub async fn pair_handler(
             PairedSession {
                 device_name: body.device_name.clone(),
                 device_type: body.device_type.clone(),
-                footprint: genesis.clone(),
+                session_genesis: genesis.clone(),
                 trace_id: trace_id.clone(),
                 created_at: Instant::now(),
             },
@@ -273,8 +271,7 @@ pub async fn pair_handler(
         StatusCode::OK,
         serde_json::to_value(PairResponse {
             token,
-            genesis: genesis.clone(),
-            hashed_footprint: genesis,
+            genesis,
             trace_id,
             device_name: body.device_name,
         })
@@ -288,5 +285,5 @@ pub fn lookup_paired_token(token: &str) -> Option<(String, String)> {
     let st = lock_pair();
     st.tokens
         .get(token)
-        .map(|s| (s.footprint.clone(), s.trace_id.clone()))
+        .map(|s| (s.session_genesis.clone(), s.trace_id.clone()))
 }

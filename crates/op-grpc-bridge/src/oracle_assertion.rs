@@ -24,15 +24,15 @@ pub const DEFAULT_AUTH_REPLAY_DB_PATH: &str = "/var/lib/op-dbus/auth-replay.db";
 pub const AUTH_REPLAY_DB_PATH_ENV: &str = "OP_AUTH_REPLAY_DB_PATH";
 pub const SOURCE_BINDING_ENV: &str = "OP_ORACLE_ASSERTION_SOURCE_BINDING";
 pub const CLOCK_LEEWAY_SECS: i64 = 30;
-pub const HUMAN_FOOTPRINT_KDF_CONTEXT: &str = "op-identity human-footprint v1";
 
 /// How a decoy-signed assertion is bound to its transport.
 ///
-/// `ExactPeerIp` is the legacy/static-WireGuard mode and remains the default.
-/// `TrustedDecoySignature` is for proxy transports where NAT replaces the
-/// human WireGuard inner address before the request reaches tonic. It still
-/// requires the trusted decoy signature, lifetime checks, one-time nonce, and
-/// registered human public key.
+/// `TrustedDecoySignature` is the live fabric binding: WARP/Xray replace the
+/// human inner source address, so the request is bound to the decoy signature,
+/// lifetime, one-time nonce, and registered human key — not TCP-source equality.
+/// `ExactPeerIp` is the retired Netmaker overlay check; it is opt-in only via
+/// `OP_ORACLE_ASSERTION_SOURCE_BINDING=exact-peer-ip`. A missing or unknown
+/// env value must not revive that path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssertionSourceBinding {
     ExactPeerIp,
@@ -40,19 +40,23 @@ pub enum AssertionSourceBinding {
 }
 
 impl AssertionSourceBinding {
-    fn from_env() -> Self {
-        match std::env::var(SOURCE_BINDING_ENV).as_deref() {
-            Ok("trusted-decoy-signature") => Self::TrustedDecoySignature,
-            Ok("exact-peer-ip") | Err(_) => Self::ExactPeerIp,
-            Ok(value) => {
+    pub(crate) fn parse(value: Result<String, std::env::VarError>) -> Self {
+        match value.as_deref() {
+            Ok("exact-peer-ip") => Self::ExactPeerIp,
+            Ok("trusted-decoy-signature") | Err(_) => Self::TrustedDecoySignature,
+            Ok(other) => {
                 tracing::error!(
                     env = SOURCE_BINDING_ENV,
-                    %value,
-                    "unknown oracle assertion source binding; using strict exact-peer-ip"
+                    value = other,
+                    "unknown oracle assertion source binding; using trusted-decoy-signature"
                 );
-                Self::ExactPeerIp
+                Self::TrustedDecoySignature
             }
         }
+    }
+
+    fn from_env() -> Self {
+        Self::parse(std::env::var(SOURCE_BINDING_ENV))
     }
 }
 
@@ -62,8 +66,12 @@ impl AssertionSourceBinding {
 pub struct HumanPrincipalIdentity {
     pub principal_id: String,
     pub human_pubkey: String,
-    pub footprint: [u8; 32],
+    /// Stable, per-arrival session identifier. Populated only after the
+    /// verified human session has been anchored.
+    pub session_id: String,
     pub expires_at: i64,
+    /// Snowball genesis anchor for this session. This proves arrival; it is
+    /// not an authorization identity and is never used as a grant-store key.
     pub session_genesis: String,
 }
 
@@ -523,6 +531,10 @@ pub struct AssertionValidator {
 }
 
 impl AssertionValidator {
+    /// Test and explicit-construction helper. Source binding is
+    /// `ExactPeerIp` so IP-equality unit tests do not all have to opt in.
+    /// Production always uses [`Self::from_env`], which defaults to
+    /// `trusted-decoy-signature`.
     pub fn new(trust_store: DecoyTrustStore) -> Self {
         Self {
             trust_store,
@@ -533,9 +545,10 @@ impl AssertionValidator {
         }
     }
 
-    /// Construct the production validator, reading only the explicit
-    /// transport-binding selector. Missing or invalid configuration remains
-    /// strict and fail-closed.
+    /// Construct the production validator, reading the transport-binding
+    /// selector. Missing or unknown `OP_ORACLE_ASSERTION_SOURCE_BINDING` uses
+    /// `trusted-decoy-signature` (the live fabric binding). `exact-peer-ip`
+    /// remains available as an explicit legacy opt-in.
     pub fn from_env(trust_store: DecoyTrustStore) -> Self {
         let path = std::env::var(AUTH_REPLAY_DB_PATH_ENV)
             .map(PathBuf::from)
@@ -705,7 +718,7 @@ impl AssertionValidator {
                 return Ok(HumanPrincipalIdentity {
                     principal_id: derive_principal_id(human_pubkey),
                     human_pubkey: human_pubkey.to_string(),
-                    footprint: derive_human_footprint(human_pubkey),
+                    session_id: String::new(),
                     expires_at,
                     session_genesis: String::new(),
                 });
@@ -717,17 +730,13 @@ impl AssertionValidator {
         }
 
         Ok(HumanPrincipalIdentity {
-            principal_id: derive_principal_id(human_pubkey),
+            principal_id: record.principal_id,
             human_pubkey: human_pubkey.to_string(),
-            footprint: derive_human_footprint(human_pubkey),
+            session_id: String::new(),
             expires_at,
             session_genesis: String::new(),
         })
     }
-}
-
-pub fn derive_human_footprint(human_pubkey: &str) -> [u8; 32] {
-    blake3::derive_key(HUMAN_FOOTPRINT_KDF_CONTEXT, human_pubkey.as_bytes())
 }
 
 fn decoy_keys_object_has_duplicate_keys(raw: &str) -> bool {
@@ -830,6 +839,26 @@ pub mod tests {
         let mut keys = HashMap::new();
         keys.insert(issuer.key_id().to_string(), *issuer.verifying_key());
         DecoyTrustStore::from_decoy_keys(keys)
+    }
+
+    #[test]
+    fn source_binding_defaults_to_trusted_decoy_not_netmaker_ip() {
+        assert_eq!(
+            AssertionSourceBinding::parse(Err(std::env::VarError::NotPresent)),
+            AssertionSourceBinding::TrustedDecoySignature
+        );
+        assert_eq!(
+            AssertionSourceBinding::parse(Ok("trusted-decoy-signature".into())),
+            AssertionSourceBinding::TrustedDecoySignature
+        );
+        assert_eq!(
+            AssertionSourceBinding::parse(Ok("exact-peer-ip".into())),
+            AssertionSourceBinding::ExactPeerIp
+        );
+        assert_eq!(
+            AssertionSourceBinding::parse(Ok("not-a-binding".into())),
+            AssertionSourceBinding::TrustedDecoySignature
+        );
     }
 
     fn write_trust_store(dir: &tempfile::TempDir, issuer: &DecoyIssuer) -> std::path::PathBuf {
@@ -1715,11 +1744,8 @@ pub mod tests {
             .expect("valid");
         assert_eq!(identity.expires_at, expires);
         assert_eq!(identity.principal_id, derive_principal_id(&pubkey));
-        assert_eq!(identity.footprint, derive_human_footprint(&pubkey));
-        assert_ne!(
-            identity.footprint,
-            blake3::derive_key("op-identity human-principal v1", pubkey.as_bytes())
-        );
+        assert!(identity.session_id.is_empty());
+        assert!(identity.session_genesis.is_empty());
         assert_ne!(identity.principal_id, derive_session_id(&pubkey));
     }
 

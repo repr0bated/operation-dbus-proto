@@ -69,7 +69,7 @@ SKIP_START=0
 WITH_HEADLESS_GUI=0
 WITH_DEV_UI=0
 
-# Canonical paths (from op-core::config and op-s6-systemctl::dbus)
+# Canonical paths (from op-core::config and op-runit-systemctl::dbus)
 ENV_FILE="/etc/op-dbus/environment"
 NET_CONF="/etc/op-dbus/network.conf"
 SESSION_BUS_SOCKET="/run/opdbus/session-bus.sock"        # op_core::config::SESSION_BUS_SOCKET_PATH
@@ -335,7 +335,7 @@ build_project() {
         -p op-grpc-bridge
         -p op-cognitive-mcp
         -p op-mcp
-        -p op-s6-systemctl
+        -p op-runit-systemctl
         -p op-xray-daemon
         -p op-network
         -p op-plugins
@@ -359,7 +359,7 @@ build_project() {
         op-grpc-bridge
         op-cognitive-mcp rag-ingest op-cog-admin
         op-mcp-compact op-mcp-server op-mcp-agents
-        s6d op-s6-systemctl
+        svd op-runit-systemctl
         op-xray-daemon
         op-of-controller op-ovsbr0-setup
         opblob
@@ -477,7 +477,7 @@ EOF
 }
 
 write_dbus_policy() {
-    log "Installing D-Bus system policy + s6d activation..."
+    log "Installing D-Bus system policy + svd activation..."
     install -d /etc/dbus-1/system.d
     cat > /etc/dbus-1/system.d/org.opdbus.conf <<EOF
 <!DOCTYPE busconfig PUBLIC
@@ -501,13 +501,13 @@ write_dbus_policy() {
 </busconfig>
 EOF
 
-    # D-Bus activation for the s6 service-management surface
-    # (org.opdbus.v1.S6.Systemctl — crates/op-s6-systemctl).
+    # D-Bus activation for the runit service-management surface
+    # (org.opdbus.v1.Runit.Systemctl — crates/op-runit-systemctl).
     install -d /usr/share/dbus-1/system-services
-    cat > /usr/share/dbus-1/system-services/org.opdbus.v1.S6.Systemctl.service <<EOF
+    cat > /usr/share/dbus-1/system-services/org.opdbus.v1.Runit.Systemctl.service <<EOF
 [D-BUS Service]
-Name=org.opdbus.v1.S6.Systemctl
-Exec=${BIN_DIR}/op-s6-systemctl
+Name=org.opdbus.v1.Runit.Systemctl
+Exec=${BIN_DIR}/op-runit-systemctl
 User=root
 EOF
     ok "D-Bus policy installed"
@@ -1418,7 +1418,7 @@ verify() {
     log "Verifying installation..."
     local bad=0
 
-    for b in op-web-server opdbus projection_server op-grpc-bridge s6d; do
+    for b in op-web-server opdbus projection_server op-grpc-bridge svd op-runit-systemctl; do
         if [[ -x ${BIN_DIR}/$b ]]; then ok "binary: $b"; else warn "missing binary: $b"; bad=1; fi
     done
 

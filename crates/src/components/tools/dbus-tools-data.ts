@@ -84,7 +84,7 @@ export const mockDbusTools: DbusObjectTool[] = [
   },
   {
     name: "Audit.Chain",
-    description: "Blockchain audit trail interface",
+    description: "Snowball audit trail interface",
     dbusPath: "/com/3tched/audit/chain",
     interface: "com.3tched.Audit.Chain1",
     methods: [
@@ -101,7 +101,7 @@ export const mockDbusTools: DbusObjectTool[] = [
       { name: "BlockCommitted", args: "u height, s hash" },
     ],
     category: "audit",
-    tags: ["blockchain", "logging", "integrity"],
+    tags: ["snowball", "logging", "integrity"],
   },
   {
     name: "Dinit.Manager",

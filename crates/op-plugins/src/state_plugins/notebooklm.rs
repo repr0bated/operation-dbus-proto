@@ -24,8 +24,9 @@ use super::plugin_scaffold_helpers::AckOutput;
 
 /// Manifest of the designated knowledge corpus.
 const MANIFEST_PATH: &str = "knowledge/notebooks.manifest.json";
-/// nlm CLI profile location — its presence implies a configured (not necessarily live) session.
-const NLM_PROFILE: &str = ".notebooklm-mcp-cli/profiles/default";
+/// Runit-supervised provider and persistent browser profile paths.
+const PROVIDER_READY: &str = "/run/opdbus/runit-ready/notebooklm-mcp";
+const PROFILE_ROOT: &str = "/home/jeremy/.local/share/notebooklm-mcp";
 
 /// NotebookLM authentication/profile state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -111,6 +112,50 @@ pub struct NotebookLmState {
     pub config: NotebookLmConfig,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EmptyInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NotebookIdInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SearchNotebooksInput {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct QueryNotebookInput {
+    pub question: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub notebook_id: Option<String>,
+    #[serde(default)]
+    pub notebook_url: Option<String>,
+    #[serde(default)]
+    pub source_format: Option<String>,
+    #[serde(default)]
+    pub show_browser: Option<bool>,
+    #[serde(default)]
+    pub browser_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetupAuthInput {
+    #[serde(default)]
+    pub show_browser: Option<bool>,
+    #[serde(default)]
+    pub browser_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProviderResult {
+    #[serde(flatten)]
+    pub value: serde_json::Map<String, serde_json::Value>,
+}
+
 pub struct NotebookLmPlugin;
 
 impl Default for NotebookLmPlugin {
@@ -125,10 +170,9 @@ impl NotebookLmPlugin {
     }
 
     fn profile_configured() -> bool {
-        if let Some(home) = std::env::var_os("HOME") {
-            return Path::new(&home).join(NLM_PROFILE).exists();
-        }
-        false
+        let root = Path::new(PROFILE_ROOT);
+        root.join("browser_state/state.json").exists()
+            || root.join("chrome_profile/Default/Cookies").exists()
     }
 
     /// Read the designated-corpus manifest if present (best-effort).
@@ -184,23 +228,27 @@ impl NotebookLmPlugin {
         };
 
         NotebookLmState {
-            status: if configured {
-                "configured"
+            status: if Path::new(PROVIDER_READY).exists() {
+                if configured {
+                    "ready"
+                } else {
+                    "authentication_required"
+                }
             } else {
-                "unconfigured"
+                "unavailable"
             }
             .to_string(),
             auth: NotebookLmAuth {
                 profile_configured: configured,
-                profile_path: NLM_PROFILE.to_string(),
-                note: "cookie sessions are short-lived; long batches run laptop-side or in bursts"
+                profile_path: PROFILE_ROOT.to_string(),
+                note: "persistent browser authentication is owned by the runit provider service"
                     .to_string(),
             },
             master_notebook: master,
             corpus,
             config: NotebookLmConfig {
-                cli: "nlm".to_string(),
-                transport: "nlm CLI / NotebookLM batchexecute".to_string(),
+                cli: "notebooklm-mcp@2.0.0".to_string(),
+                transport: "loopback Streamable HTTP (runit supervised)".to_string(),
                 ingest_pipeline: "OD-23 (embedding_model->Qdrant + Cozo graph)".to_string(),
             },
         }
@@ -213,7 +261,7 @@ impl StatePlugin for NotebookLmPlugin {
         "notebooklm"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
         Some(notebooklm_schema())
@@ -268,7 +316,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "notebooklm",
-        "1.0.0",
+        "2.0.0",
         "NotebookLM knowledge notebooks — auth status, designated corpus, master notebook",
         &root,
     );
@@ -276,7 +324,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // Add methods to schema with typed returns
     schema.methods.insert(
         "list_notebooks".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, ProviderResult>(
             "list_notebooks",
             SideEffect::Read,
             true,
@@ -286,7 +334,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NotebookIdInput, ProviderResult>(
             "get_notebook",
             SideEffect::Read,
             true,
@@ -296,7 +344,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "select_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<NotebookIdInput, ProviderResult>(
             "select_notebook",
             SideEffect::Mutation,
             false,
@@ -306,7 +354,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "search_notebooks".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<SearchNotebooksInput, ProviderResult>(
             "search_notebooks",
             SideEffect::Read,
             true,
@@ -316,7 +364,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "query_notebook".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<QueryNotebookInput, ProviderResult>(
             "query_notebook",
             SideEffect::Read,
             true,
@@ -746,7 +794,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     // === Sessions / auth / health (R/M) ===
     schema.methods.insert(
         "list_sessions".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, ProviderResult>(
             "list_sessions",
             SideEffect::Read,
             true,
@@ -776,7 +824,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_health".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, ProviderResult>(
             "get_health",
             SideEffect::Read,
             true,
@@ -786,7 +834,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "setup_auth".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<SetupAuthInput, ProviderResult>(
             "setup_auth",
             SideEffect::Mutation,
             false,
@@ -827,6 +875,15 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         CapabilityDecl {
             id: "notebooklm.invoke".to_string(),
             description: "Grants: select_notebook, add_source_url, add_source_text, add_source_drive, add_source_file, delete_source, sync_drive_sources, auto_label_sources, create_label, rename_label, set_label_emoji, move_source_label, delete_label, create_audio, create_video, create_report, create_quiz, create_flashcards, create_infographic, create_slides, revise_slides, describe_studio, get_audio_status, list_artifacts, download_artifact, start_research, import_research, share_public, share_invite, get_share_settings, disable_share, batch_operation, list_sessions, close_session, reset_session, get_health, setup_auth, refresh_auth, reauth.".to_string(),
+        },
+    );
+    schema.capabilities.insert(
+        "notebooklm.admin".to_string(),
+        CapabilityDecl {
+            id: "notebooklm.admin".to_string(),
+            description:
+                "Interactive browser-profile setup and explicit NotebookLM reauthentication"
+                    .to_string(),
         },
     );
 

@@ -1,5 +1,5 @@
 // 🟢 🛡️ Ghostbridge Trace Middleware
-// Stamps X-Ghostbridge-Footprint and X-Ghostbridge-Trace-ID on every HTTP/gRPC
+// Stamps X-Ghostbridge-Genesis and X-Ghostbridge-Trace-ID on every HTTP/gRPC
 // response. Operates inside the zeroclaw Axum host (the gRPC/gRPC-Web side of
 // The Shuttle). Mirrors the accountability loop enforced by the tonic
 // interceptor on the native-gRPC side.
@@ -13,7 +13,6 @@ use axum::response::Response;
 use tracing::{warn, Span};
 use uuid::Uuid;
 
-const FOOTPRINT_HEADER: &str = "X-Ghostbridge-Footprint";
 const GENESIS_HEADER: &str = "X-Ghostbridge-Genesis";
 const TRACE_ID_HEADER: &str = "X-Ghostbridge-Trace-ID";
 
@@ -22,16 +21,15 @@ const TRACE_ID_HEADER: &str = "X-Ghostbridge-Trace-ID";
 /// gRPC response message carry the same values.
 #[derive(Clone, Debug)]
 pub struct TraceContext {
-    pub footprint: String,
+    pub session_genesis: String,
     pub trace_id: String,
 }
 
 impl TraceContext {
     /// Extract or generate trace context from HTTP headers.
     pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
-        let footprint = headers
+        let session_genesis = headers
             .get(GENESIS_HEADER)
-            .or_else(|| headers.get(FOOTPRINT_HEADER))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
@@ -48,16 +46,15 @@ impl TraceContext {
                 id
             });
         Self {
-            footprint,
+            session_genesis,
             trace_id,
         }
     }
 
     /// Extract trace context from tonic request metadata/headers.
     pub fn from_tonic_metadata(metadata: &tonic::metadata::MetadataMap) -> Self {
-        let footprint = metadata
+        let session_genesis = metadata
             .get(GENESIS_HEADER)
-            .or_else(|| metadata.get(FOOTPRINT_HEADER))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
             .unwrap_or_default();
@@ -71,7 +68,7 @@ impl TraceContext {
                 id
             });
         Self {
-            footprint,
+            session_genesis,
             trace_id,
         }
     }
@@ -129,9 +126,8 @@ where
             let _enter = span.enter();
             let mut response = inner.call(req).await?;
 
-            if let Ok(value) = context.footprint.parse::<axum::http::HeaderValue>() {
-                response.headers_mut().insert(GENESIS_HEADER, value.clone());
-                response.headers_mut().insert(FOOTPRINT_HEADER, value);
+            if let Ok(value) = context.session_genesis.parse::<axum::http::HeaderValue>() {
+                response.headers_mut().insert(GENESIS_HEADER, value);
             }
             if let Ok(value) = context.trace_id.parse() {
                 response.headers_mut().insert(TRACE_ID_HEADER, value);
@@ -156,13 +152,13 @@ mod tests {
 
         let req = Request::builder()
             .uri("/")
-            .header(FOOTPRINT_HEADER, "abc123")
+            .header(GENESIS_HEADER, "abc123")
             .header(TRACE_ID_HEADER, "trace-123")
             .body(Body::empty())
             .unwrap();
 
         let response = service.oneshot(req).await.unwrap();
-        assert_eq!(response.headers().get(FOOTPRINT_HEADER).unwrap(), "abc123");
+        assert_eq!(response.headers().get(GENESIS_HEADER).unwrap(), "abc123");
         assert_eq!(
             response.headers().get(TRACE_ID_HEADER).unwrap(),
             "trace-123"
@@ -178,7 +174,6 @@ mod tests {
 
         let response = service.oneshot(req).await.unwrap();
         assert!(response.headers().get(GENESIS_HEADER).is_none());
-        assert!(response.headers().get(FOOTPRINT_HEADER).is_none());
         let trace_id = response.headers().get(TRACE_ID_HEADER).unwrap();
         let trace_str = trace_id.to_str().unwrap();
         assert!(

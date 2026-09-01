@@ -2,7 +2,7 @@
 # Persist the SHM present-state tree across a reboot.
 #
 # /dev/shm is tmpfs, so the projected plugin tree — the mutation fold the
-# MutationEngine rewrites on every mutation — dies at shutdown. The blockchain
+# MutationEngine rewrites on every mutation — dies at shutdown. The snowball
 # replays the *audit* trail (bounded, newest-N) but never reconstructs the state
 # a mutation produced, so without this a reboot silently drops every plugin back
 # to its schema defaults while the real data sits on disk unread.

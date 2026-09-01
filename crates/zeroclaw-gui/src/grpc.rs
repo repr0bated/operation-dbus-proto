@@ -495,7 +495,6 @@ pub async fn invoke_unary(
 /// Resolve an explicit environment identity or the configured local session.
 fn ghostbridge_identity() -> Option<(String, String)> {
     let env_genesis = std::env::var("X_GHOSTBRIDGE_GENESIS")
-        .or_else(|_| std::env::var("X_GHOSTBRIDGE_FOOTPRINT"))
         .ok()
         .filter(|value| !value.trim().is_empty());
     let env_trace = std::env::var("X_GHOSTBRIDGE_TRACE_ID")
@@ -516,9 +515,6 @@ pub fn attach_ghostbridge_identity<T>(request: &mut Request<T>) {
         let md = request.metadata_mut();
         if let Ok(v) = genesis.parse() {
             md.insert("x-ghostbridge-genesis", v);
-        }
-        if let Ok(v) = genesis.parse() {
-            md.insert("x-ghostbridge-footprint", v);
         }
         if let Ok(v) = trace_id.parse() {
             md.insert("x-ghostbridge-trace-id", v);

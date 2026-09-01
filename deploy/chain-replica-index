@@ -1,5 +1,5 @@
 #!/bin/sh
-# Post-receive hook for the blockchain vector replica.
+# Post-receive hook for the snowball vector replica.
 #
 # Invoked by the origin over ssh as `chain-replica-index <counter>` immediately
 # after `btrfs receive` lands the aligned snapshot triple
@@ -35,8 +35,8 @@ counter="${1:?usage: chain-replica-index <counter>}"
 export CHAIN_REPLICA_BASE="${CHAIN_REPLICA_BASE:-/var/lib/opdbus/chain-replica}"
 export OP_CHAIN_VECTORS_BIN="${OP_CHAIN_VECTORS_BIN:-/usr/local/bin/op-chain-vectors}"
 export OPDBUS_QDRANT_URL="${OPDBUS_QDRANT_URL:-}"
-export OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION="${OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION:-}"
-export OPDBUS_QDRANT_BLOCKCHAIN_DIM="${OPDBUS_QDRANT_BLOCKCHAIN_DIM:-}"
+export OPDBUS_QDRANT_SNOWBALL_COLLECTION="${OPDBUS_QDRANT_SNOWBALL_COLLECTION:-}"
+export OPDBUS_QDRANT_SNOWBALL_DIM="${OPDBUS_QDRANT_SNOWBALL_DIM:-}"
 
 base="$CHAIN_REPLICA_BASE"
 incoming="$base/incoming"
@@ -60,4 +60,4 @@ for label in timing vectors state; do
 done
 
 # No Voyage key here, and none needed: the vectors arrived in the stream.
-OPDBUS_BLOCKCHAIN_PATH="$base" exec "$indexer" ingest
+OPDBUS_SNOWBALL_PATH="$base" exec "$indexer" ingest

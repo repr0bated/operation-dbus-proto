@@ -65,7 +65,7 @@ pub struct WgSessionRecord {
 
 /// One container identity sled row (mirrors op-plugins' `ContainerIdentitySled`).
 /// `btrfs_device_json` is the sled's btrfs device record pre-serialized to JSON;
-/// `peer_ip`, `blob_ref`, and `btrfs_device_json` use `""` for absent.
+/// `peer_ip`, `sealed_id`, and `btrfs_device_json` use `""` for absent.
 #[derive(Debug, Clone)]
 pub struct IdentitySledRecord {
     pub session_id: String,
@@ -73,11 +73,11 @@ pub struct IdentitySledRecord {
     pub interface: String,
     pub peer_ip: String,
     pub mutation_index: i64,
-    pub hashed_footprint: String,
+    pub session_genesis: String,
     pub trace_id: String,
     pub schema_version: i64,
     pub vector_id: String,
-    pub blob_ref: String,
+    pub sealed_id: String,
     pub btrfs_device_json: String,
     pub instance_json: String,
     pub session_started_at: i64,
@@ -366,19 +366,19 @@ impl CozoGraphShuttle {
             // one row per container identity sled (the container IS the sled IS
             // the identity; host = container zero). btrfs_device_json is the
             // sled's Cozo-registered btrfs persistence device, pre-serialized
-            // ("" = none); peer_ip/blob_ref use "" for absent.
-            r#":create identity_sleds {
+            // ("" = none); peer_ip/sealed_id use "" for absent.
+            r#":create identity_sessions {
                 session_id: String
                 =>
                 wireguard_pubkey: String,
                 interface: String default "",
                 peer_ip: String default "",
                 mutation_index: Int default 0,
-                hashed_footprint: String default "",
+                session_genesis: String default "",
                 trace_id: String default "",
                 schema_version: Int default 0,
                 vector_id: String default "",
-                blob_ref: String default "",
+                sealed_id: String default "",
                 btrfs_device_json: String default "",
                 instance_json: String default "",
                 session_started_at: Int default 0,
@@ -439,6 +439,32 @@ impl CozoGraphShuttle {
                 }
             }
         }
+
+        // One-way, idempotent migration from the pre-v3 relation. Fresh
+        // stores never create this legacy relation; existing rows are copied
+        // into the session-genesis schema and all runtime reads/writes use the
+        // new relation immediately. A missing legacy relation is expected.
+        let _ = cozo_run(
+            &self.db,
+            r#"
+                ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
+                  session_genesis, trace_id, schema_version, vector_id, sealed_id,
+                  btrfs_device_json, instance_json, session_started_at, last_seen_at,
+                  active, expires_at] :=
+                    *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip,
+                      mutation_index, hashed_footprint, trace_id, schema_version,
+                      vector_id, sealed_id, btrfs_device_json, instance_json,
+                      session_started_at, last_seen_at, active, expires_at],
+                    session_genesis = hashed_footprint
+                :put identity_sessions {
+                    session_id => wireguard_pubkey, interface, peer_ip, mutation_index,
+                    session_genesis, trace_id, schema_version, vector_id, sealed_id,
+                    btrfs_device_json, instance_json, session_started_at, last_seen_at,
+                    active, expires_at
+                }
+            "#,
+            BTreeMap::new(),
+        );
 
         info!("CozoDB schema ready");
         Ok(())
@@ -1363,15 +1389,15 @@ impl CozoGraphShuttle {
     ) -> std::result::Result<(), CozoError> {
         let query = r#"
             ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
-              hashed_footprint, trace_id, schema_version, vector_id, blob_ref,
+              session_genesis, trace_id, schema_version, vector_id, sealed_id,
               btrfs_device_json, instance_json, session_started_at, last_seen_at, active,
               expires_at]
-                <- [[$sid, $pubkey, $iface, $peer_ip, $mut_idx, $footprint, $trace,
-                     $schema_ver, $vector, $blob_ref, $btrfs_dev, $instance, $started, $seen, $active,
+                <- [[$sid, $pubkey, $iface, $peer_ip, $mut_idx, $genesis, $trace,
+                     $schema_ver, $vector, $sealed_id, $btrfs_dev, $instance, $started, $seen, $active,
                      $expires]]
-            :put identity_sleds {
+            :put identity_sessions {
                 session_id => wireguard_pubkey, interface, peer_ip, mutation_index,
-                hashed_footprint, trace_id, schema_version, vector_id, blob_ref,
+                session_genesis, trace_id, schema_version, vector_id, sealed_id,
                 btrfs_device_json, instance_json, session_started_at, last_seen_at, active,
                 expires_at
             }
@@ -1392,8 +1418,8 @@ impl CozoGraphShuttle {
         );
         p.insert("mut_idx".into(), dv_int(rec.mutation_index));
         p.insert(
-            "footprint".into(),
-            DataValue::Str(rec.hashed_footprint.as_str().into()),
+            "genesis".into(),
+            DataValue::Str(rec.session_genesis.as_str().into()),
         );
         p.insert("trace".into(), DataValue::Str(rec.trace_id.as_str().into()));
         p.insert("schema_ver".into(), dv_int(rec.schema_version));
@@ -1402,8 +1428,8 @@ impl CozoGraphShuttle {
             DataValue::Str(rec.vector_id.as_str().into()),
         );
         p.insert(
-            "blob_ref".into(),
-            DataValue::Str(rec.blob_ref.as_str().into()),
+            "sealed_id".into(),
+            DataValue::Str(rec.sealed_id.as_str().into()),
         );
         p.insert(
             "btrfs_dev".into(),
@@ -1484,11 +1510,11 @@ impl CozoGraphShuttle {
         let r = cozo_run(
             &self.db,
             "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
-             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
              expires_at] := \
-             *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
-             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             *identity_sessions[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+             session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
              expires_at], \
              session_id = $sid",
@@ -1500,15 +1526,17 @@ impl CozoGraphShuttle {
 
     /// List every persisted identity sled (used to warm the dispatch cache on
     /// engine startup).
-    pub fn list_identity_sleds(&self) -> std::result::Result<Vec<IdentitySledRecord>, CozoError> {
+    pub fn list_identity_sessions(
+        &self,
+    ) -> std::result::Result<Vec<IdentitySledRecord>, CozoError> {
         let r = cozo_run(
             &self.db,
             "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
-             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
              expires_at] := \
-             *identity_sleds[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
-             hashed_footprint, trace_id, schema_version, vector_id, blob_ref, \
+             *identity_sessions[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+             session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
              expires_at]",
             BTreeMap::new(),
@@ -1533,7 +1561,7 @@ impl CozoGraphShuttle {
         cozo_run(
             &self.db,
             "?[session_id, last_seen_at, active] <- [[$sid, $seen, $active]] \
-             :update identity_sleds { session_id => last_seen_at, active }",
+             :update identity_sessions { session_id => last_seen_at, active }",
             p,
         )
         .map_err(|e| CozoError::Other(format!("touch identity sled: {e}")))?;
@@ -1875,11 +1903,11 @@ fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
         interface: s(2),
         peer_ip: s(3),
         mutation_index: dv_as_int(&row[4]),
-        hashed_footprint: s(5),
+        session_genesis: s(5),
         trace_id: s(6),
         schema_version: dv_as_int(&row[7]),
         vector_id: s(8),
-        blob_ref: s(9),
+        sealed_id: s(9),
         btrfs_device_json: s(10),
         instance_json: s(11),
         session_started_at: dv_as_int(&row[12]),
@@ -1981,11 +2009,11 @@ mod identity_sled_tests {
             interface: "".to_string(),
             peer_ip: "10.0.0.2".to_string(),
             mutation_index: 3,
-            hashed_footprint: "fp".to_string(),
+            session_genesis: "fp".to_string(),
             trace_id: "tr".to_string(),
             schema_version: 1,
             vector_id: "".to_string(),
-            blob_ref: "identity_sled.abc.blob".to_string(),
+            sealed_id: "sid1:abc".to_string(),
             btrfs_device_json: r#"{"device_path":"/dev/loop9","mount_point":"/mnt/x","btrfs_uuid":"","cozo_id":"","attached":false}"#.to_string(),
             instance_json: r#"{"name":"sid-1","status":"Stopped","type":"container"}"#.to_string(),
             session_started_at: 100,
@@ -2015,7 +2043,7 @@ mod identity_sled_tests {
         // Partial-column update must not clobber the rest of the row.
         assert_eq!(touched.instance_json, rec.instance_json);
 
-        assert_eq!(store.list_identity_sleds().unwrap().len(), 1);
+        assert_eq!(store.list_identity_sessions().unwrap().len(), 1);
         assert!(store.get_identity_sled("nope").unwrap().is_none());
     }
 

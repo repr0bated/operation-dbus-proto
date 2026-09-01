@@ -22,7 +22,7 @@ members = [
     "crates/op-plugin-lint",
     "crates/op-workflows",
     # "crates/op-ml",  # Disabled: ort API compatibility issues (see #ml-fixme)
-    "crates/op-blockchain",
+    "crates/op-snowball",
     "crates/op-deployment",
     "crates/op-mcp",
     "crates/op-mcp-aggregator",
@@ -37,11 +37,9 @@ members = [
     "crates/op-compliance",
     "crates/op-assistant-grpc",
     "crates/op-waypipe-grpc",
-    "crates/op-s6-systemctl",
+    "crates/op-runit-systemctl",
     "crates/op-xray-daemon",
-    "crates/op-mcp-shim",
     "crates/op-gemma",
-    "crates/zeroclaw-gui",
     "crates/op-dbus-cli",
 ]
 
@@ -75,7 +73,7 @@ op-state-store = { path = "crates/op-state-store" }
 op-blob = { path = "crates/op-blob" }
 op-plugins = { path = "crates/op-plugins" }
 op-workflows = { path = "crates/op-workflows" }
-op-blockchain = { path = "crates/op-blockchain" }
+op-snowball = { path = "crates/op-snowball" }
 op-inspector = { path = "crates/op-inspector" }
 op-mcp = { path = "crates/op-mcp" }
 op-web = { path = "crates/op-web" }
@@ -83,7 +81,7 @@ op-grpc-bridge = { path = "crates/op-grpc-bridge" }
 op-identity = { path = "crates/op-identity" }
 op-jsonrpc = { path = "crates/op-jsonrpc" }
 op-cozo-store = { path = "crates/op-cozo-store" }
-op-s6-systemctl = { path = "crates/op-s6-systemctl" }
+op-runit-systemctl = { path = "crates/op-runit-systemctl" }
 op-xray-daemon = { path = "crates/op-xray-daemon" }
 op-gemma = { path = "crates/op-gemma" }
 
@@ -100,7 +98,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 toml = "0.8"
 jsonschema = { version = "0.29", default-features = false }
-schemars = { version = "0.8", features = ["preserve_order"] }
+schemars = { version = "1", features = ["preserve_order"] }
 
 # DBus
 zbus = { version = "5", features = ["tokio"] }
@@ -232,7 +230,7 @@ op-state.workspace = true
 op-state-store.workspace = true
 op-plugins.workspace = true
 op-workflows.workspace = true
-op-blockchain.workspace = true
+op-snowball.workspace = true
 op-inspector.workspace = true
 op-web.workspace = true
 op-grpc-bridge.workspace = true
@@ -263,3 +261,23 @@ tempfile.workspace = true
 # Vendored: adds OF1.5 packet_type match (OXM 0x8000/44) — upstream rovs-openflow 0.2.0 lacks it.
 # Needed so op-of-controller can install the netmaker L3-port encap flow itself.
 rovs-openflow = { path = "vendor/rovs-openflow" }
+
+# ── Build profiles ───────────────────────────────────────────────────────────
+# Added 2026-09-01. There was no [profile.*] section at all, so everything ran
+# on cargo defaults: dev used debug = 2 (full DWARF), which produced a 1.37 GB
+# op-grpc-bridge debug binary and a 605 GB target/debug tree on a subvolume
+# shared with the Incus container pool and both identity sleds.
+[profile.dev]
+# Line tables keep file:line in every backtrace and panic message; only the
+# variable/type DWARF that a step-debugger needs is dropped.
+debug = "line-tables-only"
+# Debuginfo for third-party code is the bulk of the tree and is almost never
+# stepped through. First-party crates keep theirs via [profile.dev] above.
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+# Cargo already defaults release to debug = false; stated explicitly so the
+# next reader does not have to know that. Symbols stay for useful backtraces.
+debug = false
+strip = "none"

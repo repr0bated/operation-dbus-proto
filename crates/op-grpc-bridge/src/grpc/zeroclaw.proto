@@ -23,8 +23,8 @@ message SchemaResponse {
   // Accountability trace identifier.
   string trace_id = 2;
 
-  // Ghostbridge footprint hash from the incoming request or generated locally.
-  string footprint = 3;
+  // Anchored Ghostbridge session genesis from the incoming request.
+  string session_genesis = 3;
 }
 
 message SchemaEvent {

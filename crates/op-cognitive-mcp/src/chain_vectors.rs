@@ -1,10 +1,10 @@
-//! Blockchain vector projection: chain block -> Voyage embedding -> chain
+//! Snowball vector projection: chain block -> Voyage embedding -> chain
 //! vector subvolume, with Qdrant filled on the replica after `btrfs receive`.
 //!
 //! **Strict automatic invariant:** the streaming / default `project` path must
 //! **not** upsert Qdrant on the origin. Vectors land in the chain first
-//! ([`StreamingBlockchain::attach_vector`] / `vectors/vec-*.bin`); the automatic
-//! pipeline fills `blockchain_footprints` only via **`btrfs receive` →
+//! ([`StreamingSnowball::attach_vector`] / `vectors/vec-*.bin`); the automatic
+//! pipeline fills `snowball_footprints` only via **`btrfs receive` →
 //! [`ChainVectorIndex::ingest_received`]** (replica hook). Orthogonal paths
 //! (`blob_vectors`, user_memory, RAG shuttle) are unrelated and untouched.
 //!
@@ -28,8 +28,8 @@
 //! snapshot) that already holds the vectors.
 
 use anyhow::{Context, Result};
-use op_blockchain::btrfs_delta;
-use op_blockchain::{ChainBlockRef, StreamingBlockchain};
+use op_snowball::btrfs_delta;
+use op_snowball::{ChainBlockRef, StreamingSnowball};
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, Distance, GetPointsBuilder, PointId, PointStruct, QueryPointsBuilder,
     ScoredPoint, UpsertPointsBuilder, VectorParamsBuilder,
@@ -41,8 +41,8 @@ use std::path::{Path, PathBuf};
 
 use crate::voyage::VoyageClient;
 
-const DEFAULT_CHAIN_PATH: &str = "/var/lib/opdbus/blockchain";
-const DEFAULT_COLLECTION: &str = "blockchain_footprints";
+const DEFAULT_CHAIN_PATH: &str = "/var/lib/opdbus/snowball";
+const DEFAULT_COLLECTION: &str = "snowball_footprints";
 const DEFAULT_DIMS: u64 = 1024;
 
 /// Namespace for deriving deterministic Qdrant point ids from block hashes.
@@ -55,7 +55,7 @@ const BLOCK_POINT_NAMESPACE: uuid::Uuid =
 const INDEXED_BLOCK_FILE: &str = ".vector-index-block";
 
 pub struct ChainVectorIndex {
-    chain: StreamingBlockchain,
+    chain: StreamingSnowball,
     chain_path: PathBuf,
     qdrant: Qdrant,
     collection: String,
@@ -103,7 +103,7 @@ impl ChainVectorIndex {
     /// caller passes the manual upsert flag). Requires a Voyage key.
     pub async fn open() -> Result<Self> {
         let voyage = VoyageClient::new().context(
-            "blockchain vector projection needs a Voyage key (see embedding_model plugin)",
+            "snowball vector projection needs a Voyage key (see embedding_model plugin)",
         )?;
         Self::build(Some(voyage)).await
     }
@@ -117,18 +117,18 @@ impl ChainVectorIndex {
 
     async fn build(voyage: Option<VoyageClient>) -> Result<Self> {
         let chain_path = PathBuf::from(
-            std::env::var("OPDBUS_BLOCKCHAIN_PATH")
+            std::env::var("OPDBUS_SNOWBALL_PATH")
                 .unwrap_or_else(|_| DEFAULT_CHAIN_PATH.to_string()),
         );
         let url = qdrant_url();
-        let collection = std::env::var("OPDBUS_QDRANT_BLOCKCHAIN_COLLECTION")
+        let collection = std::env::var("OPDBUS_QDRANT_SNOWBALL_COLLECTION")
             .unwrap_or_else(|_| DEFAULT_COLLECTION.to_string());
-        let dims = std::env::var("OPDBUS_QDRANT_BLOCKCHAIN_DIM")
+        let dims = std::env::var("OPDBUS_QDRANT_SNOWBALL_DIM")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(DEFAULT_DIMS);
 
-        let chain = StreamingBlockchain::new(&chain_path)
+        let chain = StreamingSnowball::new(&chain_path)
             .await
             .with_context(|| format!("failed to open chain at {}", chain_path.display()))?;
 
@@ -176,7 +176,7 @@ impl ChainVectorIndex {
                 tracing::info!(
                     collection = %self.collection,
                     dims = self.dims,
-                    "created Qdrant collection for blockchain vectors"
+                    "created Qdrant collection for snowball vectors"
                 );
                 Ok(())
             }
@@ -253,7 +253,7 @@ impl ChainVectorIndex {
             already_present,
             upserted_to_qdrant,
             write_qdrant,
-            "blockchain vector projection pass complete"
+            "snowball vector projection pass complete"
         );
 
         Ok(ProjectionSummary {
@@ -308,7 +308,7 @@ impl ChainVectorIndex {
             upserted,
             skipped,
             generation,
-            "rebuilt blockchain vector index from the chain"
+            "rebuilt snowball vector index from the chain"
         );
 
         Ok(IngestSummary {
@@ -397,7 +397,7 @@ impl ChainVectorIndex {
             from_block = watermark,
             to_block = checkpoint,
             generation,
-            "indexed received blockchain vectors"
+            "indexed received snowball vectors"
         );
 
         Ok(IngestSummary {
@@ -502,17 +502,20 @@ impl ChainVectorIndex {
     async fn upsert_block(&self, block: &ChainBlockRef, vector: Vec<f32>) -> Result<()> {
         let payload: Payload = serde_json::json!({
             "block_num": block.block_num,
-            // `BlockEvent.hash` is the input-patch hash, which repeats across
-            // identical calls; the per-event unique hash lives in metadata.
-            "input_patch_hash": block.hash,
-            "event_hash": block.field("data.metadata.event_hash").unwrap_or_default(),
+            // Snowball carries the authoritative ChainEvent hash verbatim.
+            // The compatibility input digest is provenance copied from the
+            // payload; neither value is re-hashed by the vector projection.
+            "event_hash": block.hash,
+            "input_patch_hash": block
+                .field("data.payload.input_patch_hash")
+                .unwrap_or_default(),
             "plugin_id": block.category,
             "action": block.action,
             "timestamp": block.timestamp,
             "text": block.embedding_text(),
         })
         .try_into()
-        .context("failed to build blockchain vector payload")?;
+        .context("failed to build snowball vector payload")?;
 
         let point = PointStruct::new(point_id(block.block_num).to_string(), vector, payload);
         self.qdrant

@@ -55,10 +55,21 @@ else
     PROJECT_ROOT=${OP_DBUS_ROOT:-$(pwd)}
 fi
 RELEASE_DIR="$PROJECT_ROOT/target/release"
+GRANTS_SOURCE="$SCRIPT_DIR/../security/capability-grants.json"
+MCP_AUDIENCE_POLICY_SOURCE="$SCRIPT_DIR/../config/mcp-audience-policy.json"
+MCP_TOOLSETS_SOURCE="$SCRIPT_DIR/../config/mcp-toolsets.json"
 RETIRED_SERVICES_FILE="$SCRIPT_DIR/retired-services"
 RETIRED_BINARIES_FILE="$SCRIPT_DIR/retired-binaries"
 MANAGED_SERVICES_FILE="$SCRIPT_DIR/managed-services"
 ENABLED_SERVICES_FILE="$SCRIPT_DIR/enabled-services"
+EMQX_VERSION_FILE="$SCRIPT_DIR/../config/emqx.version"
+EMQX_CONFIG_DIR="$SCRIPT_DIR/../emqx"
+EMQX_ARTIFACT_CACHE_DIR=${EMQX_ARTIFACT_CACHE_DIR:-/var/cache/op-dbus/source-artifacts}
+MCP_PROVIDER_ARTIFACT_CACHE_DIR=${MCP_PROVIDER_ARTIFACT_CACHE_DIR:-/var/cache/op-dbus/source-artifacts}
+NOTEBOOKLM_MCP_VERSION_FILE="$SCRIPT_DIR/../config/notebooklm-mcp.version"
+MONGODB_MCP_VERSION_FILE="$SCRIPT_DIR/../config/mongodb-mcp-server.version"
+NOTEBOOKLM_MCP_OVERLAY_SOURCE="$SCRIPT_DIR/provider-overlays/notebooklm-mcp/http.js"
+NOTEBOOKLM_MCP_OVERLAY_TARGET=node_modules/notebooklm-mcp/dist/transport/http.js
 
 is_retired_service() {
     svc=$1
@@ -70,6 +81,12 @@ is_managed_service() {
     svc=$1
     [ -f "$MANAGED_SERVICES_FILE" ] &&
         grep -Ev '^[[:space:]]*(#|$)' "$MANAGED_SERVICES_FILE" | grep -qx "$svc"
+}
+
+is_enabled_service() {
+    svc=$1
+    [ -f "$ENABLED_SERVICES_FILE" ] &&
+        grep -Ev '^[[:space:]]*(#|$)' "$ENABLED_SERVICES_FILE" | grep -qx "$svc"
 }
 
 is_retired_binary() {
@@ -90,6 +107,50 @@ run() {
         "$@"
     fi
 }
+
+[ -r "$EMQX_VERSION_FILE" ] || die "missing EMQX artifact declaration: $EMQX_VERSION_FILE"
+# shellcheck disable=SC1090 -- release-owned, fixed-key declaration validated below.
+. "$EMQX_VERSION_FILE"
+case "${EMQX_VERSION:-}" in *[!0-9.]*|'') die "invalid EMQX_VERSION" ;; esac
+case "${EMQX_ARTIFACT:-}" in *[!A-Za-z0-9._-]*|'') die "invalid EMQX_ARTIFACT" ;; esac
+case "${EMQX_SHA256:-}" in *[!0-9a-f]*|'') die "invalid EMQX_SHA256" ;; esac
+[ "${#EMQX_SHA256}" -eq 64 ] || die "EMQX_SHA256 must contain 64 lowercase hex characters"
+EMQX_ARTIFACT_PATH="$EMQX_ARTIFACT_CACHE_DIR/$EMQX_ARTIFACT"
+EMQX_INSTALL_NAME="emqx-$EMQX_VERSION-$EMQX_SHA256"
+
+[ -r "$NOTEBOOKLM_MCP_VERSION_FILE" ] ||
+    die "missing NotebookLM MCP artifact declaration: $NOTEBOOKLM_MCP_VERSION_FILE"
+# shellcheck disable=SC1090 -- release-owned, fixed-key declaration validated below.
+. "$NOTEBOOKLM_MCP_VERSION_FILE"
+case "${NOTEBOOKLM_MCP_VERSION:-}" in *[!0-9.]*|'') die "invalid NOTEBOOKLM_MCP_VERSION" ;; esac
+case "${NOTEBOOKLM_MCP_ARTIFACT:-}" in *[!A-Za-z0-9._-]*|'') die "invalid NOTEBOOKLM_MCP_ARTIFACT" ;; esac
+case "${NOTEBOOKLM_MCP_SHA256:-}" in *[!0-9a-f]*|'') die "invalid NOTEBOOKLM_MCP_SHA256" ;; esac
+[ "${#NOTEBOOKLM_MCP_SHA256}" -eq 64 ] ||
+    die "NOTEBOOKLM_MCP_SHA256 must contain 64 lowercase hex characters"
+[ -f "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" ] ||
+    die "missing tracked NotebookLM MCP transport overlay: $NOTEBOOKLM_MCP_OVERLAY_SOURCE"
+NOTEBOOKLM_MCP_OVERLAY_SHA256=$(sha256sum "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" | cut -d' ' -f1)
+NOTEBOOKLM_MCP_DEPLOY_SHA256=$(
+    printf '%s\n' \
+        "$NOTEBOOKLM_MCP_SHA256" \
+        "$NOTEBOOKLM_MCP_OVERLAY_TARGET" \
+        "$NOTEBOOKLM_MCP_OVERLAY_SHA256" |
+        sha256sum | cut -d' ' -f1
+)
+NOTEBOOKLM_MCP_ARTIFACT_PATH="$MCP_PROVIDER_ARTIFACT_CACHE_DIR/$NOTEBOOKLM_MCP_ARTIFACT"
+NOTEBOOKLM_MCP_INSTALL_NAME="notebooklm-mcp-$NOTEBOOKLM_MCP_VERSION-$NOTEBOOKLM_MCP_DEPLOY_SHA256"
+
+[ -r "$MONGODB_MCP_VERSION_FILE" ] ||
+    die "missing MongoDB MCP artifact declaration: $MONGODB_MCP_VERSION_FILE"
+# shellcheck disable=SC1090 -- release-owned, fixed-key declaration validated below.
+. "$MONGODB_MCP_VERSION_FILE"
+case "${MONGODB_MCP_VERSION:-}" in *[!0-9.]*|'') die "invalid MONGODB_MCP_VERSION" ;; esac
+case "${MONGODB_MCP_ARTIFACT:-}" in *[!A-Za-z0-9._-]*|'') die "invalid MONGODB_MCP_ARTIFACT" ;; esac
+case "${MONGODB_MCP_SHA256:-}" in *[!0-9a-f]*|'') die "invalid MONGODB_MCP_SHA256" ;; esac
+[ "${#MONGODB_MCP_SHA256}" -eq 64 ] ||
+    die "MONGODB_MCP_SHA256 must contain 64 lowercase hex characters"
+MONGODB_MCP_ARTIFACT_PATH="$MCP_PROVIDER_ARTIFACT_CACHE_DIR/$MONGODB_MCP_ARTIFACT"
+MONGODB_MCP_INSTALL_NAME="mongodb-mcp-server-$MONGODB_MCP_VERSION-$MONGODB_MCP_SHA256"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -112,6 +173,62 @@ BINARIES=$(find "$RELEASE_DIR" -maxdepth 1 -type f -executable ! -name '*.d' ! -
         is_retired_binary "$(basename "$bin")" || printf '%s\n' "$bin"
     done)
 [ -n "$BINARIES" ] || die "$RELEASE_DIR contains no executables"
+[ -f "$EMQX_ARTIFACT_PATH" ] || die "missing pinned EMQX artifact: $EMQX_ARTIFACT_PATH"
+[ "$(sha256sum "$EMQX_ARTIFACT_PATH" | cut -d' ' -f1)" = "$EMQX_SHA256" ] ||
+    die "EMQX artifact digest does not match deploy/config/emqx.version"
+tar -tzf "$EMQX_ARTIFACT_PATH" | awk '
+    /^\// || /(^|\/)\.\.($|\/)/ { bad = 1 }
+    END { exit bad ? 1 : 0 }
+' || die "EMQX artifact contains an unsafe path"
+for required in bin/emqx etc/emqx.conf etc/base.hocon; do
+    tar -tzf "$EMQX_ARTIFACT_PATH" | grep -qx "$required" ||
+        die "EMQX artifact is missing $required"
+done
+for required_config in emqx.conf base.hocon acl.conf; do
+    [ -f "$EMQX_CONFIG_DIR/$required_config" ] ||
+        die "missing tracked EMQX config: $EMQX_CONFIG_DIR/$required_config"
+done
+[ -f "$NOTEBOOKLM_MCP_ARTIFACT_PATH" ] ||
+    die "missing pinned NotebookLM MCP artifact: $NOTEBOOKLM_MCP_ARTIFACT_PATH"
+[ "$(sha256sum "$NOTEBOOKLM_MCP_ARTIFACT_PATH" | cut -d' ' -f1)" = "$NOTEBOOKLM_MCP_SHA256" ] ||
+    die "NotebookLM MCP artifact digest does not match deploy/config/notebooklm-mcp.version"
+tar -tzf "$NOTEBOOKLM_MCP_ARTIFACT_PATH" | awk '
+    /^\// || /(^|\/)\.\.($|\/)/ { bad = 1 }
+    END { exit bad ? 1 : 0 }
+' || die "NotebookLM MCP artifact contains an unsafe path"
+tar -tzf "$NOTEBOOKLM_MCP_ARTIFACT_PATH" |
+    grep -qx 'node_modules/notebooklm-mcp/dist/index.js' ||
+    die "NotebookLM MCP artifact is missing its provider entry point"
+tar -tzf "$NOTEBOOKLM_MCP_ARTIFACT_PATH" |
+    grep -qx "$NOTEBOOKLM_MCP_OVERLAY_TARGET" ||
+    die "NotebookLM MCP artifact is missing its overlaid HTTP transport"
+/usr/bin/node --check "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" >/dev/null ||
+    die "NotebookLM MCP transport overlay is not valid JavaScript"
+
+[ -f "$MONGODB_MCP_ARTIFACT_PATH" ] ||
+    die "missing pinned MongoDB MCP artifact: $MONGODB_MCP_ARTIFACT_PATH"
+[ "$(sha256sum "$MONGODB_MCP_ARTIFACT_PATH" | cut -d' ' -f1)" = "$MONGODB_MCP_SHA256" ] ||
+    die "MongoDB MCP artifact digest does not match deploy/config/mongodb-mcp-server.version"
+tar -tzf "$MONGODB_MCP_ARTIFACT_PATH" | awk '
+    /^\// || /(^|\/)\.\.($|\/)/ { bad = 1 }
+    END { exit bad ? 1 : 0 }
+' || die "MongoDB MCP artifact contains an unsafe path"
+tar -tzf "$MONGODB_MCP_ARTIFACT_PATH" |
+    grep -qx 'node_modules/mongodb-mcp-server/dist/esm/index.js' ||
+    die "MongoDB MCP artifact is missing its provider entry point"
+
+if [ -f "$GRANTS_SOURCE" ]; then
+    [ -x "$RELEASE_DIR/op-grants-materializer" ] ||
+        die "release is missing op-grants-materializer"
+    "$RELEASE_DIR/op-grants-materializer" validate "$GRANTS_SOURCE" >/dev/null ||
+        die "capability grants are not principal-only and valid"
+fi
+[ -x "$RELEASE_DIR/op-grants-materializer" ] ||
+    die "release is missing op-grants-materializer"
+"$RELEASE_DIR/op-grants-materializer" validate-audience "$MCP_AUDIENCE_POLICY_SOURCE" >/dev/null ||
+    die "MCP audience policy is invalid"
+"$RELEASE_DIR/op-grants-materializer" validate-toolsets "$MCP_TOOLSETS_SOURCE" >/dev/null ||
+    die "MCP tool-set manifest is invalid"
 BIN_COUNT=$(printf '%s\n' "$BINARIES" | wc -l)
 log "$BIN_COUNT release binaries in $RELEASE_DIR"
 
@@ -143,7 +260,10 @@ build_golden() {
         log "reusing existing subvolume $GOLDEN_DIR"
     fi
 
-    run mkdir -p "$GOLDEN_DIR/bin" "$GOLDEN_DIR/sbin" "$GOLDEN_DIR/sv" "$GOLDEN_DIR/etc"
+    run mkdir -p "$GOLDEN_DIR/bin" "$GOLDEN_DIR/sbin" "$GOLDEN_DIR/sv" \
+        "$GOLDEN_DIR/etc" "$GOLDEN_DIR/opt"
+    run install -d -m 0700 -o root -g root \
+        "$GOLDEN_DIR/var/lib/op-dbus/identity-cozo"
 
     # Binaries. A reused golden subvolume must not retain listener executables
     # that were retired when their implementation moved behind the bridge.
@@ -167,10 +287,114 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$GOLDEN_DIR/sbin/agent-runit-guard.sh"
-    [ -f "$SCRIPT_DIR/libexec-3tched/xray-config-mount-up" ] &&
-        run install -Dm755 "$SCRIPT_DIR/libexec-3tched/xray-config-mount-up" \
-            "$GOLDEN_DIR/libexec/3tched/xray-config-mount-up"
+    for helper in xray-config-mount-up emqx-prepare mcp-provider-probe; do
+        [ -f "$SCRIPT_DIR/libexec-3tched/$helper" ] &&
+            run install -Dm755 "$SCRIPT_DIR/libexec-3tched/$helper" \
+                "$GOLDEN_DIR/libexec/3tched/$helper"
+    done
     ok "staged control scripts into golden/sbin"
+
+    # Standalone EMQX is part of the release artifact and is never copied from
+    # a running Netmaker container. Reused golden trees are accepted only when
+    # their pinned source digest still matches.
+    golden_emqx="$GOLDEN_DIR/opt/$EMQX_INSTALL_NAME"
+    golden_emqx_marker="$golden_emqx/.opdbus-artifact-sha256"
+    golden_emqx_current=0
+    if [ -f "$golden_emqx_marker" ] &&
+       [ "$(sed -n '1p' "$golden_emqx_marker")" = "$EMQX_SHA256" ]; then
+        golden_emqx_current=1
+    fi
+    if [ "$golden_emqx_current" != 1 ]; then
+        [ ! -e "$golden_emqx" ] || run rm -r -- "$golden_emqx"
+        run mkdir -p "$golden_emqx"
+        run tar -xzf "$EMQX_ARTIFACT_PATH" -C "$golden_emqx"
+        if [ "$DRY_RUN" != 1 ]; then
+            printf '%s\n' "$EMQX_SHA256" > "$golden_emqx_marker"
+        fi
+    fi
+    run chmod 0755 "$golden_emqx"
+    run mkdir -p "$GOLDEN_DIR/etc/emqx"
+    if [ -d "$golden_emqx/etc" ] && [ ! -L "$golden_emqx/etc" ]; then
+        run cp -a "$golden_emqx/etc/." "$GOLDEN_DIR/etc/emqx/"
+        run mv -- "$golden_emqx/etc" "$golden_emqx/etc.dist"
+        run ln -s ../../etc/emqx "$golden_emqx/etc"
+    fi
+    if [ ! -L "$GOLDEN_DIR/opt/emqx" ] ||
+       [ "$(readlink "$GOLDEN_DIR/opt/emqx" 2>/dev/null || true)" != "$EMQX_INSTALL_NAME" ]; then
+        [ ! -e "$GOLDEN_DIR/opt/emqx" ] || run rm -r -- "$GOLDEN_DIR/opt/emqx"
+        run ln -s "$EMQX_INSTALL_NAME" "$GOLDEN_DIR/opt/emqx"
+    fi
+    for config_name in emqx.conf base.hocon acl.conf; do
+        run install -Dm644 "$EMQX_CONFIG_DIR/$config_name" \
+            "$GOLDEN_DIR/etc/emqx/$config_name"
+    done
+    ok "staged pinned standalone EMQX $EMQX_VERSION into golden/opt"
+
+    # Provider packages are immutable, digest-pinned release inputs. Their
+    # runit services talk to these versioned trees through stable local links;
+    # neither provider creates another externally reachable MCP endpoint.
+    stage_golden_mcp_provider() {
+        provider_alias=$1
+        provider_install_name=$2
+        provider_artifact_path=$3
+        provider_sha256=$4
+        provider_entry=$5
+        provider_overlay_source=${6:-}
+        provider_overlay_target=${7:-}
+        provider_root="$GOLDEN_DIR/opt/op-mcp-providers/$provider_install_name"
+        provider_marker="$provider_root/.opdbus-artifact-sha256"
+        provider_current=0
+        if [ -f "$provider_marker" ] &&
+           [ "$(sed -n '1p' "$provider_marker")" = "$provider_sha256" ]; then
+            provider_current=1
+            if [ -n "$provider_overlay_source" ] &&
+               ! cmp -s "$provider_overlay_source" "$provider_root/$provider_overlay_target"; then
+                die "$provider_alias content-addressed overlay does not match its digest marker"
+            fi
+        fi
+        if [ "$provider_current" != 1 ]; then
+            [ ! -e "$provider_root" ] || run rm -r -- "$provider_root"
+            run mkdir -p "$provider_root"
+            run tar -xzf "$provider_artifact_path" -C "$provider_root"
+            if [ -n "$provider_overlay_source" ]; then
+                run install -Dm644 "$provider_overlay_source" \
+                    "$provider_root/$provider_overlay_target"
+            fi
+            if [ "$DRY_RUN" != 1 ]; then
+                [ -f "$provider_root/$provider_entry" ] ||
+                    die "$provider_alias staged tree is missing $provider_entry"
+                if [ -n "$provider_overlay_source" ]; then
+                    cmp -s "$provider_overlay_source" \
+                        "$provider_root/$provider_overlay_target" ||
+                        die "$provider_alias staged overlay verification failed"
+                fi
+                printf '%s\n' "$provider_sha256" > "$provider_marker"
+            fi
+        fi
+        run chmod 0755 "$provider_root"
+        provider_link="$GOLDEN_DIR/opt/op-mcp-providers/$provider_alias"
+        if [ ! -L "$provider_link" ] ||
+           [ "$(readlink "$provider_link" 2>/dev/null || true)" != "$provider_install_name" ]; then
+            if [ -e "$provider_link" ] || [ -L "$provider_link" ]; then
+                run rm -r -- "$provider_link"
+            fi
+            run ln -s "$provider_install_name" "$provider_link"
+        fi
+    }
+    run mkdir -p "$GOLDEN_DIR/opt/op-mcp-providers"
+    stage_golden_mcp_provider \
+        notebooklm-mcp "$NOTEBOOKLM_MCP_INSTALL_NAME" \
+        "$NOTEBOOKLM_MCP_ARTIFACT_PATH" "$NOTEBOOKLM_MCP_DEPLOY_SHA256" \
+        node_modules/notebooklm-mcp/dist/index.js \
+        "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" "$NOTEBOOKLM_MCP_OVERLAY_TARGET"
+    stage_golden_mcp_provider \
+        mongodb-mcp-server "$MONGODB_MCP_INSTALL_NAME" \
+        "$MONGODB_MCP_ARTIFACT_PATH" "$MONGODB_MCP_SHA256" \
+        node_modules/mongodb-mcp-server/dist/esm/index.js
+    run mkdir -p \
+        "$GOLDEN_DIR/var/log/runit/notebooklm-mcp" \
+        "$GOLDEN_DIR/var/log/runit/mongodb-mcp-server"
+    ok "staged pinned NotebookLM and MongoDB MCP providers into golden/opt"
 
     # Runit service definitions tracked in the repo. Explicit retirement is
     # subtractive so a reused golden subvolume cannot resurrect an old unit.
@@ -190,6 +414,8 @@ build_golden() {
             run install -Dm755 "${svc_dir}log/run" "$GOLDEN_DIR/sv/$svc/log/run"
         [ -f "${svc_dir}finish" ] &&
             run install -Dm755 "${svc_dir}finish" "$GOLDEN_DIR/sv/$svc/finish"
+        [ -f "${svc_dir}check" ] &&
+            run install -Dm755 "${svc_dir}check" "$GOLDEN_DIR/sv/$svc/check"
     done
     ok "staged runit service definitions into golden/sv"
 
@@ -203,6 +429,13 @@ build_golden() {
     [ -f "$SCRIPT_DIR/../99-agent-runit-guard.hook" ] &&
         run install -Dm644 "$SCRIPT_DIR/../99-agent-runit-guard.hook" \
             "$GOLDEN_DIR/etc/pacman-hooks/99-agent-runit-guard.hook"
+    [ -f "$GRANTS_SOURCE" ] &&
+        run install -Dm600 "$GRANTS_SOURCE" \
+            "$GOLDEN_DIR/etc/opdbus/capability-grants.json"
+    run install -Dm600 "$MCP_AUDIENCE_POLICY_SOURCE" \
+        "$GOLDEN_DIR/etc/opdbus/mcp-audience-policy.json"
+    run install -Dm600 "$MCP_TOOLSETS_SOURCE" \
+        "$GOLDEN_DIR/etc/opdbus/mcp-toolsets.json"
 
     # Network configuration shipped by this release. These paths mirror the
     # live locations below so golden and the running host remain one artifact.
@@ -230,6 +463,14 @@ build_golden() {
             printf 'source: %s\n' "$PROJECT_ROOT"
             printf 'init: runit (sv)\n'
             printf 'binaries: %s\n' "$BIN_COUNT"
+            printf 'emqx-artifact: %s\n' "$EMQX_ARTIFACT"
+            printf 'emqx-sha256: %s\n' "$EMQX_SHA256"
+            printf 'notebooklm-mcp-artifact: %s\n' "$NOTEBOOKLM_MCP_ARTIFACT"
+            printf 'notebooklm-mcp-sha256: %s\n' "$NOTEBOOKLM_MCP_SHA256"
+            printf 'notebooklm-mcp-overlay-sha256: %s\n' "$NOTEBOOKLM_MCP_OVERLAY_SHA256"
+            printf 'notebooklm-mcp-deploy-sha256: %s\n' "$NOTEBOOKLM_MCP_DEPLOY_SHA256"
+            printf 'mongodb-mcp-artifact: %s\n' "$MONGODB_MCP_ARTIFACT"
+            printf 'mongodb-mcp-sha256: %s\n' "$MONGODB_MCP_SHA256"
             printf '\n[sha256]\n'
             printf '%s\n' "$BINARIES" | while IFS= read -r bin; do
                 printf '%s  %s\n' "$(sha256sum "$bin" | cut -d' ' -f1)" "$(basename "$bin")"
@@ -276,29 +517,6 @@ listener_present() {
     '
 }
 
-local_ipv4_present() {
-    address=$1
-    ip -4 -o addr show 2>/dev/null | awk -v wanted="$address" '
-        {
-            split($4, parts, "/")
-            if (parts[1] == wanted) found = 1
-        }
-        END { exit(found ? 0 : 1) }
-    '
-}
-
-bridge_netmaker_listener() (
-    set +u
-    set -a
-    [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
-    [ -r /etc/op-dbus/netmaker-broker.env ] && . /etc/op-dbus/netmaker-broker.env
-    set +a
-    NETMAKER_MESH_IP=${NETMAKER_MESH_IP:-100.69.0.1}
-    if local_ipv4_present "$NETMAKER_MESH_IP"; then
-        printf '%s:8090\n' "$NETMAKER_MESH_IP"
-    fi
-)
-
 legacy_8090_relay_running() {
     pgrep -f '/usr/local/libexec/3tched/socket-relay .*tcp-listen .* 8090' >/dev/null 2>&1
 }
@@ -318,8 +536,7 @@ bridge_ready() {
     [ -S /run/opdbus/grpc.sock ] || return 1
     listener_present 127.0.0.1:8090 || return 1
     listener_present 10.0.0.3:8090 || return 1
-    netmaker_listener=$(bridge_netmaker_listener)
-    [ -z "$netmaker_listener" ] || listener_present "$netmaker_listener" || return 1
+    listener_present 127.0.0.1:9000 || return 1
     ! legacy_8090_relay_running
 }
 
@@ -332,11 +549,82 @@ wait_bridge_ready() {
     done
 }
 
+runit_manager_ready() {
+    sv status op-runit-systemctl 2>/dev/null | grep -q '^run:' || return 1
+    busctl --system introspect \
+        org.opdbus.v1.Runit.Systemctl \
+        /org/opdbus/v1/plugins/runit/systemctl \
+        org.opdbus.v1.Runit.Systemctl >/dev/null 2>&1
+}
+
+emqx_ready() {
+    sv status emqx 2>/dev/null | grep -q '^run:' || return 1
+    listener_present 127.0.0.1:1883 || return 1
+    listener_present 127.0.0.1:18083 || return 1
+    ! listener_present 0.0.0.0:1883
+}
+
+notebooklm_mcp_ready() {
+    sv status notebooklm-mcp 2>/dev/null | grep -q '^run:' || return 1
+    curl -fsS --max-time 2 http://127.0.0.1:3101/healthz >/dev/null 2>&1 || return 1
+    listener_present 127.0.0.1:3101 || return 1
+    ! listener_present 0.0.0.0:3101
+}
+
+mongodb_mcp_ready() {
+    sv status mongodb-mcp-server 2>/dev/null | grep -q '^run:' || return 1
+    curl -fsS --max-time 2 http://127.0.0.1:3103/health >/dev/null 2>&1 || return 1
+    listener_present 127.0.0.1:3102 || return 1
+    listener_present 127.0.0.1:3103 || return 1
+    ! listener_present 0.0.0.0:3102 || return 1
+    ! listener_present 0.0.0.0:3103
+}
+
+wait_service_ready() {
+    ready_fn=$1
+    attempts=0
+    until "$ready_fn"; do
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 60 ] || return 1
+        sleep 1
+    done
+}
+
+wait_runit_supervision() {
+    svc=$1
+    attempts=0
+    until sv status "$svc" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 30 ] || return 1
+        sleep 1
+    done
+}
+
+ensure_enabled_service_ready() {
+    svc=$1
+    ready_fn=$2
+    [ -e "$RUNIT_RUNSVDIR/$svc" ] || [ -L "$RUNIT_RUNSVDIR/$svc" ] || return 0
+    "$ready_fn" && return 0
+    warn "$svc is enabled but not ready; restarting it to complete the release"
+    wait_runit_supervision "$svc" ||
+        die "$svc is enabled but runsv did not establish supervision"
+    if [ "$svc" = op-grpc-bridge ]; then
+        wait_legacy_8090_relays_down
+    fi
+    sv restart "$svc" || die "sv restart $svc failed"
+    if [ "$svc" = op-grpc-bridge ]; then
+        wait_bridge_ready || die "op-grpc-bridge failed direct-bind readiness"
+    else
+        wait_service_ready "$ready_fn" || die "$svc failed readiness"
+    fi
+}
+
 install_live() {
     log "installing into the live runtime"
 
     changed_binaries=""
     changed_services=""
+    config_backup="/var/tmp/op-config-pre-golden-$STAMP"
     bridge_cutover_needed=0
     for legacy_bridge_relay in fwd-8090 fwd-nm-mesh-8090; do
         if [ -L "$RUNIT_RUNSVDIR/$legacy_bridge_relay" ] ||
@@ -344,17 +632,27 @@ install_live() {
             bridge_cutover_needed=1
         fi
     done
-    printf '%s\n' "$BINARIES" | while IFS= read -r bin; do
+    # A redirected loop stays in the current shell, preserving both the
+    # accumulated change list and one exact executable path per input line.
+    # This avoids a predictable root-owned /tmp scratch file, including during
+    # --dry-run, without regressing whitespace-safe path handling.
+    while IFS= read -r bin; do
+        [ -n "$bin" ] || continue
         name=$(basename "$bin")
         target="$INSTALL_BIN/$name"
         if [ -f "$target" ] && cmp -s "$bin" "$target"; then
             continue
         fi
         run install -Dm755 "$bin" "$target"
-        printf '%s\n' "$name" >> /tmp/golden-changed.$$
-    done
-    [ -f "/tmp/golden-changed.$$" ] && changed_binaries=$(cat "/tmp/golden-changed.$$")
-    rm -f "/tmp/golden-changed.$$"
+        if [ -z "$changed_binaries" ]; then
+            changed_binaries=$name
+        else
+            changed_binaries="$changed_binaries
+$name"
+        fi
+    done <<EOF
+$BINARIES
+EOF
 
     if [ -z "$changed_binaries" ]; then
         ok "all $BIN_COUNT binaries already current in $INSTALL_BIN"
@@ -373,22 +671,207 @@ install_live() {
     [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
         run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
             "$INSTALL_SBIN/agent-runit-guard"
-    if [ -f "$SCRIPT_DIR/libexec-3tched/xray-config-mount-up" ]; then
-        xray_helper="/usr/local/libexec/3tched/xray-config-mount-up"
-        if [ -f "$xray_helper" ] && ! cmp -s \
-            "$SCRIPT_DIR/libexec-3tched/xray-config-mount-up" "$xray_helper"; then
-            run mkdir -p "/var/tmp/op-control-pre-golden-$STAMP"
-            run install -Dm755 "$xray_helper" \
-                "/var/tmp/op-control-pre-golden-$STAMP/xray-config-mount-up"
+    for helper_name in xray-config-mount-up emqx-prepare mcp-provider-probe; do
+        helper_source="$SCRIPT_DIR/libexec-3tched/$helper_name"
+        [ -f "$helper_source" ] || continue
+        helper_target="/usr/local/libexec/3tched/$helper_name"
+        helper_changed=0
+        if [ ! -f "$helper_target" ] || ! cmp -s "$helper_source" "$helper_target"; then
+            helper_changed=1
+            if [ -f "$helper_target" ]; then
+                run mkdir -p "/var/tmp/op-control-pre-golden-$STAMP"
+                run install -Dm755 "$helper_target" \
+                    "/var/tmp/op-control-pre-golden-$STAMP/$helper_name"
+            fi
         fi
-        run install -Dm755 "$SCRIPT_DIR/libexec-3tched/xray-config-mount-up" "$xray_helper"
-    fi
+        run install -Dm755 "$helper_source" "$helper_target"
+        if [ "$helper_changed" = 1 ]; then
+            case "$helper_name" in
+                xray-config-mount-up) helper_services="xray-config-mount" ;;
+                emqx-prepare) helper_services="emqx" ;;
+                mcp-provider-probe)
+                    helper_services="notebooklm-mcp mongodb-mcp-server"
+                    ;;
+                *) helper_services="" ;;
+            esac
+            for helper_service in $helper_services; do
+                case " $changed_services " in
+                    *" $helper_service "*) ;;
+                    *) changed_services="$changed_services $helper_service" ;;
+                esac
+            done
+        fi
+    done
     ok "installed control scripts + systemd compat layer"
 
-    if [ -d /etc/pacman.d/hooks ] || mkdir -p /etc/pacman.d/hooks 2>/dev/null; then
-        [ -f "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" ] &&
-            run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
-                /etc/pacman.d/hooks/99-systemd-unit-to-runit.hook
+    # Install the same digest-pinned portable EMQX tree used by the golden
+    # image. The immutable root name includes the full artifact digest, so a
+    # new artifact never replaces the tree referenced by the stable link.
+    live_emqx="/opt/$EMQX_INSTALL_NAME"
+    live_emqx_marker="$live_emqx/.opdbus-artifact-sha256"
+    emqx_changed=0
+    live_emqx_current=0
+    if [ -f "$live_emqx_marker" ] &&
+       [ "$(sed -n '1p' "$live_emqx_marker")" = "$EMQX_SHA256" ]; then
+        live_emqx_current=1
+    fi
+    if [ "$live_emqx_current" != 1 ]; then
+        emqx_changed=1
+        [ ! -e "$live_emqx" ] ||
+            die "content-addressed EMQX root exists with an invalid digest marker: $live_emqx"
+        if [ "$DRY_RUN" = 1 ]; then
+            printf '  would stage: %s -> %s\n' "$EMQX_ARTIFACT_PATH" "$live_emqx"
+        else
+            emqx_stage=$(mktemp -d /opt/.emqx-stage.XXXXXX)
+            tar -xzf "$EMQX_ARTIFACT_PATH" -C "$emqx_stage"
+            [ -x "$emqx_stage/bin/emqx" ] || die "staged EMQX tree has no executable bin/emqx"
+            printf '%s\n' "$EMQX_SHA256" > "$emqx_stage/.opdbus-artifact-sha256"
+            chmod 0755 "$emqx_stage"
+            mv -- "$emqx_stage" "$live_emqx"
+        fi
+    fi
+    run chmod 0755 "$live_emqx"
+
+    run install -d -m 0750 -o root -g root /etc/emqx
+    if [ -d "$live_emqx/etc" ] && [ ! -L "$live_emqx/etc" ]; then
+        run cp -an "$live_emqx/etc/." /etc/emqx/
+        run mv -- "$live_emqx/etc" "$live_emqx/etc.dist"
+        run ln -s /etc/emqx "$live_emqx/etc"
+    fi
+    if [ -e /opt/emqx ] && [ ! -L /opt/emqx ]; then
+        run mkdir -p "/opt/.opdbus-rollback/$STAMP"
+        run mv -- /opt/emqx "/opt/.opdbus-rollback/$STAMP/emqx-current"
+        emqx_changed=1
+    fi
+    if [ ! -L /opt/emqx ] || [ "$(readlink /opt/emqx 2>/dev/null || true)" != "$EMQX_INSTALL_NAME" ]; then
+        if [ "$DRY_RUN" = 1 ]; then
+            printf '  would atomically link: /opt/emqx -> %s\n' "$EMQX_INSTALL_NAME"
+        else
+            emqx_link_tmp="/opt/.emqx-link.$$"
+            rm -f -- "$emqx_link_tmp"
+            ln -s "$EMQX_INSTALL_NAME" "$emqx_link_tmp"
+            mv -Tf -- "$emqx_link_tmp" /opt/emqx
+        fi
+        emqx_changed=1
+    fi
+
+    for config_name in emqx.conf base.hocon acl.conf; do
+        source_file="$EMQX_CONFIG_DIR/$config_name"
+        dest="/etc/emqx/$config_name"
+        [ -f "$source_file" ] || die "missing EMQX configuration: $source_file"
+        if [ ! -f "$dest" ] || ! cmp -s "$source_file" "$dest"; then
+            emqx_changed=1
+            if [ -f "$dest" ]; then
+                run mkdir -p "$config_backup/etc/emqx"
+                run install -Dm644 "$dest" "$config_backup$dest"
+            fi
+        fi
+        run install -Dm644 "$source_file" "$dest"
+    done
+    run /usr/local/libexec/3tched/emqx-prepare --check-config
+    if [ "$emqx_changed" = 1 ]; then
+        case " $changed_services " in
+            *" emqx "*) ;;
+            *) changed_services="$changed_services emqx" ;;
+        esac
+    fi
+
+    # Stage the pinned local MCP providers atomically. The versioned tree is
+    # never overwritten in place; the stable link changes only after the
+    # complete archive and expected entry point have been verified.
+    install_live_mcp_provider() {
+        provider_service=$1
+        provider_install_name=$2
+        provider_artifact_path=$3
+        provider_sha256=$4
+        provider_entry=$5
+        provider_overlay_source=${6:-}
+        provider_overlay_target=${7:-}
+        provider_base=/opt/op-mcp-providers
+        provider_root="$provider_base/$provider_install_name"
+        provider_link="$provider_base/$provider_service"
+        provider_marker="$provider_root/.opdbus-artifact-sha256"
+        provider_changed=0
+        if [ -f "$provider_marker" ] &&
+           [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" = "$provider_sha256" ] &&
+           [ -n "$provider_overlay_source" ] &&
+           ! cmp -s "$provider_overlay_source" "$provider_root/$provider_overlay_target"; then
+            die "$provider_service content-addressed overlay does not match its digest marker"
+        fi
+        if [ ! -f "$provider_marker" ] ||
+           [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" != "$provider_sha256" ]; then
+            provider_changed=1
+            [ ! -e "$provider_root" ] ||
+                die "content-addressed provider root has an invalid digest marker: $provider_root"
+            if [ "$DRY_RUN" = 1 ]; then
+                printf '  would stage: %s -> %s\n' "$provider_artifact_path" "$provider_root"
+            else
+                provider_stage=$(mktemp -d "$provider_base/.${provider_service}-stage.XXXXXX")
+                tar -xzf "$provider_artifact_path" -C "$provider_stage"
+                [ -f "$provider_stage/$provider_entry" ] ||
+                    die "$provider_service staged tree is missing $provider_entry"
+                if [ -n "$provider_overlay_source" ]; then
+                    install -Dm644 "$provider_overlay_source" \
+                        "$provider_stage/$provider_overlay_target"
+                    cmp -s "$provider_overlay_source" \
+                        "$provider_stage/$provider_overlay_target" ||
+                        die "$provider_service staged overlay verification failed"
+                fi
+                printf '%s\n' "$provider_sha256" > "$provider_stage/.opdbus-artifact-sha256"
+                chmod 0755 "$provider_stage"
+                mv -- "$provider_stage" "$provider_root"
+            fi
+        fi
+        run chmod 0755 "$provider_root"
+        if [ ! -L "$provider_link" ] ||
+           [ "$(readlink "$provider_link" 2>/dev/null || true)" != "$provider_install_name" ]; then
+            provider_changed=1
+            if [ -e "$provider_link" ] && [ ! -L "$provider_link" ]; then
+                run mkdir -p "$provider_base/.opdbus-rollback/$STAMP"
+                run mv -- "$provider_link" \
+                    "$provider_base/.opdbus-rollback/$STAMP/${provider_service}-previous"
+            fi
+            if [ "$DRY_RUN" = 1 ]; then
+                printf '  would atomically link: %s -> %s\n' \
+                    "$provider_link" "$provider_install_name"
+            else
+                provider_link_tmp="$provider_base/.${provider_service}-link.$$"
+                rm -f -- "$provider_link_tmp"
+                ln -s "$provider_install_name" "$provider_link_tmp"
+                mv -Tf -- "$provider_link_tmp" "$provider_link"
+            fi
+        fi
+        if [ "$provider_changed" = 1 ]; then
+            case " $changed_services " in
+                *" $provider_service "*) ;;
+                *) changed_services="$changed_services $provider_service" ;;
+            esac
+        fi
+    }
+    run install -d -m 0755 -o root -g root /opt/op-mcp-providers
+    install_live_mcp_provider \
+        notebooklm-mcp "$NOTEBOOKLM_MCP_INSTALL_NAME" \
+        "$NOTEBOOKLM_MCP_ARTIFACT_PATH" "$NOTEBOOKLM_MCP_DEPLOY_SHA256" \
+        node_modules/notebooklm-mcp/dist/index.js \
+        "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" "$NOTEBOOKLM_MCP_OVERLAY_TARGET"
+    install_live_mcp_provider \
+        mongodb-mcp-server "$MONGODB_MCP_INSTALL_NAME" \
+        "$MONGODB_MCP_ARTIFACT_PATH" "$MONGODB_MCP_SHA256" \
+        node_modules/mongodb-mcp-server/dist/esm/index.js
+    run install -d -m 0755 \
+        /var/log/runit/notebooklm-mcp \
+        /var/log/runit/mongodb-mcp-server
+    run install -d -m 0750 -o root -g secrets /etc/opdbus/secrets
+    # OIB1 is durable inside the identity Cozo relations. Keep that database
+    # root-only; blob-aware clients read only the private tmpfs projection.
+    run install -d -m 0700 -o root -g root /var/lib/op-dbus/identity-cozo
+    run find /var/lib/op-dbus/identity-cozo -xdev -type d -exec chmod 0700 {} +
+    run find /var/lib/op-dbus/identity-cozo -xdev -type f -exec chmod 0600 {} +
+
+    if [ -f "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" ]; then
+        run install -d -m 0755 /etc/pacman.d/hooks
+        run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
+            /etc/pacman.d/hooks/99-systemd-unit-to-runit.hook
     fi
 
     # Retire exact service definitions recoverably. Removing the enabled
@@ -421,7 +904,6 @@ install_live() {
 
     # Install the release-owned network config and preserve replaced host
     # copies under one timestamped rollback directory.
-    config_backup="/var/tmp/op-config-pre-golden-$STAMP"
     legacy_sshd_dropin="/etc/ssh/sshd_config.d/10-netmaker-only.conf"
     if [ -f "$legacy_sshd_dropin" ]; then
         run mkdir -p "$config_backup/etc/ssh/sshd_config.d"
@@ -446,6 +928,54 @@ install_live() {
             run install -Dm644 "$dest" "$config_backup$dest"
         fi
         run install -Dm644 "$source_file" "$dest"
+    done
+
+    # Capability authority is release-owned, principal-only, and materialized
+    # into tmpfs by opdbus-grants. Preserve the previous durable document for
+    # rollback and restart the materializer when it changes.
+    grants_dest="/etc/opdbus/capability-grants.json"
+    if [ -f "$GRANTS_SOURCE" ]; then
+        grants_changed=0
+        if [ ! -f "$grants_dest" ] || ! cmp -s "$GRANTS_SOURCE" "$grants_dest"; then
+            grants_changed=1
+            if [ -f "$grants_dest" ]; then
+                run mkdir -p "$config_backup$(dirname "$grants_dest")"
+                run install -Dm600 "$grants_dest" "$config_backup$grants_dest"
+            fi
+        fi
+        run install -Dm600 "$GRANTS_SOURCE" "$grants_dest"
+        if [ "$grants_changed" = 1 ]; then
+            case " $changed_services " in
+                *" opdbus-grants "*) ;;
+                *) changed_services="$changed_services opdbus-grants" ;;
+            esac
+        fi
+    fi
+
+    # Projection policy is durable, root-only release content. It contains no
+    # credentials or identity assertions, but is protected against live edits
+    # because it defines what each authenticated MCP audience can discover.
+    for mapping in \
+        "$MCP_AUDIENCE_POLICY_SOURCE:/etc/opdbus/mcp-audience-policy.json" \
+        "$MCP_TOOLSETS_SOURCE:/etc/opdbus/mcp-toolsets.json"
+    do
+        source_file=${mapping%%:*}
+        dest=${mapping#*:}
+        policy_changed=0
+        if [ ! -f "$dest" ] || ! cmp -s "$source_file" "$dest"; then
+            policy_changed=1
+            if [ -f "$dest" ]; then
+                run mkdir -p "$config_backup$(dirname "$dest")"
+                run install -Dm600 "$dest" "$config_backup$dest"
+            fi
+        fi
+        run install -Dm600 "$source_file" "$dest"
+        if [ "$policy_changed" = 1 ]; then
+            case " $changed_services " in
+                *" op-grpc-bridge "*) ;;
+                *) changed_services="$changed_services op-grpc-bridge" ;;
+            esac
+        fi
     done
 
     # Service definitions normally preserve a hand-tuned host copy. Services
@@ -473,6 +1003,10 @@ install_live() {
         run install -Dm755 "${svc_dir}run" "$dest"
         [ -f "${svc_dir}log/run" ] &&
             run install -Dm755 "${svc_dir}log/run" "$RUNIT_SV_DIR/$svc/log/run"
+        [ -f "${svc_dir}check" ] &&
+            run install -Dm755 "${svc_dir}check" "$RUNIT_SV_DIR/$svc/check"
+        [ -f "${svc_dir}finish" ] &&
+            run install -Dm755 "${svc_dir}finish" "$RUNIT_SV_DIR/$svc/finish"
         if [ "$definition_changed" = 1 ] && is_managed_service "$svc"; then
             changed_services="$changed_services $svc"
         fi
@@ -481,16 +1015,31 @@ install_live() {
     # Enable only explicitly declared new services. Existing enablement is
     # otherwise untouched.
     if [ -f "$ENABLED_SERVICES_FILE" ]; then
-        grep -Ev '^[[:space:]]*(#|$)' "$ENABLED_SERVICES_FILE" | while IFS= read -r svc; do
-            [ -n "$svc" ] || continue
+        while IFS= read -r svc || [ -n "$svc" ]; do
+            case "$svc" in ''|\#*) continue ;; esac
             if [ "$DRY_RUN" = 1 ]; then
                 [ -f "$SCRIPT_DIR/$svc/run" ] || die "enabled service has no definition: $svc"
             else
                 [ -d "$RUNIT_SV_DIR/$svc" ] || die "enabled service has no definition: $svc"
             fi
-            [ -e "$RUNIT_RUNSVDIR/$svc" ] ||
+            enabled_target="$RUNIT_RUNSVDIR/$svc"
+            enable_changed=0
+            if [ -e "$enabled_target" ] && [ ! -L "$enabled_target" ]; then
+                die "enabled runit service path is not a symlink: $enabled_target"
+            fi
+            if [ ! -L "$enabled_target" ] ||
+               [ "$(readlink "$enabled_target" 2>/dev/null || true)" != "$RUNIT_SV_DIR/$svc" ]; then
+                enable_changed=1
+                [ ! -L "$enabled_target" ] || run rm -- "$enabled_target"
                 run ln -s "$RUNIT_SV_DIR/$svc" "$RUNIT_RUNSVDIR/$svc"
-        done
+            fi
+            if [ "$enable_changed" = 1 ]; then
+                case " $changed_services " in
+                    *" $svc "*) ;;
+                    *) changed_services="$changed_services $svc" ;;
+                esac
+            fi
+        done < "$ENABLED_SERVICES_FILE"
     fi
 
     if [ "$bridge_cutover_needed" = 1 ] && [ -e "$RUNIT_RUNSVDIR/op-grpc-bridge" ]; then
@@ -506,9 +1055,12 @@ install_live() {
     fi
     if [ -z "$changed_binaries" ] && [ -z "$changed_services" ]; then
         log "nothing changed; no restarts needed"
-        if [ -e "$RUNIT_RUNSVDIR/op-grpc-bridge" ]; then
-            wait_legacy_8090_relays_down
-            wait_bridge_ready || die "op-grpc-bridge failed direct-bind readiness"
+        if [ "$DRY_RUN" != 1 ]; then
+            ensure_enabled_service_ready op-runit-systemctl runit_manager_ready
+            ensure_enabled_service_ready notebooklm-mcp notebooklm_mcp_ready
+            ensure_enabled_service_ready mongodb-mcp-server mongodb_mcp_ready
+            ensure_enabled_service_ready op-grpc-bridge bridge_ready
+            ensure_enabled_service_ready emqx emqx_ready
         fi
         return 0
     fi
@@ -518,7 +1070,11 @@ install_live() {
     restart_list=""
     held_back=""
     for svc in $changed_services; do
-        [ -e "$RUNIT_RUNSVDIR/$svc" ] || continue
+        if [ "$DRY_RUN" = 1 ]; then
+            [ -e "$RUNIT_RUNSVDIR/$svc" ] || is_enabled_service "$svc" || continue
+        else
+            [ -e "$RUNIT_RUNSVDIR/$svc" ] || [ -L "$RUNIT_RUNSVDIR/$svc" ] || continue
+        fi
         case " $NEVER_AUTO_RESTART " in
             *" $svc "*)
                 held_back="$held_back $svc"
@@ -554,13 +1110,50 @@ install_live() {
         warn "  restart these deliberately from the console, e.g.: sudo sv restart <svc>"
     fi
 
+    # A prior interrupted publish may have installed content before restarting
+    # its consumer. Queue any unhealthy release dependency so an idempotent
+    # rerun completes the cutover instead of merely reporting stale state.
+    for readiness in \
+        op-runit-systemctl:runit_manager_ready \
+        notebooklm-mcp:notebooklm_mcp_ready \
+        mongodb-mcp-server:mongodb_mcp_ready \
+        op-grpc-bridge:bridge_ready \
+        emqx:emqx_ready
+    do
+        svc=${readiness%%:*}
+        ready_fn=${readiness#*:}
+        [ -e "$RUNIT_RUNSVDIR/$svc" ] || [ -L "$RUNIT_RUNSVDIR/$svc" ] || continue
+        "$ready_fn" && continue
+        case " $restart_list " in
+            *" $svc "*) ;;
+            *) restart_list="$restart_list $svc" ;;
+        esac
+    done
+
     if [ -z "$restart_list" ]; then
         log "no enabled service references the changed binaries"
         return 0
     fi
 
+    # Dependency order is explicit: local WARM providers become healthy before
+    # the bridge projects them, and EMQX registers after the bridge's ExHook
+    # listener is ready.
+    ordered_restart_list=""
+    for svc in op-runit-systemctl notebooklm-mcp mongodb-mcp-server op-grpc-bridge emqx $restart_list; do
+        case " $restart_list " in *" $svc "*) ;; *) continue ;; esac
+        case " $ordered_restart_list " in
+            *" $svc "*) ;;
+            *) ordered_restart_list="$ordered_restart_list $svc" ;;
+        esac
+    done
+    restart_list=$ordered_restart_list
+
     log "restarting:$restart_list"
     for svc in $restart_list; do
+        if [ "$DRY_RUN" != 1 ]; then
+            wait_runit_supervision "$svc" ||
+                die "$svc was enabled but runsv did not establish supervision"
+        fi
         if [ "$svc" = op-grpc-bridge ]; then
             if [ "$DRY_RUN" = 1 ]; then
                 run sv restart "$svc"
@@ -569,7 +1162,33 @@ install_live() {
             wait_legacy_8090_relays_down
             sv restart "$svc" || die "sv restart $svc failed"
             wait_bridge_ready || die "op-grpc-bridge failed direct-bind readiness"
-            ok "op-grpc-bridge ready on required direct :8090 listeners"
+            ok "op-grpc-bridge ready on :8090 plus loopback-mTLS ExHook :9000"
+        elif [ "$svc" = op-runit-systemctl ]; then
+            run sv restart "$svc" || die "sv restart $svc failed"
+            if [ "$DRY_RUN" != 1 ]; then
+                wait_service_ready runit_manager_ready || die "op-runit-systemctl failed D-Bus readiness"
+                ok "op-runit-systemctl ready on the system bus"
+            fi
+        elif [ "$svc" = emqx ]; then
+            run sv restart "$svc" || die "sv restart $svc failed"
+            if [ "$DRY_RUN" != 1 ]; then
+                wait_service_ready emqx_ready || die "standalone EMQX failed loopback readiness"
+                ok "standalone EMQX ready on loopback MQTT and management listeners"
+            fi
+        elif [ "$svc" = notebooklm-mcp ]; then
+            run sv restart "$svc" || die "sv restart $svc failed"
+            if [ "$DRY_RUN" != 1 ]; then
+                wait_service_ready notebooklm_mcp_ready ||
+                    die "NotebookLM MCP provider failed loopback readiness"
+                ok "NotebookLM MCP provider ready on loopback :3101"
+            fi
+        elif [ "$svc" = mongodb-mcp-server ]; then
+            run sv restart "$svc" || die "sv restart $svc failed"
+            if [ "$DRY_RUN" != 1 ]; then
+                wait_service_ready mongodb_mcp_ready ||
+                    die "MongoDB MCP provider failed loopback readiness"
+                ok "MongoDB MCP provider ready read-only on loopback :3102"
+            fi
         else
             run sv restart "$svc" || warn "sv restart $svc failed"
         fi

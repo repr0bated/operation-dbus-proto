@@ -197,7 +197,7 @@ authority and those mutations are either untracked or buried in other plugins' `
 
 | Missing Plugin | Domain | Why Needed |
 |---|---|---|
-| `mutation_footprint` | Audit trail | **The blockchain plugin being designed** — no mutations tracked |
+| `mutation_footprint` | Audit trail | **The snowball plugin being designed** — no mutations tracked |
 | `firewall` / `nftables` | Firewall rules | No schema for firewall policy changes |
 | `certificate` / `pki` | TLS certificates | Cert lifecycle untracked; `keypair` is insufficient |
 | `vault` / `secrets_backend` | Secret management | No authoritative schema for secret storage backends |
@@ -208,7 +208,7 @@ authority and those mutations are either untracked or buried in other plugins' `
 |---|---|---|
 | `dns_zone` | Authoritative DNS | DNS zone records not managed declaratively |
 | `ntp` / `chrony` | Time sync | Time sync config untracked |
-| `btrfs` | Storage subvolumes | `op-blockchain`'s subvolumes have no plugin schema |
+| `btrfs` | Storage subvolumes | `op-snowball`'s subvolumes have no plugin schema |
 | `journal` / `logging` | Log management | Log retention/forwarding unschematized |
 | `ssh_authorized_keys` | SSH access | SSH keys not declaratively managed |
 | `vlan` | VLAN management | VLAN config buried in `net` as `Any` |
@@ -292,7 +292,7 @@ and LLM tools that use the schema for context.
    This unblocks catalog recognition with zero field changes.
 
 2. Add `mutation_footprint` plugin — this is the audit system that tracks all other mutations.
-   See `crates/op-blockchain/REQUIREMENTS.md` and `crates/op-blockchain/DESIGN.md`.
+   See `crates/op-snowball/REQUIREMENTS.md` and `crates/op-snowball/DESIGN.md`.
 
 ### Short Term (schema quality)
 

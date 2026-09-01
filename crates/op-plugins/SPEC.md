@@ -45,7 +45,7 @@ op-plugins/src/state_plugins/openflow_obfuscation.rs
 op-core = { path = "../op-core" }
 op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-network = { path = "../op-network" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
@@ -92,7 +92,7 @@ systemd
 default_registry
 
 ## Purpose
-Plugin system with state management, domain plugins, and blockchain footprints
+Plugin system with state management, domain plugins, and snowball footprints
 
 ## Build Information
 - **Edition**: edition.workspace = true
@@ -104,7 +104,7 @@ Internal dependencies:
 - op-core
 - op-state
 - op-state-store
-- op-blockchain
+- op-snowball
 - op-network
 - op-dynamic-loader
 - op-execution-tracker

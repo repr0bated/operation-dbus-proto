@@ -20,7 +20,6 @@ op-blob = { workspace = true }
 op-identity = { workspace = true }
 op-plugins = { workspace = true }
 op-state-store = { path = "../op-state-store" }
-schemars = { workspace = true }
 jsonschema = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"

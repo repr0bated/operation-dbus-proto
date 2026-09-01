@@ -183,9 +183,9 @@ pub struct FullSystemPlugin {
     /// Cached current state
     state_cache: Arc<RwLock<Option<FullSystemState>>>,
 
-    /// Sender for blockchain footprints
+    /// Sender for snowball footprints
     #[allow(dead_code)]
-    blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<op_blockchain::PluginFootprint>>,
+    snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<op_snowball::PluginFootprint>>,
 }
 
 impl Default for FullSystemPlugin {
@@ -198,17 +198,17 @@ impl FullSystemPlugin {
     pub fn new() -> Self {
         Self {
             state_cache: Arc::new(RwLock::new(None)),
-            blockchain_sender: None,
+            snowball_sender: None,
         }
     }
 
-    /// Create with blockchain sender for change tracking
-    pub fn with_blockchain(
-        sender: tokio::sync::mpsc::UnboundedSender<op_blockchain::PluginFootprint>,
+    /// Create with snowball sender for change tracking
+    pub fn with_snowball(
+        sender: tokio::sync::mpsc::UnboundedSender<op_snowball::PluginFootprint>,
     ) -> Self {
         Self {
             state_cache: Arc::new(RwLock::new(None)),
-            blockchain_sender: Some(sender),
+            snowball_sender: Some(sender),
         }
     }
 

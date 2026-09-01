@@ -52,9 +52,9 @@ npx vitest run src/test/<file>          # single test file
 
 Build gotchas:
 
-- `[patch.crates-io]` pins zbus to a **local checkout at `/home/admin/git/zbus`** — the workspace does not build without it.
+- `[patch.crates-io]` currently patches **only `rovs-openflow`** (to `vendor/rovs-openflow`, for the OF1.5 packet_type match). There is **no zbus patch** — earlier guidance claiming the workspace needs a local checkout at `/home/admin/git/zbus` was false; zbus comes from crates.io via the workspace `zbus = "5"` dep.
 - `op-web` **release** builds panic unless `crates/op-web/ui/dist/index.html` exists (RustEmbed); build that UI first (`npx vite build` in `crates/op-web/ui`). Dev builds compile with an empty asset set, so the panic only bites on `--release`.
-- The root `op-dbus` package has no binary — real binaries live in member crates (`op-web` → `op-web-server`/`opdbus`, `op-grpc-bridge`, `op-cognitive-mcp`, `op-projection` → `projection_server`, `op-s6-systemctl` → `s6d`, etc.).
+- The root `op-dbus` package has no binary — real binaries live in member crates (`op-web` → `op-web-server`/`opdbus`, `op-grpc-bridge`, `op-cognitive-mcp`, `op-projection` → `projection_server`, `op-runit-systemctl` → `svd`, etc.).
 - `op-ml` is commented out of the workspace (ort API breakage).
 - Rust-first: no new Python; scripts are shell.
 
@@ -66,7 +66,7 @@ Build gotchas:
 
 **The sealed blob IS the plugin.** Present state lives in the sealed blob catalog in shared memory: `/dev/shm/opdbus/plugin-blobs/<plugin_id>.<schema_hash16>.blob` (`op_blob::catalog::DEFAULT_SHM_DIR`). A plugin exists ⟺ its blob is in the catalog; register = seal, deregister = remove. The sole writer is the blob sealer in `op-blob` — never SchemaEngine (`op-projection`'s `write_schemas_to_shm` only reports the published catalog hash via `op_identity::schema_bridge::schema_catalog_hash()`). Consumers read SHM directly (1:1 zero-copy) — they never re-hash, never consult the Rust registry for existence. The old `/dev/shm/opdbus/schemas` folder, `live-schema.json` monolith, and manifest are gone; docs that mention them are stale.
 
-**Reactive, not polled.** The system does not watch, poll, or index. SHM is the authoritative present-state that components read; an arrival (e.g. an xray greeting connection) triggers action. Durability is the per-mutation immutable blockchain (`op-blockchain`) — there are no snapshot backups and **no SQL for state** (graph store is CozoDB).
+**Reactive, not polled.** The system does not watch, poll, or index. SHM is the authoritative present-state that components read; an arrival (e.g. an xray greeting connection) triggers action. Durability is the per-mutation immutable snowball (`op-snowball`) — there are no snapshot backups and **no SQL for state** (graph store is CozoDB).
 
 **Transport & identity (zero-trust) — intent vs current live state.** The intended/documented model (see `unix_socket.rs`'s `SHARED_CONTAINER_SOCKET`) is: gRPC (tonic, TLS mandatory) over one shared Unix domain socket per container (`/run/ghostbridge/container.sock`, bind-mounted into the container as a disk device), with the tonic-web bridge demuxing by gRPC service/method via reflection — no per-service TCP ports, no NIC. Identity = WireGuard pubkey → Argon2(PSK, salt=pubkey) sessionid; a container's name IS its sessionid. The xray router injects identity headers (`X-Ghostbridge-Footprint`/`X-WireGuard-Pubkey`) — that header is meant to be the only gate; IP ACLs/ports are theater in this model. SESSION bus = the WG-identity-gated plugin surface; SYSTEM bus = local agents/mirror.
 
@@ -77,7 +77,7 @@ Build gotchas:
 - `mail-3tched`, `cozo`, and `netmaker` do **not** use the shared-socket model at all — no `ghostbridge-socket` mount on any of them. Each instead has individually-configured `incus config device add <name> proxy listen=tcp:<host-addr>:<port> connect=tcp:127.0.0.1:<port>` mappings, one per exposed port (e.g. mail-3tched: 25/143/465/587/993/80, each its own device; netmaker: 8081/8083, each with both a `10.200.0.2` and a `127.0.0.1` variant). None of these three are netns-isolated behind a shared UDS — they're plain per-container TCP port-forwards, config'd by hand rather than through `unix_socket`'s `createunixsocket` path.
 - Before trusting "all container I/O is UDS" for any specific container, check its actual device list first (`sudo incus config device show <name>`) — don't assume the documented model applies uniformly. This split is recent (post-migration) and may still be settling; re-verify if it's been more than a few days.
 
-**MCP gateways (settled — do not redesign).** `op-cognitive-mcp` is the universal gateway for ALL external clients (tonic-web gRPC :50052 + server reflection for tool discovery). `compact-mcp` is loopback-only for the chatbot. Never create new shims or point external clients at `op-assistant-grpc`.
+**MCP gateways (settled — do not redesign).** One public MCP door: `:8090` on `op-grpc-bridge` (cognitive MCP is in-process there; no standalone `op-cognitive-mcp` runit service). `compact_mcp` is a retired *plugin id* — not reflected, not loadable. Compact *mode* (the 4 meta-tools) is in-process in op-web for the singleton control-plane chatbot; it is not an MCP plugin and not a second listener. Never create new shims or point external clients at `op-assistant-grpc`.
 
 **Host tooling.** As of the 2026-07-20/21 server move, the host runs **runit**, not s6 — `service6`/`s6d`/`s6-*` no longer exist on this box and any doc or memory saying otherwise is stale. Service definitions live under `/etc/runit/sv/<name>/`, enabled by symlinking into `/etc/runit/runsvdir/default/`; manage them with the standard `sv start|stop|restart|status|check <name>` (see `3tched-artix-runit-install.sh` for the canonical patterns, e.g. `sv start "$d"` / `until sv check "$d"; do sleep 1; done`). No wrapper/gate script exists for runit the way `service6` was for s6 — `sv` is used directly. Still be conservative with service-affecting commands (start/stop/restart) regardless of supervisor — read state before acting, don't chain speculative changes. OVS is driven natively over OVSDB JSON-RPC via the rovs plugins (`op-openvswitch-daemon` was the deprecated D-Bus-passthrough predecessor to this — it has been removed from the tree; don't recreate it). Containers are Incus; expose sockets via `zbusctl createsocket`, not raw incus proxy devices — that guidance still holds going forward even though current live containers (`assistant`, `cozo`, `mail-3tched`, `netmaker`, `qdrant`, `xray`) mix the intended shared-UDS model with hand-configured per-port `incus proxy` devices set up during the rushed post-migration demo push. See the Transport & identity note above before assuming either pattern for a given container; don't treat the raw-proxy-device pattern as newly sanctioned just because it's common right now.
 
@@ -91,10 +91,10 @@ Build gotchas:
 | `op-grpc-bridge` | tonic gRPC bridge (TLS) between D-Bus surface and external clients |
 | `op-cognitive-mcp` | External MCP gateway, CozoDB memory, Qdrant semantic search |
 | `op-identity` | WireGuard identity, sessionid derivation, sled/shuttle |
-| `op-blockchain` | Per-mutation immutable chain (the durability layer) |
+| `op-snowball` | Per-mutation immutable chain (the durability layer) |
 | `op-blob` / `op-state-store` | Sealed blob catalog / schema engine storage |
 | `op-network` | Native OVSDB, OpenFlow, rtnetlink (no CLI subprocesses) |
-| `op-s6-systemctl` | `s6d` service-management CLI — **legacy, s6-era**; host now runs runit (`sv`), this crate/binary is not the live control path |
+| `op-runit-systemctl` | `svd` service-management CLI + the `org.opdbus.v1.Runit.Systemctl` D-Bus service. **This IS the live service-control path** — it owns that bus name on the system bus and the emqx plugin drives service lifecycle through it. (Renamed from `op-s6-systemctl`/`s6d` per spec FR-7; earlier guidance calling it legacy and not-live was wrong.) |
 | `op-xray-daemon` | xray router daemon (identity injection, subdomain routing) |
 | `op-gemma` | Gemma inference plugin (schema-driven UI generation) |
 

@@ -4,7 +4,7 @@
 //! separate transport, no shared state. Queries the `EventChainService` gRPC
 //! surface directly.
 //!
-//! The D-Bus `blockchain.query_events` method exposes the same audit data to
+//! The D-Bus `snowball.query_events` method exposes the same audit data to
 //! MCP clients, AI agents, and `zcall` operators. Both paths read one
 //! `EventChain` on the server, so the two views cannot disagree.
 //!

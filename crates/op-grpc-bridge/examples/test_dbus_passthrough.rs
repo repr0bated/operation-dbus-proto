@@ -5,12 +5,12 @@ use tonic::Request;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let footprint = std::env::args()
+    let genesis = std::env::args()
         .nth(1)
-        .expect("usage: test_dbus_passthrough <footprint_hex> <trace_id_hex>");
+        .expect("usage: test_dbus_passthrough <genesis_hex> <trace_id>");
     let trace_id = std::env::args()
         .nth(2)
-        .expect("usage: test_dbus_passthrough <footprint_hex> <trace_id_hex>");
+        .expect("usage: test_dbus_passthrough <genesis_hex> <trace_id>");
 
     let mut client = DbusPassthroughClient::connect("http://127.0.0.1:8090").await?;
     let mut request = Request::new(DbusCallRequest {
@@ -21,10 +21,9 @@ async fn main() -> anyhow::Result<()> {
         method: "ListSessions".to_string(),
         json_body: "{}".to_string(),
     });
-    request.metadata_mut().insert(
-        "x-ghostbridge-footprint",
-        MetadataValue::try_from(footprint)?,
-    );
+    request
+        .metadata_mut()
+        .insert("x-ghostbridge-genesis", MetadataValue::try_from(genesis)?);
     request
         .metadata_mut()
         .insert("x-ghostbridge-trace-id", MetadataValue::try_from(trace_id)?);

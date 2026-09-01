@@ -115,12 +115,18 @@ impl SessionManager {
         Self::with_vault_path(crate::identity_vault::DEFAULT_VAULT_PATH)
     }
 
+    /// Backward-compatible constructor for explicit interface-based identity wiring.
+    ///
+    /// Deprecated: WG-interface-based identity is deprecated in favor of explicit
+    /// pubkey injection (WG_PUBKEY / signed metadata).
     pub fn with_wireguard_interface(interface: &str) -> anyhow::Result<Self> {
         Self::with_vault_and_interface(crate::identity_vault::DEFAULT_VAULT_PATH, interface)
     }
 
     pub fn with_vault_path<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Self> {
-        Self::with_vault_and_interface(path, "wg0")
+        // Keeping this overload for compatibility, but do not assume a WG interface.
+        // WG interface defaults are deprecated; identity should be injected via pubkey.
+        Self::with_vault_and_interface(path, "")
     }
 
     pub fn with_vault_and_interface<P: AsRef<std::path::Path>>(

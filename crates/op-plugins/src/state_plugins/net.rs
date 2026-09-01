@@ -1,7 +1,7 @@
 // Net state plugin - authoritative OVS state management via D-Bus
 // Handles: interfaces, bridges, IPs, basic connectivity via plugin schema
 // Integrates with systemd-networkd as subordinate service for L3 configuration
-use op_blockchain::PluginFootprint;
+use op_snowball::PluginFootprint;
 
 // Use D-Bus introspection instead of CLI commands
 use anyhow::{Context, Result};
@@ -66,7 +66,7 @@ pub struct InterfaceConfig {
     pub tunable: TunableConfig,
 }
 
-/// Tunable configuration - can be changed, each change tracked in blockchain.
+/// Tunable configuration - can be changed, each change tracked in snowball.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 pub struct TunableConfig {
     /// Ports attached to this interface.
@@ -221,23 +221,23 @@ pub struct AddressConfig {
 /// Net state plugin implementation - authoritative OVS state via D-Bus
 pub struct NetStatePlugin {
     #[allow(dead_code)]
-    blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
+    snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
 }
 
 #[allow(dead_code)]
 impl NetStatePlugin {
     pub fn new() -> Self {
         Self {
-            blockchain_sender: None,
+            snowball_sender: None,
         }
     }
 
     #[allow(dead_code)]
-    pub fn with_blockchain_sender(
-        blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
+    pub fn with_snowball_sender(
+        snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
     ) -> Self {
         Self {
-            blockchain_sender: Some(blockchain_sender),
+            snowball_sender: Some(snowball_sender),
         }
     }
 

@@ -284,7 +284,7 @@ mod tests {
         );
         assert_eq!(
             ui_role_from_subid(
-                "mut.service.blockchain.snapshot-interval@v1",
+                "mut.service.snowball.snapshot-interval@v1",
                 Some(UiFieldShape::Integer)
             ),
             Some(UiRole::NumericControl)

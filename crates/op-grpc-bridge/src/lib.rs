@@ -22,6 +22,7 @@
 //! ```
 
 pub mod chat_service;
+pub mod dbus_identity;
 pub mod dynamic_reflection;
 pub mod emqx_hook_provider;
 pub mod grpc_client;
@@ -31,6 +32,7 @@ pub mod human_principal_dispatch;
 pub mod identity_sled_dispatch;
 pub mod interceptor;
 pub mod mcp_frontend;
+pub mod mcp_policy;
 pub mod mutation_engine;
 pub mod oracle_assertion;
 pub mod per_plugin_reflection;
@@ -87,9 +89,9 @@ pub mod proto {
         tonic::include_proto!("operation.registry.v1");
     }
 
-    /// EMQX ExHook v2 broker callback service.
+    /// EMQX ExHook v3 broker callback service (EMQX 5.9+).
     pub mod emqx_exhook {
-        tonic::include_proto!("emqx.exhook.v2");
+        tonic::include_proto!("emqx.exhook.v3");
     }
 
     /// Zeroclaw plugin schema gRPC service (GetSchema / WatchSchema).
@@ -222,8 +224,8 @@ mod interceptor_crate_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn assertion_present_footprint_headers_not_consulted() {
-        crate::interceptor::tests::assertion_present_footprint_headers_not_consulted_impl().await;
+    async fn assertion_present_legacy_headers_not_consulted() {
+        crate::interceptor::tests::assertion_present_legacy_headers_not_consulted_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -243,13 +245,13 @@ mod interceptor_crate_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn human_footprint_grant_allows_capability_gate() {
-        crate::interceptor::tests::human_footprint_grant_allows_capability_gate_impl().await;
+    async fn human_principal_grant_allows_capability_gate() {
+        crate::interceptor::tests::human_principal_grant_allows_capability_gate_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn human_footprint_missing_grant_denies_capability_gate() {
-        crate::interceptor::tests::human_footprint_missing_grant_denies_capability_gate_impl()
+    async fn human_principal_missing_grant_denies_capability_gate() {
+        crate::interceptor::tests::human_principal_missing_grant_denies_capability_gate_impl()
             .await;
     }
 

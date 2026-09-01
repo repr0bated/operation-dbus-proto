@@ -55,7 +55,7 @@ async-recursion = "1.0"
 dirs = "5"
 
 # JSON Schema validation
-jsonschema = "0.18"
+jsonschema = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -185,7 +185,7 @@ pub trait Plugin: Send + Sync {
         Ok(())
     }
 
-    /// Get hash of current state for blockchain footprint
+    /// Get hash of current state for snowball footprint
     fn state_hash(&self) -> String {
         use sha2::{Digest, Sha256};
         // Default implementation - plugins should override for accuracy

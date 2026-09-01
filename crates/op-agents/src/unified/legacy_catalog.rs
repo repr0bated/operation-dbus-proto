@@ -660,12 +660,12 @@ fn persona_dispatch_table() -> Vec<(&'static str, Factory)> {
             ),
         ),
         (
-            "blockchain-developer",
+            "snowball-developer",
             p!(
-                "blockchain-developer",
-                "Blockchain Developer",
-                "blockchain",
-                "Blockchain development",
+                "snowball-developer",
+                "Snowball Developer",
+                "snowball",
+                "Snowball development",
                 ArchitectureDesign
             ),
         ),

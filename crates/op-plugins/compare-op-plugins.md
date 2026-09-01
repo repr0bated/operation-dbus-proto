@@ -22,8 +22,8 @@
 
 ## Current Implementation Overview
 
-- Plugin system with state management, domain plugins, and blockchain footprints
-- Internal crate integrations: op-core, op-dbus-model, op-state, op-state-store, op-blockchain, op-network, op-dynamic-loader, op-execution-tracker.
+- Plugin system with state management, domain plugins, and snowball footprints
+- Internal crate integrations: op-core, op-dbus-model, op-state, op-state-store, op-snowball, op-network, op-dynamic-loader, op-execution-tracker.
 
 ## Module / File Comparison
 
@@ -73,7 +73,7 @@
 - `op-dbus-model` - not listed in SPEC dependency block
 - `op-state` - documented in SPEC
 - `op-state-store` - documented in SPEC
-- `op-blockchain` - documented in SPEC
+- `op-snowball` - documented in SPEC
 - `op-network` - documented in SPEC
 - `op-dynamic-loader` - documented in SPEC
 - `op-execution-tracker` - documented in SPEC

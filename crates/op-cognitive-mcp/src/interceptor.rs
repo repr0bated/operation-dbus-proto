@@ -3,24 +3,21 @@
 // Authentication here resolves one projected session and verifies the request's
 // genesis against that record.
 
-use op_identity::FootprintVerifyError;
+use op_identity::SessionGenesisVerifyError;
 use tonic::{Request, Status};
 
 /// Identity extracted by the Ghostbridge interceptor and attached to each
 /// accepted request for downstream authorization / trace linking.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GhostbridgeIdentity {
-    pub footprint: String,
+    pub principal_id: String,
     pub session_id: String,
+    pub session_genesis: String,
 }
 
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    let genesis_value = req
-        .metadata()
-        .get("x-ghostbridge-genesis")
-        .or_else(|| req.metadata().get("x-ghostbridge-footprint"))
-        .cloned();
+    let genesis_value = req.metadata().get("x-ghostbridge-genesis").cloned();
     let trace_value = req.metadata().get("x-ghostbridge-trace-id").cloned();
     let pubkey_value = req.metadata().get("x-wireguard-pubkey").cloned();
 
@@ -41,26 +38,27 @@ pub fn ghostbridge_interceptor(mut req: Request<()>) -> Result<Request<()>, Stat
     let identity =
         op_identity::resolve_verified_session(request_genesis, trace_id, wireguard_pubkey)
             .map_err(|error| match error {
-                FootprintVerifyError::SledUnreachable => {
+                SessionGenesisVerifyError::SledUnreachable => {
                     Status::internal("Identity session projection unreachable")
                 }
-                FootprintVerifyError::InvalidSled => {
+                SessionGenesisVerifyError::InvalidSled => {
                     Status::failed_precondition("Identity session is not anchored")
                 }
-                FootprintVerifyError::Inactive => {
+                SessionGenesisVerifyError::Inactive => {
                     Status::permission_denied("Identity session is inactive")
                 }
-                FootprintVerifyError::Expired => {
+                SessionGenesisVerifyError::Expired => {
                     Status::permission_denied("Identity session term has expired")
                 }
-                FootprintVerifyError::Mismatch => Status::permission_denied(
+                SessionGenesisVerifyError::Mismatch => Status::permission_denied(
                     "Session genesis does not match the projected identity record.",
                 ),
             })?;
 
     req.extensions_mut().insert(GhostbridgeIdentity {
-        footprint: request_genesis.to_string(),
+        principal_id: op_identity::session::derive_principal_id(&identity.wireguard_pubkey),
         session_id: identity.session_id,
+        session_genesis: request_genesis.to_string(),
     });
 
     Ok(req)

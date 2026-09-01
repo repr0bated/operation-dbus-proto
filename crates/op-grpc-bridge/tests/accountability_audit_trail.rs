@@ -6,9 +6,9 @@
 //! per-plugin gRPC methods. They assert the two things the spec's acceptance
 //! criteria hinge on:
 //!
-//!   1. `blockchain.query_events` / `blockchain.verify_chain` return real audit
+//!   1. `snowball.query_events` / `snowball.verify_chain` return real audit
 //!      data — not the catch-all echo of their input.
-//!   2. The blockchain plugin's seven pre-existing methods still echo, proving
+//!   2. The snowball plugin's seven pre-existing methods still echo, proving
 //!      the scope boundary was not crossed.
 
 use std::sync::Arc;
@@ -47,10 +47,10 @@ async fn query_events_returns_real_audit_data_not_echo() {
 
     let response = engine
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "query_events",
             "{\"limit\":10}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -91,10 +91,10 @@ async fn query_events_filters_and_clamps_limit() {
     // limit=2 must return exactly 2 rows and report more available.
     let paged = engine
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "query_events",
             "{\"limit\":2}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -106,10 +106,10 @@ async fn query_events_filters_and_clamps_limit() {
     // An over-max limit is clamped silently rather than rejected (FR-4).
     let clamped = engine
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "query_events",
             "{\"limit\":100000}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -126,10 +126,10 @@ async fn query_events_filters_and_clamps_limit() {
     // plugin_id filter excludes other plugins' events.
     let filtered = engine
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "query_events",
             "{\"plugin_id\":\"cognitive_mcp\",\"limit\":50}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -145,10 +145,10 @@ async fn query_events_filters_and_clamps_limit() {
     // decision filter maps onto the chain's Decision enum.
     let denied = engine
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "query_events",
             "{\"decision\":\"deny\",\"limit\":50}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -167,10 +167,10 @@ async fn verify_chain_reports_integrity() {
 
     let response = engine
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "verify_chain",
             "{}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -184,7 +184,7 @@ async fn verify_chain_reports_integrity() {
 }
 
 #[tokio::test]
-async fn existing_blockchain_methods_still_echo() {
+async fn existing_snowball_methods_still_echo() {
     let engine = engine();
 
     // Scope boundary (FR-8): the seven pre-existing methods stay un-wired and
@@ -200,10 +200,10 @@ async fn existing_blockchain_methods_still_echo() {
     ] {
         let response = engine
             .dispatch_method_call(
-                "blockchain",
+                "snowball",
                 method,
                 "{\"scope_marker\":true}",
-                Some("blockchain.read"),
+                Some("snowball.read"),
                 "test-actor",
             )
             .await
@@ -226,9 +226,9 @@ async fn audit_methods_are_declared_in_the_plugin_schema() {
     use op_state::StatePlugin;
     use op_state_store::SideEffect;
 
-    let schema = op_plugins::state_plugins::blockchain_plugin::BlockchainPlugin::new()
+    let schema = op_plugins::state_plugins::snowball_plugin::SnowballPlugin::new()
         .schema()
-        .expect("blockchain plugin publishes a schema");
+        .expect("snowball plugin publishes a schema");
 
     for name in ["query_events", "verify_chain"] {
         let decl = schema
@@ -236,7 +236,7 @@ async fn audit_methods_are_declared_in_the_plugin_schema() {
             .get(name)
             .unwrap_or_else(|| panic!("{name} missing from schema.methods"));
         assert!(matches!(decl.side_effect, SideEffect::Read));
-        assert_eq!(decl.required_capability.as_deref(), Some("blockchain.read"));
+        assert_eq!(decl.required_capability.as_deref(), Some("snowball.read"));
         assert!(decl.returns.is_some(), "{name} must declare a typed output");
     }
 
@@ -261,7 +261,7 @@ async fn audit_methods_are_declared_in_the_plugin_schema() {
 /// engine over the same path rebuilds the chain from disk — the "survives a
 /// restart" claim, exercised without touching a live service.
 ///
-/// The chain path must be on Btrfs (`StreamingBlockchain` creates subvolumes).
+/// The chain path must be on Btrfs (`StreamingSnowball` creates subvolumes).
 /// If subvolume creation is unavailable the durability sink stays disabled by
 /// design (NFR-4), and this test says so rather than silently passing.
 #[tokio::test]
@@ -290,10 +290,10 @@ async fn audit_trail_persists_and_survives_a_restart() {
         // chain is intact.
         let live = first
             .dispatch_method_call(
-                "blockchain",
+                "snowball",
                 "query_events",
                 "{\"limit\":10}",
-                Some("blockchain.read"),
+                Some("snowball.read"),
                 "test-actor",
             )
             .await
@@ -327,10 +327,10 @@ async fn audit_trail_persists_and_survives_a_restart() {
 
     let restored = second
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "query_events",
             "{\"limit\":10}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await
@@ -347,10 +347,10 @@ async fn audit_trail_persists_and_survives_a_restart() {
     // new event continues the chain instead of restarting the ids.
     let verified = second
         .dispatch_method_call(
-            "blockchain",
+            "snowball",
             "verify_chain",
             "{}",
-            Some("blockchain.read"),
+            Some("snowball.read"),
             "test-actor",
         )
         .await

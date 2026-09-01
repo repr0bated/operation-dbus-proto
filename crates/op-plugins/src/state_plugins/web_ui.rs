@@ -2,14 +2,14 @@
 //!
 //! Follows the 3-section plugin pattern:
 //! - SECTION 1: Immutable Identity (set once, never changes)
-//! - SECTION 2: Tunable Config (can change, blockchain tracks all changes)
+//! - SECTION 2: Tunable Config (can change, snowball tracks all changes)
 //! - SECTION 3: Capabilities (what this plugin can do)
 //!
 //! Uses op-identity crate for WireGuard-based authentication.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use op_blockchain::PluginFootprint;
+use op_snowball::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::{CapabilityDecl, PluginSchema};
 #[cfg(test)]
@@ -62,10 +62,10 @@ impl Default for WebUiIdentity {
 }
 
 // ============================================================================
-// SECTION 2: TUNABLE CONFIG (can change, blockchain tracks all changes)
+// SECTION 2: TUNABLE CONFIG (can change, snowball tracks all changes)
 // ============================================================================
 
-/// Tunable configuration - changes tracked in blockchain.
+/// Tunable configuration - changes tracked in snowball.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.web-ui.tunables.schema@v1"))]
 pub struct WebUiTunables {
@@ -349,7 +349,7 @@ pub struct WebUiPlugin {
     tunables: WebUiTunables,
     capabilities: WebUiCapabilities,
     #[allow(dead_code)]
-    blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
+    snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
 }
 
 impl WebUiPlugin {
@@ -358,18 +358,18 @@ impl WebUiPlugin {
             identity: WebUiIdentity::default(),
             tunables: WebUiTunables::default(),
             capabilities: WebUiCapabilities::default(),
-            blockchain_sender: None,
+            snowball_sender: None,
         }
     }
 
-    pub fn with_blockchain_sender(
-        blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
+    pub fn with_snowball_sender(
+        snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
     ) -> Self {
         Self {
             identity: WebUiIdentity::default(),
             tunables: WebUiTunables::default(),
             capabilities: WebUiCapabilities::default(),
-            blockchain_sender: Some(blockchain_sender),
+            snowball_sender: Some(snowball_sender),
         }
     }
 

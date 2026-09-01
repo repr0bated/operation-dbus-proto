@@ -72,15 +72,17 @@ type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatFrame, Status>> + Send + 
 async fn dispatch_chat_method(
     engine: &MutationEngine,
     chat_args: &str,
-    actor_id: &str,
+    identity: &GhostbridgeIdentity,
 ) -> anyhow::Result<ChatOutput> {
     let result = engine
-        .dispatch_method_call(
+        .dispatch_method_call_with_identity(
             ROUTER_PLUGIN_ID,
             "Chat",
             chat_args,
             Some(ROUTER_CHAT_CAPABILITY),
-            actor_id,
+            &identity.principal_id,
+            Some(&identity.session_id),
+            Some(&identity.session_genesis),
         )
         .await?;
     let payload = result
@@ -366,7 +368,7 @@ impl ChatService for ChatServiceImpl {
 
         let cancellations = self.cancellations.clone();
         let engine = self.engine.clone();
-        let actor_id = identity.session_id;
+        let identity = identity;
         let conv_id = conversation_id.clone();
 
         tokio::spawn(async move {
@@ -382,7 +384,7 @@ impl ChatService for ChatServiceImpl {
                 .await;
 
             let completion = tokio::select! {
-                result = dispatch_chat_method(engine.as_ref(), &chat_args, &actor_id) => result,
+                result = dispatch_chat_method(engine.as_ref(), &chat_args, &identity) => result,
                 changed = cancel_rx.changed() => {
                     match changed {
                         Ok(()) if *cancel_rx.borrow() => Err(anyhow!("chat cancelled")),
@@ -574,9 +576,17 @@ mod tests {
         };
         let args = serde_json::to_string(&input).expect("chat input");
 
-        let error = dispatch_chat_method(&engine, &args, "test-actor")
-            .await
-            .expect_err("undeclared model must be rejected by the router");
+        let error = dispatch_chat_method(
+            &engine,
+            &args,
+            &GhostbridgeIdentity {
+                principal_id: "test-actor".into(),
+                session_id: "test-session".into(),
+                session_genesis: "test-genesis".into(),
+            },
+        )
+        .await
+        .expect_err("undeclared model must be rejected by the router");
 
         let message = error.to_string();
         assert!(

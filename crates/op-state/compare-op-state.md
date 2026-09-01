@@ -23,7 +23,7 @@
 ## Current Implementation Overview
 
 - State management system with plugin infrastructure, crypto, and schema validation
-- Internal crate integrations: op-core, op-blockchain, op-jsonrpc, op-state-store, op-network.
+- Internal crate integrations: op-core, op-snowball, op-jsonrpc, op-state-store, op-network.
 
 ## Module / File Comparison
 
@@ -61,7 +61,7 @@
 
 ### Internal Workspace Dependencies
 - `op-core` - documented in SPEC
-- `op-blockchain` - documented in SPEC
+- `op-snowball` - documented in SPEC
 - `op-jsonrpc` - documented in SPEC
 - `op-state-store` - documented in SPEC
 - `op-network` - not listed in SPEC dependency block

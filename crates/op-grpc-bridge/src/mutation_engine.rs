@@ -11,25 +11,174 @@ use async_trait::async_trait;
 use serde_json;
 use simd_json::prelude::{ValueAsContainer, ValueAsMutContainer, ValueAsScalar, ValueObjectAccess};
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use tokio::sync::{broadcast, OnceCell, RwLock, Semaphore};
+use tokio::sync::{broadcast, Mutex, OnceCell, RwLock, Semaphore};
 use zbus::zvariant::OwnedValue as ZOwnedValue;
 use zbus::{Connection, Proxy};
 
-use base64::Engine;
-use op_blockchain::{PluginFootprint, StreamingBlockchain};
 use op_cognitive_mcp::CognitiveMcpServer;
 use op_llm::chat::ChatManager;
+use op_mcp::external_client::{
+    AuthMethod, ExternalMcpClient, ExternalMcpConfig, ExternalMcpTransport,
+};
 use op_network::rovs_proxy::OvsdbDbusClient;
-use op_plugins::state_plugins::blockchain_plugin::{
+use op_plugins::state_plugins::snowball_plugin::{
     AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
 };
+use op_snowball::{PluginFootprint, StreamingSnowball};
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
-/// Default on-disk location of the streaming blockchain that backs the durable
-/// audit trail, when `$OPDBUS_BLOCKCHAIN_PATH` is unset. Matches
-/// `blockchain_plugin::DEFAULT_BASE_PATH` so both read the same chain.
-const DEFAULT_BLOCKCHAIN_PATH: &str = "/var/lib/opdbus/blockchain";
+/// Default on-disk location of the streaming snowball that backs the durable
+/// audit trail, when `$OPDBUS_SNOWBALL_PATH` is unset. Matches
+/// `snowball_plugin::DEFAULT_BASE_PATH` so both read the same chain.
+const DEFAULT_SNOWBALL_PATH: &str = "/var/lib/opdbus/snowball";
+const DEFAULT_NOTEBOOKLM_MCP_URL: &str = "http://127.0.0.1:3101/mcp";
+const DEFAULT_MONGODB_MCP_URL: &str = "http://127.0.0.1:3102/mcp";
+const NOTEBOOKLM_AUTH_READY: &str = "/run/opdbus/runit-ready/notebooklm-mcp-authenticated";
+const DEFAULT_MCP_PROVIDER_CALL_TIMEOUT_SECS: u64 = 30;
+
+/// Reconnecting client for a runit-supervised loopback MCP provider.
+/// Provider startup and browser/database authentication are deliberately not
+/// part of the bridge process or the HOT request path.
+struct SupervisedMcpProvider {
+    name: String,
+    url: String,
+    client: Mutex<Option<ExternalMcpClient>>,
+}
+
+impl SupervisedMcpProvider {
+    fn new(name: &str, url: String) -> Self {
+        Self {
+            name: name.to_string(),
+            url,
+            client: Mutex::new(None),
+        }
+    }
+
+    fn new_client(&self) -> ExternalMcpClient {
+        ExternalMcpClient::new(ExternalMcpConfig {
+            name: self.name.clone(),
+            command: String::new(),
+            args: vec![],
+            transport: ExternalMcpTransport::StreamableHttp,
+            url: Some(self.url.clone()),
+            env: HashMap::new(),
+            api_key: None,
+            api_key_env: "API_KEY".to_string(),
+            auth_method: AuthMethod::None,
+            headers: HashMap::new(),
+        })
+    }
+
+    fn call_timeout(&self) -> std::time::Duration {
+        let seconds = std::env::var("OP_MCP_PROVIDER_CALL_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| (1..=300).contains(seconds))
+            .unwrap_or(DEFAULT_MCP_PROVIDER_CALL_TIMEOUT_SECS);
+        std::time::Duration::from_secs(seconds)
+    }
+
+    async fn discard_client(&self, client: &mut Option<ExternalMcpClient>) {
+        if let Some(mut client) = client.take() {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), client.stop()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(
+                    provider = %self.name,
+                    %error,
+                    "could not close supervised MCP session cleanly"
+                ),
+                Err(_) => tracing::warn!(
+                    provider = %self.name,
+                    "timed out closing supervised MCP session"
+                ),
+            }
+        }
+        if self.name == "notebooklm" {
+            if let Err(error) = set_provider_ready_marker(NOTEBOOKLM_AUTH_READY, false) {
+                tracing::warn!(
+                    %error,
+                    "could not clear NotebookLM authentication readiness"
+                );
+            }
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        upstream_name: &str,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let mut guard = self.client.lock().await;
+        if guard.is_none() {
+            let mut client = self.new_client();
+            if let Err(error) = client.start().await {
+                let mut failed_client = Some(client);
+                self.discard_client(&mut failed_client).await;
+                return Err(anyhow::anyhow!(
+                    "provider_unavailable: {}: {error}",
+                    self.name
+                ));
+            }
+            *guard = Some(client);
+        }
+
+        let advertised = guard
+            .as_ref()
+            .expect("provider client initialized")
+            .get_tools()
+            .await
+            .iter()
+            .any(|tool| {
+                tool.name
+                    .strip_prefix(&format!("{}:", self.name))
+                    .is_some_and(|name| name == upstream_name)
+            });
+        if !advertised {
+            anyhow::bail!(
+                "provider_tool_unavailable: {} does not advertise '{}'",
+                self.name,
+                upstream_name
+            );
+        }
+
+        let mut bytes = serde_json::to_vec(&arguments)?;
+        let input = simd_json::to_owned_value(&mut bytes)?;
+        let call = guard
+            .as_mut()
+            .expect("provider client initialized")
+            .call_tool(upstream_name, input);
+        let call_timeout = self.call_timeout();
+        match tokio::time::timeout(call_timeout, call).await {
+            Ok(Ok(value)) => serde_json::to_value(value).map_err(Into::into),
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    provider = %self.name,
+                    %error,
+                    "supervised MCP session failed; closing without replay"
+                );
+                self.discard_client(&mut guard).await;
+                Err(anyhow::anyhow!(
+                    "provider_unavailable: {}: {error}",
+                    self.name
+                ))
+            }
+            Err(_) => {
+                tracing::warn!(
+                    provider = %self.name,
+                    timeout_seconds = call_timeout.as_secs(),
+                    "supervised MCP call timed out; closing without replay"
+                );
+                self.discard_client(&mut guard).await;
+                Err(anyhow::anyhow!(
+                    "provider_unavailable: {}: call timed out",
+                    self.name
+                ))
+            }
+        }
+    }
+}
 
 /// A state change projected from the authoritative system bus
 #[derive(Debug, Clone)]
@@ -72,6 +221,8 @@ pub struct MutationEngine {
     pub event_chain: Arc<RwLock<EventChain>>,
     /// Real-time change projection channel
     change_tx: broadcast::Sender<StateChange>,
+    /// Exact appended audit events for EventChainService subscribers.
+    chain_tx: broadcast::Sender<ChainEvent>,
     /// State cache for instant gRPC retrieval
     state_cache: Arc<RwLock<HashMap<String, simd_json::OwnedValue>>>,
     /// System D-Bus connection authority
@@ -85,11 +236,11 @@ pub struct MutationEngine {
     #[allow(dead_code)]
     dbus_call_limiter: Arc<Semaphore>,
 
-    /// Durable audit sink: the streaming blockchain's `timing_subvol` holds one
+    /// Durable audit sink: the streaming snowball's `timing_subvol` holds one
     /// JSON record per event chain event, so the trail survives a restart.
     /// Empty until [`MutationEngine::init_audit_durability`] runs; a missing
     /// sink degrades to RAM-only recording rather than failing dispatches.
-    audit_sink: Arc<OnceCell<Arc<StreamingBlockchain>>>,
+    audit_sink: Arc<OnceCell<Arc<StreamingSnowball>>>,
 
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbDbusClient>,
@@ -101,6 +252,10 @@ pub struct MutationEngine {
     /// reached only after a call has entered PluginService/MutationEngine; it
     /// never opens a second listener or becomes a parallel control plane.
     cognitive_mcp: Arc<OnceCell<Arc<CognitiveMcpServer>>>,
+    /// WARM provider clients. These connect only after an admitted typed call;
+    /// neither service participates in HOT discovery or execution.
+    notebooklm_mcp: Arc<SupervisedMcpProvider>,
+    mongodb_mcp: Arc<SupervisedMcpProvider>,
     /// Verified session identities, keyed by session_id. Projection of the
     /// session records for the mutation path — not a second store.
     sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
@@ -155,6 +310,10 @@ pub struct GenesisStamp {
     pub session_id: String,
     pub wireguard_pubkey: String,
     pub genesis_hex: String,
+    pub trace_id: String,
+    /// Complete MutationEngine-authored SID1 envelope, embedded inline in the
+    /// sled's `sealed_id` and forwarded unchanged by SID1-aware clients.
+    pub sealed_id: String,
     pub arrival_timestamp: i64,
     pub chain_head_at_arrival: String,
     pub catalog_hash_at_arrival: String,
@@ -170,8 +329,235 @@ pub struct SessionContext {
 }
 
 const ANONYMOUS_ACTOR: &str = "anonymous";
+const IDENTITY_PROJECTION_GROUP_ENV: &str = "OP_IDENTITY_PROJECTION_GROUP";
+
+/// Remove possession material from any identity value that can leave the
+/// MutationEngine through a generic state surface. The full value remains in
+/// the authoritative cache and private credential projection only.
+fn redact_identity_credentials(value: &mut simd_json::OwnedValue) {
+    match value {
+        simd_json::OwnedValue::Object(object) => {
+            object.remove("sealed_id");
+            for nested in object.values_mut() {
+                redact_identity_credentials(nested);
+            }
+        }
+        simd_json::OwnedValue::Array(values) => {
+            for nested in values {
+                redact_identity_credentials(nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn contains_identity_credential_field(value: &simd_json::OwnedValue) -> bool {
+    match value {
+        simd_json::OwnedValue::Object(object) => {
+            object.contains_key("sealed_id")
+                || object.values().any(contains_identity_credential_field)
+        }
+        simd_json::OwnedValue::Array(values) => {
+            values.iter().any(contains_identity_credential_field)
+        }
+        _ => false,
+    }
+}
+
+fn public_plugin_value(plugin_id: &str, value: &simd_json::OwnedValue) -> simd_json::OwnedValue {
+    let mut public = value.clone();
+    if plugin_id == "identity_sled" {
+        redact_identity_credentials(&mut public);
+    }
+    public
+}
+
+fn redact_identity_credentials_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.remove("sealed_id");
+            for nested in object.values_mut() {
+                redact_identity_credentials_json(nested);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for nested in values {
+                redact_identity_credentials_json(nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Identity sleds carry a reusable session-term possession credential. Publish
+/// exact bytes to a private root:secrets credential file and a separately
+/// serialized, recursively redacted value to the generic state tree.
+fn write_plugin_projection(plugin_id: &str, json: &[u8]) -> anyhow::Result<()> {
+    if plugin_id != "identity_sled" {
+        return op_core::projection_shm::write_projection(plugin_id, json);
+    }
+    let group_name =
+        std::env::var(IDENTITY_PROJECTION_GROUP_ENV).unwrap_or_else(|_| "secrets".to_string());
+    let state_dir = op_core::projection_shm::shm_state_dir();
+    let group_gid = match nix::unistd::Group::from_name(&group_name)
+        .map_err(|error| anyhow::anyhow!("resolve identity projection group: {error}"))?
+    {
+        Some(group) => group.gid,
+        None if state_dir != op_core::projection_shm::SHM_STATE_DIR => {
+            // Sandboxed test/dev projection roots are already private temp
+            // directories and need not depend on a host-specific group.
+            nix::unistd::Gid::current()
+        }
+        None => anyhow::bail!("identity projection group '{group_name}' does not exist"),
+    };
+    write_identity_projection_at(&state_dir, json, group_gid)
+}
+
+fn write_identity_projection_at(
+    state_dir: &str,
+    json: &[u8],
+    group_gid: nix::unistd::Gid,
+) -> anyhow::Result<()> {
+    std::fs::create_dir_all(&state_dir)?;
+    let credential_dir =
+        op_core::projection_shm::credential_projection_dir_for_state_dir(&state_dir);
+    std::fs::create_dir_all(&credential_dir)?;
+    std::fs::set_permissions(&credential_dir, std::fs::Permissions::from_mode(0o750))?;
+    nix::unistd::chown(std::path::Path::new(&credential_dir), None, Some(group_gid))
+        .map_err(|error| anyhow::anyhow!("set identity credential directory group: {error}"))?;
+
+    let credential_path =
+        op_core::projection_shm::credential_projection_file_path_in(&state_dir, "identity_sled");
+    op_core::projection_shm::atomic_write_shm_with_permissions(
+        &credential_path,
+        json,
+        0o640,
+        Some(group_gid.as_raw()),
+    )?;
+
+    let mut parsed = json.to_vec();
+    let mut public = simd_json::to_owned_value(&mut parsed)?;
+    redact_identity_credentials(&mut public);
+    let public_json = simd_json::to_vec(&public)?;
+    let public_path = op_core::projection_shm::projection_file_path_in(&state_dir, "identity_sled");
+    op_core::projection_shm::atomic_write_shm_with_permissions(
+        &public_path,
+        &public_json,
+        0o644,
+        None,
+    )?;
+
+    // The public manifest is only a generation counter and contains no sled
+    // data. Bump it after both files are installed as the commit point.
+    op_core::projection_shm::bump_manifest_generation_in(&state_dir)?;
+    Ok(())
+}
+
+/// Seal the immutable session metadata once, in the same component that owns
+/// genesis minting.  This helper does not touch Snowball footprints or event
+/// hashes; the returned SID1 value is an identity projection only.
+fn sealed_sealed_id(
+    stamp: &GenesisStamp,
+    schema_version: u32,
+    expires_at: i64,
+) -> anyhow::Result<String> {
+    op_identity::sealed_id::SealedId {
+        principal_id: op_identity::session::derive_principal_id(&stamp.wireguard_pubkey),
+        principal_kind: "wireguard-principal".to_string(),
+        session_id: stamp.session_id.clone(),
+        wireguard_pubkey: stamp.wireguard_pubkey.clone(),
+        session_genesis: stamp.genesis_hex.clone(),
+        trace_id: stamp.trace_id.clone(),
+        schema_version,
+        issued_at: stamp.arrival_timestamp,
+        expires_at,
+        arrival_timestamp: stamp.arrival_timestamp,
+        chain_head_at_arrival: stamp.chain_head_at_arrival.clone(),
+        catalog_hash_at_arrival: stamp.catalog_hash_at_arrival.clone(),
+        head_timestamp_at_arrival: stamp.head_timestamp_at_arrival,
+        transport_scope: "dbus,grpc,mcp".to_string(),
+    }
+    .to_inline_ref()
+    .map_err(|error| anyhow::anyhow!("seal session sealed ID: {error}"))
+}
 
 impl MutationEngine {
+    /// Materialize the protected local MCP service identity at bridge startup.
+    /// The public key is not a credential; it selects the already configured
+    /// WireGuard account, while both derived IDs are checked against the
+    /// release-owned expectations before the MutationEngine mints anything.
+    pub async fn bootstrap_configured_mcp_identity(
+        &self,
+    ) -> anyhow::Result<Option<SessionContext>> {
+        let Ok(wireguard_pubkey) = std::env::var("OP_MCP_IDENTITY_WIREGUARD_PUBKEY") else {
+            return Ok(None);
+        };
+        let wireguard_pubkey = wireguard_pubkey.trim();
+        if wireguard_pubkey.is_empty() {
+            anyhow::bail!("OP_MCP_IDENTITY_WIREGUARD_PUBKEY is empty");
+        }
+        let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
+        let principal_id = op_identity::session::derive_principal_id(wireguard_pubkey);
+        if let Ok(expected) = std::env::var("OP_MCP_IDENTITY_SESSION_ID") {
+            if expected.trim() != session_id {
+                anyhow::bail!(
+                    "configured MCP identity session_id does not match its WireGuard key"
+                );
+            }
+        }
+        if let Ok(expected) = std::env::var("OP_MCP_IDENTITY_PRINCIPAL_ID") {
+            if expected.trim() != principal_id {
+                anyhow::bail!(
+                    "configured MCP identity principal_id does not match its WireGuard key"
+                );
+            }
+        }
+        match crate::human_principal_dispatch::resolve_key_for_assertion(wireguard_pubkey).await {
+            Ok(Some(record)) if record.revoked_at != 0 => {
+                anyhow::bail!("configured MCP identity is revoked")
+            }
+            Ok(Some(record))
+                if record.principal_id != principal_id
+                    || record.human_pubkey != wireguard_pubkey =>
+            {
+                anyhow::bail!("configured MCP identity registry binding changed")
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                // This is a release-owned singleton identity, so its first
+                // registration is itself a MutationEngine event. No direct
+                // Cozo bootstrap or unaudited startup write is permitted.
+                let args = simd_json::serde::to_owned_value(&serde_json::json!({
+                    "human_pubkey": wireguard_pubkey,
+                    "display_alias": "control-plane-chatbot"
+                }))?;
+                self.mutate(
+                    "human_principal".to_string(),
+                    "/org/opdbus/v1/plugins/human_principal".to_string(),
+                    ChangeType::MethodCall,
+                    Some("register_key".to_string()),
+                    args,
+                    "op-grpc-bridge.bootstrap".to_string(),
+                    Some("human_principal.write".to_string()),
+                )
+                .await?;
+            }
+            Err(error) => anyhow::bail!("configured MCP principal registry unavailable: {error:?}"),
+        }
+        self.mint_and_store_genesis(&session_id, wireguard_pubkey)
+            .await?;
+        let context = self
+            .session_context(&session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configured MCP identity was not cached after mint"))?;
+        tracing::info!(
+            %principal_id,
+            %session_id,
+            "configured MCP identity sealed into its sled"
+        );
+        Ok(Some(context))
+    }
+
     pub async fn session_context(&self, session_id: &str) -> Option<SessionContext> {
         self.sessions.read().await.get(session_id).cloned()
     }
@@ -239,9 +625,6 @@ impl MutationEngine {
         &self,
         wireguard_pubkey: &str,
     ) -> Option<SessionContext> {
-        if let Some(found) = self.session_context_for_actor(wireguard_pubkey).await {
-            return Some(found);
-        }
         let valid_wireguard_key = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
             wireguard_pubkey.trim(),
@@ -251,6 +634,30 @@ impl MutationEngine {
             return None;
         }
         let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
+        if let Some(record) = crate::identity_sled_dispatch::stored_session(self, &session_id).await
+        {
+            let now = chrono::Utc::now().timestamp();
+            let current = record.is_anchored()
+                && record.active
+                && record.wireguard_pubkey == wireguard_pubkey
+                && record
+                    .expires_at
+                    .is_none_or(|expires_at| expires_at == 0 || expires_at > now);
+            if !current {
+                tracing::warn!(
+                    %session_id,
+                    "verified identity has an inactive, expired, or mismatched authoritative sled"
+                );
+                return None;
+            }
+            let context = SessionContext {
+                genesis_hex: record.genesis.unwrap_or_default(),
+                session_id: record.session_id,
+                wireguard_pubkey: record.wireguard_pubkey,
+            };
+            self.register_session_context(context.clone()).await;
+            return Some(context);
+        }
         match self
             .mint_and_store_genesis(&session_id, wireguard_pubkey)
             .await
@@ -287,16 +694,53 @@ impl MutationEngine {
         if session_id.is_empty() {
             anyhow::bail!("session genesis requires a session_id");
         }
-        if let Some(existing) =
-            crate::identity_sled_dispatch::stored_genesis(self, session_id).await
+        let existing_record = crate::identity_sled_dispatch::stored_session(self, session_id).await;
+        if let Some(existing) = existing_record
+            .as_ref()
+            .filter(|record| record.is_anchored())
         {
+            if existing.wireguard_pubkey != wireguard_pubkey {
+                anyhow::bail!(
+                    "session '{}' is already anchored to a different WireGuard identity",
+                    session_id
+                );
+            }
+            let existing_genesis = existing.genesis.clone().unwrap_or_default();
+            let mut stamp = GenesisStamp {
+                session_id: existing.session_id.clone(),
+                wireguard_pubkey: existing.wireguard_pubkey.clone(),
+                genesis_hex: existing_genesis.clone(),
+                trace_id: existing.trace_id.clone(),
+                sealed_id: String::new(),
+                arrival_timestamp: existing.arrival_timestamp,
+                chain_head_at_arrival: existing.chain_head_at_arrival.clone(),
+                catalog_hash_at_arrival: existing.catalog_hash_at_arrival.clone(),
+                head_timestamp_at_arrival: existing.head_timestamp_at_arrival,
+            };
+            stamp.sealed_id = match existing
+                .sealed_id
+                .as_deref()
+                .filter(|sealed| !sealed.is_empty())
+            {
+                // Authored once: preserve the exact stored bytes. store_genesis
+                // validates every claim and fails closed if they were altered.
+                Some(sealed) => sealed.to_string(),
+                // One-way migration for a legacy anchored record that predates
+                // SID1. This is the only anchored-session sealing path.
+                None => sealed_sealed_id(
+                    &stamp,
+                    existing.schema_version,
+                    existing.expires_at.unwrap_or(0),
+                )?,
+            };
+            crate::identity_sled_dispatch::store_genesis(self, &stamp).await?;
             self.register_session_context(SessionContext {
-                genesis_hex: existing.clone(),
+                genesis_hex: existing_genesis.clone(),
                 session_id: session_id.to_string(),
                 wireguard_pubkey: wireguard_pubkey.to_string(),
             })
             .await;
-            return Ok(existing);
+            return Ok(existing_genesis);
         }
 
         let pubkey_bytes = base64::Engine::decode(
@@ -340,15 +784,31 @@ impl MutationEngine {
             arrival_timestamp,
         );
 
-        let stamp = GenesisStamp {
+        let trace_id = existing_record
+            .as_ref()
+            .map(|record| record.trace_id.trim())
+            .filter(|trace| !trace.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| hex::encode(uuid::Uuid::new_v4().as_bytes()));
+        let mut stamp = GenesisStamp {
             session_id: session_id.to_string(),
             wireguard_pubkey: wireguard_pubkey.to_string(),
             genesis_hex: hex::encode(genesis),
+            trace_id,
+            sealed_id: String::new(),
             arrival_timestamp,
             chain_head_at_arrival: chain_head_hex,
             catalog_hash_at_arrival: hex::encode(catalog_hash_bytes),
             head_timestamp_at_arrival: head_timestamp,
         };
+        stamp.sealed_id = sealed_sealed_id(
+            &stamp,
+            op_plugins::state_plugins::identity_sled::RECORD_FORMAT,
+            existing_record
+                .as_ref()
+                .and_then(|record| record.expires_at)
+                .unwrap_or(0),
+        )?;
 
         let stored = crate::identity_sled_dispatch::store_genesis(self, &stamp).await?;
         self.register_session_context(SessionContext {
@@ -376,14 +836,17 @@ impl MutationEngine {
                 .clone()
         };
         self.persist_audit_event(&event).await;
+        let _ = self.chain_tx.send(event);
     }
 
     /// Create a new authoritative Mutation Engine
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
+        let (chain_tx, _) = broadcast::channel(1024);
         Self {
             event_chain,
             change_tx,
+            chain_tx,
             state_cache: Arc::new(RwLock::new(HashMap::new())),
             dbus_connection: Arc::new(OnceCell::new()),
             session_bus: Arc::new(OnceCell::new()),
@@ -394,8 +857,22 @@ impl MutationEngine {
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
             cognitive_mcp: Arc::new(OnceCell::new()),
+            notebooklm_mcp: Arc::new(SupervisedMcpProvider::new(
+                "notebooklm",
+                std::env::var("OP_NOTEBOOKLM_MCP_URL")
+                    .unwrap_or_else(|_| DEFAULT_NOTEBOOKLM_MCP_URL.to_string()),
+            )),
+            mongodb_mcp: Arc::new(SupervisedMcpProvider::new(
+                "mongodb",
+                std::env::var("OP_MONGODB_MCP_URL")
+                    .unwrap_or_else(|_| DEFAULT_MONGODB_MCP_URL.to_string()),
+            )),
             sessions: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub fn chain_tx(&self) -> &broadcast::Sender<ChainEvent> {
+        &self.chain_tx
     }
 
     async fn cognitive_mcp(&self) -> anyhow::Result<&Arc<CognitiveMcpServer>> {
@@ -426,19 +903,19 @@ impl MutationEngine {
     ///
     /// OSCAL subid: `src.service.event-chain.rebuild@v1`
     pub async fn init_audit_durability(&self) -> usize {
-        let base_path = std::env::var("OPDBUS_BLOCKCHAIN_PATH")
-            .unwrap_or_else(|_| DEFAULT_BLOCKCHAIN_PATH.to_string());
+        let base_path = std::env::var("OPDBUS_SNOWBALL_PATH")
+            .unwrap_or_else(|_| DEFAULT_SNOWBALL_PATH.to_string());
         self.init_audit_durability_at(&base_path).await
     }
 
     /// [`init_audit_durability`](Self::init_audit_durability) against an explicit
-    /// chain path, bypassing `$OPDBUS_BLOCKCHAIN_PATH`.
+    /// chain path, bypassing `$OPDBUS_SNOWBALL_PATH`.
     pub async fn init_audit_durability_at(&self, base_path: &str) -> usize {
         if self.audit_sink.get().is_some() {
             return 0;
         }
 
-        let chain_store = match StreamingBlockchain::new(base_path).await {
+        let chain_store = match StreamingSnowball::new(base_path).await {
             Ok(chain) => Arc::new(chain),
             Err(error) => {
                 tracing::warn!(
@@ -500,7 +977,7 @@ impl MutationEngine {
             let block_num = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .and_then(op_blockchain::parse_block_number);
+                .and_then(op_snowball::parse_block_number);
             candidate_paths.push((block_num, path));
         }
 
@@ -745,9 +1222,22 @@ impl MutationEngine {
                 }
             }
 
-            if let Some(mut bytes) = op_core::projection_shm::read_projection_bytes(&plugin_id) {
+            let existing_projection = if plugin_id == "identity_sled" {
+                op_core::projection_shm::read_credential_projection_bytes(&plugin_id)
+                    .or_else(|| op_core::projection_shm::read_projection_bytes(&plugin_id))
+            } else {
+                op_core::projection_shm::read_projection_bytes(&plugin_id)
+            };
+            if let Some(mut bytes) = existing_projection {
                 match simd_json::to_owned_value(&mut bytes) {
                     Ok(projected_state) => {
+                        // On the first upgraded boot this migrates any legacy
+                        // full identity state out of the public projection;
+                        // on later boots it also repairs stale public files.
+                        if plugin_id == "identity_sled" {
+                            let full_json = simd_json::to_vec(&projected_state)?;
+                            write_plugin_projection(&plugin_id, &full_json)?;
+                        }
                         self.update_state_cache(plugin_id.clone(), projected_state)
                             .await;
                     }
@@ -764,7 +1254,7 @@ impl MutationEngine {
 
             let seed_state = op_plugins::projection_seed_state_from_schema(&schema);
             let json = simd_json::to_string(&seed_state)?;
-            op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())?;
+            write_plugin_projection(&plugin_id, json.as_bytes())?;
             self.emit_updated_signal(&plugin_id, None, Self::state_keys_owned(&seed_state))
                 .await;
             self.update_state_cache(plugin_id.clone(), seed_state).await;
@@ -985,6 +1475,15 @@ impl MutationEngine {
             tags = self.compute_tags(&plugin_id, &object_path);
         }
 
+        // Credential-bearing identity state is authoritative internally, but
+        // every generic audit, subscription, snapshot, and projection surface
+        // receives the public shape. This also keeps reusable SID1 bytes out
+        // of the Snowball event payload.
+        let public_old_value = old_value
+            .as_ref()
+            .map(|value| public_plugin_value(&plugin_id, value));
+        let public_new_value = public_plugin_value(&plugin_id, &new_value);
+
         let event = {
             let mut chain = self.event_chain.write().await;
             let op = match change_type {
@@ -1003,7 +1502,7 @@ impl MutationEngine {
                     object_path.clone(),
                     tags.clone(),
                     Decision::Allow,
-                    &new_value,
+                    &public_new_value,
                 )
                 .with_capability(capability);
                 chain.append(event).clone()
@@ -1016,7 +1515,7 @@ impl MutationEngine {
                     object_path.clone(),
                     tags.clone(),
                     Decision::Allow,
-                    &new_value,
+                    &public_new_value,
                 );
                 event.clone()
             }
@@ -1025,6 +1524,7 @@ impl MutationEngine {
         // Durability: mirror the event into the timing_subvol so it survives a
         // restart. Inline with the change, never deferred.
         self.persist_audit_event(&event).await;
+        let _ = self.chain_tx.send(event.clone());
 
         self.update_cached_plugin_state(
             &plugin_id,
@@ -1045,9 +1545,7 @@ impl MutationEngine {
         if change_type != ChangeType::ObjectRemoved {
             match simd_json::to_string(&new_value) {
                 Ok(json) => {
-                    if let Err(e) =
-                        op_core::projection_shm::write_projection(&plugin_id, json.as_bytes())
-                    {
+                    if let Err(e) = write_plugin_projection(&plugin_id, json.as_bytes()) {
                         tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to write shm projection");
                     } else {
                         let keys = if member_name.is_some() {
@@ -1076,8 +1574,8 @@ impl MutationEngine {
             object_path,
             change_type,
             member_name,
-            old_value,
-            new_value,
+            old_value: public_old_value,
+            new_value: public_new_value,
             tags_touched: tags,
             event_hash: event.event_hash.clone(),
             timestamp: event.timestamp,
@@ -1316,6 +1814,24 @@ impl MutationEngine {
                 let result = dispatch_xray_method(method, &args_json).await?;
                 caller_result = Some(simd_json::serde::to_owned_value(&result)?);
             }
+        } else if plugin_id == "emqx" && change_type == ChangeType::MethodCall {
+            // EMQX owns a typed standalone dispatcher. Keep the original
+            // caller arguments as the canonical event payload and return the
+            // domain result separately; lifecycle selection is intentionally
+            // fixed inside the plugin and cannot be supplied by the caller.
+            if let Some(method) = &member_name {
+                let mut args_json = serde_json::to_value(&value)?;
+                if let serde_json::Value::Array(items) = &args_json {
+                    args_json = items
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+                }
+                let result =
+                    op_plugins::state_plugins::emqx::dispatch_emqx_method(method, &args_json)
+                        .await?;
+                caller_result = Some(simd_json::serde::to_owned_value(&result)?);
+            }
         } else if plugin_id == "netmaker" && change_type == ChangeType::MethodCall {
             anyhow::bail!("plugin 'netmaker' is retired and cannot be invoked");
         } else {
@@ -1332,10 +1848,13 @@ impl MutationEngine {
             }
         }
 
+        let raw_result = caller_result.unwrap_or_else(|| authoritative_value.clone());
+        let public_result = public_plugin_value(&plugin_id, &raw_result);
+
         // 2. Record and broadcast change
         let change = self
             .process_authoritative_change(
-                plugin_id,
+                plugin_id.clone(),
                 object_path,
                 change_type,
                 member_name,
@@ -1366,7 +1885,7 @@ impl MutationEngine {
             success: true,
             event_id: change.event_id,
             event_hash: change.event_hash,
-            result: caller_result.or(Some(authoritative_value)),
+            result: Some(public_result),
             error: None,
         })
     }
@@ -1406,7 +1925,7 @@ impl MutationEngine {
     /// 1. Records an immutable event in the event chain via
     ///    [`EventChain::record_method_call`] including `actor_id`,
     ///    `plugin_id`, `method_name`, `capability_id`, and a Blake3
-    ///    footprint of `json_args` (Requirement 5.5 / VAL-DISPATCH-005).
+    ///    bounded canonical `json_args` payload (Requirement 5.5 / VAL-DISPATCH-005).
     /// 2. The append occurs **before** the call returns success
     ///    (NFR-003 / VAL-NFR-003).
     /// 3. Broadcasts the change to subscribers.
@@ -1422,6 +1941,32 @@ impl MutationEngine {
         json_args: &str,
         capability_id: Option<&str>,
         actor_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.dispatch_method_call_with_identity(
+            plugin_id,
+            method,
+            json_args,
+            capability_id,
+            actor_id,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Dispatch with the verified session metadata attached to the canonical
+    /// event payload. Session values are correlation fields only; `actor_id`
+    /// is the exact stable principal used for authorization and audit identity.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn dispatch_method_call_with_identity(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        json_args: &str,
+        capability_id: Option<&str>,
+        actor_id: &str,
+        session_id: Option<&str>,
+        session_genesis: Option<&str>,
     ) -> anyhow::Result<serde_json::Value> {
         // Test-only: ForceDispatchError triggers an error for VAL-DISPATCH-003 testing.
         // This allows tests to verify error propagation without using malformed JSON
@@ -1439,18 +1984,23 @@ impl MutationEngine {
             simd_json::to_owned_value(&mut bytes)
                 .map_err(|e| anyhow::anyhow!("invalid json_args for method '{}': {}", method, e))?
         };
+        if plugin_id == "identity_sled" && contains_identity_credential_field(&parsed_value) {
+            anyhow::bail!("sealed_id is MutationEngine-authored and cannot be supplied");
+        }
 
         // Record the immutable event with the full accountability surface.
         // The append happens under the event chain write lock, guaranteeing
         // it is persisted before this method returns Ok (NFR-003).
         let event_summary = {
             let mut chain = self.event_chain.write().await;
-            let event = chain.record_method_call(
+            let event = chain.record_method_call_with_identity(
                 actor_id.to_string(),
+                session_id.map(str::to_string),
+                session_genesis.map(str::to_string),
                 plugin_id.to_string(),
                 method.to_string(),
                 capability_id.map(|s| s.to_string()),
-                json_args, // verbatim string for Blake3 footprint
+                json_args,
             );
             (
                 event.event_id,
@@ -1464,6 +2014,7 @@ impl MutationEngine {
         // the audit trail survives a restart (FR-6). A failure here is logged
         // and does not fail the dispatch (NFR-4).
         self.persist_audit_event(&event_summary.3).await;
+        let _ = self.chain_tx.send(event_summary.3.clone());
 
         // Broadcast the method-call change to gRPC subscribers.
         let change = StateChange {
@@ -1484,7 +2035,7 @@ impl MutationEngine {
         let _ = self.change_tx.send(change.clone());
 
         // Dispatch to appropriate backend based on plugin_id
-        let method_result: serde_json::Value = match plugin_id {
+        let mut method_result: serde_json::Value = match plugin_id {
             "rovs_commands" => {
                 dispatch_rovs_commands_method(&self.ovsdb, method, &parsed_value).await?
             }
@@ -1494,6 +2045,17 @@ impl MutationEngine {
             "xray" => {
                 let args = serde_json::to_value(&parsed_value)?;
                 dispatch_xray_method(method, &args).await?
+            }
+            "emqx" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::emqx::dispatch_emqx_method(method, &args).await?
+            }
+            "workflows" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                op_plugins::state_plugins::workflows_plugin::dispatch_workflows_method(
+                    method, &args,
+                )
+                .await?
             }
             "identity_sled" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -1602,21 +2164,51 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 self.dispatch_cognitive_mcp_method(method, &args).await?
             }
+            "notebooklm" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                let upstream = match method {
+                    "query_notebook" => "ask_question",
+                    "reauth" | "refresh_auth" => "re_auth",
+                    other => other,
+                };
+                let result = self.notebooklm_mcp.call_tool(upstream, args).await?;
+                if matches!(
+                    method,
+                    "get_health" | "setup_auth" | "reauth" | "refresh_auth"
+                ) {
+                    if let Some(authenticated) = notebooklm_authentication_result(&result) {
+                        if let Err(error) =
+                            set_provider_ready_marker(NOTEBOOKLM_AUTH_READY, authenticated)
+                        {
+                            tracing::warn!(%error, "could not update NotebookLM authentication readiness");
+                        }
+                    }
+                }
+                result
+            }
+            "mongodb_mcp" => {
+                let args = serde_json::to_value(&parsed_value)?;
+                let upstream = method.replace('_', "-");
+                self.mongodb_mcp.call_tool(&upstream, args).await?
+            }
             // Audit-trail query surface. Deliberately scoped: only the two
             // audit methods are wired. The plugin's seven pre-existing methods
             // (snapshots, retention, rollback) fall through to the echo below,
             // exactly as before, until the schema-methods sweep wires them.
-            "blockchain" => match method {
+            "snowball" => match method {
                 "query_events" => {
-                    dispatch_blockchain_query_events(&self.event_chain, &parsed_value).await?
+                    dispatch_snowball_query_events(&self.event_chain, &parsed_value).await?
                 }
                 "verify_chain" => {
-                    dispatch_blockchain_verify_chain(&self.event_chain, &parsed_value).await?
+                    dispatch_snowball_verify_chain(&self.event_chain, &parsed_value).await?
                 }
                 _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
             },
             _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
         };
+        if plugin_id == "identity_sled" {
+            redact_identity_credentials_json(&mut method_result);
+        }
 
         // Return a JSON result carrying the event accountability proof and the
         // method's domain result. This is the value the bridge serializes and
@@ -1644,7 +2236,12 @@ impl MutationEngine {
             }
         }
 
-        let mut bytes = op_core::projection_shm::read_projection_bytes(plugin_id)?;
+        let mut bytes = if plugin_id == "identity_sled" {
+            op_core::projection_shm::read_credential_projection_bytes(plugin_id)
+                .or_else(|| op_core::projection_shm::read_projection_bytes(plugin_id))?
+        } else {
+            op_core::projection_shm::read_projection_bytes(plugin_id)?
+        };
         let value = simd_json::to_owned_value(&mut bytes).ok()?;
         let json = serde_json::to_value(&value).ok()?;
         let state = serde_json::from_value(json).ok()?;
@@ -1767,6 +2364,15 @@ impl MutationEngine {
         cache.get(plugin_id).cloned()
     }
 
+    /// Fetch state for a generic outward-facing surface. Identity possession
+    /// material is recursively removed; internal dispatchers must use
+    /// [`Self::get_state`] when they need the authoritative sled.
+    pub async fn get_public_state(&self, plugin_id: &str) -> Option<simd_json::OwnedValue> {
+        self.get_state(plugin_id)
+            .await
+            .map(|state| public_plugin_value(plugin_id, &state))
+    }
+
     /// Update the authoritative state cache
     pub async fn update_state_cache(&self, plugin_id: String, state: simd_json::OwnedValue) {
         let mut cache = self.state_cache.write().await;
@@ -1783,27 +2389,36 @@ impl MutationEngine {
         let Some(state) = self.get_state(plugin_id).await else {
             return Ok(());
         };
-        let new_value = serde_json::to_value(&state)?;
-        let crawl = match tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            self.crawl_plugin_dbus_tree(plugin_id),
-        )
-        .await
-        {
-            Ok(value) => value,
-            Err(_) => {
-                tracing::warn!(
-                    plugin_id,
-                    "plugin D-Bus crawl timed out; projecting cached state"
-                );
-                None
+        let public_state = public_plugin_value(plugin_id, &state);
+        let new_value = serde_json::to_value(&public_state)?;
+        let crawl = if plugin_id == "identity_sled" {
+            // The identity D-Bus tree is itself backed by the public
+            // projection. Skipping a pre-write crawl avoids carrying a stale
+            // legacy credential into the subscription envelope during the
+            // first migration publish.
+            None
+        } else {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                self.crawl_plugin_dbus_tree(plugin_id),
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    tracing::warn!(
+                        plugin_id,
+                        "plugin D-Bus crawl timed out; projecting cached state"
+                    );
+                    None
+                }
             }
         };
         // The shm state file holds present state verbatim; the composite is
         // only carried on the broadcast `StateChange` for event-stream consumers.
-        let state_owned = simd_json::serde::to_owned_value(&new_value)?;
-        let json = simd_json::to_string(&state_owned)?;
-        op_core::projection_shm::write_projection(plugin_id, json.as_bytes())?;
+        let state_owned = public_state;
+        let json = simd_json::to_string(&state)?;
+        write_plugin_projection(plugin_id, json.as_bytes())?;
         self.emit_updated_signal(plugin_id, None, Self::state_keys_serde(&new_value))
             .await;
         let projection = if let Some(crawl) = crawl {
@@ -1900,6 +2515,57 @@ impl MutationEngine {
     }
 }
 
+fn notebooklm_authentication_result(result: &serde_json::Value) -> Option<bool> {
+    if let Some(value) = find_boolean_field(result, "authenticated") {
+        return Some(value);
+    }
+    for item in result
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(text) = item.get("text").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+            if let Some(authenticated) = find_boolean_field(&value, "authenticated") {
+                return Some(authenticated);
+            }
+        }
+    }
+    None
+}
+
+fn find_boolean_field(value: &serde_json::Value, field: &str) -> Option<bool> {
+    match value {
+        serde_json::Value::Object(object) => object
+            .get(field)
+            .and_then(serde_json::Value::as_bool)
+            .or_else(|| {
+                object
+                    .values()
+                    .find_map(|nested| find_boolean_field(nested, field))
+            }),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .find_map(|nested| find_boolean_field(nested, field)),
+        _ => None,
+    }
+}
+
+fn set_provider_ready_marker(path: &str, ready: bool) -> std::io::Result<()> {
+    if ready {
+        std::fs::write(path, b"ready\n")
+    } else {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 /// Result of an authoritative mutation
 #[derive(Debug, Clone)]
 pub struct MutationResult {
@@ -1990,11 +2656,10 @@ fn existing_unix_socket_sockets() -> Vec<simd_json::OwnedValue> {
 
 /// Convert a chain event into a durable footprint for the `timing_subvol`.
 ///
-/// The full event is embedded under `metadata.audit_event` so the startup
-/// rebuild can restore it losslessly, including the stored `event_hash` and
-/// `prev_hash` that make the chain tamper-evident. The flat metadata keys
-/// beside it exist for operators and tools grepping the timing directory
-/// directly.
+/// The full event is the footprint payload so startup rebuild can restore it
+/// losslessly, including the stored `event_hash` and `prev_hash` that make the
+/// chain tamper-evident. Flat metadata keys beside it exist for operators and
+/// tools grepping the timing directory directly.
 ///
 /// OSCAL subid: `evt.service.event-chain.persist@v1`
 fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
@@ -2003,6 +2668,18 @@ fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
         "actor_id".to_string(),
         simd_json::OwnedValue::from(event.actor_id.as_str()),
     );
+    if let Some(session_id) = event.session_id.as_deref() {
+        metadata.insert(
+            "session_id".to_string(),
+            simd_json::OwnedValue::from(session_id),
+        );
+    }
+    if let Some(session_genesis) = event.session_genesis.as_deref() {
+        metadata.insert(
+            "session_genesis".to_string(),
+            simd_json::OwnedValue::from(session_genesis),
+        );
+    }
     metadata.insert(
         "capability_id".to_string(),
         simd_json::OwnedValue::from(event.capability_id.clone().unwrap_or_default()),
@@ -2023,21 +2700,12 @@ fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
         "decision".to_string(),
         simd_json::OwnedValue::from(format!("{:?}", event.decision)),
     );
-    // Lossless copy for replay. Serialized through serde_json (ChainEvent's
-    // derive target) and re-parsed into simd_json for the footprint map.
-    match serde_json::to_vec(event) {
-        Ok(mut bytes) => match simd_json::to_owned_value(&mut bytes) {
-            Ok(value) => {
-                metadata.insert("audit_event".to_string(), value);
-            }
-            Err(error) => {
-                tracing::warn!(%error, event_id = event.event_id, "audit event not replayable");
-            }
-        },
-        Err(error) => {
-            tracing::warn!(%error, event_id = event.event_id, "audit event not serializable");
-        }
-    }
+    // Lossless payload for replay, hashing, and vectorization. The footprint
+    // transports this value; it does not replace it with another digest.
+    let payload = simd_json::serde::to_owned_value(event).unwrap_or_else(|error| {
+        tracing::warn!(%error, event_id = event.event_id, "audit event not serializable");
+        simd_json::json!({ "event_id": event.event_id, "serialization_error": true })
+    });
 
     PluginFootprint {
         plugin_id: event.plugin_id.clone(),
@@ -2046,9 +2714,7 @@ fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
             .clone()
             .unwrap_or_else(|| format!("{:?}", event.op)),
         timestamp: event.timestamp.timestamp_millis() as u64,
-        data_hash: event.input_patch_hash.clone(),
-        // The event hash is the timing file name, so one file per event.
-        content_hash: event.event_hash.clone(),
+        payload,
         metadata,
         vector_features: vec![],
     }
@@ -2074,13 +2740,13 @@ fn chain_event_to_record(event: &ChainEvent) -> AuditEventRecord {
     }
 }
 
-/// `blockchain.query_events` — paginated, filtered read of the audit trail.
+/// `snowball.query_events` — paginated, filtered read of the audit trail.
 ///
 /// Reads the same `EventChain` the gRPC `EventChainService.GetEvents` serves, so
 /// the D-Bus/MCP path and the GUI path can never disagree.
 ///
-/// OSCAL subid: `obs.service.blockchain.events.query@v1`
-async fn dispatch_blockchain_query_events(
+/// OSCAL subid: `obs.service.snowball.events.query@v1`
+async fn dispatch_snowball_query_events(
     event_chain: &Arc<RwLock<EventChain>>,
     args: &simd_json::OwnedValue,
 ) -> anyhow::Result<serde_json::Value> {
@@ -2126,10 +2792,10 @@ async fn dispatch_blockchain_query_events(
     })?)
 }
 
-/// `blockchain.verify_chain` — hash-chain integrity check over a range.
+/// `snowball.verify_chain` — hash-chain integrity check over a range.
 ///
-/// OSCAL subid: `obs.service.blockchain.chain.verify@v1`
-async fn dispatch_blockchain_verify_chain(
+/// OSCAL subid: `obs.service.snowball.chain.verify@v1`
+async fn dispatch_snowball_verify_chain(
     event_chain: &Arc<RwLock<EventChain>>,
     args: &simd_json::OwnedValue,
 ) -> anyhow::Result<serde_json::Value> {
@@ -2379,6 +3045,28 @@ impl MutationEngine {
             return Ok(serde_json::json!({ "tools": descriptors }));
         }
 
+        // `toolsets` is admitted and audited here exactly once. The bridge
+        // computes the principal/grant-specific projection after this common
+        // MutationEngine boundary; the policy result is never authority.
+        if method == "toolsets" {
+            return Ok(serde_json::json!({ "admitted": true }));
+        }
+
+        if method == "workflow_query" {
+            return op_plugins::state_plugins::workflows_plugin::dispatch_workflows_method(
+                "query_workflows",
+                args,
+            )
+            .await;
+        }
+        if method == "workflow_run" {
+            return op_plugins::state_plugins::workflows_plugin::dispatch_workflows_method(
+                "start_workflow",
+                args,
+            )
+            .await;
+        }
+
         let (tool_name, tool_args) = map_schema_method_to_tool(method, args)?;
         let runtime = self.cognitive_mcp().await?;
         let input = simd_json::serde::to_owned_value(&tool_args)?;
@@ -2454,6 +3142,7 @@ fn map_schema_method_to_tool(
     match method {
         // Memory methods all resolve to the one `cognitive_memory` tool.
         "memory_store" => Ok(("cognitive_memory".into(), with_field("operation", "store"))),
+        "memory_recall" => Ok(("cognitive_memory".into(), with_field("operation", "query"))),
         "memory_query" => Ok(("cognitive_memory".into(), with_field("operation", "query"))),
         "memory_retrieve" => Ok((
             "cognitive_memory".into(),
@@ -2580,6 +3269,71 @@ mod cognitive_dispatch_tests {
                 .expect_err("retired standalone management must not reach a handler");
             assert!(error.to_string().contains("has no tool-registry mapping"));
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_redaction_tests {
+    use super::{public_plugin_value, write_identity_projection_at};
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn identity_projection_splits_exact_private_and_redacted_public_state() {
+        let root = tempfile::tempdir().unwrap();
+        let state_dir = root.path().join("state");
+        let raw = br#"{"sleds":[{"session_id":"one","sealed_id":"sid1:secret","nested":{"sealed_id":"sid1:nested"}}],"events":[]}"#;
+        write_identity_projection_at(
+            state_dir.to_str().unwrap(),
+            raw,
+            nix::unistd::Gid::current(),
+        )
+        .unwrap();
+
+        let public_path = state_dir.join("identity_sled.json");
+        let private_path = state_dir.join(".credentials/identity_sled.json");
+        let public: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&public_path).unwrap()).unwrap();
+        let private: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&private_path).unwrap()).unwrap();
+        let expected_private: serde_json::Value = serde_json::from_slice(raw).unwrap();
+
+        assert_eq!(private, expected_private);
+        assert!(public.pointer("/sleds/0/sealed_id").is_none());
+        assert!(public.pointer("/sleds/0/nested/sealed_id").is_none());
+        assert!(!serde_json::to_string(&public).unwrap().contains("sid1:"));
+        assert_eq!(
+            std::fs::metadata(&public_path).unwrap().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(
+            std::fs::metadata(&private_path).unwrap().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(
+            std::fs::metadata(state_dir.join(".credentials"))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o750
+        );
+    }
+
+    #[test]
+    fn public_identity_value_is_recursive_and_other_plugins_are_unchanged() {
+        let state = simd_json::json!({
+            "sleds": [{
+                "session_id": "one",
+                "sealed_id": "sid1:secret",
+                "nested": { "sealed_id": "sid1:nested", "keep": true }
+            }]
+        });
+        let public = public_plugin_value("identity_sled", &state);
+        let encoded = simd_json::to_string(&public).unwrap();
+        assert!(!encoded.contains("sealed_id"));
+        assert!(!encoded.contains("sid1:"));
+        assert!(encoded.contains("session_id"));
+        assert!(encoded.contains("keep"));
+        assert_eq!(public_plugin_value("another_plugin", &state), state);
     }
 }
 

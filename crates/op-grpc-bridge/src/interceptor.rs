@@ -25,8 +25,11 @@ pub const ASSERTION_METADATA_KEY: &str = "x-oracle-identity-assertion-bin";
 /// accepted request for bridge-layer authorization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GhostbridgeIdentity {
-    pub footprint: String,
+    /// Stable registered identity used for authorization and audit metadata.
+    pub principal_id: String,
     pub session_id: String,
+    /// Session arrival proof. Never used as an authorization key.
+    pub session_genesis: String,
 }
 
 /// Process-wide handle to the engine, set once from `build_operation_routes`
@@ -66,7 +69,7 @@ impl tonic::service::Interceptor for GhostbridgeInterceptorWithValidator {
 }
 
 /// Build the per-serving-instance PluginService/generated-route interceptor.
-/// Oracle assertion metadata is mandatory on this gate; legacy footprint
+/// Oracle assertion metadata is mandatory on this gate; legacy session-genesis
 /// authentication remains available only through [`GhostbridgeInterceptor`]
 /// on explicitly legacy domain services.
 pub fn make_ghostbridge_interceptor(
@@ -109,13 +112,14 @@ pub fn make_registration_interceptor(
     RegistrationInterceptorWithValidator::new(validator)
 }
 
-/// Resolve the footprint/session pair for capability gating. Human principal
+/// Resolve the principal/session identity for capability gating. Human principal
 /// identity shadows Ghostbridge when both are present.
 pub fn bridge_capability_identity(extensions: &tonic::Extensions) -> Option<GhostbridgeIdentity> {
     if let Some(human) = extensions.get::<HumanPrincipalIdentity>() {
         return Some(GhostbridgeIdentity {
-            footprint: hex::encode(human.footprint),
-            session_id: human.principal_id.clone(),
+            principal_id: human.principal_id.clone(),
+            session_id: human.session_id.clone(),
+            session_genesis: human.session_genesis.clone(),
         });
     }
     extensions.get::<GhostbridgeIdentity>().cloned()
@@ -184,19 +188,20 @@ fn ghostbridge_interceptor_with_validator(
         )
     })
     .ok_or_else(|| Status::unauthenticated("Assertion identity has no anchored session genesis"))?;
+    pending.identity_mut().session_id = session.session_id;
     pending.identity_mut().session_genesis = session.genesis_hex;
     let identity = validator.consume_pending(pending).map_err(Status::from)?;
     req.extensions_mut().insert(identity);
     Ok(req)
 }
 
-/// Legacy/test entry: footprint-only path (assertion metadata absent).
+/// Legacy/test entry: anchored-session path (assertion metadata absent).
 #[allow(clippy::result_large_err)]
 pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
-    ghostbridge_footprint_interceptor(req)
+    ghostbridge_genesis_interceptor(req)
 }
 
-/// Look up the specific caller's identity sled and check its footprint +
+/// Look up the specific caller's identity sled and check its session genesis +
 /// term (`expires_at`) - the per-identity path. Resolves either by a
 /// WireGuard pubkey (host/xray-mesh callers, session_id derived from the
 /// pubkey) or, when there's no pubkey, directly by the trace_id the caller
@@ -204,11 +209,35 @@ pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> 
 /// WireGuard identity of its own - e.g. Lovable). Returns `None` when
 /// there's no engine registered yet, no identifying header, or no matching
 /// record, so the caller can fall back to the shared host legacy sled.
+fn resolve_active_principal_id(human_pubkey: &str) -> Result<String, Status> {
+    if human_pubkey.is_empty() {
+        return Err(Status::unauthenticated(
+            "Session has no registered human public key",
+        ));
+    }
+    let record = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            crate::human_principal_dispatch::resolve_key_for_assertion(human_pubkey),
+        )
+    })
+    .map_err(|_| Status::internal("Human principal registry unavailable"))?
+    .ok_or_else(|| Status::unauthenticated("Session is not bound to a registered principal"))?;
+    if record.revoked_at != 0 {
+        return Err(Status::permission_denied("Registered principal is revoked"));
+    }
+    if record.principal_id.is_empty() {
+        return Err(Status::unauthenticated(
+            "Registered principal has no stable principal_id",
+        ));
+    }
+    Ok(record.principal_id)
+}
+
 fn verify_per_identity(
     pubkey: Option<&str>,
     trace_id: Option<&str>,
-    request_footprint: &str,
-) -> Option<Result<String, Status>> {
+    request_genesis: &str,
+) -> Option<Result<GhostbridgeIdentity, Status>> {
     let engine = ENGINE.read().expect("engine lock poisoned").clone()?;
     let session_id = pubkey.map(op_identity::session::derive_session_id);
     let args = match (&session_id, trace_id) {
@@ -231,13 +260,10 @@ fn verify_per_identity(
         Ok(value) => value.get("identity").cloned()?,
         Err(_) => return None,
     };
-    // `genesis` is the authoritative verdict (Task 7); `hashed_footprint` is
-    // retained only as a transitional fallback for pre-migration records that
-    // have not yet been re-keyed. Either match is accepted, and a missing
-    // stored value fails closed via the `?` above.
+    // Session genesis is the authoritative arrival proof. Legacy hashed
+    // identity values are deliberately not accepted as authorization input.
     let stored = identity
         .get("genesis")
-        .or_else(|| identity.get("hashed_footprint"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let stored = match stored {
@@ -254,7 +280,7 @@ fn verify_per_identity(
         }
     }
 
-    if stored != request_footprint {
+    if stored != request_genesis {
         return None;
     }
 
@@ -263,17 +289,26 @@ fn verify_per_identity(
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .or(session_id)?;
-    Some(Ok(resolved_session_id))
+    let human_pubkey = identity
+        .get("wireguard_pubkey")
+        .and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+        .or(pubkey)?;
+    let principal_id = match resolve_active_principal_id(human_pubkey) {
+        Ok(value) => value,
+        Err(error) => return Some(Err(error)),
+    };
+    Some(Ok(GhostbridgeIdentity {
+        principal_id,
+        session_id: resolved_session_id,
+        session_genesis: request_genesis.to_string(),
+    }))
 }
 
-/// THE GATEKEEPER: legacy Ghostbridge footprint path (byte-for-byte when assertion absent).
+/// THE GATEKEEPER: legacy Ghostbridge session-genesis path.
 #[allow(clippy::result_large_err)]
-fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
-    let genesis_value = req
-        .metadata()
-        .get("x-ghostbridge-genesis")
-        .or_else(|| req.metadata().get("x-ghostbridge-footprint"))
-        .cloned();
+fn ghostbridge_genesis_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
+    let genesis_value = req.metadata().get("x-ghostbridge-genesis").cloned();
     let trace_value = req
         .metadata()
         .get("x-ghostbridge-trace-id")
@@ -306,17 +341,13 @@ fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>
         .map_err(|_| Status::invalid_argument("Invalid trace header encoding"))?;
     if pubkey_str.is_some() || trace_str.is_some() {
         if let Some(outcome) = verify_per_identity(pubkey_str, trace_str, request_genesis) {
-            let session_id = outcome?;
-            req.extensions_mut().insert(GhostbridgeIdentity {
-                footprint: request_genesis.to_string(),
-                session_id,
-            });
+            req.extensions_mut().insert(outcome?);
             return Ok(req);
         }
     }
 
-    // Fallback: no identifying header beyond the self-asserted footprint. The
-    // footprint IS the session genesis now, so resolve the session record by it
+    // Fallback: no identifying header beyond the asserted session genesis, so
+    // resolve the session record by it
     // and fail closed when no record matches — an unknown genesis is no
     // identity, not a licence to admit.
     let engine = ENGINE.read().expect("engine lock poisoned").clone();
@@ -334,9 +365,11 @@ fn ghostbridge_footprint_interceptor(mut req: Request<()>) -> Result<Request<()>
     });
     match record {
         Some(sled) => {
+            let principal_id = resolve_active_principal_id(&sled.wireguard_pubkey)?;
             req.extensions_mut().insert(GhostbridgeIdentity {
-                footprint: request_genesis.to_string(),
+                principal_id,
                 session_id: sled.session_id,
+                session_genesis: request_genesis.to_string(),
             });
             Ok(req)
         }
@@ -378,7 +411,8 @@ pub(crate) mod tests {
     use crate::oracle_assertion::tests::{
         signed_with_fields, source_at, test_ip, test_issuer, trust_store_for_issuer,
     };
-    use crate::oracle_assertion::{derive_human_footprint, AssertionValidator};
+    use crate::oracle_assertion::AssertionValidator;
+    use op_identity::session::derive_principal_id;
     use tonic::metadata::MetadataValue;
     use tonic::Code;
 
@@ -409,10 +443,10 @@ pub(crate) mod tests {
             .insert_bin(ASSERTION_METADATA_KEY, MetadataValue::from_bytes(wire));
     }
 
-    fn insert_ghostbridge_headers(req: &mut Request<()>, footprint: &str, trace: &str) {
+    fn insert_ghostbridge_headers(req: &mut Request<()>, genesis: &str, trace: &str) {
         req.metadata_mut().insert(
-            "x-ghostbridge-footprint",
-            MetadataValue::try_from(footprint).expect("footprint header"),
+            "x-ghostbridge-genesis",
+            MetadataValue::try_from(genesis).expect("genesis header"),
         );
         req.metadata_mut().insert(
             "x-ghostbridge-trace-id",
@@ -443,7 +477,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_rejects_missing_footprint_header() {
+    fn test_rejects_missing_genesis_header() {
         let req = Request::new(());
         let result = ghostbridge_interceptor(req);
         assert!(result.is_err());
@@ -483,7 +517,7 @@ pub(crate) mod tests {
     fn test_rejects_missing_trace_header() {
         let mut req = Request::new(());
         req.metadata_mut().insert(
-            "x-ghostbridge-footprint",
+            "x-ghostbridge-genesis",
             MetadataValue::from_static("deadbeef"),
         );
         let result = ghostbridge_interceptor(req);
@@ -492,7 +526,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_rejects_missing_footprint_with_trace_only() {
+    fn test_rejects_missing_genesis_with_trace_only() {
         let mut req = Request::new(());
         req.metadata_mut().insert(
             "x-ghostbridge-trace-id",
@@ -504,19 +538,19 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_footprint_mismatch_detection() {
-        let sled_footprint: [u8; 32] = [0xAA; 32];
-        let expected = hex::encode(sled_footprint);
-        let request_footprint = "0000000000000000000000000000000000000000000000000000000000000000";
-        assert_ne!(request_footprint, expected);
+    fn test_genesis_mismatch_detection() {
+        let sled_genesis: [u8; 32] = [0xAA; 32];
+        let expected = hex::encode(sled_genesis);
+        let request_genesis = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert_ne!(request_genesis, expected);
     }
 
     #[test]
-    fn test_footprint_match_succeeds() {
-        let sled_footprint: [u8; 32] = [0xBB; 32];
-        let expected = hex::encode(sled_footprint);
-        let request_footprint = hex::encode([0xBB; 32]);
-        assert_eq!(request_footprint, expected);
+    fn test_genesis_match_succeeds() {
+        let sled_genesis: [u8; 32] = [0xBB; 32];
+        let expected = hex::encode(sled_genesis);
+        let request_genesis = hex::encode([0xBB; 32]);
+        assert_eq!(request_genesis, expected);
     }
 
     #[test]
@@ -527,7 +561,7 @@ pub(crate) mod tests {
         }
         let mut req = Request::new(());
         req.metadata_mut().insert(
-            "x-ghostbridge-footprint",
+            "x-ghostbridge-genesis",
             MetadataValue::from_static("aabbccdd"),
         );
         req.metadata_mut().insert(
@@ -562,7 +596,9 @@ pub(crate) mod tests {
             .get::<HumanPrincipalIdentity>()
             .expect("human identity inserted");
         assert_eq!(identity.human_pubkey, pubkey);
-        assert_eq!(identity.footprint, derive_human_footprint(&pubkey));
+        assert_eq!(identity.principal_id, derive_principal_id(&pubkey));
+        assert!(!identity.session_id.is_empty());
+        assert!(!identity.session_genesis.is_empty());
     }
 
     /// VAL-BRIDGE-022
@@ -576,7 +612,7 @@ pub(crate) mod tests {
     }
 
     /// VAL-BRIDGE-023
-    pub async fn assertion_present_footprint_headers_not_consulted_impl() {
+    pub async fn assertion_present_legacy_headers_not_consulted_impl() {
         let _cozo = temp_cozo();
         let issuer = test_issuer();
         let pubkey = pk(42);
@@ -639,11 +675,11 @@ pub(crate) mod tests {
     }
 
     /// VAL-BRIDGE-027
-    pub async fn human_footprint_grant_allows_capability_gate_impl() {
+    pub async fn human_principal_grant_allows_capability_gate_impl() {
         let _cozo = temp_cozo();
         let pubkey = pk(44);
         register(&pubkey, "grant").await.expect("register");
-        let footprint_hex = hex::encode(derive_human_footprint(&pubkey));
+        let principal_id = derive_principal_id(&pubkey);
         let schema = serde_json::json!({
             "methods": {
                 "resolve_key": { "required_capability": "human_principal.read" }
@@ -653,14 +689,14 @@ pub(crate) mod tests {
             }
         });
         let _grants = install_grants(serde_json::json!({
-            footprint_hex.clone(): { "capabilities": ["human_principal.read"] }
+            principal_id.clone(): { "capabilities": ["human_principal.read"] }
         }));
         let identity = bridge_capability_identity(&{
             let mut ex = tonic::Extensions::new();
             ex.insert(HumanPrincipalIdentity {
-                principal_id: "did:op:human:test".to_string(),
+                principal_id,
                 human_pubkey: pubkey.clone(),
-                footprint: derive_human_footprint(&pubkey),
+                session_id: "human-session".to_string(),
                 session_genesis: "11".repeat(32),
                 expires_at: 1_700_000_300,
             });
@@ -679,24 +715,25 @@ pub(crate) mod tests {
     }
 
     /// VAL-BRIDGE-028
-    pub async fn human_footprint_missing_grant_denies_capability_gate_impl() {
+    pub async fn human_principal_missing_grant_denies_capability_gate_impl() {
         let _cozo = temp_cozo();
         let pubkey = pk(45);
-        let footprint_hex = hex::encode(derive_human_footprint(&pubkey));
+        let principal_id = derive_principal_id(&pubkey);
         let schema = serde_json::json!({
             "methods": {
                 "resolve_key": { "required_capability": "human_principal.read" }
             },
             "capability_grants": {
-                footprint_hex.clone(): ["human_principal.read"]
+                principal_id.clone(): ["human_principal.read"]
             }
         });
         let _grants = install_grants(serde_json::json!({
             "*": { "capabilities": ["human_principal.read"] }
         }));
         let identity = GhostbridgeIdentity {
-            footprint: footprint_hex,
+            principal_id,
             session_id: "human".to_string(),
+            session_genesis: "33".repeat(32),
         };
         assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
             Some(&schema),
@@ -739,33 +776,34 @@ pub(crate) mod tests {
     /// VAL-BRIDGE-029
     pub async fn human_identity_shadows_ghostbridge_for_capability_gate_impl() {
         let _cozo = temp_cozo();
-        let human_fp = derive_human_footprint("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=");
-        let ghost_fp = "aa".repeat(32);
+        let human_principal = "did:op:human:shadow".to_string();
+        let ghost_principal = "did:op:service:ghost".to_string();
         let schema = serde_json::json!({
             "methods": {
                 "resolve_key": { "required_capability": "human_principal.read" }
             },
             "capability_grants": {
-                ghost_fp.clone(): ["human_principal.read"]
+                ghost_principal.clone(): ["human_principal.read"]
             }
         });
         let _grants = install_grants(serde_json::json!({
-            hex::encode(human_fp): { "capabilities": ["human_principal.read"] }
+            human_principal.clone(): { "capabilities": ["human_principal.read"] }
         }));
         let mut ex = tonic::Extensions::new();
         ex.insert(HumanPrincipalIdentity {
-            principal_id: "did:op:human:shadow".to_string(),
+            principal_id: human_principal.clone(),
             human_pubkey: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=".to_string(),
-            footprint: human_fp,
+            session_id: "human-session".to_string(),
             session_genesis: "22".repeat(32),
             expires_at: 1_700_000_300,
         });
         ex.insert(GhostbridgeIdentity {
-            footprint: ghost_fp,
+            principal_id: ghost_principal,
             session_id: "ghost".to_string(),
+            session_genesis: "aa".repeat(32),
         });
         let identity = bridge_capability_identity(&ex).expect("human wins");
-        assert_eq!(identity.footprint, hex::encode(human_fp));
+        assert_eq!(identity.principal_id, human_principal);
         assert!(crate::grpc_server::enforce_bridge_capability_with_schema(
             Some(&schema),
             "human_principal",
@@ -806,22 +844,22 @@ pub(crate) mod tests {
 
     /// VAL-BRIDGE-038
     pub async fn bridge_capability_identity_prefers_human_impl() {
-        let human_fp = [0x38; 32];
         let mut ex = tonic::Extensions::new();
         ex.insert(HumanPrincipalIdentity {
             principal_id: "did:op:human:pref".to_string(),
             human_pubkey: "pk".to_string(),
-            footprint: human_fp,
+            session_id: "human-session".to_string(),
             session_genesis: "38".repeat(32),
             expires_at: 1,
         });
         ex.insert(GhostbridgeIdentity {
-            footprint: "bb".repeat(32),
+            principal_id: "did:op:service:ghost".to_string(),
             session_id: "ghost".to_string(),
+            session_genesis: "bb".repeat(32),
         });
         let id = bridge_capability_identity(&ex).unwrap();
-        assert_eq!(id.footprint, hex::encode(human_fp));
-        assert_eq!(id.session_id, "did:op:human:pref");
+        assert_eq!(id.principal_id, "did:op:human:pref");
+        assert_eq!(id.session_id, "human-session");
     }
 
     /// VAL-BRIDGE-039
@@ -844,15 +882,12 @@ pub(crate) mod tests {
     }
 }
 
-/// Load the capabilities granted to one sled footprint.
+/// Load the capabilities granted to one registered principal.
 ///
-/// The JSON document is keyed by lowercase footprint hex and each value owns a
+/// The JSON document is keyed by exact `principal_id` and each value owns a
 /// `capabilities` array. Missing, malformed, or unreadable grant state fails
 /// closed.
-pub fn load_capability_grants(footprint_hex: &str) -> std::collections::HashSet<String> {
-    if footprint_hex.is_empty() || footprint_hex == "*" {
-        return std::collections::HashSet::new();
-    }
+pub fn load_capability_grants(principal_id: &str) -> std::collections::HashSet<String> {
     let path = std::env::var("OP_GRANTS_PATH")
         .unwrap_or_else(|_| "/dev/shm/opdbus/capability-grants.json".to_string());
     let Ok(bytes) = std::fs::read(path) else {
@@ -861,8 +896,32 @@ pub fn load_capability_grants(footprint_hex: &str) -> std::collections::HashSet<
     let Ok(document) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return std::collections::HashSet::new();
     };
+    capabilities_for_principal(&document, principal_id)
+}
+
+/// Parse one principal's grants from a fully principal-bound document.
+///
+/// A wildcard or legacy 64-hex footprint key invalidates the entire document.
+/// This prevents a partially migrated authority file from appearing safe merely
+/// because an individual lookup happened to use an exact principal ID.
+pub(crate) fn capabilities_for_principal(
+    document: &serde_json::Value,
+    principal_id: &str,
+) -> std::collections::HashSet<String> {
+    if principal_id.is_empty() || principal_id == "*" {
+        return std::collections::HashSet::new();
+    }
+    let Some(entries) = document.as_object() else {
+        return std::collections::HashSet::new();
+    };
+    if entries.keys().any(|key| {
+        key == "*"
+            || (key.len() == 64 && key.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit()))
+    }) {
+        return std::collections::HashSet::new();
+    }
     document
-        .get(footprint_hex)
+        .get(principal_id)
         .and_then(|entry| entry.get("capabilities"))
         .and_then(serde_json::Value::as_array)
         .into_iter()

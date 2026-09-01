@@ -1,0 +1,105 @@
+#!/bin/sh
+set -eu
+exec 2>&1
+
+READY_DIR=/run/opdbus/runit-ready
+READY_FILE="$READY_DIR/notebooklm-mcp"
+AUTH_READY_FILE="$READY_DIR/notebooklm-mcp-authenticated"
+PROVIDER_ROOT=/opt/op-mcp-providers/notebooklm-mcp
+PROVIDER_ENTRY="$PROVIDER_ROOT/node_modules/notebooklm-mcp/dist/index.js"
+AUTH_ROOT=/home/jeremy/.local/share/notebooklm-mcp
+
+install -d -m 0755 "$READY_DIR"
+rm -f -- "$READY_FILE" "$AUTH_READY_FILE"
+[ -f "$PROVIDER_ENTRY" ] || {
+    echo "notebooklm-mcp: pinned provider is missing: $PROVIDER_ENTRY" >&2
+    exit 1
+}
+id jeremy >/dev/null 2>&1 || {
+    echo "notebooklm-mcp: runtime user jeremy is missing" >&2
+    exit 1
+}
+
+# The provider's Playwright storage state and persistent Chrome profile contain
+# live Google session cookies.  Keep the directory boundary private and make
+# all subsequently created browser material owner-only.  Perform this work as
+# the runtime user: these paths live below a user-writable home, so root must
+# never follow a user-controlled symlink while applying chown/chmod.
+chpst -u jeremy:jeremy /bin/sh -eu -c '
+    auth_root=$1
+    umask 077
+    install -d -m 0700 \
+        "$auth_root" "$auth_root/browser_state" "$auth_root/chrome_profile" \
+        "$auth_root/chrome_profile_instances"
+    for auth_file in \
+        "$auth_root/browser_state/state.json" \
+        "$auth_root/browser_state/session.json"
+    do
+        [ ! -f "$auth_file" ] || chmod 0600 "$auth_file"
+    done
+' notebooklm-auth-permissions "$AUTH_ROOT"
+umask 077
+
+provider_pid=0
+cleanup() {
+    trap - HUP INT TERM EXIT
+    rm -f -- "$READY_FILE" "$AUTH_READY_FILE"
+    if [ "$provider_pid" -gt 0 ] && kill -0 "$provider_pid" 2>/dev/null; then
+        kill -TERM "$provider_pid" 2>/dev/null || true
+        (
+            sleep 15
+            if kill -0 "$provider_pid" 2>/dev/null; then
+                echo "notebooklm-mcp: provider did not stop after 15s; sending KILL" >&2
+                kill -KILL "$provider_pid" 2>/dev/null || true
+            fi
+        ) &
+        shutdown_watchdog=$!
+        wait "$provider_pid" 2>/dev/null || true
+        kill -TERM "$shutdown_watchdog" 2>/dev/null || true
+        wait "$shutdown_watchdog" 2>/dev/null || true
+    fi
+    provider_pid=0
+}
+trap 'cleanup; exit 129' HUP
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap cleanup EXIT
+
+chpst -u jeremy:jeremy env \
+    HOME=/home/jeremy \
+    USER=jeremy \
+    DISPLAY=:20 \
+    XAUTHORITY=/home/jeremy/.Xauthority \
+    NOTEBOOKLM_TRANSPORT=http \
+    NOTEBOOKLM_HOST=127.0.0.1 \
+    NOTEBOOKLM_PORT=3101 \
+    NOTEBOOKLM_PROFILE=standard \
+    NOTEBOOK_PROFILE_STRATEGY=auto \
+    /usr/bin/node "$PROVIDER_ENTRY" --transport http --host 127.0.0.1 --port 3101 &
+provider_pid=$!
+
+attempt=0
+until curl -fsS --max-time 2 http://127.0.0.1:3101/healthz >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if ! kill -0 "$provider_pid" 2>/dev/null; then
+        status=0
+        wait "$provider_pid" || status=$?
+        provider_pid=0
+        exit "$status"
+    fi
+    [ "$attempt" -lt 60 ] || {
+        echo "notebooklm-mcp: health endpoint not ready after 60s" >&2
+        exit 1
+    }
+    sleep 1
+done
+touch "$READY_FILE"
+chmod 0644 "$READY_FILE"
+echo "notebooklm-mcp: ready on loopback :3101; authentication is owned by the bridge session"
+
+status=0
+wait "$provider_pid" || status=$?
+provider_pid=0
+trap - HUP INT TERM EXIT
+rm -f -- "$READY_FILE" "$AUTH_READY_FILE"
+exit "$status"

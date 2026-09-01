@@ -7,7 +7,7 @@
 //! compatibility with the existing serde_json ecosystem.
 
 use anyhow::{anyhow, Result};
-use jsonschema::JSONSchema;
+use jsonschema::Validator;
 use serde_json::Value; // Keep for compatibility with existing code
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -129,7 +129,7 @@ impl Default for ValidationConfig {
 #[derive(Clone)]
 pub struct InputValidator {
     config: ValidationConfig,
-    schema_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Arc<JSONSchema>>>>,
+    schema_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Arc<Validator>>>>,
 }
 
 impl Default for InputValidator {
@@ -244,7 +244,7 @@ impl InputValidator {
                 schema.clone()
             } else {
                 // Compile and cache the schema
-                let compiled = JSONSchema::compile(schema)
+                let compiled = jsonschema::validator_for(schema)
                     .map_err(|e| anyhow!("Failed to compile schema for {}: {}", tool_name, e))?;
                 let arc_schema = Arc::new(compiled);
 
@@ -254,12 +254,14 @@ impl InputValidator {
             }
         };
 
-        // Validate against schema
-        if let Err(errors) = compiled_schema.validate(input) {
-            let error_messages: Vec<String> = errors
-                .map(|e| format!("{} at path: {}", e.instance_path, e))
-                .collect();
-
+        // Validate against schema. jsonschema >= 0.20 returns a single error from
+        // `validate`; `iter_errors` is the all-errors iterator the old
+        // `JSONSchema::validate` used to return.
+        let error_messages: Vec<String> = compiled_schema
+            .iter_errors(input)
+            .map(|e| format!("{} at path: {}", e.instance_path, e))
+            .collect();
+        if !error_messages.is_empty() {
             return Err(anyhow!(
                 "Schema validation failed: {}",
                 error_messages.join("; ")

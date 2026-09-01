@@ -17,6 +17,33 @@ use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
+/// Default endpoint when no explicit environment override is present.
+///
+/// The local/host mode has the shared container socket mounted, so it avoids
+/// fabric assumptions and works without a WG/static-mesh address.
+pub const DEFAULT_ENDPOINT: &str = "unix:/run/ghostbridge/container.sock";
+
+/// Resolve the active gRPC endpoint.
+///
+/// `ZEROCLAW_GRPC` is the preferred override.
+/// `ZEROCLAW_GRPC_FABRIC` remains accepted only for compatibility and is
+/// treated as deprecated.
+pub fn resolve_endpoint() -> String {
+    if let Ok(endpoint) = std::env::var("ZEROCLAW_GRPC") {
+        return endpoint;
+    }
+
+    if let Ok(endpoint) = std::env::var("ZEROCLAW_GRPC_FABRIC") {
+        eprintln!(
+            "ZEROCLAW_GRPC_FABRIC is deprecated; use ZEROCLAW_GRPC (for example \
+            `unix:/run/ghostbridge/container.sock`) instead"
+        );
+        return endpoint;
+    }
+
+    DEFAULT_ENDPOINT.to_string()
+}
+
 /// Parse a `unix:` endpoint into its filesystem path.
 ///
 /// Accepts `unix:/path`, `unix://authority/path` (authority ignored), and

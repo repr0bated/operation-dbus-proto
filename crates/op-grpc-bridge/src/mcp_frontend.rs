@@ -24,6 +24,10 @@ use serde_json::{json, Value};
 use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 
 use crate::grpc_server::DECLARED_CAPABILITY_HEADER;
+#[cfg(test)]
+use crate::interceptor::capabilities_for_principal;
+use crate::interceptor::load_capability_grants;
+use crate::mcp_policy::{McpProjectionPolicy, ToolsetDefinition, HOT_TOOL_NAMES};
 use crate::mutation_engine::MutationEngine;
 use crate::oracle_assertion::AssertionValidator;
 
@@ -35,6 +39,11 @@ pub const MCP_NAME_HEADER: &str = "mcp-name";
 /// Raw HTTP uses the same canonical header name as gRPC metadata. Its value is
 /// the OIA1 wire envelope encoded as unpadded canonical base64url.
 pub const HTTP_ASSERTION_HEADER: &str = "x-oracle-identity-assertion-bin";
+/// MutationEngine-authored SID1 envelope read from the caller's selected sled.
+/// The HTTP spelling is canonical unpadded base64url; the bridge reconstructs
+/// the inline `sid1:` value and exact-matches it against the authoritative
+/// session record before accepting any claims.
+pub const HTTP_SEALED_ID_HEADER: &str = op_identity::sealed_id::HTTP_HEADER_NAME;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_ASSERTION_BYTES: usize = 16 * 1024;
@@ -46,11 +55,19 @@ const ALLOWED_ORIGINS_ENV: &str = "OP_MCP_ALLOWED_ORIGINS";
 #[derive(Clone, Debug)]
 struct AuthenticatedCaller {
     principal_id: String,
-    footprint: String,
+    session_id: String,
+    session_genesis: String,
 }
 
 #[derive(Debug)]
 struct McpAuthError(String);
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ToolsetSelection {
+    id: String,
+    generation: u64,
+}
 
 #[async_trait]
 trait McpAuthenticator: Send + Sync {
@@ -74,8 +91,29 @@ impl McpAuthenticator for OracleHttpAuthenticator {
         headers: &HeaderMap,
         peer: Option<SocketAddr>,
     ) -> Result<AuthenticatedCaller, McpAuthError> {
-        let encoded = one_required_header(headers, HTTP_ASSERTION_HEADER)
-            .map_err(|error| McpAuthError(error.to_string()))?;
+        let assertion =
+            one_optional_header(headers, HTTP_ASSERTION_HEADER).map_err(McpAuthError)?;
+        let sealed_id =
+            one_optional_header(headers, HTTP_SEALED_ID_HEADER).map_err(McpAuthError)?;
+        match (assertion, sealed_id) {
+            (Some(_), Some(_)) => Err(McpAuthError(
+                "send exactly one identity credential, not both OIA1 and SID1".into(),
+            )),
+            (Some(encoded), None) => self.authenticate_assertion(encoded, peer).await,
+            (None, Some(encoded)) => self.authenticate_sealed_id(encoded).await,
+            (None, None) => Err(McpAuthError(format!(
+                "missing {HTTP_ASSERTION_HEADER} or {HTTP_SEALED_ID_HEADER} header"
+            ))),
+        }
+    }
+}
+
+impl OracleHttpAuthenticator {
+    async fn authenticate_assertion(
+        &self,
+        encoded: &str,
+        peer: Option<SocketAddr>,
+    ) -> Result<AuthenticatedCaller, McpAuthError> {
         if encoded.len() > encoded_len_upper_bound(MAX_ASSERTION_BYTES) {
             return Err(McpAuthError(
                 "Oracle identity assertion is too large".into(),
@@ -97,6 +135,7 @@ impl McpAuthenticator for OracleHttpAuthenticator {
             .ok_or_else(|| {
                 McpAuthError("Assertion identity has no anchored session genesis".into())
             })?;
+        pending.identity_mut().session_id = session.session_id;
         pending.identity_mut().session_genesis = session.genesis_hex;
         let identity = self
             .validator
@@ -104,20 +143,151 @@ impl McpAuthenticator for OracleHttpAuthenticator {
             .map_err(|error| McpAuthError(error.to_string()))?;
         Ok(AuthenticatedCaller {
             principal_id: identity.principal_id,
-            footprint: hex::encode(identity.footprint),
+            session_id: identity.session_id,
+            session_genesis: identity.session_genesis,
+        })
+    }
+
+    async fn authenticate_sealed_id(
+        &self,
+        encoded: &str,
+    ) -> Result<AuthenticatedCaller, McpAuthError> {
+        if encoded.len() > encoded_len_upper_bound(MAX_ASSERTION_BYTES) {
+            return Err(McpAuthError("sealed identity is too large".into()));
+        }
+        let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.as_bytes())
+            .map_err(|_| McpAuthError("malformed sealed identity".into()))?;
+        if wire.len() > MAX_ASSERTION_BYTES
+            || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&wire) != encoded
+        {
+            return Err(McpAuthError(
+                "sealed identity is not canonical base64url".into(),
+            ));
+        }
+        let claims = op_identity::sealed_id::SealedId::open(&wire)
+            .map_err(|error| McpAuthError(error.to_string()))?;
+        if claims.principal_kind != "wireguard-principal"
+            || !claims
+                .transport_scope
+                .split(',')
+                .any(|scope| scope.trim() == "mcp")
+        {
+            return Err(McpAuthError(
+                "sealed identity is not valid for the MCP transport".into(),
+            ));
+        }
+        if op_identity::session::derive_session_id(&claims.wireguard_pubkey) != claims.session_id
+            || op_identity::session::derive_principal_id(&claims.wireguard_pubkey)
+                != claims.principal_id
+        {
+            return Err(McpAuthError(
+                "sealed identity identifiers do not match its WireGuard identity".into(),
+            ));
+        }
+
+        let sled =
+            crate::identity_sled_dispatch::stored_session(self.engine.as_ref(), &claims.session_id)
+                .await
+                .ok_or_else(|| McpAuthError("sealed identity session was not found".into()))?;
+        let now = chrono::Utc::now().timestamp();
+        if !sled.is_anchored() || !sled.active {
+            return Err(McpAuthError(
+                "sealed identity session is not active and anchored".into(),
+            ));
+        }
+        if sled
+            .expires_at
+            .is_some_and(|expires_at| expires_at != 0 && expires_at <= now)
+        {
+            return Err(McpAuthError("sealed identity session has expired".into()));
+        }
+        let inline = format!("{}{}", op_identity::sealed_id::INLINE_PREFIX, encoded);
+        if sled.sealed_id.as_deref() != Some(inline.as_str())
+            || sled.wireguard_pubkey != claims.wireguard_pubkey
+            || sled.genesis.as_deref() != Some(claims.session_genesis.as_str())
+            || sled.trace_id != claims.trace_id
+            || sled.schema_version != claims.schema_version
+            || sled.expires_at.unwrap_or(0) != claims.expires_at
+            || sled.arrival_timestamp != claims.arrival_timestamp
+            || claims.issued_at != claims.arrival_timestamp
+            || sled.chain_head_at_arrival != claims.chain_head_at_arrival
+            || sled.catalog_hash_at_arrival != claims.catalog_hash_at_arrival
+            || sled.head_timestamp_at_arrival != claims.head_timestamp_at_arrival
+        {
+            return Err(McpAuthError(
+                "sealed identity does not match the authoritative sled".into(),
+            ));
+        }
+
+        // A local sled can exist without MCP authority.  Exact principal-only
+        // grants remain the final admission source; no sealed ID/genesis/hash is
+        // ever looked up as a grant key.
+        if load_exact_capability_grants(&claims.principal_id).is_empty() {
+            return Err(McpAuthError(
+                "sealed identity principal has no MCP capabilities".into(),
+            ));
+        }
+        match crate::human_principal_dispatch::resolve_key_for_assertion(&claims.wireguard_pubkey)
+            .await
+        {
+            Ok(record) => validate_registered_sealed_id_principal(
+                record.as_ref(),
+                &claims.principal_id,
+                &claims.wireguard_pubkey,
+            )?,
+            Err(error) => {
+                return Err(McpAuthError(format!(
+                    "principal registry unavailable: {error:?}"
+                )))
+            }
+        }
+
+        Ok(AuthenticatedCaller {
+            principal_id: claims.principal_id,
+            session_id: claims.session_id,
+            session_genesis: claims.session_genesis,
         })
     }
 }
 
+/// SID1 is a possession credential for an already-registered principal, not
+/// a registration mechanism.  Keep this check independent and testable so a
+/// missing row can never drift back into a fail-open wildcard match.
+fn validate_registered_sealed_id_principal(
+    record: Option<&op_cozo_store::HumanPrincipalRecord>,
+    expected_principal_id: &str,
+    expected_wireguard_pubkey: &str,
+) -> Result<(), McpAuthError> {
+    let record =
+        record.ok_or_else(|| McpAuthError("sealed identity principal is not registered".into()))?;
+    if record.revoked_at != 0 {
+        return Err(McpAuthError("sealed identity principal is revoked".into()));
+    }
+    if record.principal_id != expected_principal_id
+        || record.human_pubkey != expected_wireguard_pubkey
+    {
+        return Err(McpAuthError(
+            "sealed identity principal registry binding changed".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait]
 trait McpBackend: Send + Sync {
-    async fn list_tools(&self, caller: &AuthenticatedCaller) -> anyhow::Result<Vec<Value>>;
+    async fn list_tools(
+        &self,
+        caller: &AuthenticatedCaller,
+        selection: Option<&ToolsetSelection>,
+    ) -> anyhow::Result<Vec<Value>>;
 
     async fn call_tool(
         &self,
         caller: &AuthenticatedCaller,
         name: &str,
         arguments: Value,
+        selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Value>;
 
     async fn list_resources(&self, caller: &AuthenticatedCaller) -> anyhow::Result<Vec<Value>>;
@@ -129,60 +299,307 @@ trait McpBackend: Send + Sync {
 struct MutationEngineMcpBackend {
     engine: Arc<MutationEngine>,
     blob_catalog_dir: PathBuf,
+    policy: Arc<McpProjectionPolicy>,
+    plugin_registry: Arc<op_plugins::DefaultPluginRegistry>,
 }
 
 impl MutationEngineMcpBackend {
-    fn new(engine: Arc<MutationEngine>) -> Self {
+    fn new(engine: Arc<MutationEngine>, policy: McpProjectionPolicy) -> Self {
         let blob_catalog_dir = std::env::var("OP_BLOB_CATALOG_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
+        let plugin_registry =
+            op_plugins::DefaultPluginRegistry::new(Arc::new(op_state_store::MemoryStore::new()));
         Self {
             engine,
             blob_catalog_dir,
+            policy: Arc::new(policy),
+            plugin_registry: Arc::new(plugin_registry),
         }
     }
 
     fn authorize(caller: &AuthenticatedCaller, required_capability: &str) -> anyhow::Result<()> {
-        let grants = load_exact_capability_grants(&caller.footprint);
+        let grants = load_exact_capability_grants(&caller.principal_id);
         authorize_with_grants(&grants, required_capability)
     }
 
-    async fn dispatch(
+    async fn dispatch_plugin(
+        &self,
+        caller: &AuthenticatedCaller,
+        plugin_id: &str,
+        method: &str,
+        arguments: Value,
+        required_capability: &str,
+    ) -> anyhow::Result<Value> {
+        Self::authorize(caller, required_capability)?;
+        // Stable principal identity is the audit actor. Session identity stays
+        // in the authenticated request context and never becomes authority.
+        let actor = caller.principal_id.clone();
+        let result = self
+            .engine
+            .dispatch_method_call_with_identity(
+                plugin_id,
+                method,
+                &serde_json::to_string(&arguments)?,
+                Some(required_capability),
+                &actor,
+                Some(&caller.session_id),
+                Some(&caller.session_genesis),
+            )
+            .await?;
+        Ok(result.get("result").cloned().unwrap_or(result))
+    }
+
+    async fn cognitive_admission(
         &self,
         caller: &AuthenticatedCaller,
         method: &str,
         arguments: Value,
         required_capability: &str,
     ) -> anyhow::Result<Value> {
-        Self::authorize(caller, required_capability)?;
-        let actor = format!("mcp:{}", caller.principal_id);
-        let result = self
-            .engine
-            .dispatch_method_call(
-                "cognitive_mcp",
-                method,
-                &serde_json::to_string(&arguments)?,
-                Some(required_capability),
-                &actor,
+        self.dispatch_plugin(
+            caller,
+            "cognitive_mcp",
+            method,
+            arguments,
+            required_capability,
+        )
+        .await
+    }
+
+    fn provider_ready(set: &ToolsetDefinition) -> bool {
+        !set.requires_provider_health
+            || Path::new("/run/opdbus/runit-ready")
+                .join(&set.provider)
+                .is_file()
+    }
+
+    async fn typed_tool_descriptor(&self, public_name: &str) -> anyhow::Result<Value> {
+        let (plugin_id, method_name) = parse_typed_tool_name(public_name)?;
+        if !op_plugins::DefaultPluginRegistry::available_plugins()
+            .iter()
+            .any(|candidate| candidate == plugin_id)
+        {
+            anyhow::bail!("AccessDenied: tool '{public_name}' names an unknown plugin");
+        }
+        let plugin = self.plugin_registry.load_plugin(plugin_id).await?;
+        let schema = plugin
+            .schema()
+            .ok_or_else(|| anyhow::anyhow!("plugin '{plugin_id}' has no sealed schema"))?;
+        method_descriptor(&schema, method_name, public_name)
+    }
+
+    fn hot_tool_descriptor(public_name: &str) -> anyhow::Result<Value> {
+        let schema = op_plugins::cognitive_mcp_plugin_schema();
+        method_descriptor(&schema, public_name, public_name)
+    }
+
+    async fn authorized_hot_catalog(&self, grants: &HashSet<String>) -> anyhow::Result<Vec<Value>> {
+        let mut tools = Vec::with_capacity(HOT_TOOL_NAMES.len());
+        for name in HOT_TOOL_NAMES {
+            let descriptor = Self::hot_tool_descriptor(name)?;
+            if descriptor_authority(&descriptor, Some(name))
+                .is_ok_and(|(capability, _)| grants.contains(capability))
+            {
+                tools.push(descriptor);
+            }
+        }
+        Ok(tools)
+    }
+
+    async fn authorized_set_catalog(
+        &self,
+        set: &ToolsetDefinition,
+        grants: &HashSet<String>,
+    ) -> anyhow::Result<Vec<Value>> {
+        if !Self::provider_ready(set) {
+            anyhow::bail!("provider_unavailable: {}", set.provider);
+        }
+        let mut tools = Vec::with_capacity(set.tools.len());
+        for name in &set.tools {
+            let descriptor = self.typed_tool_descriptor(name).await?;
+            if descriptor_authority(&descriptor, Some(name))
+                .is_ok_and(|(capability, _)| grants.contains(capability))
+            {
+                tools.push(descriptor);
+            }
+        }
+        Ok(tools)
+    }
+
+    fn selected_set<'a>(
+        &'a self,
+        selection: &ToolsetSelection,
+    ) -> anyhow::Result<&'a ToolsetDefinition> {
+        if selection.generation != self.policy.toolsets.generation {
+            anyhow::bail!(
+                "toolset_generation_changed: requested {}, current {}; relist required",
+                selection.generation,
+                self.policy.toolsets.generation
+            );
+        }
+        self.policy
+            .toolset(&selection.id)
+            .ok_or_else(|| anyhow::anyhow!("unknown toolset '{}'", selection.id))
+    }
+
+    async fn external_catalog(
+        &self,
+        caller: &AuthenticatedCaller,
+        selection: Option<&ToolsetSelection>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let grants = load_exact_capability_grants(&caller.principal_id);
+        let mut by_name = BTreeMap::new();
+        for descriptor in self.authorized_hot_catalog(&grants).await? {
+            by_name.insert(tool_name(&descriptor).to_string(), descriptor);
+        }
+        if let Some(selection) = selection {
+            let set = self.selected_set(selection)?;
+            for descriptor in self.authorized_set_catalog(set, &grants).await? {
+                by_name.insert(tool_name(&descriptor).to_string(), descriptor);
+            }
+        }
+        Ok(by_name.into_values().collect())
+    }
+
+    async fn toolsets_result(
+        &self,
+        caller: &AuthenticatedCaller,
+        arguments: &Value,
+    ) -> anyhow::Result<Value> {
+        let grants = load_exact_capability_grants(&caller.principal_id);
+        let operation = arguments
+            .get("operation")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("toolsets requires operation"))?;
+        let mut projected = Vec::new();
+        for set in &self.policy.toolsets.sets {
+            let authorized_count = self
+                .authorized_set_catalog_without_health(set, &grants)
+                .await?
+                .len();
+            if authorized_count == 0 {
+                continue;
+            }
+            projected.push(json!({
+                "id": set.id,
+                "temperature": set.temperature,
+                "provider": set.provider,
+                "available": Self::provider_ready(set),
+                "authorizedToolCount": authorized_count
+            }));
+        }
+
+        match operation {
+            "list" => Ok(json!({
+                "operation": "list",
+                "catalog_generation": self.policy.toolsets.generation,
+                "relist_required": false,
+                "result": {"sets": projected}
+            })),
+            "select" => {
+                let id = arguments
+                    .get("toolset_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("toolsets select requires toolset_id"))?;
+                let set = self
+                    .policy
+                    .toolset(id)
+                    .ok_or_else(|| anyhow::anyhow!("unknown toolset '{id}'"))?;
+                if !Self::provider_ready(set) {
+                    anyhow::bail!("provider_unavailable: {}", set.provider);
+                }
+                let tools = self.authorized_set_catalog(set, &grants).await?;
+                if tools.is_empty() {
+                    anyhow::bail!("AccessDenied: no authorized tools in toolset '{id}'");
+                }
+                Ok(json!({
+                    "operation": "select",
+                    "catalog_generation": self.policy.toolsets.generation,
+                    "relist_required": true,
+                    "result": {
+                        "selector": {
+                            "id": id,
+                            "generation": self.policy.toolsets.generation
+                        },
+                        "tools": tools.into_iter().map(normalize_tool_definition).collect::<Vec<_>>()
+                    }
+                }))
+            }
+            _ => anyhow::bail!("toolsets operation must be list or select"),
+        }
+    }
+
+    async fn authorized_set_catalog_without_health(
+        &self,
+        set: &ToolsetDefinition,
+        grants: &HashSet<String>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let mut tools = Vec::with_capacity(set.tools.len());
+        for name in &set.tools {
+            let descriptor = self.typed_tool_descriptor(name).await?;
+            if descriptor_authority(&descriptor, Some(name))
+                .is_ok_and(|(capability, _)| grants.contains(capability))
+            {
+                tools.push(descriptor);
+            }
+        }
+        Ok(tools)
+    }
+
+    async fn dispatch_projected_tool(
+        &self,
+        caller: &AuthenticatedCaller,
+        descriptor: &Value,
+        name: &str,
+        arguments: Value,
+    ) -> anyhow::Result<Value> {
+        let grants = load_exact_capability_grants(&caller.principal_id);
+        authorize_and_validate_tool_call(descriptor, name, &arguments, &grants)?;
+        let required_capability = descriptor_authority(descriptor, Some(name))?.0;
+        let (plugin_id, method_name) = if HOT_TOOL_NAMES.contains(&name) {
+            ("cognitive_mcp", name)
+        } else {
+            parse_typed_tool_name(name)?
+        };
+        let admitted = self
+            .dispatch_plugin(
+                caller,
+                plugin_id,
+                method_name,
+                arguments.clone(),
+                required_capability,
             )
             .await?;
-        Ok(result.get("result").cloned().unwrap_or(result))
+        if name == "toolsets" {
+            self.toolsets_result(caller, &arguments).await
+        } else {
+            Ok(admitted)
+        }
     }
 }
 
 #[async_trait]
 impl McpBackend for MutationEngineMcpBackend {
-    async fn list_tools(&self, caller: &AuthenticatedCaller) -> anyhow::Result<Vec<Value>> {
-        let result = self
-            .dispatch(caller, "list_tools", json!({}), "cognitive_mcp.read")
+    async fn list_tools(
+        &self,
+        caller: &AuthenticatedCaller,
+        selection: Option<&ToolsetSelection>,
+    ) -> anyhow::Result<Vec<Value>> {
+        self.cognitive_admission(caller, "list_tools", json!({}), "cognitive_mcp.read")
             .await?;
-        let tools = result
-            .get("tools")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("cognitive tool catalog returned no tools array"))?;
-        let grants = load_exact_capability_grants(&caller.footprint);
-        Ok(filter_authorized_tools(tools, &grants)
+        if selection.is_some() {
+            self.cognitive_admission(
+                caller,
+                "toolsets",
+                json!({"operation": "select"}),
+                "cognitive_mcp.read",
+            )
+            .await?;
+        }
+        Ok(self
+            .external_catalog(caller, selection)
+            .await?
             .into_iter()
             .map(normalize_tool_definition)
             .collect())
@@ -193,24 +610,21 @@ impl McpBackend for MutationEngineMcpBackend {
         caller: &AuthenticatedCaller,
         name: &str,
         arguments: Value,
+        selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Value> {
-        Self::authorize(caller, "cognitive_mcp.invoke")?;
         let descriptor = self
-            .engine
-            .cognitive_tool_descriptor(name)
+            .external_catalog(caller, selection)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("AccessDenied: tool '{name}' has no descriptor"))?;
-        let grants = load_exact_capability_grants(&caller.footprint);
-        authorize_and_validate_tool_call(&descriptor, name, &arguments, &grants)?;
-        let result = self
-            .dispatch(
-                caller,
-                "invoke_tool",
-                json!({"tool_name": name, "arguments": arguments}),
-                "cognitive_mcp.invoke",
-            )
-            .await?;
-        Ok(normalize_tool_result(result))
+            .into_iter()
+            .find(|tool| tool_name(tool) == name)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "AccessDenied: tool '{name}' is not in the current HOT/toolset projection"
+                )
+            })?;
+        self.dispatch_projected_tool(caller, &descriptor, name, arguments)
+            .await
+            .map(normalize_tool_result)
     }
 
     async fn list_resources(&self, caller: &AuthenticatedCaller) -> anyhow::Result<Vec<Value>> {
@@ -244,12 +658,14 @@ struct McpFrontendState {
 
 /// Build the raw HTTP projection. The returned router owns no listener.
 pub fn build_mcp_router(engine: Arc<MutationEngine>, validator: Arc<AssertionValidator>) -> Router {
+    let policy = McpProjectionPolicy::load_from_env()
+        .expect("protected MCP audience/toolset policy must be valid before binding :8090");
     let state = McpFrontendState {
         authenticator: Arc::new(OracleHttpAuthenticator {
             validator,
             engine: engine.clone(),
         }),
-        backend: Arc::new(MutationEngineMcpBackend::new(engine)),
+        backend: Arc::new(MutationEngineMcpBackend::new(engine, policy)),
         allowed_origins: Arc::new(configured_allowed_origins()),
     };
     router_with_state(state)
@@ -396,17 +812,27 @@ async fn dispatch_rpc(
     params: Value,
 ) -> Result<Value, RpcDispatchError> {
     match method {
-        // The canonical 2026-07-28 path is stateless. Stateful initialization
-        // belongs only to the separately bounded legacy shim, which is not
-        // mounted here; accepting it here would silently merge the lifecycles.
-        "initialize" | "notifications/initialized" => {
-            Err(RpcDispatchError::method_not_found(method))
+        // Streamable HTTP remains stateless, but the standard MCP handshake is
+        // still required.  No shim or server-side session is introduced here.
+        "initialize" => {
+            let requested = params
+                .get("protocolVersion")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RpcDispatchError::invalid_params("missing protocolVersion"))?;
+            if requested != MCP_PROTOCOL_VERSION {
+                return Err(RpcDispatchError::invalid_params(format!(
+                    "unsupported protocolVersion: {requested}"
+                )));
+            }
+            Ok(initialize_result())
         }
+        "notifications/initialized" => Ok(json!({})),
         "ping" => Ok(json!({})),
         "server/discover" => Ok(discovery_result()),
         "tools/list" => {
+            let selection = selection_from_params(&params)?;
             let mut tools = backend
-                .list_tools(caller)
+                .list_tools(caller, selection.as_ref())
                 .await
                 .map_err(RpcDispatchError::internal)?;
             tools.sort_by(|left, right| tool_name(left).cmp(tool_name(right)));
@@ -414,12 +840,13 @@ async fn dispatch_rpc(
         }
         "tools/call" => {
             let name = required_string_param(&params, "name")?;
-            let arguments = params
+            let mut arguments = params
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            let selection = merged_toolset_selection(&params, &mut arguments)?;
             backend
-                .call_tool(caller, name, arguments)
+                .call_tool(caller, name, arguments, selection.as_ref())
                 .await
                 .map_err(RpcDispatchError::internal)
         }
@@ -453,7 +880,7 @@ fn initialize_result() -> Value {
             "name": "op-grpc-bridge",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "Each request requires a fresh Oracle identity assertion."
+        "instructions": "Each request requires exactly one authenticated identity: a fresh OIA1 assertion or the exact active SID1 stored in the caller's identity sled."
     })
 }
 
@@ -463,23 +890,27 @@ fn discovery_result() -> Value {
         "endpoint": MCP_PATH,
         "transport": "streamable-http",
         "sessionMode": "stateless",
-        "requiredHeaders": [
-            "MCP-Protocol-Version",
-            "Mcp-Method",
-            HTTP_ASSERTION_HEADER
-        ],
-        "nameHeaderMethods": ["tools/call", "resources/read"],
+        "requiredHeaders": ["MCP-Protocol-Version"],
+        "identityHeaderAlternatives": [HTTP_ASSERTION_HEADER, HTTP_SEALED_ID_HEADER],
+        "optionalIntegrityHeaders": ["Mcp-Method", "Mcp-Name"],
         "capabilities": initialize_result()["capabilities"].clone()
     })
 }
 
 fn validate_protocol_headers(headers: &HeaderMap, rpc: &JsonRpcRequest) -> Result<(), String> {
-    let version = one_required_header(headers, MCP_VERSION_HEADER)?;
-    if version != MCP_PROTOCOL_VERSION {
-        return Err(format!("unsupported MCP protocol version: {version}"));
+    // Per Streamable HTTP, the initialize request negotiates the protocol and
+    // therefore need not carry MCP-Protocol-Version yet. All later requests
+    // must carry the negotiated value.
+    match one_optional_header(headers, MCP_VERSION_HEADER)? {
+        Some(version) if version != MCP_PROTOCOL_VERSION => {
+            return Err(format!("unsupported MCP protocol version: {version}"));
+        }
+        None if rpc.method != "initialize" => {
+            return Err(format!("missing {MCP_VERSION_HEADER} header"));
+        }
+        _ => {}
     }
-    let method = one_required_header(headers, MCP_METHOD_HEADER)?;
-    if method != rpc.method {
+    if one_optional_header(headers, MCP_METHOD_HEADER)?.is_some_and(|method| method != rpc.method) {
         return Err("Mcp-Method header does not match JSON-RPC method".into());
     }
 
@@ -494,8 +925,9 @@ fn validate_protocol_headers(headers: &HeaderMap, rpc: &JsonRpcRequest) -> Resul
     };
     match expected_name {
         Some(expected) => {
-            let actual = one_required_header(headers, MCP_NAME_HEADER)?;
-            if actual != expected {
+            if one_optional_header(headers, MCP_NAME_HEADER)?
+                .is_some_and(|actual| actual != expected)
+            {
                 return Err("Mcp-Name header does not match JSON-RPC target".into());
             }
         }
@@ -590,6 +1022,63 @@ fn required_string_param<'a>(params: &'a Value, name: &str) -> Result<&'a str, R
         .ok_or_else(|| RpcDispatchError::invalid_params(format!("missing {name}")))
 }
 
+fn selection_from_params(params: &Value) -> Result<Option<ToolsetSelection>, RpcDispatchError> {
+    selection_from_meta(params.get("_meta"))
+}
+
+fn merged_toolset_selection(
+    params: &Value,
+    arguments: &mut Value,
+) -> Result<Option<ToolsetSelection>, RpcDispatchError> {
+    let from_params = selection_from_params(params)?;
+    let from_arguments = take_argument_toolset_selection(arguments)?;
+    match (from_params, from_arguments) {
+        (Some(left), Some(right)) if left != right => Err(RpcDispatchError::invalid_params(
+            "conflicting _meta.opdbus_toolset selectors",
+        )),
+        (Some(selection), _) | (_, Some(selection)) => Ok(Some(selection)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn selection_from_meta(meta: Option<&Value>) -> Result<Option<ToolsetSelection>, RpcDispatchError> {
+    let Some(raw) = meta.and_then(|value| value.get("opdbus_toolset")) else {
+        return Ok(None);
+    };
+    let selection: ToolsetSelection = serde_json::from_value(raw.clone()).map_err(|error| {
+        RpcDispatchError::invalid_params(format!("invalid toolset selector: {error}"))
+    })?;
+    if selection.id.is_empty() || selection.generation == 0 {
+        return Err(RpcDispatchError::invalid_params(
+            "toolset selector requires a non-empty id and positive generation",
+        ));
+    }
+    Ok(Some(selection))
+}
+
+fn take_argument_toolset_selection(
+    arguments: &mut Value,
+) -> Result<Option<ToolsetSelection>, RpcDispatchError> {
+    let Some(object) = arguments.as_object_mut() else {
+        return Ok(None);
+    };
+    let mut remove_meta = false;
+    let raw = if let Some(meta) = object.get_mut("_meta").and_then(Value::as_object_mut) {
+        let value = meta.remove("opdbus_toolset");
+        remove_meta = meta.is_empty();
+        value
+    } else {
+        None
+    };
+    if remove_meta {
+        object.remove("_meta");
+    }
+    match raw {
+        Some(value) => selection_from_meta(Some(&json!({"opdbus_toolset": value}))),
+        None => Ok(None),
+    }
+}
+
 fn paginate(key: &str, values: Vec<Value>, params: &Value) -> Result<Value, RpcDispatchError> {
     let offset = match params.get("cursor").and_then(Value::as_str) {
         Some(cursor) => cursor
@@ -615,6 +1104,73 @@ fn paginate(key: &str, values: Vec<Value>, params: &Value) -> Result<Value, RpcD
         result.insert("nextCursor".into(), Value::String(end.to_string()));
     }
     Ok(Value::Object(result))
+}
+
+fn parse_typed_tool_name(name: &str) -> anyhow::Result<(&str, &str)> {
+    let mut parts = name.split('.');
+    if parts.next() != Some("plugin") {
+        anyhow::bail!("AccessDenied: '{name}' is not a canonical typed plugin tool");
+    }
+    let plugin_id = parts
+        .next()
+        .filter(|part| !part.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("AccessDenied: '{name}' has no plugin id"))?;
+    let method_name = parts
+        .next()
+        .filter(|part| !part.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("AccessDenied: '{name}' has no method"))?;
+    if parts.next().is_some()
+        || !plugin_id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        || !method_name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        anyhow::bail!("AccessDenied: '{name}' is not canonical");
+    }
+    Ok((plugin_id, method_name))
+}
+
+fn method_descriptor(
+    schema: &op_state_store::PluginSchema,
+    method_name: &str,
+    public_name: &str,
+) -> anyhow::Result<Value> {
+    let method = schema.methods.get(method_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "AccessDenied: sealed plugin '{}' has no method '{}'",
+            schema.name,
+            method_name
+        )
+    })?;
+    let required_capability = method.required_capability.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "AccessDenied: {}.{} has no sealed capability",
+            schema.name,
+            method_name
+        )
+    })?;
+    if !schema.capabilities.contains_key(required_capability) {
+        anyhow::bail!(
+            "AccessDenied: {}.{} capability '{}' is outside schema closure",
+            schema.name,
+            method_name,
+            required_capability
+        );
+    }
+    let mut descriptor = json!({
+        "name": public_name,
+        "description": format!("{} — {}", schema.description, method.name),
+        "inputSchema": serde_json::to_value(&method.args)?,
+        "required_capability": required_capability,
+        "subid": method.subid,
+        "authority_method": method.name
+    });
+    if let Some(output) = &method.returns {
+        descriptor["outputSchema"] = serde_json::to_value(output)?;
+    }
+    Ok(descriptor)
 }
 
 fn normalize_tool_definition(mut tool: Value) -> Value {
@@ -745,29 +1301,8 @@ fn resource_uri(value: &Value) -> &str {
     value.get("uri").and_then(Value::as_str).unwrap_or("")
 }
 
-fn load_exact_capability_grants(footprint: &str) -> HashSet<String> {
-    let path = std::env::var("OP_GRANTS_PATH")
-        .unwrap_or_else(|_| "/dev/shm/opdbus/capability-grants.json".to_string());
-    let Ok(bytes) = std::fs::read(path) else {
-        return HashSet::new();
-    };
-    let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
-        return HashSet::new();
-    };
-    capabilities_for_footprint(&document, footprint)
-}
-
-fn capabilities_for_footprint(document: &Value, footprint: &str) -> HashSet<String> {
-    // Deliberately no `"*"` fallback. MCP authority is always principal-bound.
-    document
-        .get(footprint)
-        .and_then(|entry| entry.get("capabilities"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect()
+fn load_exact_capability_grants(principal_id: &str) -> HashSet<String> {
+    load_capability_grants(principal_id)
 }
 
 fn list_blob_resources(dir: &Path) -> anyhow::Result<Vec<Value>> {
@@ -944,7 +1479,8 @@ mod tests {
             }
             Ok(AuthenticatedCaller {
                 principal_id: "test-principal".into(),
-                footprint: "test-footprint".into(),
+                session_id: "test-session".into(),
+                session_genesis: "test-genesis".into(),
             })
         }
     }
@@ -954,7 +1490,11 @@ mod tests {
 
     #[async_trait]
     impl McpBackend for TestBackend {
-        async fn list_tools(&self, _caller: &AuthenticatedCaller) -> anyhow::Result<Vec<Value>> {
+        async fn list_tools(
+            &self,
+            _caller: &AuthenticatedCaller,
+            _selection: Option<&ToolsetSelection>,
+        ) -> anyhow::Result<Vec<Value>> {
             Ok(vec![json!({
                 "name": "echo",
                 "description": "Echo input",
@@ -967,6 +1507,7 @@ mod tests {
             _caller: &AuthenticatedCaller,
             name: &str,
             arguments: Value,
+            _selection: Option<&ToolsetSelection>,
         ) -> anyhow::Result<Value> {
             Ok(json!({
                 "content": [{"type": "text", "text": arguments.to_string()}],
@@ -1037,7 +1578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modern_initialize_is_rejected_as_legacy_only() {
+    async fn native_initialize_succeeds_without_a_shim() {
         let response = call(
             "initialize",
             json!({"protocolVersion": MCP_PROTOCOL_VERSION}),
@@ -1046,19 +1587,88 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_json(response).await;
-        assert_eq!(body["error"]["code"], -32601);
-        assert!(body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("initialize"));
+        assert_eq!(body["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
+        assert_eq!(body["result"]["serverInfo"]["name"], "op-grpc-bridge");
     }
 
     #[tokio::test]
-    async fn modern_initialized_notification_is_rejected_as_legacy_only() {
+    async fn native_initialized_notification_is_accepted_without_a_shim() {
         let response = call("notifications/initialized", json!({}), None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_json(response).await;
-        assert_eq!(body["error"]["code"], -32601);
+        assert_eq!(body["result"], json!({}));
+    }
+
+    #[tokio::test]
+    async fn initialize_negotiates_before_protocol_header_exists() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("x-test-auth", "ok")
+                    .body(Body::from(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {"protocolVersion": MCP_PROTOCOL_VERSION}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["result"]["protocolVersion"],
+            MCP_PROTOCOL_VERSION
+        );
+    }
+
+    fn principal_record(
+        principal_id: &str,
+        pubkey: &str,
+        revoked_at: i64,
+    ) -> op_cozo_store::HumanPrincipalRecord {
+        op_cozo_store::HumanPrincipalRecord {
+            principal_id: principal_id.into(),
+            human_pubkey: pubkey.into(),
+            display_alias: String::new(),
+            registered_at: 1,
+            revoked_at,
+        }
+    }
+
+    #[test]
+    fn sealed_id_requires_an_exact_active_registry_binding() {
+        assert!(validate_registered_sealed_id_principal(None, "p", "k").is_err());
+        assert!(validate_registered_sealed_id_principal(
+            Some(&principal_record("p", "k", 2)),
+            "p",
+            "k"
+        )
+        .is_err());
+        assert!(validate_registered_sealed_id_principal(
+            Some(&principal_record("other", "k", 0)),
+            "p",
+            "k"
+        )
+        .is_err());
+        assert!(validate_registered_sealed_id_principal(
+            Some(&principal_record("p", "other", 0)),
+            "p",
+            "k"
+        )
+        .is_err());
+        assert!(validate_registered_sealed_id_principal(
+            Some(&principal_record("p", "k", 0)),
+            "p",
+            "k"
+        )
+        .is_ok());
     }
 
     #[tokio::test]
@@ -1097,6 +1707,22 @@ mod tests {
         .await;
         assert_eq!(body["result"]["structuredContent"]["tool"], "echo");
         assert_eq!(body["result"]["structuredContent"]["arguments"]["value"], 7);
+    }
+
+    #[test]
+    fn argument_toolset_selector_is_stripped_before_schema_validation() {
+        let mut arguments = json!({
+            "query": "identity",
+            "_meta": {
+                "opdbus_toolset": {"id": "context_code", "generation": 3}
+            }
+        });
+        let selection = merged_toolset_selection(&json!({}), &mut arguments)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.id, "context_code");
+        assert_eq!(selection.generation, 3);
+        assert_eq!(arguments, json!({"query": "identity"}));
     }
 
     #[tokio::test]
@@ -1366,10 +1992,23 @@ mod tests {
             "*": {"capabilities": ["cognitive_mcp.read", "cognitive_mcp.invoke"]},
             "known": {"capabilities": ["cognitive_mcp.read"]}
         });
-        assert!(capabilities_for_footprint(&document, "unknown").is_empty());
-        assert_eq!(
-            capabilities_for_footprint(&document, "known"),
-            HashSet::from(["cognitive_mcp.read".to_string()])
+        assert!(capabilities_for_principal(&document, "unknown").is_empty());
+        assert!(capabilities_for_principal(&document, "known").is_empty());
+    }
+
+    #[test]
+    fn legacy_footprint_key_invalidates_entire_grant_document() {
+        let document = json!({
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": {
+                "capabilities": ["cognitive_mcp.invoke"]
+            },
+            "937d6d2b-ecae-ed53-f3a2-d7bd09f544ff": {
+                "capabilities": ["cognitive_mcp.read"]
+            }
+        });
+        assert!(
+            capabilities_for_principal(&document, "937d6d2b-ecae-ed53-f3a2-d7bd09f544ff")
+                .is_empty()
         );
     }
 

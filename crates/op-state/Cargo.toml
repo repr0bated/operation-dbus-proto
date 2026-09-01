@@ -9,7 +9,7 @@ description = "State management system with plugin infrastructure, crypto, and s
 [dependencies]
 parking_lot = { workspace = true }
 op-core = { path = "../op-core" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-state-store = { path = "../op-state-store" }
 op-network = { path = "../op-network" }

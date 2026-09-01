@@ -2,10 +2,11 @@
 
 ## Purpose
 
-Establish exactly one authenticated network ingress for the entire MCP / cognitive
-tool surface, owned by `op-grpc-bridge`, listening on TLS port `:8090`. Every MCP
-client — general, compact, agents, cognitive, code, memory, blob-schema/catalog,
-context-awareness, Waypipe, and generated plugin methods — reaches the same
+Establish `10.0.0.3:8090` as the authenticated unified fabric surface itself, owned by
+`op-grpc-bridge`: MCP at `/mcp`, native gRPC/gRPC-Web, generated plugin methods, and
+mutation/control capabilities all enter through that one surface. Every MCP client —
+agents, cognitive, code, memory, blob-schema/catalog, context-awareness, Waypipe, and
+generated plugin methods — reaches the same
 in-process registry (and the same sealed-plugin route surface) through the same
 authentication, route-building, capability, validation, dispatch, and event-chain
 stack, whether the transport is TCP, the host Unix domain socket, or a container
@@ -50,26 +51,32 @@ called out inline and in the Verified Baseline section.
 | Term | Meaning |
 |---|---|
 | **Bridge** | `op-grpc-bridge`, the sole owner of the `:8090` TLS ingress, of the D-Bus session-bus name `org.opdbus.v1.plugins`, of the canonical `ToolRegistry`, of the sealed-plugin route surface, and of the single authoritative durable Cozo writer. |
-| **Ingress** | The one network listener that accepts MCP/gRPC traffic: TLS `:8090`. |
+| **Unified fabric surface** | The one bridge-owned mesh-private external surface, `10.0.0.3:8090`, carrying MCP `/mcp`, native gRPC/gRPC-Web, generated plugin methods, and mutation/control capabilities through one authority. It is not merely an endpoint on another fabric. |
+| **Ingress** | The listener set implementing the unified fabric surface on TLS `:8090`. |
 | **UDS** | Unix domain socket. Host UDS = `/run/opdbus/grpc.sock`; container UDS = the bind-mounted `/run/ghostbridge/container.sock`. |
 | **Registry** | The single in-process `ToolRegistry` (`crates/op-mcp/src/tool_registry.rs`) owned by the bridge. |
-| **Registry tool** | A `Tool` implementation registered in the bridge-owned `ToolRegistry` (cognitive, code, memory, agent, blob, compact meta-tools). The registry is an in-process implementation detail behind the canonical D-Bus execution path; no network adapter may execute it directly. |
+| **Registry tool** | A typed `Tool` implementation registered in the bridge-owned `ToolRegistry` (cognitive, code, memory, agent, blob, HOT tools, or WARM/COLD set members). The registry is an in-process implementation detail behind the canonical D-Bus execution path; no network adapter may execute it directly. |
 | **Generated plugin method** | A sealed-PluginSchema-derived gRPC method dispatched through `PluginService.CallMethod` → D-Bus → `MutationEngine`. These are **routes**, not registry tools (see FR-3a). |
 | **Tool descriptor** | A read-only runtime projection of the tool's authoritative sealed `PluginSchema.methods[method]` / `MethodDecl`: `required_capability`, `subid`, `side_effect`, `idempotent`, `input_schema`, `output_schema`, `approval_required` (see FR-3b). It is not a second independently authored contract. |
 | **Capability-filtered view** | A per-client subset of the tool/route surface computed from the caller's resolved identity and granted capabilities — never a separate network service. |
 | **Sealed blob** | An immutable `OPBLOB01` object at `/dev/shm/opdbus/plugin-blobs/<plugin_id>.<schema_hash16>.blob`, written only by `op-blob`. A blob is active only when it is manifest-selected, hash/compatibility validated, and its declared executable shapes are mounted; an uncompiled or incompatible blob remains staged/inactive (FR-9). |
 | **PluginSchema** | The published contract for a plugin, derived from schemars; single source of truth for method shapes, capabilities, subids. |
 | **OIA1** | The versioned Oracle Identity Assertion wire envelope defined by `netmaker-xray-identity-handoff`. |
+| **SID1** | The bounded MutationEngine-authored immutable session identity envelope stored inline in exactly one selected identity sled and forwarded unchanged by the local header helper. It is not an OPBLOB01 object, footprint, grant key, or Snowball input. |
+| **Header helper** | Short-lived `op-identity-headers`, invoked natively by Codex through per-request `http_headers_helper`; it emits one JSON header object and owns no listener, MCP transport, proxy, or identity-authoring logic. |
 | **identity_sled** | The per-session identity projection resolved by the bridge for capability lookup. |
-| **Event chain** | The per-mutation immutable chain (`op-blockchain` / `EventChain`) appended on every dispatched call. |
+| **Event chain** | The per-mutation immutable chain (`op-snowball` / `EventChain`) appended on every dispatched call. |
 | **Memory domain** | A trust/scope class of memory: system-curated, chatbot-soul, user/container, workspace/project, or shared-semantic (see DR-6). |
 
 ---
 
 ## Non-negotiable target architecture (normative)
 
-1. There is exactly **one** network MCP ingress: TLS `:8090`, owned by the bridge.
-2. All MCP clients authenticate at `:8090` before discovery or execution.
+1. `10.0.0.3:8090` is exactly one external **unified fabric surface**, owned by the
+   bridge, covering MCP, gRPC/gRPC-Web, plugins, mutation, and control capabilities.
+2. All MCP clients authenticate at `:8090` before discovery or execution with exactly
+   one accepted identity credential: exact active-sled SID1 for the protected local
+   client or fresh OIA1 for another caller.
 3. The `:8090` listener multiplexes, on **one port**, MCP Streamable HTTP/JSON-RPC,
    optional MCP SSE, and native gRPC (with server reflection). "One port, two
    protocols" means the same listener handles each protocol over its own valid
@@ -98,8 +105,11 @@ called out inline and in the Verified Baseline section.
    D-Bus path (`PluginService.CallMethod` → `MutationEngine`) after bridge
    authentication. The in-process `ToolRegistry` is an executor selected by the
    MutationEngine, not a parallel control plane. Tool contracts are derived from the
-   manifest-selected sealed `PluginSchema`; MCP, gRPC, compact meta-tools, and direct
+   manifest-selected sealed `PluginSchema`; MCP, gRPC, typed HOT/WARM/COLD tools, and direct
    generated calls MUST NOT author or execute a second contract.
+9. EMQX is a standalone internal broker attached behind the fabric through loopback
+   MQTT and a dedicated authenticated ExHook listener. It never exposes or forwards
+   MCP and never becomes a second external endpoint or identity authority.
 
 ---
 
@@ -125,9 +135,9 @@ name is authoritative.
 | Deployed bridge/web binaries lag current source | ⚠️ | run script says "Phase 2 in-process"; source still has loopback (see below) |
 | `plugin_schema.dat` absent from `/dev/shm/opdbus` | ✅ | `find` → none |
 | 66 sealed blobs in `/dev/shm/opdbus/plugin-blobs/` | ✅ | `ls` |
-| `/dev/shm/opdbus/capability-grants.json` grants wildcard `*` footprint `cognitive_mcp.invoke`, `cognitive_mcp.read`, `mcp.read/write`, `agent.invoke`, `compact_mcp.*` … | ✅ (defect) | file — the forbidden wildcard-identity bypass |
-| A real per-footprint grant entry (hex-keyed) also exists | ✅ | same file — the per-identity model is available |
-| Working compact/full tool inventory + counts (must be preserved across migration) | ✅ baseline | to be captured in Phase 0 (DEP/CR-1) |
+| `/dev/shm/opdbus/capability-grants.json` grants wildcard `*` identity `cognitive_mcp.invoke`, `cognitive_mcp.read`, `mcp.read/write`, `agent.invoke`, `compact_mcp.*` … | ✅ (defect) | file — the forbidden wildcard-identity bypass |
+| A 64-hex derived-footprint grant key also exists | ✅ (defect) | same file — grants must migrate to registered `principal_id`, never a digest |
+| Working typed capability inventory plus the four retired compact names | ✅ baseline | capture typed capabilities as the preservation oracle and compact names as the removal oracle in Phase 0 (DEP/CR-1) |
 
 ### Source (repo) — the `Tool`/`ToolRegistry` contract (the authorization gap)
 
@@ -212,19 +222,20 @@ are normative. Criteria marked `[manual]` cannot be fully automated.
 
 ## Functional Requirements
 
-### FR-1 — One network MCP ingress (resolved listener topology)
+### FR-1 — One unified fabric surface (resolved listener topology)
 
 The bridge MUST own the only network listener that serves MCP tool discovery or
 execution: TLS `:8090`. The current topology is defective: the bridge directly binds
 only `127.0.0.1:8090`, and `10.0.0.3:8090` is a **Python `socket-relay`** (`fwd-8090`)
 — an unmanaged L4 forwarding hop (TLS remains end-to-end), a second process owning
-the canonical port, and a no-Python-policy violation. The canonical bind
-set is exact, not an implementation-time choice:
+the canonical port, and a no-Python-policy violation. The canonical bind set is exact,
+not an implementation-time choice:
 
 - `127.0.0.1:8090` (host loopback);
-- `10.0.0.3:8090` (the `svc0` service address); and
-- `${NETMAKER_MESH_IP}:8090`, whose deployment default is `100.69.0.1:8090`, bound
-  only when the configured Netmaker interface owns that exact address.
+- `10.0.0.3:8090` (the `svc0` unified fabric address).
+
+There is no Netmaker bind in the target architecture. EMQX is also no longer a
+Netmaker component; it stays behind this surface on loopback MQTT/ExHook.
 
 `10.200.0.2:8090` is not an MCP ingress address and MUST NOT be bound unless a later,
 reviewed change adds it to this canonical contract. The resolved implementation MUST:
@@ -234,27 +245,25 @@ reviewed change adds it to this canonical contract. The resolved implementation 
   terminates or forwards `:8090` traffic;
 - state the firewall policy for the mesh-facing port and the TLS certificate SANs
   that cover every bound address;
-- retire both `fwd-8090` (including its Python `socket-relay`) and
-  `fwd-nm-mesh-8090`; Netmaker reachability MUST be a bridge-direct bind, not a mesh
-  relay;
+- retire both historical `fwd-8090` (including its Python `socket-relay`) and
+  `fwd-nm-mesh-8090`; neither is replaced by a Netmaker bind or relay;
 - fail startup for a configured canonical address that exists on its interface but
   cannot be bound; it MUST NOT silently continue loopback-only.
 No other process may open a network listener that serves MCP/gRPC, and no relay may
 sit in front of `:8090`.
 
 **Acceptance:**
-- `sudo ss -lntp` shows only the **bridge PID** listening on `127.0.0.1:8090`,
-  `10.0.0.3:8090`, and (when the configured Netmaker address is present)
-  `${NETMAKER_MESH_IP}:8090`; no non-canonical `:8090` bind and no listener on
+- `sudo ss -lntp` shows only the **bridge PID** listening on `127.0.0.1:8090` and
+  `10.0.0.3:8090`; no Netmaker/non-canonical `:8090` bind and no listener on
   `:3003`, `:50051`, `:50052`, `:11438`, `:11437` exists.
 - `fwd-8090` and `fwd-nm-mesh-8090` are retired (`sudo sv status` → down/absent;
   service dirs removed) and no `socket-relay`/`tcpfwd`/`python3` process fronts
   `:8090`.
 - Plaintext gRPC dial to `:8090` fails; a TLS-authenticated reflection dial succeeds
   against every bound address, and the presented cert's SANs cover them.
-- The deployed firewall allows `10.0.0.3:8090` and the Netmaker bind only from their
-  named trusted interfaces/CIDRs and denies every other ingress; an off-mesh
-  reachability test fails while an on-mesh test succeeds.
+- The deployed firewall allows `10.0.0.3:8090` only on `svc0` from the enumerated
+  trusted service CIDR and denies every other ingress; an unauthorized-interface
+  reachability test fails while the authorized service path succeeds.
 
 ### FR-2 — Protocol multiplexing on `:8090` (one port, per-connection protocol)
 
@@ -266,8 +275,9 @@ connection; adding a protocol MUST NOT add a port.
 **Acceptance:**
 - Over the same port, an independently authenticated canonical stateless MCP request
   completes `tools/list` without a legacy session, AND a separate gRPC connection
-  completes reflection `list`; if the bounded legacy shim is retained, a separate
-  legacy test completes `initialize` + `tools/list` and labels that path legacy.
+  completes reflection `list`; a real native Codex connection also completes
+  `initialize`/`notifications/initialized` + `tools/list` in the same router with no
+  proxy, listener, or authorization-bearing MCP session.
 - The design decides SSE retain-or-remove; exactly one holds: (retained) an SSE
   subscription over `:8090` opens; or (removed) the acceptance test asserts no SSE
   route exists.
@@ -280,67 +290,95 @@ canonical version is the current MCP release (2026-07-28, stateless lifecycle;
 https://blog.modelcontextprotocol.io/posts/2026-07-28/). The design MUST:
 
 - adopt the 2026-07-28 **stateless** lifecycle and its required headers as canonical;
-- define, explicitly and as a bounded compatibility shim, whether the older stateful
-  `initialize` + `Mcp-Session-Id` model is supported; if supported, it is legacy-only
-  and documented as such;
-- bind authentication to the OIA1 assertion, not to an MCP session id: a **one-use
-  OIA1 assertion authenticates each request/turn**, and any MCP session id is a
-  correlation handle only. A stolen or replayed MCP session id MUST NOT be sufficient
-  authentication — every request still passes SEC-2. For a legacy stateful client the
-  design MUST define exactly how a one-use OIA assertion establishes the authenticated
-  session and how subsequent requests re-present/bind fresh assertion material
-  (session id alone never authorizes).
+- accept native Codex `initialize` and `notifications/initialized` in the same bridge
+  router as a bounded protocol-compatibility lifecycle, without a shim/proxy/listener
+  or authorization-bearing server session;
+- bind authentication to exactly one credential, never an MCP session id: the exact
+  active-sled SID1 authenticates the protected local chatbot request, while a one-use
+  OIA1 authenticates another caller's request. A stolen/replayed MCP session id is
+  insufficient and every protected message still passes SEC-2.
 
-The canonical stateless path MUST NOT create server-held authorization state and MUST
-NOT require a prior legacy `initialize`; each independently authenticated request is
-valid according to the 2026-07-28 lifecycle. `initialize`-before-use applies **only**
-to the explicitly legacy stateful shim. Tests and error messages MUST name which path
-they exercise so the two lifecycles cannot be accidentally merged.
+The canonical stateless path MUST NOT create server-held authorization state and direct
+requests remain independently valid. Native Codex may nevertheless send
+`initialize`/`notifications/initialized`; the same router responds compatibly and then
+continues stateless authorization. This compatibility is an in-router method behavior,
+not a network shim, proxy, separate mode, second MCP endpoint, or identity authority.
+
+Codex connects directly to `https://10.0.0.3:8090/mcp` and invokes
+`op-identity-headers` through native per-request `http_headers_helper`. The helper reads
+only the explicitly selected current sled's private `root:secrets` credential projection
+(never public/legacy state) and emits only
+`x-opdbus-sealed-id-bin` JSON containing its exact MutationEngine-authored SID1.
+It owns no listener/transport and never rebuilds identity claims. OAuth is absent: no
+authorization/token/callback/PKCE routes or same-endpoint OAuth-to-OIA exchange exist.
+
+The full credential-bearing sled persists only in the root-only identity Cozo tree and
+the `0640 root:secrets` private tmpfs projection. Public identity state and generic
+D-Bus, StateSync get/subscribe, snapshot, method-result, Snowball/vector, schema, web,
+log, and error surfaces recursively omit `sealed_id` and SID1 bytes.
 
 The endpoint MUST also implement: protocol-version negotiation (reject unsupported
 versions); JSON-RPC error objects; request cancellation; notifications; request
 body-size limits and per-request timeouts; the browser policy of SEC-14;
 SSE resumption (if SSE retained); pagination for `tools/list`; and `resources/list` +
 `resources/read` for `blob://<plugin_id>` resources (FR-8). For ordinary MCP HTTP,
-OIA1 MUST use one canonical base64url-without-padding header encoding with a bounded
-decoded length; duplicate assertion headers, non-canonical encodings, trailing bytes,
-and conflicting gRPC/HTTP assertion representations MUST be rejected. Native gRPC
-retains the canonical `-bin` metadata encoding. No intermediary may translate a raw
-self-asserted identity header into OIA1.
+OIA1 and SID1 MUST each use canonical base64url-without-padding HTTP encoding with a
+bounded decoded length; duplicates, non-canonical encodings, trailing bytes, dual
+SID1+OIA1 credentials, and conflicting gRPC/HTTP representations are rejected. Native
+gRPC retains its canonical `-bin` metadata encoding. The JSON-RPC body is authoritative
+for method and target name; native Codex is not required to synthesize custom
+`Mcp-Method` or `Mcp-Name` headers. `MCP-Protocol-Version` follows standard
+initialize/subsequent-request behavior. No intermediary may translate a raw
+self-asserted identity header into an accepted credential.
 
 **Acceptance:**
 - The server advertises exactly one canonical `protocolVersion` (2026-07-28) and
-  rejects unsupported versions; any legacy stateful path is documented and gated.
-- A request bearing a valid MCP session id but **no valid fresh OIA1 assertion** is
-  rejected (session id is not authentication); a replayed session id does not grant
-  access.
-- A canonical stateless request succeeds without a legacy session after its own fresh
-  OIA1 is validated; a call before initialization on the **legacy shim only** is
-  rejected.
+  rejects unsupported versions. There is no separate legacy stateful path or mode;
+  native Codex lifecycle messages are handled in the same router.
+- A request bearing a valid MCP session id but no exact active-sled SID1 or fresh OIA1
+  is rejected; a replayed session id grants nothing.
+- Direct stateless requests succeed with either accepted credential. Native Codex's
+  initialize/initialized sequence succeeds in the same router and creates no standing
+  authority; its helper is invoked per request and forwards the same immutable session
+  SID1 until that sled is revoked, expired, inactive, or replaced.
+- No OAuth support route, MCP shim/proxy process, alternate command, or second listener
+  participates in the Codex path.
 - `resources/list` includes `blob://` entries and `resources/read` returns a sealed
   plugin's resource.
-- Duplicate/non-canonical/oversized HTTP OIA1 headers are rejected, and the same OIA1
-  wire bytes produce the same identity decision over native gRPC and MCP HTTP.
+- Duplicate/non-canonical/oversized SID1/OIA1 headers and dual credentials are rejected;
+  SID1 is exact-matched to the active sled and OIA1 remains replay-protected.
 - An oversized body and a slow request are bounded; cancellation follows the
   mutation-safe semantics of FR-3g/NFR-4; browser Origin/CORS behavior follows SEC-14.
 
 ### FR-3 — Unified surface; removing a service never removes its tools
 
-All MCP capabilities MUST survive across one bridge-owned in-process `ToolRegistry`
+All MCP capabilities MUST survive in the authoritative catalog spanning one bridge-owned in-process `ToolRegistry`
 (registry tools) plus the shared sealed-plugin route surface (generated plugin
-methods, FR-3a). Retiring any standalone service MUST NOT remove any tool or method.
-The combined surface MUST include: (1) general/full tools; (2) compact meta-tools
-`list_tools`/`search_tools`/`get_tool_schema`/`execute_tool`; (3) agent tools;
-(4) cognitive tools; (5) code tools `code_search`/`code_context`/`code_index`;
-(6) context-awareness services; (7) memory tools; (8) blob-schema/catalog tools
-(FR-8); (9) Waypipe (FR-11); (10) generated plugin methods (FR-3a).
+methods, FR-3a). Retiring any standalone service MUST NOT remove its typed underlying
+capabilities. The combined surface MUST include: (1) the five HOT typed tools
+`memory_recall`/`memory_store`/`workflow_query`/`workflow_run`/`toolsets`; (2) typed
+agent tools; (3) cognitive tools; (4) code tools
+`code_search`/`code_context`/`code_index`; (5) context-awareness services; (6) memory
+tools; (7) blob-schema/catalog tools (FR-8); (8) Waypipe (FR-11); and (9) generated
+plugin methods (FR-3a). The former generic compact meta-tools are an intentional
+surface removal, not a lost capability: `toolsets` reaches authorized typed tools.
+
+Presence in the authoritative catalog does not imply visibility to every caller. The
+audience/temperature projection in
+`standalone-emqx-identity-mcp` FR-12 through FR-15 is the newer authority for client-visible
+`tools/list` and `tools/call`: exactly one configured chatbot `principal_id` begins
+with exactly the five typed HOT tools, while other agents receive their capability-
+authorized HOT subset. `toolsets` selects exactly one typed WARM/COLD set at a time.
+No principal sees or calls `list_tools`, `search_tools`, `get_tool_schema`,
+`execute_tool`, or `invoke_tool` on MCP.
 
 **Acceptance:**
-- With all standalone MCP services stopped, an authenticated discovery at `:8090`
-  exposes at least one representative from each of categories 1–9 plus generated
-  plugin methods (10).
-- A regression test enumerates the pre-consolidation tool/method names (captured in
-  Phase 0) and asserts each is still present.
+- With all retired standalone MCP services stopped, an internal catalog regression
+  test enumerates the pre-consolidation tool/method names and asserts each remains in
+  the one bridge-owned catalog.
+- Audience-projected discovery never exposes every category at once; the exact five-
+  tool singleton default and authorized one-set-at-a-time typed selection prove the
+  preserved capabilities are reachable without a generic executor or another listener.
 
 ### FR-3a — Generated plugin methods are routes, not registry tools
 
@@ -361,7 +399,7 @@ execution are forbidden.
   D-Bus/`PluginService`/`MutationEngine` path and MUST NOT call the `ToolRegistry`
   directly as a parallel control plane (registry-tool dispatch also carries the
   ExecutionContext of FR-3d and the same auth pipeline of SEC-2).
-- A route-spy test proves every MCP `tools/call`, including compact `execute_tool`,
+- A route-spy test proves every direct typed MCP `tools/call`
   crosses the canonical `PluginService.CallMethod`/MutationEngine admission point
   exactly once before any tool implementation runs.
 
@@ -375,9 +413,9 @@ and `approval_required`; tool implementation code MUST NOT independently redefin
 those security fields. Registration MUST reject a missing declaration or any mismatch
 between implementation projection and sealed declaration. The MutationEngine, before
 selecting `ToolRegistry::execute`, MUST enforce the **target tool's**
-`required_capability` against the caller's resolved identity. Holding a broad
-capability (e.g. `cognitive_mcp.invoke` / `execute_tool`) MUST NOT authorize every
-registered tool; each tool is authorized by its own `required_capability`.
+`required_capability` against the caller's resolved identity. A broad category or
+legacy invoke capability MUST NOT authorize every registered tool; each directly
+called typed tool is authorized by its own `required_capability`.
 
 **Acceptance:**
 - Every registered tool exposes a descriptor with all fields populated (a test
@@ -406,24 +444,19 @@ carry, all set by the bridge (never by the caller):
 - verified approval (when the target tool is `approval_required`, FR-12/SEC-10);
 - transport binding (TCP source binding or UDS peer credentials, TR-2).
 
-Read-only meta-tools propagate the original context. A dispatching meta-tool such as
-`execute_tool` MUST create, through a bridge-only constructor, an **attenuated child
-ExecutionContext**: actor, resolved identity, scope, transport binding, approval
-provenance, parent correlation, deadline, and cancellation may only be preserved or
-narrowed; the selected capability is replaced by the server-resolved target
-capability; delegation depth increments; no grant or scope may be added. Both the
-outer meta-tool capability and the nested target capability MUST be granted. A caller
-cannot supply a child context, and recursive meta-dispatch beyond the configured
-depth fails before execution.
+Each direct typed `tools/call` receives a target-specific ExecutionContext constructed
+by the bridge after projection and exact target-capability resolution. `toolsets`
+changes only the selected view and never dispatches a nested target, constructs a
+child context, adds a grant, or changes scope. The former generic MCP meta-dispatch
+path is removed.
 
 **Acceptance:**
 - `Tool` execution receives an ExecutionContext the caller cannot forge or mutate; a
   test asserts a caller cannot inject/override any ExecutionContext field via
   `arguments`.
-- A meta-tool invocation reaching a target tool carries an attenuated child with the
-  same actor/transport/parent trace, no wider scope/deadline, and the target's
-  server-selected capability; tests prove both outer and target capabilities are
-  required and that recursion/delegation depth is bounded.
+- A direct typed invocation carries the server-selected target capability and cannot
+  widen actor, transport, scope, deadline, approval, or grants; `toolsets` selection
+  does not execute a target or create another ExecutionContext.
 
 ### FR-3e — Output-schema validation before use
 
@@ -502,7 +535,9 @@ Wildcard `"*"` identity grants MUST be prohibited **without exception** in
 Public liveness/onboarding is expressed by an exact route allowlist, never a wildcard
 principal or capability grant. Moreover, `PluginSchema` declares capabilities that a
 method **requires** but MUST NOT be an authority that **assigns** grants to identities:
-all identity grants derive from the active per-session `identity_sled` projection.
+all grants derive from the protected principal-grant projection keyed by an exact,
+registered `principal_id`. `identity_sled` supplies the principal's current
+session/genesis context but does not assign grants.
 Legacy `PluginSchema.capability_grants` data MUST be ignored for authorization and
 removed/resealed; encountering it during activation is a migration error, not a grant.
 Hand-written services mounted by the shared route builder — context, Waypipe,
@@ -516,10 +551,56 @@ registration, health — MUST also carry capability, `side_effect`, `subid`, and
 - A semantic CI/runtime gate fails on any `"*"` identity grant or any non-empty sealed
   `PluginSchema.capability_grants`, regardless of capability category; liveness and
   onboarding tests pass solely through the exact public-route allowlist.
-- A per-footprint grant embedded in a sealed schema but absent from the caller's active
-  `identity_sled` does not authorize execution; a current sled grant does.
+- A per-principal or per-footprint grant embedded in a sealed schema does not authorize
+  execution; only the protected principal-grant projection entry for the caller's exact
+  registered `principal_id` does.
 - Context/Waypipe/registration/health methods each expose capability + subid +
   side_effect + approval metadata.
+
+### FR-4b — Principal identity is authority; footprint is sled payload only
+
+The authorization namespace is the stable `principal_id` resolved from the
+authoritative HumanPrincipal/service-principal registry. `session_id` is correlation;
+`session_genesis` anchors one session term. Neither is a capability key. A
+`PluginFootprint` is exclusively the canonical per-mutation payload envelope emitted
+by the sled and delivered by the Shuttle to the Snowball hash-chain append path and
+asynchronous vectorization.
+
+The resolved `principal_id` MUST be injected into request/event context as
+`actor_id`, then copied into footprint metadata alongside `session_id` and
+`session_genesis`. No principal, grant, audience, SID1 claim, D-Bus binding,
+tool-set handle, or cache scope may be derived from a footprint, genesis, chain head,
+`data_hash`, `content_hash`, `event_hash`, or another digest. In particular, hashing a
+footprint/hash to manufacture an identity is forbidden.
+
+Snowball is the sole chain-hash author. It computes the current event receipt once
+from the domain, previous link, and canonical payload bytes. The sled/Shuttle MUST NOT
+prehash the current footprint/payload and ask Snowball to hash that digest again.
+Vectorization consumes deterministic canonical payload text and records the returned
+`event_id`/`event_hash` as provenance; a digest-only body is insufficient. The current
+`ChainEvent.json_args_footprint` prehash is removed; bounded/redacted canonical
+arguments are part of the footprint payload instead. Explicit digests of external
+state/reference artifacts may remain clearly named provenance fields, but they are
+not footprints and do not replace the current payload.
+
+**Acceptance:**
+- `HumanPrincipalIdentity.footprint`, `derive_human_footprint`, auth-facing
+  `GhostbridgeIdentity.footprint`, footprint-keyed `AuthenticatedCaller`, and
+  `capabilities_for_footprint` are removed or migrated to explicit principal/session/
+  genesis fields.
+- Production grant loading accepts registered `principal_id` keys only and rejects
+  wildcard, 64-hex footprint, genesis, and other digest keys.
+- Two sessions for one principal retain the same grants/audience while receiving
+  distinct session/genesis/footprint records; identical payload digests owned by two
+  principals do not transfer authority.
+- Exactly one canonical footprint payload type feeds Snowball and vectorization;
+  Snowball authors one current-event hash and no `json_args_footprint` or legacy
+  `data_hash → content_hash` current-payload hash-of-hash generator remains.
+- MutationEngine authors SID1 once from the immutable session identity/anchor and
+  stores it in that sled; no footprint/hash is an SID1 input or authorization key.
+- The A.N.N.A. Scribe persona and established email identity remain intact. Only its
+  unsafe duplicate `/dev/shm/plugin_schema.dat` mmap reader and duplicate derivation
+  are removed; any needed read uses the canonical selected-sled projection.
 
 ### FR-3c — Registration rejects all name collisions
 
@@ -531,43 +612,99 @@ the first registration intact; a test asserts this for an arbitrary name.
 
 ### FR-4 — Client "modes" are capability-filtered views, not services
 
-"full", "compact", "agents", "cognitive", and "code" behavior MUST be a
-capability-filtered projection of the same surface, computed from the caller's
-resolved identity. No separate network service or execution engine per mode.
+HOT/default and named WARM/COLD tool-set behavior MUST be projections of the same
+surface, computed after resolving the caller's identity. The effective view is the
+intersection of exact capabilities, server-side audience policy, HOT/default or one
+selected set, and provider health. The former compact mode/meta-tool surface is
+retired. No separate network service or execution engine per mode or tool set exists.
 
 **Acceptance:**
 - Two identities with different granted capabilities calling `tools/list` receive
   different filtered sets from the same registry instance.
+- A tool-set selector can only narrow exact grants; a guessed call outside the active
+  projection is denied.
 - CI gate (scoped to production execution ownership, NFR-7): no production code path
   constructs a second authoritative `ToolRegistry` or a per-mode network listener.
   (Test-only and isolated-library registries are out of the gate's scope.)
 
-### FR-5 — Compact meta-tools operate over the unified surface
+### FR-4c — Provider-backed WARM sets are supervised, pinned, and truthfully gated
 
-`list_tools`, `search_tools`, `get_tool_schema`, `execute_tool` MUST operate over
-the same unified surface (post-filter). `execute_tool` MUST dispatch through the
-same target-tool capability (FR-3b) + input validation (FR-5a) + event-chain path
-as a direct call, using the attenuated child context of FR-3d and entering the
-canonical D-Bus/MutationEngine path exactly once. It MUST NOT call the target registry
-implementation directly.
+NotebookLM and `mongodb-mcp-server` MUST be independent runit-supervised local
+providers, installed from version-and-SHA256-pinned release artifacts rather than
+`npx @latest`. They MUST bind Streamable HTTP only on loopback and MUST be reachable
+from clients only through the bridge's one authenticated `:8090/mcp` endpoint. The
+bridge owns the typed `plugin.notebooklm.*` and `plugin.mongodb_mcp.*` adapters and
+dispatches them through the same capability, schema-validation, identity-metadata,
+and MutationEngine audit path as every other plugin method.
+
+Service health and upstream authentication are separate facts:
+
+- `notebooklm_auth` contains only `get_health` and `setup_auth` and requires the
+  healthy provider marker; `notebooklm_research` requires a distinct marker produced
+  only when NotebookLM reports `authenticated=true`. Interactive authentication runs
+  as the desktop user on the protected CRD display and persists only the provider's
+  Chrome profile, never a cookie copied into bridge configuration.
+- `mongodb_knowledge` may use the healthy read-only provider without a database URI.
+  `mongodb_data` requires a distinct authenticated marker created only after a real
+  read-only `list-databases` probe succeeds against the configured `preconfigured`
+  connection. A merely present URI MUST NOT satisfy this gate.
+- MongoDB runs with read-only mode, server-side JavaScript disabled, request
+  overrides disabled, and telemetry disabled. Its credential source is a protected
+  root-owned environment file, never a tool argument, manifest value, or log field.
+- Local `context_code` and `context_knowledge` sets remain in-process WARM sets.
+  None of these providers or health checks participates in constructing or serving
+  the five HOT tools.
+- EMQX is not an MCP provider endpoint. It is a standalone internal broker attached
+  through loopback MQTT and dedicated authenticated ExHook; it supplies asynchronous
+  health/catalog/hook signals only and remains behind the `10.0.0.3:8090` fabric.
+
+**Acceptance:** both services survive restart under `sudo sv`, expose only loopback
+listeners, answer an MCP initialize/list/call probe, and remove readiness markers on
+exit. With no MongoDB credential, `mongodb_data` is absent while
+`mongodb_knowledge` remains selectable. With NotebookLM logged out,
+`notebooklm_auth` remains selectable while `notebooklm_research` is absent. No
+provider process, profile, credential, or additional URL appears in client MCP
+configuration.
+
+### FR-5 — `toolsets` replaces the compact lazy loader
+
+The one configured singleton chatbot initially discovers exactly
+`memory_recall`, `memory_store`, `workflow_query`, `workflow_run`, and `toolsets`.
+`toolsets` lists authorized sets and selects exactly one typed WARM/COLD set; after
+re-list, the view is exact grants ∩ audience ∩ (HOT ∪ selected set) ∩ provider health.
+Selection grants nothing and cannot union multiple sets. The former
+`list_tools`/`search_tools`/`get_tool_schema`/`execute_tool` surface and all
+`invoke_tool` aliases are absent from active MCP discovery and denied by name for
+every principal.
+
+Drill-down requires explicit MCP client support. `toolsets(select)` returns the
+principal/client/catalog-bound selector and `relist_required=true`; the client—not the
+model—must capture it, issue a new `tools/list` with the selector in negotiated `_meta`,
+and carry it on later calls. Schemas returned inside a tool result are informational
+and do not register callable tools. A client that does not implement selector/re-list
+behavior remains on its HOT default and MUST NOT be reported as supporting drill-down.
 
 **Acceptance:**
-- `execute_tool{tool_name:"cognitive_memory", …}` returns a real result and records
-  a non-zero `event_id`/`event_hash`.
-- `search_tools` for a known cognitive tool returns it (the pre-consolidation defect
-  — compact endpoint carrying none of the cognitive tools — MUST NOT recur).
+- The singleton's initial `tools/list` is exactly the five HOT typed names.
+- Selecting one authorized set and re-listing returns the HOT base plus only that
+  set's authorized healthy typed tools; selecting another replaces it.
+- A real-client capability test proves Codex/Grok selector/re-list support before
+  claiming drill-down E2E; an unsupported client remains on HOT five with a typed
+  `client_relist_required`/unsupported result and no hidden tool becomes callable.
+- A guessed typed tool outside the active projection and every former compact/generic
+  name are denied, even when client/model metadata is spoofed.
 
-### FR-5a — Nested tool-argument validation (fail closed)
+### FR-5a — Direct typed tool-argument validation (fail closed)
 
-For `invoke_tool` / `execute_tool`, the bridge MUST resolve the **target tool's**
-`input_schema` and validate the nested `arguments` against it before execution.
-Invalid arguments MUST NOT reach the tool. A missing or invalid target-tool schema
-MUST fail closed (reject), never execute unvalidated.
+For every direct `tools/call`, the bridge resolves the selected typed tool's
+`input_schema` and validates its `arguments` before execution. Invalid arguments MUST
+NOT reach the tool. A missing or invalid target schema fails closed. `toolsets`
+selection itself has a typed bounded schema and never carries nested tool arguments.
 
 **Acceptance:**
-- `execute_tool` with `arguments` that violate the target tool's schema is rejected
-  before the tool runs (no side effect, event chain records the rejection).
-- A tool whose schema cannot be resolved cannot be invoked via `execute_tool`.
+- A direct typed call whose arguments violate its schema is rejected before the tool
+  runs (no side effect; the event chain records the rejection).
+- A tool whose schema cannot be resolved cannot be advertised or invoked.
 
 ### FR-6 — In-process cognitive registry ownership; no HTTP loopback
 
@@ -583,8 +720,7 @@ second execution authority.
 **Acceptance:**
 - `rg -n '10.200.0.2:3003|cognitive_mcp_endpoint|reqwest' crates/op-grpc-bridge/src`
   returns no HTTP-dispatch match.
-- An authenticated `invoke_tool`/`execute_tool` succeeds while no process listens on
-  `:3003`.
+- An authenticated direct typed tool call succeeds while no process listens on `:3003`.
 - A test fails if any production network adapter invokes `ToolRegistry::execute`
   without first crossing `PluginService.CallMethod`/MutationEngine, or if one logical
   call crosses that mutation admission point more than once.
@@ -596,7 +732,7 @@ second execution authority.
 
 **Acceptance:**
 - `rg` shows no mapping of `code_*` to `*_blob_vectors` in the bridge.
-- `execute_tool{tool_name:"code_search"}` returns `CodeSearchTool`-shaped output,
+- A direct `tools/call` of `code_search` returns `CodeSearchTool`-shaped output,
   not blob-vector search output.
 
 ### FR-8 — Consolidated sealed blob catalog / blob-schema MCP
@@ -618,7 +754,7 @@ read-only.
   bounded or streamed response (FR-8a).
 - `blob_schema`/`blob_manifest`/`blob_methods`/`blob_search` and the `blob://`
   resource each return data for a known sealed plugin.
-- Ordinary authenticated callers never receive embedded grants, footprints, secrets,
+- Ordinary authenticated callers never receive embedded grants, private principal/session/footprint metadata, secrets,
   private examples/defaults, or tenant-private metadata through any blob/reflection
   surface (FR-8b).
 - No consumer writes to the blob dir.
@@ -647,7 +783,7 @@ Reflection, `blob_catalog`, `blob_schema`, `blob_manifest`, `blob_methods`,
 `blob_search`, and `blob://` resources MUST expose a single deterministic **public
 schema projection**, not the raw sealed JSON. The projection includes callable method
 shapes, public descriptions, side-effect/idempotency/approval metadata, subids, and
-required capability names, but strips `capability_grants`, identity footprints,
+required capability names, but strips `capability_grants`, private principal/session/footprint metadata,
 secret/sensitive defaults and examples, private tenant/org metadata, filesystem
 secrets, and deployment-only fields. Sanitization runs before pagination, search,
 vectorization, caching, logging, or response generation. Raw sealed-schema bytes, if
@@ -854,7 +990,7 @@ memory, execution, and every other registration method require authentication.
 `/genesis/complete` MUST accept only a canonical, versioned **OIG1 Oracle Identity
 Genesis envelope** signed by a trusted Oracle-decoy key after the decoy has verified
 the WireGuard peer and its human/key ownership. Its signed fields include the human
-public key, Netmaker inner address, intended principal/session identifiers or their
+public key, WireGuard inner address, intended principal/session identifiers or their
 derivation inputs, decoy key id, issued-at, expiry (maximum 15 minutes), one-use nonce,
 and protocol purpose/domain. The bridge performs canonical parse, trust-key/signature,
 time, transport binding, proof-purpose, and atomic durable nonce consumption before it
@@ -870,7 +1006,7 @@ NOT remain additional bridge bypasses.
 
 **Acceptance:**
 - Unauthenticated liveness succeeds; unauthenticated `tools/list`, reflection,
-  context stream, memory, and `execute_tool` are rejected before dispatch (SEC-2).
+  context stream, memory, and every typed tool call are rejected before dispatch (SEC-2).
 - Route enumeration proves only `/healthz` and `/genesis/complete` are public.
   `/genesis/complete` is rate-limited and cannot reach tool discovery/execution; its
   pre-auth events are telemetry, not actor-attributed event-chain records.
@@ -915,12 +1051,13 @@ rather than silently skipping or replaying another scope's events.
 
 Every MCP, registry-tool, and generated-plugin request MUST pass, before dispatch:
 (1) transport authentication (TLS for TCP; peer-credential binding for UDS, TR-2);
-(2) Oracle-signed assertion / session-genesis validation; (3) expiry, activity,
-signature, a non-mutating replay lookup, and binding checks (transport-appropriate
-binding, TR-2); (4) principal and per-session `identity_sled` resolution; (4b) atomic
-check-and-consume in the independent durable replay store of SEC-13; (5) **target**
-method/tool capability check (FR-3b); (6) input-schema validation (nested for
-`execute_tool`, FR-5a); (6b) durable idempotency/audit intent (FR-3g/DR-5); (7)
+(2) exactly one identity credential; (3a) for local SID1, canonical decode/integrity,
+MCP-scope, derived-identifier, revocation, current active-sled exact-byte/claim match;
+or (3b) for OIA1, signature/expiry/activity, non-mutating replay lookup, and transport-
+appropriate binding; (4) exact registered principal and per-session `identity_sled`
+resolution; (4b, OIA1 only) atomic check-and-consume in the independent durable replay
+store of SEC-13; (5) **target** method/tool capability check (FR-3b); (6) direct typed
+input-schema validation (FR-5a); (6b) durable idempotency/audit intent (FR-3g/DR-5); (7)
 canonical D-Bus `PluginService.CallMethod`/MutationEngine dispatch; (8) typed output
 validation, commit/reconciliation classification, and linked event outcome; (9)
 response carrying trace/event identity where applicable. The assertion mechanics are owned by
@@ -931,11 +1068,13 @@ response carrying trace/event identity where applicable. The assertion mechanics
   fail **before dispatch** (no tool executes, no memory read/write occurs).
 - A successful call's response and event carry non-zero `event_id`/non-empty
   `event_hash`.
-- An ordering test proves signature → expiry → replay lookup → binding →
-  principal/sled resolution → atomic replay consume → capability →
-  input-validation → intent/idempotency admission → D-Bus dispatch → output
-  validation/commit → audit outcome. A wrong-source assertion cannot consume/burn
-  the nonce, and replay-store unavailability fails the authenticated request closed.
+- Ordering tests prove SID1 canonical decode/seal → derived identifiers → active-sled
+  exact match/revocation → exact principal grants, and separately prove OIA1 signature
+  → expiry → replay lookup → binding → principal/sled resolution → atomic replay
+  consume. Both then run capability → input validation → intent/idempotency admission
+  → D-Bus dispatch → output validation/commit → audit outcome. A wrong-source OIA1
+  cannot burn its nonce, and replay-store unavailability fails OIA-authenticated
+  requests closed.
 
 ### SEC-3 — No wildcard/self-asserted/sentinel identity; no local bypass
 
@@ -949,8 +1088,8 @@ local" bypass. Local UDS callers are subject to the same identity pipeline.
   materialized/fallback grant source finds no `"*"` identity grant and no non-empty
   authoritative `PluginSchema.capability_grants`; public routes use the exact FR-18
   allowlist instead.
-- A host-UDS or container-UDS call with no valid assertion is rejected identically to
-  an unauthenticated TCP call.
+- A host-UDS or container-UDS call with no accepted SID1/OIA1 credential is rejected
+  identically to an unauthenticated TCP call.
 - `rg -n 'plugin_schema.dat'` over active code/deploy/docs returns no active use.
 
 ### SEC-4 — Identical authorization semantics across TCP, host UDS, container UDS
@@ -1263,10 +1402,10 @@ in-memory authoritative history.
 
 ### TR-1 — TCP ingress
 
-TLS `:8090`, bridge-owned and directly bound on `127.0.0.1`, `10.0.0.3`, and the
-configured Netmaker interface address (default `100.69.0.1`) when present,
-multiplexing MCP HTTP/JSON-RPC, optional SSE, gRPC-Web, and native gRPC through one
-route/auth stack (FR-1, FR-2, SEC-1/SEC-14). No relay and no `10.200.0.2:8090` bind.
+TLS `:8090`, bridge-owned and directly bound only on `127.0.0.1` and the unified
+fabric address `10.0.0.3`, multiplexing MCP HTTP/JSON-RPC, optional SSE, gRPC-Web,
+native gRPC, plugins, mutation, and control through one route/auth stack (FR-1, FR-2,
+SEC-1/SEC-14). No relay, Netmaker bind, or `10.200.0.2:8090` bind.
 
 ### TR-2 — Host and container UDS are equivalent alternate transports with transport-specific binding
 
@@ -1274,15 +1413,16 @@ Host UDS (`/run/opdbus/grpc.sock`) and container UDS
 (`/run/ghostbridge/container.sock`) MUST route through the identical
 authorization/route/capability/validation/dispatch/event stack and return equivalent
 results to TCP for the same identity + method. Binding is transport-specific:
-- **TCP:** Oracle assertion + authenticated network/source binding.
-- **UDS:** Oracle assertion + `SO_PEERCRED` (peer uid/gid/pid), socket ownership, and
+- **TCP:** exact selected-sled SID1 for the configured protected local path, or OIA1
+  plus authenticated network/source binding for another caller.
+- **UDS:** accepted SID1/OIA1 credential + `SO_PEERCRED` (peer uid/gid/pid), socket ownership, and
   session/container binding.
-Neither transport receives implicit trust; a UDS peer with no valid assertion is
+Neither transport receives implicit trust; a UDS peer with no accepted credential is
 rejected exactly like an unauthenticated TCP peer.
 
 **Acceptance:** TCP, host UDS, container UDS return equivalent results for the same
 authenticated request; an unauthenticated request is rejected identically on all
-three; a UDS request's peer credentials are validated (a forged/absent assertion over
+three; a UDS request's peer credentials are validated (a forged/absent credential over
 UDS is rejected).
 
 ### TR-3 — No alternate MCP transports/listeners
@@ -1342,8 +1482,8 @@ The UDS transports MUST have a fully defined security model, not merely
 
 Host lifecycle actions MUST use `sudo sv`. `systemctl`/s6 MUST NOT be used. Retired
 MCP service definitions MUST be removed from `deploy/runit/` to match the live host.
-A surviving shim MAY keep a retired name only if it opens no listener, owns no
-independent registry/DB writer, and always calls the bridge (CR-4).
+No retired MCP shim/proxy service survives. `op-identity-headers` is a short-lived
+header JSON helper, not a service or transport (CR-4).
 **Acceptance:** no active `deploy/runit/` service `run` binds `:11438`, `:3003`, or
 `:50052`; retired MCP service dirs are removed.
 
@@ -1402,14 +1542,16 @@ can be retried. Checkpoint checksums and restore logs are retained without raw s
 ### CR-1 — No stranded consumer during cutover; preserve inventory
 
 Migration MUST move clients to `:8090` bridge paths before deleting old
-listeners/routes; each step has rollback. The working compact/full tool inventory and
-counts captured in Phase 0 MUST be preserved through migration (no net tool loss).
+listeners/routes; each step has rollback. The typed underlying capability inventory
+captured in Phase 0 MUST be preserved. The four former compact meta-tool names are an
+explicit removal and are replaced by `toolsets`; they are excluded from the post-
+migration name/count floor.
 **Acceptance:** ordered cutover with per-step rollback; a consumer inventory
 (`.mcp.json`, `~/.factory/mcp.json`, `.kiro/settings/mcp.json`,
 `deploy/config/*mcp*.json`, container gateways, Xray routes) migrated before
 deletion; post-migration tool count ≥ captured baseline. Baseline artifacts committed
 to the repository contain only sanitized inventories and hashes/counts; raw live grant
-files, assertion/approval material, identity footprints, and secrets are never copied
+files, assertion/approval material, principal/session/footprint metadata, and secrets are never copied
 or committed. Rollback follows DEP-5 and MUST NOT restore the known wildcard grant.
 
 ### CR-2 — Context/feedback affects later retrieval
@@ -1424,14 +1566,14 @@ correction/accepted/rejected suggestion a later ranked suggestion changes.
 Qdrant/Voyage failure degrades to durable memory without disabling auth or durable
 storage (DR-4, DR-1a).
 
-### CR-4 — Legacy names only as shims or in removal/negative contexts
+### CR-4 — Legacy names only in removal/negative contexts
 
 Retired names (`op-cognitive-mcp`, `op-mcp-agents`, `op-mcp-compact`,
 `op-mcp-blob-schema`, `op-mcp-cognitive`, `op-waypipe-grpc`) and forbidden
 ports/paths (`:3003`, `:50051`, `:50052`, `:11438`, `10.200.0.2:3003`,
 `plugin_schema.dat`) MAY appear only in removal tasks, migration notes, or negative
-tests. A surviving shim opens no listener, owns no independent registry/DB writer, and
-always calls the bridge.
+tests. No surviving MCP shim/proxy is part of the Codex path: Codex uses native direct
+Streamable HTTP plus the header-only helper.
 **Acceptance:** CI grep gates (NFR-7) fail on any active reference.
 
 ### CR-5 — Orthogonal specs de-conflicted and linked
@@ -1459,8 +1601,9 @@ The following end-to-end tests MUST be preserved and required as gates:
 - the existing **real Voyage/Qdrant** semantic E2E, using a unique temporary
   generation/collection, manifest-pinned blob set, deterministic cleanup, explicit
   non-skip assertion, and cross-scope negative query;
-- an **authenticated `:8090` E2E** against every applicable canonical bind (loopback,
-  `svc0`, Netmaker): SAN-valid TLS, canonical HTTP and native-gRPC OIA1 encodings,
+- an **authenticated `:8090` E2E** against both canonical binds (loopback and
+  `svc0`): SAN-valid TLS, direct native Codex initialize/list/call with
+  exact selected-sled SID1, canonical optional OIA1 HTTP/native-gRPC encoding and replay,
   OIG1 onboarding fixture, discovery, safe read, D-Bus route spy, per-tool denial,
   idempotent mutation fixture, event intent/outcome, and no alternate listener;
 - a **two-turn chatbot-memory E2E** where turn 1 writes a typed redacted scoped record
@@ -1539,7 +1682,8 @@ passes with the new subids.
 ### NFR-6 — No Python; Rust-first; shell scripts only
 
 No new Python (per `CLAUDE.md`/`AGENTS.md` governing policy). JSON assertions use
-`jq`. Transport shims are Rust/nftables/`socat`, never Python.
+`jq`. No MCP transport shim is introduced; non-MCP network policy uses existing
+Rust/nftables mechanisms.
 **Acceptance:** no acceptance criterion invokes `python3`; no new `.py` added.
 
 ### NFR-7 — Zero-trace CI grep gates
@@ -1557,7 +1701,8 @@ CI MUST fail on any active (non-removal, non-negative-test) occurrence in `crate
 - bridge HTTP loopback dispatch (`cognitive_mcp_endpoint`, POST to `/mcp`)
 - sentinel/wildcard/embedded identity-grant authority: any `"*"` grant in any source,
   or any non-empty authoritative `PluginSchema.capability_grants`; schemas may declare
-  required capabilities but identity grants come only from `identity_sled` (FR-4a,
+  required capabilities but grants come only from the protected exact-`principal_id`
+  projection; `identity_sled` supplies session/genesis context only (FR-4a, FR-4b,
   SEC-3)
 - the `op-web` alternate gRPC ingress: `grpc_proxy` forwarding `application/grpc*` to
   `:8090`, and the `/jsonrpc`, `/rpc`, `/.well-known/mcp.json`, `mcp_discovery`,
@@ -1569,8 +1714,16 @@ CI MUST fail on any active (non-removal, non-negative-test) occurrence in `crate
 - first-prefix blob resolution instead of exact schema-hash (`DR-8`)
 - raw sealed schema/grant/secret fields reaching ordinary reflection/blob/resource/
   vector/cache surfaces instead of the FR-8b public projection
-- direct network-adapter/meta-tool-to-`ToolRegistry::execute` dispatch that bypasses
-  the canonical D-Bus/MutationEngine admission path
+- direct network-adapter-to-`ToolRegistry::execute` dispatch that bypasses the
+  canonical D-Bus/MutationEngine admission path
+- active OAuth discovery/token/callback/PKCE code or a same-endpoint OAuth-to-OIA
+  exchange for Codex
+- a Codex MCP `command`/stdio shim, HTTP proxy, header-helper listener, or alternate
+  MCP URL; `op-identity-headers` may only emit header JSON and exit
+- requiring native Codex to synthesize non-standard `Mcp-Method`/`Mcp-Name` headers
+  instead of deriving method/target from the parsed JSON-RPC body
+- active MCP exposure of `list_tools`, `search_tools`, `get_tool_schema`,
+  `execute_tool`, or `invoke_tool`; the names may appear only in removal/negative tests
 
 The second-`ToolRegistry` and no-polling gates are **scoped** (production execution
 ownership; periodic state-discovery only) per FR-4 and NFR-2 so they do not flag

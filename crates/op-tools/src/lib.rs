@@ -18,7 +18,7 @@
 //! - LLM decisions and tool calls
 //! - Session lifecycle events
 //!
-//! This integrates with blockchain for immutable audit logging.
+//! This integrates with snowball for immutable audit logging.
 
 pub mod builtin;
 pub mod discovery;

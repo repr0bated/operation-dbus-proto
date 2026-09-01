@@ -148,7 +148,7 @@ echo ""
 
 # Specialty Agents
 echo "🎨 SPECIALTY AGENTS:"
-echo "  ✅ blockchain-developer  - Blockchain development"
+echo "  ✅ snowball-developer  - Snowball development"
 echo "  ✅ unity-developer       - Unity game development"
 echo "  ✅ quant-analyst         - Quantitative analysis"
 echo "  ✅ arm-cortex-expert     - ARM development"

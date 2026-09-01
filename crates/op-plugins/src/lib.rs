@@ -17,13 +17,13 @@
     clippy::empty_line_after_outer_attr
 )]
 
-//! op-plugins: Plugin system with state management and blockchain footprints
+//! op-plugins: Plugin system with state management and snowball footprints
 //!
 //! Features:
 //! - Plugin trait with desired state management
 //! - State plugins for network, LXC, systemd, OpenFlow, etc.
 //! - BTRFS subvolume storage per plugin
-//! - Automatic hash footprints for blockchain audit trail
+//! - Automatic hash footprints for snowball audit trail
 //! - Auto-creation of missing plugins
 //! - Lifecycle hooks
 //! - Canonical plugin-document persistence into the schema catalog

@@ -20,7 +20,7 @@ use tokio::time::timeout;
 use tonic::metadata::MetadataValue;
 
 const TEST_TRACE_HEADER: &str = "x-ghostbridge-trace-id";
-const TEST_FOOTPRINT_HEADER: &str = "x-ghostbridge-footprint";
+const TEST_GENESIS_HEADER: &str = "x-ghostbridge-genesis";
 
 fn write_schema(path: &PathBuf, value: &serde_json::Value) {
     if let Some(parent) = path.parent() {
@@ -79,8 +79,8 @@ async fn should_serve_schema_over_grpc_web() {
         MetadataValue::from_static("integration-test-trace"),
     );
     request.metadata_mut().insert(
-        TEST_FOOTPRINT_HEADER,
-        MetadataValue::from_static("integration-test-footprint"),
+        TEST_GENESIS_HEADER,
+        MetadataValue::from_static("integration-test-genesis"),
     );
 
     let response = client.get_schema(request).await.unwrap();
@@ -90,7 +90,7 @@ async fn should_serve_schema_over_grpc_web() {
     assert_eq!(parsed["name"], "zeroclaw");
     assert_eq!(parsed["version"], "1.0.0");
     assert_eq!(inner.trace_id, "integration-test-trace");
-    assert_eq!(inner.footprint, "integration-test-footprint");
+    assert_eq!(inner.session_genesis, "integration-test-genesis");
 }
 
 #[tokio::test]
@@ -178,5 +178,8 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
         Some("cap.software.3tched-router.models.read@v1")
     );
     assert_eq!(event.actor_id, "integration-test-actor");
-    assert!(event.json_args_footprint.is_some());
+    assert_eq!(
+        event.input_payload.as_ref().expect("payload")["args"]["provider"],
+        "salad"
+    );
 }

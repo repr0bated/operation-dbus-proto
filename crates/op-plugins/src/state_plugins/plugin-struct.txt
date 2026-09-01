@@ -4059,7 +4059,7 @@
 ● Update(~/git/operation-dbus-proto/crates/op-plugins/Cargo.toml)
   ⎿  Added 2 lines
        7  description = "Plugin system with state management, domain plug
-          ins, and blockchain footprints"
+          ins, and snowball footprints"
        8  
        9  [dependencies]
       10 +# PROTOTYPE: derive plugin schemas from structs (see state_plug

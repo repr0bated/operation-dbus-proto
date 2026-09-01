@@ -16,7 +16,7 @@
 //! - security: Security-focused coding agents
 //! - business: Business and operations agents
 //! - seo: SEO and content marketing agents
-//! - specialty: Niche domain agents (blockchain, gaming, finance, etc.)
+//! - specialty: Niche domain agents (snowball, gaming, finance, etc.)
 
 pub mod advise;
 pub mod aiml;

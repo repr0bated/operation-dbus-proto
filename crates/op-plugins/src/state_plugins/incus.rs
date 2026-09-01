@@ -154,6 +154,17 @@ fn named_devices_from_map(map: &BTreeMap<String, BTreeMap<String, String>>) -> V
 
 pub struct IncusPlugin;
 
+/// Power states accepted by the identity-session lifecycle.
+///
+/// This deliberately exposes only the two transitions needed by parked
+/// identity containers.  Provisioning remains an `incus init` (stopped), and
+/// authenticated session activation/deactivation owns the start/stop calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentitySessionPowerState {
+    Running,
+    Stopped,
+}
+
 impl IncusPlugin {
     pub fn new() -> Self {
         Self
@@ -322,6 +333,38 @@ impl IncusPlugin {
                 Err(anyhow::anyhow!("Incus API error: {}", err))
             }
         }
+    }
+
+    fn identity_session_power_request(
+        session_id: &str,
+        state: IdentitySessionPowerState,
+    ) -> Result<(String, &'static str)> {
+        let parsed = uuid::Uuid::parse_str(session_id)
+            .with_context(|| format!("invalid identity session id '{session_id}'"))?;
+        if parsed.to_string() != session_id {
+            anyhow::bail!("identity session id must be a canonical lowercase UUID");
+        }
+        let body = match state {
+            IdentitySessionPowerState::Running => r#"{"action":"start"}"#,
+            IdentitySessionPowerState::Stopped => r#"{"action":"stop"}"#,
+        };
+        Ok((format!("/1.0/instances/{session_id}/state"), body))
+    }
+
+    /// Change the power state of an identity-session container through the
+    /// native Incus REST API. Identity container names are canonical UUIDs,
+    /// so validating that invariant also prevents request-path injection.
+    pub async fn set_identity_session_power_state(
+        session_id: &str,
+        state: IdentitySessionPowerState,
+    ) -> Result<()> {
+        let (path, body) = Self::identity_session_power_request(session_id, state)?;
+        Self::incus_api_call("PUT", &path, Some(body))
+            .await
+            .with_context(|| {
+                format!("failed to change identity container '{session_id}' power state")
+            })?;
+        Ok(())
     }
 
     /// Fetch current instance configuration via REST API
@@ -833,6 +876,12 @@ impl IncusPlugin {
         desired: &IncusInstance,
     ) -> Result<Vec<String>> {
         let mut changes = Vec::new();
+        // `incus init` creates a stopped instance. Avoid issuing a redundant
+        // stop operation for provisioned/parked containers; they must remain
+        // stopped until an authenticated session activates them.
+        if current.is_none() && desired.status == "Stopped" {
+            return Ok(changes);
+        }
         if current.map(|instance| instance.status.as_str()) == Some(desired.status.as_str()) {
             return Ok(changes);
         }
@@ -1116,6 +1165,35 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[test]
+    fn identity_session_power_requests_are_typed_and_path_safe() {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let (start_path, start_body) = IncusPlugin::identity_session_power_request(
+            &session_id,
+            IdentitySessionPowerState::Running,
+        )
+        .expect("start request");
+        assert_eq!(start_path, format!("/1.0/instances/{session_id}/state"));
+        assert_eq!(start_body, r#"{"action":"start"}"#);
+
+        let (_, stop_body) = IncusPlugin::identity_session_power_request(
+            &session_id,
+            IdentitySessionPowerState::Stopped,
+        )
+        .expect("stop request");
+        assert_eq!(stop_body, r#"{"action":"stop"}"#);
+        assert!(IncusPlugin::identity_session_power_request(
+            "../../host?project=default",
+            IdentitySessionPowerState::Running,
+        )
+        .is_err());
+        assert!(IncusPlugin::identity_session_power_request(
+            &session_id.to_uppercase(),
+            IdentitySessionPowerState::Running,
+        )
+        .is_err());
     }
 
     #[test]

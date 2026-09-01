@@ -1,0 +1,104 @@
+{
+  "generation": 3,
+  "hot": [
+    "memory_recall",
+    "memory_store",
+    "workflow_query",
+    "workflow_run",
+    "toolsets"
+  ],
+  "sets": [
+    {
+      "id": "context_code",
+      "temperature": "warm",
+      "provider": "op-grpc-bridge",
+      "requires_provider_health": false,
+      "tools": [
+        "plugin.cognitive_mcp.code_search",
+        "plugin.cognitive_mcp.code_context",
+        "plugin.cognitive_mcp.code_index"
+      ]
+    },
+    {
+      "id": "context_knowledge",
+      "temperature": "warm",
+      "provider": "op-grpc-bridge",
+      "requires_provider_health": false,
+      "tools": [
+        "plugin.cognitive_mcp.memory_retrieve",
+        "plugin.cognitive_mcp.memory_query",
+        "plugin.cognitive_mcp.memory_list_namespaces"
+      ]
+    },
+    {
+      "id": "emqx_ops",
+      "temperature": "warm",
+      "provider": "emqx",
+      "requires_provider_health": true,
+      "tools": [
+        "plugin.emqx.get_status",
+        "plugin.emqx.get_mcp_status",
+        "plugin.emqx.list_listeners",
+        "plugin.emqx.list_hooks",
+        "plugin.emqx.get_hook_status",
+        "plugin.emqx.configure_hooks",
+        "plugin.emqx.start",
+        "plugin.emqx.stop",
+        "plugin.emqx.restart"
+      ]
+    },
+    {
+      "id": "notebooklm_auth",
+      "temperature": "warm",
+      "provider": "notebooklm-mcp",
+      "requires_provider_health": true,
+      "tools": [
+        "plugin.notebooklm.get_health",
+        "plugin.notebooklm.setup_auth"
+      ]
+    },
+    {
+      "id": "notebooklm_research",
+      "temperature": "warm",
+      "provider": "notebooklm-mcp-authenticated",
+      "requires_provider_health": true,
+      "tools": [
+        "plugin.notebooklm.list_notebooks",
+        "plugin.notebooklm.get_notebook",
+        "plugin.notebooklm.search_notebooks",
+        "plugin.notebooklm.query_notebook",
+        "plugin.notebooklm.select_notebook",
+        "plugin.notebooklm.list_sessions"
+      ]
+    },
+    {
+      "id": "mongodb_knowledge",
+      "temperature": "warm",
+      "provider": "mongodb-mcp-server",
+      "requires_provider_health": true,
+      "tools": [
+        "plugin.mongodb_mcp.list_knowledge_sources",
+        "plugin.mongodb_mcp.search_knowledge"
+      ]
+    },
+    {
+      "id": "mongodb_data",
+      "temperature": "warm",
+      "provider": "mongodb-mcp-server-authenticated",
+      "requires_provider_health": true,
+      "tools": [
+        "plugin.mongodb_mcp.list_connections",
+        "plugin.mongodb_mcp.list_databases",
+        "plugin.mongodb_mcp.list_collections",
+        "plugin.mongodb_mcp.db_stats",
+        "plugin.mongodb_mcp.collection_schema",
+        "plugin.mongodb_mcp.collection_indexes",
+        "plugin.mongodb_mcp.collection_storage_size",
+        "plugin.mongodb_mcp.find",
+        "plugin.mongodb_mcp.count",
+        "plugin.mongodb_mcp.aggregate",
+        "plugin.mongodb_mcp.aggregate_db"
+      ]
+    }
+  ]
+}

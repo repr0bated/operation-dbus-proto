@@ -125,7 +125,7 @@ impl std::fmt::Display for SubidTaxonomy {
 
 /// Why a request genesis failed to verify against a projected session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FootprintVerifyError {
+pub enum SessionGenesisVerifyError {
     /// The identity projection could not be read or decoded.
     SledUnreachable,
     /// The selected session exists but has not minted an anchored genesis.
@@ -143,9 +143,9 @@ pub fn resolve_verified_session(
     request_genesis: &str,
     trace_id: Option<&str>,
     wireguard_pubkey: Option<&str>,
-) -> Result<crate::session_projection::SessionIdentity, FootprintVerifyError> {
+) -> Result<crate::session_projection::SessionIdentity, SessionGenesisVerifyError> {
     let sessions = crate::session_projection::read_identity_sessions()
-        .map_err(|_| FootprintVerifyError::SledUnreachable)?;
+        .map_err(|_| SessionGenesisVerifyError::SledUnreachable)?;
     let trace_id = trace_id.map(str::trim).filter(|value| !value.is_empty());
     let wireguard_pubkey = wireguard_pubkey
         .map(str::trim)
@@ -161,21 +161,21 @@ pub fn resolve_verified_session(
         }
     });
 
-    let session = matching.next().ok_or(FootprintVerifyError::Mismatch)?;
+    let session = matching.next().ok_or(SessionGenesisVerifyError::Mismatch)?;
     if matching.next().is_some() {
-        return Err(FootprintVerifyError::Mismatch);
+        return Err(SessionGenesisVerifyError::Mismatch);
     }
     if !session.is_anchored() {
-        return Err(FootprintVerifyError::InvalidSled);
+        return Err(SessionGenesisVerifyError::InvalidSled);
     }
     if !session.active {
-        return Err(FootprintVerifyError::Inactive);
+        return Err(SessionGenesisVerifyError::Inactive);
     }
     if !session.is_current() {
-        return Err(FootprintVerifyError::Expired);
+        return Err(SessionGenesisVerifyError::Expired);
     }
     if session.genesis.as_deref() != Some(request_genesis) {
-        return Err(FootprintVerifyError::Mismatch);
+        return Err(SessionGenesisVerifyError::Mismatch);
     }
     Ok(session)
 }
@@ -185,7 +185,7 @@ pub fn verify_session_genesis(
     request_genesis: &str,
     trace_id: Option<&str>,
     wireguard_pubkey: Option<&str>,
-) -> Result<(), FootprintVerifyError> {
+) -> Result<(), SessionGenesisVerifyError> {
     resolve_verified_session(request_genesis, trace_id, wireguard_pubkey).map(|_| ())
 }
 

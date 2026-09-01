@@ -53,7 +53,6 @@ pub(crate) use super::workflows_plugin::workflows_schema as workflows_plugin_sch
 pub(crate) use super::xray::xray_schema as xray_plugin_schema;
 
 // Added missing schema re-exports
-pub(crate) use super::blockchain_plugin::blockchain_schema as blockchain_plugin_schema;
 pub(crate) use super::config::config_plugin_schema;
 pub(crate) use super::cozo::cozo_schema as cozo_plugin_schema;
 pub(crate) use super::datastore::datastore_schema as datastore_plugin_schema;
@@ -63,6 +62,7 @@ pub(crate) use super::large_language_model::large_language_model_schema as large
 pub(crate) use super::login1::login1_schema as login1_plugin_schema;
 pub(crate) use super::mcp::mcp_schema as mcp_plugin_schema;
 pub(crate) use super::notebooklm::notebooklm_schema as notebooklm_plugin_schema;
+pub(crate) use super::snowball_plugin::snowball_schema as snowball_plugin_schema;
 // pub(crate) use super::packagekit::packagekit_schema as packagekit_plugin_schema;
 pub(crate) use super::persona::persona_schema as persona_plugin_schema;
 pub(crate) use super::procfs::procfs_schema as procfs_plugin_schema;

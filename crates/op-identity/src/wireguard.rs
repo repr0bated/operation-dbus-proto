@@ -6,19 +6,28 @@ use tracing::debug;
 /// WireGuard identity provider
 #[derive(Debug, Clone)]
 pub struct WireGuardIdentity {
-    /// Interface name (default: wg0)
-    interface: String,
+    /// Interface name for optional WireGuard identity lookup.
+    ///
+    /// Deprecated: automatic interface discovery is deprecated; prefer setting
+    /// WG_PUBKEY (or equivalent injected identity pubkey) directly.
+    interface: Option<String>,
 }
 
 impl WireGuardIdentity {
     pub fn new() -> Self {
-        let iface = std::env::var("WG_INTERFACE").unwrap_or_else(|_| "netmaker".to_string());
-        Self::with_interface(&iface)
+        let iface = std::env::var("WG_INTERFACE")
+            .or_else(|_| std::env::var("FABRIC_WG_INTERFACE"))
+            .ok();
+        Self::with_interface(&iface.unwrap_or_default())
     }
 
     pub fn with_interface(interface: &str) -> Self {
         Self {
-            interface: interface.to_string(),
+            interface: if interface.is_empty() {
+                None
+            } else {
+                Some(interface.to_string())
+            },
         }
     }
 
@@ -30,28 +39,42 @@ impl WireGuardIdentity {
             return Ok(pubkey);
         }
 
+        let interface = self
+            .interface
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("WG_PUBKEY unset and WG interface not configured"))?;
+
         // Fall back to live interface state (wg show <iface> public-key).
         let output = Command::new("wg")
-            .args(["show", &self.interface, "public-key"])
+            .args(["show", interface, "public-key"])
             .output()?;
         if output.status.success() {
             let pubkey = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !pubkey.is_empty() {
-                debug!(iface = %self.interface, "Using WireGuard pubkey from wg show");
+                debug!(iface = %interface, "Using WireGuard pubkey from wg show");
                 return Ok(pubkey);
             }
         }
 
         anyhow::bail!(
             "WG_PUBKEY unset and `wg show {} public-key` failed; cannot resolve local identity",
-            self.interface
+            interface
         );
     }
 
     /// True when `pubkey` is a peer on this interface with a recent handshake.
     pub fn is_recent_peer(&self, pubkey: &str, max_age_secs: u64) -> anyhow::Result<bool> {
+        let interface = self
+            .interface
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("WG interface not configured"))?;
+
         let output = Command::new("wg")
-            .args(["show", &self.interface, "latest-handshakes"])
+            .args(["show", interface, "latest-handshakes"])
             .output()?;
         if !output.status.success() {
             return Ok(false);
@@ -76,8 +99,15 @@ impl WireGuardIdentity {
 
     /// Get peer's pubkey from their IP address
     pub fn get_pubkey_for_ip(&self, peer_ip: &str) -> anyhow::Result<Option<String>> {
+        let interface = self
+            .interface
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("WG interface not configured"))?;
+
         let output = Command::new("wg")
-            .args(["show", &self.interface, "allowed-ips"])
+            .args(["show", interface, "allowed-ips"])
             .output()?;
 
         if !output.status.success() {
@@ -104,8 +134,15 @@ impl WireGuardIdentity {
 
     /// Get all connected peers with their latest handshake times
     pub fn get_connected_peers(&self) -> anyhow::Result<Vec<PeerInfo>> {
+        let interface = self
+            .interface
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("WG interface not configured"))?;
+
         let output = Command::new("wg")
-            .args(["show", &self.interface, "latest-handshakes"])
+            .args(["show", interface, "latest-handshakes"])
             .output()?;
 
         if !output.status.success() {
@@ -146,8 +183,10 @@ impl WireGuardIdentity {
     /// Uses `ip -4 addr show <iface>` and parses the first `inet` address.
     /// Returns `None` if the interface has no IPv4 address or the command fails.
     pub fn get_local_ip(&self) -> Option<String> {
+        let interface = self.interface.as_deref()?;
+
         let output = Command::new("ip")
-            .args(["-4", "addr", "show", &self.interface])
+            .args(["-4", "addr", "show", interface])
             .output()
             .ok()?;
 
@@ -171,8 +210,15 @@ impl WireGuardIdentity {
 
     /// Get allowed IPs for a specific peer
     fn get_allowed_ips_for_peer(&self, pubkey: &str) -> anyhow::Result<Vec<String>> {
+        let interface = self
+            .interface
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("WG interface not configured"))?;
+
         let output = Command::new("wg")
-            .args(["show", &self.interface, "allowed-ips"])
+            .args(["show", interface, "allowed-ips"])
             .output()?;
 
         if !output.status.success() {

@@ -1,4 +1,4 @@
-//! Event Chain - Blockchain-style Compliance and Reproducibility Layer
+//! Event Chain - Snowball-style Compliance and Reproducibility Layer
 //!
 //! Provides tamper-evident audit trail through:
 //! - Hash-linked events for every state transition
@@ -18,7 +18,7 @@
 //! - `target` (object path / selector)
 //! - `tags_touched` (computed from schema)
 //! - `decision` (allow/deny) + `deny_reason`
-//! - `input_patch_hash`
+//! - `input_payload` (bounded, redacted canonical sled payload)
 //! - `result_effective_hash` (post-compile)
 
 use chrono::{DateTime, Utc};
@@ -132,6 +132,14 @@ pub struct ChainEvent {
     pub timestamp: DateTime<Utc>,
     /// Actor who initiated the operation
     pub actor_id: String,
+    /// Authenticated session correlated with this action. The stable actor is
+    /// still `actor_id`; this field is audit metadata, never authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Arrival proof for the authenticated session. This is metadata only and
+    /// is never used as an identity, grant key, or payload digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_genesis: Option<String>,
     /// Capability used for the operation
     pub capability_id: Option<String>,
     /// Plugin that owns the state
@@ -148,13 +156,21 @@ pub struct ChainEvent {
     pub decision: Decision,
     /// Reason for denial (if denied)
     pub deny_reason: Option<DenyReason>,
-    /// Hash of the input patch/payload
+    /// Compatibility digest of `input_payload`. New event hashes are computed
+    /// from the canonical payload itself, never from this digest.
     pub input_patch_hash: String,
-    /// Blake3 footprint of the verbatim `json_args` string passed by the
-    /// caller for a method dispatch. `None` for events that do not carry
-    /// a raw JSON argument string (e.g. internal store subscriptions).
+    /// Bounded, redacted, canonical input carried into Snowball for hashing,
+    /// replay, and asynchronous vectorization.
     #[serde(default)]
-    pub json_args_footprint: Option<String>,
+    pub input_payload: Option<Value>,
+    /// Read-only compatibility for persisted pre-payload method events. New
+    /// events never populate or serialize this field.
+    #[serde(
+        default,
+        rename = "json_args_footprint",
+        skip_serializing_if = "Option::is_none"
+    )]
+    legacy_args_digest: Option<String>,
     /// The method name invoked by the caller for a method-dispatch event.
     /// `None` for non-method events (property sets, signals, etc.).
     #[serde(default)]
@@ -201,6 +217,8 @@ impl ChainEvent {
             event_hash: String::new(), // Computed below
             timestamp,
             actor_id,
+            session_id: None,
+            session_genesis: None,
             capability_id: None,
             plugin_id,
             schema_version,
@@ -210,7 +228,8 @@ impl ChainEvent {
             decision,
             deny_reason: None,
             input_patch_hash,
-            json_args_footprint: None,
+            input_payload: Some(canonicalize_json(input_patch)),
+            legacy_args_digest: None,
             method_name: None,
             result_effective_hash: None,
             db_delta_hash: None,
@@ -230,26 +249,50 @@ impl ChainEvent {
     /// Public so callers that enrich an already-appended event with additional
     /// fields (e.g. `capability_id`) can recompute the hash after mutation.
     pub fn compute_hash(&self) -> String {
-        let payload = CanonicalEventPayload {
-            event_id: self.event_id,
-            prev_hash: &self.prev_hash,
-            timestamp: self.timestamp,
-            actor_id: &self.actor_id,
-            capability_id: self.capability_id.as_deref(),
-            plugin_id: &self.plugin_id,
-            schema_version: &self.schema_version,
-            op: &self.op,
-            target: &self.target,
-            tags_touched: &self.tags_touched,
-            decision: &self.decision,
-            deny_reason: self.deny_reason.as_ref(),
-            input_patch_hash: &self.input_patch_hash,
-            json_args_footprint: self.json_args_footprint.as_deref(),
-            method_name: self.method_name.as_deref(),
-            result_effective_hash: self.result_effective_hash.as_deref(),
+        let canonical = if let Some(input_payload) = self.input_payload.as_ref() {
+            simd_json::serde::to_owned_value(&CanonicalEventPayload {
+                event_id: self.event_id,
+                prev_hash: &self.prev_hash,
+                timestamp: self.timestamp,
+                actor_id: &self.actor_id,
+                session_id: self.session_id.as_deref(),
+                session_genesis: self.session_genesis.as_deref(),
+                capability_id: self.capability_id.as_deref(),
+                plugin_id: &self.plugin_id,
+                schema_version: &self.schema_version,
+                op: &self.op,
+                target: &self.target,
+                tags_touched: &self.tags_touched,
+                decision: &self.decision,
+                deny_reason: self.deny_reason.as_ref(),
+                input_payload,
+                method_name: self.method_name.as_deref(),
+                result_effective_hash: self.result_effective_hash.as_deref(),
+            })
+            .unwrap_or_default()
+        } else {
+            // Preserve verification of already-persisted records while keeping
+            // all newly-created events on the direct-payload path.
+            simd_json::serde::to_owned_value(&LegacyCanonicalEventPayload {
+                event_id: self.event_id,
+                prev_hash: &self.prev_hash,
+                timestamp: self.timestamp,
+                actor_id: &self.actor_id,
+                capability_id: self.capability_id.as_deref(),
+                plugin_id: &self.plugin_id,
+                schema_version: &self.schema_version,
+                op: &self.op,
+                target: &self.target,
+                tags_touched: &self.tags_touched,
+                decision: &self.decision,
+                deny_reason: self.deny_reason.as_ref(),
+                input_patch_hash: &self.input_patch_hash,
+                json_args_footprint: self.legacy_args_digest.as_deref(),
+                method_name: self.method_name.as_deref(),
+                result_effective_hash: self.result_effective_hash.as_deref(),
+            })
+            .unwrap_or_default()
         };
-
-        let canonical = simd_json::serde::to_owned_value(&payload).unwrap_or_default();
         let canonical = canonicalize_json(&canonical);
         compute_hash(&canonical)
     }
@@ -277,6 +320,11 @@ impl ChainEvent {
 
     /// Verify this event's hash against its content
     pub fn verify(&self) -> bool {
+        if let Some(payload) = self.input_payload.as_ref() {
+            if compute_hash(&canonicalize_json(payload)) != self.input_patch_hash {
+                return false;
+            }
+        }
         let computed = self.compute_hash();
         computed == self.event_hash
     }
@@ -285,6 +333,29 @@ impl ChainEvent {
 /// Canonical payload structure for consistent hashing
 #[derive(Serialize)]
 struct CanonicalEventPayload<'a> {
+    event_id: u64,
+    prev_hash: &'a str,
+    timestamp: DateTime<Utc>,
+    actor_id: &'a str,
+    session_id: Option<&'a str>,
+    session_genesis: Option<&'a str>,
+    capability_id: Option<&'a str>,
+    plugin_id: &'a str,
+    schema_version: &'a str,
+    op: &'a OperationType,
+    target: &'a str,
+    tags_touched: &'a [String],
+    decision: &'a Decision,
+    deny_reason: Option<&'a DenyReason>,
+    input_payload: &'a Value,
+    method_name: Option<&'a str>,
+    result_effective_hash: Option<&'a str>,
+}
+
+/// Canonical shape used only to verify records written before direct payloads
+/// were introduced.
+#[derive(Serialize)]
+struct LegacyCanonicalEventPayload<'a> {
     event_id: u64,
     prev_hash: &'a str,
     timestamp: DateTime<Utc>,
@@ -575,7 +646,7 @@ impl EventChain {
     /// - `plugin_id` — target plugin
     /// - `method_name` — the invoked method name
     /// - `capability_id` — the capability used (or `None`)
-    /// - `json_args_footprint` — Blake3 hash of the verbatim `json_args` string
+    /// - `input_payload` — bounded, redacted canonical method arguments
     ///
     /// The append occurs before the dispatch returns success to the caller
     /// (the caller holds the `EventChain` write lock during `record`).
@@ -587,9 +658,33 @@ impl EventChain {
         capability_id: Option<String>,
         json_args: &str,
     ) -> &ChainEvent {
-        let json_args_footprint = blake3::hash(json_args.as_bytes()).to_hex().to_string();
+        self.record_method_call_with_identity(
+            actor_id,
+            None,
+            None,
+            plugin_id,
+            method_name,
+            capability_id,
+            json_args,
+        )
+    }
+
+    /// Record a method event with verified session correlation metadata.
+    /// `actor_id` remains the stable principal used for authorization.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_method_call_with_identity(
+        &mut self,
+        actor_id: String,
+        session_id: Option<String>,
+        session_genesis: Option<String>,
+        plugin_id: String,
+        method_name: String,
+        capability_id: Option<String>,
+        json_args: &str,
+    ) -> &ChainEvent {
         let target = format!("/org/opdbus/v1/plugins/{}", plugin_id);
-        let input_patch = simd_json::json!({ "method": method_name, "args": json_args });
+        let method_args = sanitize_method_args(json_args);
+        let input_patch = simd_json::json!({ "method": method_name, "args": method_args });
         let mut event = ChainEvent::new(
             self.next_event_id(),
             self.last_hash().to_string(),
@@ -602,10 +697,11 @@ impl EventChain {
             Decision::Allow,
             &input_patch,
         );
+        event.session_id = session_id;
+        event.session_genesis = session_genesis;
         event.capability_id = capability_id;
         event.method_name = Some(method_name);
-        event.json_args_footprint = Some(json_args_footprint);
-        // Recompute hash now that capability_id / method_name / footprint are set.
+        // Recompute hash now that capability_id and method_name are set.
         event.event_hash = event.compute_hash();
         self.append(event)
     }
@@ -636,15 +732,18 @@ impl EventChain {
     /// Replay a persisted event from its JSON representation.
     ///
     /// Accepts either a bare serialized [`ChainEvent`] object or a
-    /// streaming-blockchain timing record that carries one under
+    /// streaming-snowball timing record that carries one under
     /// `data.metadata.audit_event`. Returns the replayed `event_id`.
     ///
     /// OSCAL subid: `src.service.event-chain.rebuild@v1`
     pub fn replay_from_footprint(&mut self, json: &serde_json::Value) -> Result<u64, String> {
-        let candidate = json
-            .get("data")
-            .and_then(|d| d.get("metadata"))
-            .and_then(|m| m.get("audit_event"))
+        let data = json.get("data");
+        let candidate = data
+            .and_then(|d| d.get("payload"))
+            .or_else(|| {
+                data.and_then(|d| d.get("metadata"))
+                    .and_then(|m| m.get("audit_event"))
+            })
             .unwrap_or(json);
 
         let event: ChainEvent = serde_json::from_value(candidate.clone())
@@ -882,6 +981,76 @@ pub struct TagImmutabilityProof {
 // Hash utilities
 // =============================================================================
 
+const MAX_METHOD_ARGS_BYTES: usize = 64 * 1024;
+const MAX_METHOD_ARGS_PREVIEW_BYTES: usize = 48 * 1024;
+
+/// Parse, recursively redact, and bound a method payload before it enters the
+/// authoritative chain. The bound fallback contains redacted JSON text rather
+/// than a digest, so Snowball and its vector projection still receive payload
+/// content and never have to hash a hash.
+fn sanitize_method_args(json_args: &str) -> Value {
+    let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(json_args) else {
+        return simd_json::json!({ "_invalid_json": true });
+    };
+    redact_sensitive_json(&mut parsed);
+    let encoded = serde_json::to_vec(&parsed).unwrap_or_default();
+    if encoded.len() > MAX_METHOD_ARGS_BYTES {
+        let mut end = encoded.len().min(MAX_METHOD_ARGS_PREVIEW_BYTES);
+        while end > 0 && std::str::from_utf8(&encoded[..end]).is_err() {
+            end -= 1;
+        }
+        let preview = String::from_utf8_lossy(&encoded[..end]).into_owned();
+        parsed = serde_json::json!({
+            "_truncated": true,
+            "original_redacted_bytes": encoded.len(),
+            "redacted_json_preview": preview
+        });
+    }
+    simd_json::serde::to_owned_value(&parsed).unwrap_or_default()
+}
+
+fn redact_sensitive_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, nested) in object {
+                if sensitive_payload_key(key) {
+                    *nested = serde_json::Value::String("[REDACTED]".to_string());
+                } else {
+                    redact_sensitive_json(nested);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for nested in values {
+                redact_sensitive_json(nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sensitive_payload_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "authorization"
+            | "cookie"
+            | "password"
+            | "passwd"
+            | "secret"
+            | "token"
+            | "access_token"
+            | "refresh_token"
+            | "api_key"
+            | "private_key"
+            | "client_secret"
+    ) || normalized.ends_with("_password")
+        || normalized.ends_with("_secret")
+        || normalized.ends_with("_token")
+        || normalized.ends_with("_api_key")
+        || normalized.ends_with("_private_key")
+}
+
 /// Compute hash of a JSON value
 fn compute_hash(value: &Value) -> String {
     let canonical_str = simd_json::to_string(value).unwrap_or_default();
@@ -1112,9 +1281,9 @@ mod tests {
         for i in 0..5 {
             chain.record_method_call(
                 "user1".to_string(),
-                "blockchain".to_string(),
+                "snowball".to_string(),
                 format!("m{i}"),
-                Some("blockchain.read".to_string()),
+                Some("snowball.read".to_string()),
                 "{}",
             );
         }
@@ -1178,6 +1347,35 @@ mod tests {
         chain.replay_event(events[1].clone()).expect("first replay");
         // event_id 1 after event_id 2 is a corrupted ordering — must be refused.
         assert!(chain.replay_event(events[0].clone()).is_err());
+    }
+
+    #[test]
+    fn method_event_carries_identity_metadata_and_hashes_direct_payload() {
+        let mut chain = EventChain::new(ChainConfig::default());
+        let event = chain
+            .record_method_call_with_identity(
+                "937d6d2b-ecae-ed53-f3a2-d7bd09f544ff".into(),
+                Some("session-7".into()),
+                Some("genesis-7".into()),
+                "cognitive_mcp".into(),
+                "memory_store".into(),
+                Some("cognitive_mcp.invoke".into()),
+                r#"{"text":"remember this","password":"do-not-persist"}"#,
+            )
+            .clone();
+
+        assert_eq!(event.actor_id, "937d6d2b-ecae-ed53-f3a2-d7bd09f544ff");
+        assert_eq!(event.session_id.as_deref(), Some("session-7"));
+        assert_eq!(event.session_genesis.as_deref(), Some("genesis-7"));
+        let payload = event.input_payload.as_ref().expect("direct payload");
+        assert_eq!(payload["method"], "memory_store");
+        assert_eq!(payload["args"]["text"], "remember this");
+        assert_eq!(payload["args"]["password"], "[REDACTED]");
+        assert!(event.verify());
+
+        let mut tampered = event;
+        tampered.session_genesis = Some("different-genesis".into());
+        assert!(!tampered.verify(), "session metadata must be hash-bound");
     }
 
     #[test]

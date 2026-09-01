@@ -8,14 +8,18 @@
 //! The schema itself is never generated here; it is read from the plugin's
 //! sealed blob in the SHM catalog (`/dev/shm/opdbus/plugin-blobs`).
 
+use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_stream::stream;
 use axum::Router;
-use tonic::transport::{Identity, ServerTlsConfig};
+use sha2::{Digest, Sha256};
+use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
+use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request as TonicRequest, Response as TonicResponse, Status};
 use tower_http::cors::CorsLayer;
 use tracing::info;
@@ -40,6 +44,11 @@ const DEFAULT_SCHEMA_PLUGIN_ID: &str = "tched_router";
 /// The authenticated shared TCP door. Cognitive methods are in-process routes
 /// on this listener; they do not own a separate bind address.
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8090";
+const DEFAULT_EMQX_EXHOOK_BIND_ADDR: &str = "127.0.0.1:9000";
+const DEFAULT_EMQX_EXHOOK_SERVER_CERT: &str = "/etc/op-dbus/tls/tonic-svc0.crt";
+const DEFAULT_EMQX_EXHOOK_SERVER_KEY: &str = "/etc/op-dbus/tls/tonic-svc0.key";
+const DEFAULT_EMQX_EXHOOK_CLIENT_CA: &str = "/etc/op-dbus/tls/tonic-svc0-ca.crt";
+const DEFAULT_EMQX_EXHOOK_CLIENT_CERT: &str = "/etc/op-dbus/tls/emqx-exhook-client.crt";
 /// Default schema source: the sealed blob catalog dir. When `schema_path`
 /// is a directory the loader reads the plugin's own blob from it (a blob in
 /// the catalog IS the plugin); a file path is still accepted for tests and
@@ -64,6 +73,33 @@ pub struct ServerConfig {
     /// TLS identity for the TCP door. `None` aborts startup with a clear error
     /// unless `ZEROCLAW_DEV_SELF_SIGNED=1` is set (dev/CI only — never production).
     pub tls_identity: Option<Identity>,
+    /// Dedicated broker callback listener. It is deliberately separate from
+    /// the client-facing gRPC/MCP door: EMQX authenticates with a pinned mTLS
+    /// client certificate and can reach only HookProvider.
+    pub emqx_exhook: EmqxExhookConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct EmqxExhookConfig {
+    pub enabled: bool,
+    pub bind_addr: String,
+    pub server_cert_path: PathBuf,
+    pub server_key_path: PathBuf,
+    pub client_ca_path: PathBuf,
+    pub client_cert_path: PathBuf,
+}
+
+impl Default for EmqxExhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_addr: DEFAULT_EMQX_EXHOOK_BIND_ADDR.to_string(),
+            server_cert_path: PathBuf::from(DEFAULT_EMQX_EXHOOK_SERVER_CERT),
+            server_key_path: PathBuf::from(DEFAULT_EMQX_EXHOOK_SERVER_KEY),
+            client_ca_path: PathBuf::from(DEFAULT_EMQX_EXHOOK_CLIENT_CA),
+            client_cert_path: PathBuf::from(DEFAULT_EMQX_EXHOOK_CLIENT_CERT),
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -75,6 +111,7 @@ impl Default for ServerConfig {
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
             tls_identity: None,
+            emqx_exhook: EmqxExhookConfig::default(),
         }
     }
 }
@@ -100,6 +137,27 @@ impl ServerConfig {
                 .or_else(|_| std::env::var("GRPC_BIND"))
                 .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
             tls_identity: Self::load_tls_identity(),
+            emqx_exhook: EmqxExhookConfig {
+                enabled: env_flag("OP_EMQX_EXHOOK_ENABLE"),
+                bind_addr: std::env::var("OP_EMQX_EXHOOK_BIND_ADDR")
+                    .unwrap_or_else(|_| DEFAULT_EMQX_EXHOOK_BIND_ADDR.to_string()),
+                server_cert_path: env_path(
+                    "OP_EMQX_EXHOOK_SERVER_CERT_FILE",
+                    DEFAULT_EMQX_EXHOOK_SERVER_CERT,
+                ),
+                server_key_path: env_path(
+                    "OP_EMQX_EXHOOK_SERVER_KEY_FILE",
+                    DEFAULT_EMQX_EXHOOK_SERVER_KEY,
+                ),
+                client_ca_path: env_path(
+                    "OP_EMQX_EXHOOK_CLIENT_CA_FILE",
+                    DEFAULT_EMQX_EXHOOK_CLIENT_CA,
+                ),
+                client_cert_path: env_path(
+                    "OP_EMQX_EXHOOK_CLIENT_CERT_FILE",
+                    DEFAULT_EMQX_EXHOOK_CLIENT_CERT,
+                ),
+            },
         }
     }
 
@@ -190,6 +248,78 @@ impl ServerConfig {
     }
 }
 
+fn env_path(key: &str, default: &str) -> PathBuf {
+    PathBuf::from(std::env::var(key).unwrap_or_else(|_| default.to_string()))
+}
+
+fn env_flag(key: &str) -> bool {
+    std::env::var(key)
+        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+#[derive(Clone)]
+struct EmqxExhookPeerGate {
+    expected_cert_sha256: [u8; 32],
+}
+
+impl tonic::service::Interceptor for EmqxExhookPeerGate {
+    fn call(&mut self, request: TonicRequest<()>) -> Result<TonicRequest<()>, Status> {
+        let info = request
+            .extensions()
+            .get::<TlsConnectInfo<TcpConnectInfo>>()
+            .ok_or_else(|| Status::unauthenticated("EMQX ExHook requires mutual TLS"))?;
+        let peer = info
+            .get_ref()
+            .remote_addr()
+            .ok_or_else(|| Status::permission_denied("EMQX ExHook peer address is unavailable"))?;
+        if !peer.ip().is_loopback() {
+            return Err(Status::permission_denied(
+                "EMQX ExHook accepts loopback peers only",
+            ));
+        }
+        let certs = info
+            .peer_certs()
+            .ok_or_else(|| Status::unauthenticated("EMQX ExHook client certificate is missing"))?;
+        let leaf = certs
+            .first()
+            .ok_or_else(|| Status::unauthenticated("EMQX ExHook client certificate is empty"))?;
+        let actual: [u8; 32] = Sha256::digest(leaf.as_ref()).into();
+        if actual != self.expected_cert_sha256 {
+            return Err(Status::permission_denied(
+                "EMQX ExHook client certificate is not the pinned broker identity",
+            ));
+        }
+        Ok(request)
+    }
+}
+
+fn first_certificate_sha256(path: &std::path::Path) -> anyhow::Result<[u8; 32]> {
+    let file = std::fs::File::open(path).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot open pinned EMQX client certificate {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut reader = BufReader::new(file);
+    let certificate = rustls_pemfile::certs(&mut reader)
+        .next()
+        .transpose()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "cannot parse pinned EMQX client certificate {}: {error}",
+                path.display()
+            )
+        })?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "pinned EMQX client certificate {} contains no certificate",
+                path.display()
+            )
+        })?;
+    Ok(Sha256::digest(certificate.as_ref()).into())
+}
+
 fn configured_schema_plugin_id(getenv: impl Fn(&str) -> Option<String>) -> String {
     getenv("OP_DBUS_SCHEMA_PLUGIN_ID")
         .or_else(|| getenv("ZEROCLAW_PLUGIN_ID"))
@@ -221,7 +351,7 @@ impl ZeroclawService for ZeroclawGrpcService {
         let mut response = TonicResponse::new(SchemaResponse {
             schema_json,
             trace_id: context.trace_id.clone(),
-            footprint: context.footprint.clone(),
+            session_genesis: context.session_genesis.clone(),
         });
         inject_trace_metadata(&mut response, &context);
         Ok(response)
@@ -260,16 +390,13 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
             .metadata_mut()
             .insert("x-ghostbridge-trace-id", trace_id);
     }
-    if let Ok(footprint) = context
-        .footprint
+    if let Ok(session_genesis) = context
+        .session_genesis
         .parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>()
     {
         response
             .metadata_mut()
-            .insert("x-ghostbridge-genesis", footprint.clone());
-        response
-            .metadata_mut()
-            .insert("x-ghostbridge-footprint", footprint);
+            .insert("x-ghostbridge-genesis", session_genesis);
     }
 }
 
@@ -320,6 +447,7 @@ fn build_axum_app_with_validator(
             "x-user-agent".parse().unwrap(),
             "grpc-timeout".parse().unwrap(),
             crate::mcp_frontend::HTTP_ASSERTION_HEADER.parse().unwrap(),
+            crate::mcp_frontend::HTTP_SEALED_ID_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_VERSION_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_METHOD_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_NAME_HEADER.parse().unwrap(),
@@ -382,6 +510,24 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
+    // D-Bus bindings do not survive a bridge restart. Invalidate every
+    // instance-backed sled that was durably active, then stop its container,
+    // before MCP/gRPC/D-Bus routes can be built or listeners exposed. Host
+    // identities have no Incus instance and remain untouched.
+    let parked =
+        crate::identity_sled_dispatch::park_orphaned_container_sessions(mutation_engine.as_ref())
+            .await?;
+    if parked > 0 {
+        tracing::warn!(
+            parked,
+            "parked orphaned identity containers before exposing fabric routes"
+        );
+    }
+    // The local chatbot's service identity is release-configured and sealed
+    // by the same MutationEngine that owns every other session arrival.  This
+    // closes the bootstrap loop for blob-aware local MCP clients without an
+    // OAuth/OIA detour or a second MCP endpoint.
+    mutation_engine.bootstrap_configured_mcp_identity().await?;
     let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine.clone());
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
@@ -409,6 +555,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // SchemaRouter reads sealed blobs and creates SchemaBackedInterface objects
     // with real methods/properties matching each plugin's schema, dispatching
     // calls through the same MutationEngine as the gRPC path.
+    let assertion_validator_for_dbus = assertion_validator.clone();
     tokio::spawn(async move {
         let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
             .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
@@ -429,7 +576,28 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let dbus_conn = Arc::new(tokio::sync::OnceCell::new());
         let _ = dbus_conn.set(conn.clone());
         let engine_for_signal = mutation_engine_for_dbus.clone();
-        let router = SchemaRouter::with_engine(dbus_conn, mutation_engine_for_dbus);
+        let identity_resolver = crate::dbus_identity::DbusIdentityResolver::new(
+            conn.clone(),
+            mutation_engine_for_dbus.clone(),
+            assertion_validator_for_dbus,
+        );
+        if let Err(error) = identity_resolver.start_exit_monitor().await {
+            tracing::error!(%error, "D-Bus identity exit monitor failed to start");
+            return;
+        }
+        if let Err(error) = conn
+            .object_server()
+            .at(
+                crate::dbus_identity::DBUS_IDENTITY_OBJECT_PATH,
+                crate::dbus_identity::DbusIdentityBootstrap::new(identity_resolver.clone()),
+            )
+            .await
+        {
+            tracing::error!(%error, "D-Bus identity bootstrap interface failed to register");
+            return;
+        }
+        let router = SchemaRouter::with_engine(dbus_conn, mutation_engine_for_dbus)
+            .with_identity_resolver(identity_resolver);
 
         if let Err(e) = router.register_objects().await {
             tracing::error!(error = %e, "Failed to register authoritative D-Bus plugin objects");
@@ -498,6 +666,76 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             );
         }
     }
+
+    // Broker callbacks have a different trust domain from human/model calls.
+    // ExHook therefore receives a dedicated loopback-only mTLS listener with
+    // one mounted service and an exact client-certificate pin. It is never
+    // added to the shared :8090/container.sock route set.
+    let emqx_exhook_server = if config.emqx_exhook.enabled {
+        let exhook = &config.emqx_exhook;
+        let bind_addr: SocketAddr = exhook.bind_addr.parse().map_err(|error| {
+            anyhow::anyhow!(
+                "invalid OP_EMQX_EXHOOK_BIND_ADDR '{}': {error}",
+                exhook.bind_addr
+            )
+        })?;
+        if !bind_addr.ip().is_loopback() {
+            anyhow::bail!(
+                "OP_EMQX_EXHOOK_BIND_ADDR must be loopback, got {}",
+                bind_addr
+            );
+        }
+        let server_cert = std::fs::read(&exhook.server_cert_path).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot read EMQX ExHook server certificate {}: {error}",
+                exhook.server_cert_path.display()
+            )
+        })?;
+        let server_key = std::fs::read(&exhook.server_key_path).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot read EMQX ExHook server key {}: {error}",
+                exhook.server_key_path.display()
+            )
+        })?;
+        let client_ca = std::fs::read(&exhook.client_ca_path).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot read EMQX ExHook client CA {}: {error}",
+                exhook.client_ca_path.display()
+            )
+        })?;
+        let expected_cert_sha256 = first_certificate_sha256(&exhook.client_cert_path)?;
+        let peer_gate = EmqxExhookPeerGate {
+            expected_cert_sha256,
+        };
+        let hook_provider =
+            crate::proto::emqx_exhook::hook_provider_server::HookProviderServer::new(
+                crate::emqx_hook_provider::HookProviderService::new(mutation_engine.clone()),
+            )
+            .max_decoding_message_size(1024 * 1024)
+            .max_encoding_message_size(1024 * 1024);
+        let hook_provider =
+            tonic::service::interceptor::InterceptedService::new(hook_provider, peer_gate);
+        let tls = ServerTlsConfig::new()
+            .identity(Identity::from_pem(server_cert, server_key))
+            .client_ca_root(Certificate::from_pem(client_ca));
+        info!(
+            addr = %bind_addr,
+            client_cert = %exhook.client_cert_path.display(),
+            "EMQX ExHook listening on dedicated loopback mTLS endpoint"
+        );
+        Some(
+            tonic::transport::Server::builder()
+                .timeout(Duration::from_secs(10))
+                .concurrency_limit_per_connection(32)
+                .tls_config(tls)
+                .map_err(|error| anyhow::anyhow!("invalid EMQX ExHook TLS config: {error}"))?
+                .add_service(hook_provider)
+                .serve(bind_addr),
+        )
+    } else {
+        info!("EMQX ExHook listener disabled");
+        None
+    };
 
     // Host-local Unix socket (operators / host clients).
     let unix_socket = config.unix_socket.clone();
@@ -588,7 +826,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             Some(s) => s
                 .await
                 .map_err(|e| anyhow::anyhow!("Shared container.sock: {e}")),
-            None => Ok(()),
+            None => std::future::pending::<anyhow::Result<()>>().await,
         }
     };
     let unix_fut = async {
@@ -603,12 +841,23 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             Err(join_err) => Err(anyhow::anyhow!("TCP TLS server task panicked: {join_err}")),
         }
     };
+    let emqx_exhook_fut = async {
+        match emqx_exhook_server {
+            Some(server) => server
+                .await
+                .map_err(|error| anyhow::anyhow!("EMQX ExHook server error: {error}")),
+            None => std::future::pending::<anyhow::Result<()>>().await,
+        }
+    };
 
-    let (u, s, t) = tokio::join!(unix_fut, shared_fut, tcp_fut);
-    u?;
-    s?;
-    t?;
-    Ok(())
+    // A listener exit is a process-level health failure. Returning here lets
+    // runit restart the complete bridge instead of leaving a partial surface.
+    tokio::select! {
+        result = unix_fut => result,
+        result = shared_fut => result,
+        result = tcp_fut => result,
+        result = emqx_exhook_fut => result,
+    }
 }
 
 /// Bind a Unix domain socket for tonic, creating parents and replacing stale files.
@@ -634,7 +883,7 @@ async fn bind_unix_listener(
     {
         use std::os::unix::fs::PermissionsExt;
         // World-readable+writable+executable: NIC-less containers (mapped UIDs) must connect.
-        // Auth is enforced by the GhostBridge footprint header, not socket ACLs.
+        // Auth is enforced by the Ghostbridge session identity, not socket ACLs.
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777));
     }
     Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
@@ -652,5 +901,13 @@ mod tests {
     #[test]
     fn env_free_server_startup_loads_the_canonical_router_blob() {
         assert_eq!(configured_schema_plugin_id(|_| None), "tched_router");
+    }
+
+    #[test]
+    fn emqx_exhook_defaults_to_disabled_loopback() {
+        let config = EmqxExhookConfig::default();
+        assert!(!config.enabled);
+        let address: SocketAddr = config.bind_addr.parse().expect("valid bind address");
+        assert!(address.ip().is_loopback());
     }
 }
