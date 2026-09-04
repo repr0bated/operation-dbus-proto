@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = CozoGraphShuttle::new_persistent(db_path)?;
     let before = store.get_identity_sled(&session_id)?.is_some();
-    store.delete_identity_session(&session_id)?;
+    store.delete_session(&session_id)?;
     let after = store.get_identity_sled(&session_id)?.is_some();
     println!("session_id={session_id} existed_before={before} exists_after={after}");
     Ok(())

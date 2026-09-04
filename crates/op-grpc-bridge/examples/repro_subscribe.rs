@@ -67,7 +67,7 @@ async fn main() {
     let pool = Arc::new(GrpcClientPool::new());
     let client = RemoteOperationClient::new(pool, &addr, "repro-subscribe");
 
-    let mut stream = match client.subscribe(vec![], vec![], vec![], true, true).await {
+    let mut stream = match client.subscribe(vec![], vec![], vec![]).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("SUBSCRIBE FAILED: {e}");
@@ -83,8 +83,8 @@ async fn main() {
                 n += 1;
                 if n <= 5 || n % 50 == 0 {
                     eprintln!(
-                        "frame {n}: plugin={} kind={} type={}",
-                        msg.plugin_id, msg.frame_kind, msg.change_type
+                        "frame {n}: plugin={} path={} property={:?}",
+                        msg.plugin_id, msg.object_path, msg.property_name
                     );
                 }
                 if n >= 250 {
