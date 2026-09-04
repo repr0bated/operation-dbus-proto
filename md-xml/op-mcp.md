@@ -2443,7 +2443,7 @@ fn simd_to_prost_value(value: &Value) -> ProstValue {
 //! - Run-on-connection agent support
 //! - BTRFS cache integration
 //! - StateStore execution tracking
-//! - Blockchain audit trail
+//! - Snowball audit trail
 
 #[cfg(feature = "grpc")]
 mod client;
@@ -2501,7 +2501,7 @@ pub struct GrpcConfig {
     pub keepalive_timeout: Duration,
     pub cache_path: Option<PathBuf>,
     pub state_db_path: Option<PathBuf>,
-    pub blockchain_path: Option<PathBuf>,
+    pub snowball_path: Option<PathBuf>,
 }
 
 impl Default for GrpcConfig {
@@ -2521,7 +2521,7 @@ impl Default for GrpcConfig {
             keepalive_timeout: Duration::from_secs(10),
             cache_path: Some(PathBuf::from("/var/lib/op-dbus/cache/grpc")),
             state_db_path: Some(PathBuf::from("/var/lib/op-dbus/state/grpc.db")),
-            blockchain_path: Some(PathBuf::from("/var/lib/op-dbus/blockchain/grpc")),
+            snowball_path: Some(PathBuf::from("/var/lib/op-dbus/snowball/grpc")),
         }
     }
 }
@@ -2559,15 +2559,15 @@ impl GrpcConfig {
         self
     }
 
-    pub fn with_blockchain_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.blockchain_path = Some(path.into());
+    pub fn with_snowball_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.snowball_path = Some(path.into());
         self
     }
 
     pub fn without_infrastructure(mut self) -> Self {
         self.cache_path = None;
         self.state_db_path = None;
-        self.blockchain_path = None;
+        self.snowball_path = None;
         self
     }
 }
@@ -2585,7 +2585,7 @@ impl GrpcTransport {
         let infrastructure = GrpcInfrastructure::from_paths(
             config.cache_path.clone(),
             config.state_db_path.clone(),
-            config.blockchain_path.clone(),
+            config.snowball_path.clone(),
         )
         .await?;
 
@@ -2738,7 +2738,7 @@ struct Session {
 pub struct GrpcInfrastructure {
     pub cache_path: Option<PathBuf>,
     pub state_db_path: Option<PathBuf>,
-    pub blockchain_path: Option<PathBuf>,
+    pub snowball_path: Option<PathBuf>,
     pub tool_registry: Option<Arc<op_tools::ToolRegistry>>,
 }
 
@@ -2747,7 +2747,7 @@ impl Clone for GrpcInfrastructure {
         Self {
             cache_path: self.cache_path.clone(),
             state_db_path: self.state_db_path.clone(),
-            blockchain_path: self.blockchain_path.clone(),
+            snowball_path: self.snowball_path.clone(),
             tool_registry: self.tool_registry.clone(),
         }
     }
@@ -2758,7 +2758,7 @@ impl Default for GrpcInfrastructure {
         Self {
             cache_path: None,
             state_db_path: None,
-            blockchain_path: None,
+            snowball_path: None,
             tool_registry: None,
         }
     }
@@ -2772,7 +2772,7 @@ impl GrpcInfrastructure {
     pub async fn from_paths(
         _cache_path: Option<PathBuf>,
         _state_db_path: Option<PathBuf>,
-        _blockchain_path: Option<PathBuf>,
+        _snowball_path: Option<PathBuf>,
     ) -> Result<Self> {
         Ok(Self::default())
     }

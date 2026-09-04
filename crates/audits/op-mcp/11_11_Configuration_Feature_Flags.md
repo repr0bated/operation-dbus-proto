@@ -58,7 +58,7 @@ The following static endpoints, ports, directories, and paths are hardcoded with
 ### System Paths & Directories
 *   **gRPC Cache Path**: `"/var/lib/op-dbus/cache/grpc"` — `crates/op-mcp/src/grpc/server.rs:52`
 *   **gRPC SQLite State Path**: `"/var/lib/op-dbus/state/grpc.db"` — `crates/op-mcp/src/grpc/server.rs:53`
-*   **gRPC Blockchain Trail Path**: `"/var/lib/op-dbus/blockchain/grpc"` — `crates/op-mcp/src/grpc/server.rs:54`
+*   **gRPC Snowball Trail Path**: `"/var/lib/op-dbus/snowball/grpc"` — `crates/op-mcp/src/grpc/server.rs:54`
 *   **Local Network Sysfs Path**: `"/sys/class/net"` — `crates/op-mcp/src/tools/system.rs:24`
 *   **System Filesystem Access Validations**: Absolute paths check in `crates/op-mcp/src/tools/filesystem.rs`:
     *   `"/etc/shadow"` & `"/etc/sudoers"` (Line 33)

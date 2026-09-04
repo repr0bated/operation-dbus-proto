@@ -1,6 +1,6 @@
 {
   "id": "1",
-  "subject": "Verify baseline: read blockchain_plugin.rs, mutation_engine.rs, event_chain.rs, zeroclaw-gui structure",
+  "subject": "Verify baseline: read snowball_plugin.rs, mutation_engine.rs, event_chain.rs, zeroclaw-gui structure",
   "description": "Confirm spec's claims about existing code before modifying",
   "status": "pending"
 }

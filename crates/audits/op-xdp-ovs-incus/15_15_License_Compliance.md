@@ -47,7 +47,7 @@ Because we do not have access to the actual packages' metadata or individual `Ca
         "crates/op-plugins",
         "crates/op-workflows",
         "crates/op-ml",
-        "crates/op-blockchain",
+        "crates/op-snowball",
         "crates/op-deployment",
         "crates/op-mcp",
         "crates/op-mcp-aggregator",

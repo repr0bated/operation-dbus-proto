@@ -1,6 +1,6 @@
 # Production Security and Quality Audit: Error Handling & Schema-as-Code
 
-This audit evaluates the quality and safety of error-handling mechanics, lock-safety guarantees, and serialization contracts across the `op-blockchain` crate.
+This audit evaluates the quality and safety of error-handling mechanics, lock-safety guarantees, and serialization contracts across the `op-snowball` crate.
 
 ---
 
@@ -25,19 +25,19 @@ This audit evaluates the quality and safety of error-handling mechanics, lock-sa
 There are exactly 5 `.unwrap()` sites across the workspace files. Below is the complete catalog of all 5 sites with their context and actionable recommendations.
 
 ### Site 1
-* **File & Line:** `crates/op-blockchain/src/btrfs_numa_integration.rs:255`
+* **File & Line:** `crates/op-snowball/src/btrfs_numa_integration.rs:255`
 * **Context:**
   ```rust
-  info!("Created blockchain snapshot: {}", snapshots.last().unwrap().display());
+  info!("Created snowball snapshot: {}", snapshots.last().unwrap().display());
   ```
-* **Risk Evaluation:** Low (No DoS risk). The code pushes `blockchain_snapshot` onto the `snapshots` vector on line 253 right before calling `last()`, meaning the vector is guaranteed to contain at least one element.
-* **Recommendation:** Avoid query-and-unwrap. Reference the local variable `blockchain_snapshot` directly:
+* **Risk Evaluation:** Low (No DoS risk). The code pushes `snowball_snapshot` onto the `snapshots` vector on line 253 right before calling `last()`, meaning the vector is guaranteed to contain at least one element.
+* **Recommendation:** Avoid query-and-unwrap. Reference the local variable `snowball_snapshot` directly:
   ```rust
-  info!("Created blockchain snapshot: {}", blockchain_snapshot.display());
+  info!("Created snowball snapshot: {}", snowball_snapshot.display());
   ```
 
 ### Site 2
-* **File & Line:** `crates/op-blockchain/src/btrfs_numa_integration.rs:263`
+* **File & Line:** `crates/op-snowball/src/btrfs_numa_integration.rs:263`
 * **Context:**
   ```rust
   info!("Created cache snapshot: {}", snapshots.last().unwrap().display());
@@ -49,7 +49,7 @@ There are exactly 5 `.unwrap()` sites across the workspace files. Below is the c
   ```
 
 ### Site 3
-* **File & Line:** `crates/op-blockchain/src/plugin_footprint.rs:315`
+* **File & Line:** `crates/op-snowball/src/plugin_footprint.rs:315`
 * **Context:** (Within `mod tests`)
   ```rust
   let footprint = generator.create_footprint("create", &data, None).unwrap();
@@ -61,7 +61,7 @@ There are exactly 5 `.unwrap()` sites across the workspace files. Below is the c
   ```
 
 ### Site 4
-* **File & Line:** `crates/op-blockchain/src/plugin_footprint.rs:329`
+* **File & Line:** `crates/op-snowball/src/plugin_footprint.rs:329`
 * **Context:** (Within `mod tests`)
   ```rust
   let footprint = generator.create_footprint("create", &data, None).unwrap();
@@ -70,7 +70,7 @@ There are exactly 5 `.unwrap()` sites across the workspace files. Below is the c
 * **Recommendation:** Change the test signature to return `Result` and propagate errors via `?`.
 
 ### Site 5
-* **File & Line:** `crates/op-blockchain/src/retention.rs:139`
+* **File & Line:** `crates/op-snowball/src/retention.rs:139`
 * **Context:** (Within `mod tests`)
   ```rust
   let policy = RetentionPolicy::from_json(&json).unwrap();
@@ -84,13 +84,13 @@ There are exactly 5 `.unwrap()` sites across the workspace files. Below is the c
 
 A common security vulnerability in Rust systems involves panic propagation through synchronized structures. If a thread panics while holding an standard library `std::sync::Mutex` or `std::sync::RwLock` lock, the lock becomes "poisoned." Subsequent attempts to acquire the lock will return an `Err(PoisonError)`. Calling `.unwrap()` on the result of such lock acquisitions will cause subsequent threads to panic, resulting in cascading Denial of Service (DoS).
 
-### Analysis of Lock Usages in `op-blockchain`
+### Analysis of Lock Usages in `op-snowball`
 This crate makes extensive use of synchronized states via `Arc<RwLock<Option<NumaTopology>>>` and `Arc<RwLock<u64>>` in:
-* `crates/op-blockchain/src/btrfs_numa_integration.rs`
-* `crates/op-blockchain/src/blockchain.rs`
-* `crates/op-blockchain/src/streaming_blockchain.rs`
+* `crates/op-snowball/src/btrfs_numa_integration.rs`
+* `crates/op-snowball/src/snowball.rs`
+* `crates/op-snowball/src/streaming_snowball.rs`
 
-All synchronized fields use **`tokio::sync::RwLock`** (as imported in `btrfs_numa_integration.rs:18`, `blockchain.rs:20`, and `streaming_blockchain.rs:22`). 
+All synchronized fields use **`tokio::sync::RwLock`** (as imported in `btrfs_numa_integration.rs:18`, `snowball.rs:20`, and `streaming_snowball.rs:22`). 
 
 Unlike `std::sync::RwLock`, **`tokio::sync::RwLock` does not implement lock poisoning**. The acquire operations (`read().await` and `write().await`) do not return a `Result`; they return the guard directly (or resolve to it asynchronously). 
 
@@ -104,13 +104,13 @@ The codebase does not adhere to the Schema-as-Code discipline. Data contracts, s
 
 ### Ad-Hoc Data Contracts and Struct Duplication
 Data schemas are declared as native, mutable Rust structures serialized directly into untyped JSON:
-* `BlockEvent` is defined in `crates/op-blockchain/src/footprint.rs:8-15` and duplicated as an identical but separate struct in `crates/op-blockchain/src/streaming_blockchain.rs:25-32`.
-* `RetentionPolicy` is defined in `crates/op-blockchain/src/retention.rs:8-17` and duplicated in `crates/op-blockchain/src/streaming_blockchain.rs:43-48`.
-* `PluginFootprint` in `crates/op-blockchain/src/footprint.rs:47-55` uses raw `HashMap<String, simd_json::OwnedValue>` (an untyped generic structure) for its `metadata` field, allowing unchecked data mutation.
+* `BlockEvent` is defined in `crates/op-snowball/src/footprint.rs:8-15` and duplicated as an identical but separate struct in `crates/op-snowball/src/streaming_snowball.rs:25-32`.
+* `RetentionPolicy` is defined in `crates/op-snowball/src/retention.rs:8-17` and duplicated in `crates/op-snowball/src/streaming_snowball.rs:43-48`.
+* `PluginFootprint` in `crates/op-snowball/src/footprint.rs:47-55` uses raw `HashMap<String, simd_json::OwnedValue>` (an untyped generic structure) for its `metadata` field, allowing unchecked data mutation.
 
 ### Untyped Ad-Hoc JSON Construction
 Throughout the ledger writing logic, structural contracts are constructed dynamically using the untyped `simd_json::json!` macro:
-* **`crates/op-blockchain/src/btrfs_numa_integration.rs:98-106`**:
+* **`crates/op-snowball/src/btrfs_numa_integration.rs:98-106`**:
   ```rust
   let block_data = simd_json::json!({
       "plugin_id": footprint.plugin_id,
@@ -122,7 +122,7 @@ Throughout the ledger writing logic, structural contracts are constructed dynami
       "vector_features": footprint.vector_features,
   });
   ```
-* **`crates/op-blockchain/src/streaming_blockchain.rs:192-197`**:
+* **`crates/op-snowball/src/streaming_snowball.rs:192-197`**:
   ```rust
   let data = simd_json::json!({
       "plugin_id": footprint.plugin_id,
@@ -134,7 +134,7 @@ Throughout the ledger writing logic, structural contracts are constructed dynami
 
 ### Non-Versioned Deserialization
 When retrieving records from disk, fields are parsed from untyped indices without schema validation:
-* **`crates/op-blockchain/src/btrfs_numa_integration.rs:153-171`**:
+* **`crates/op-snowball/src/btrfs_numa_integration.rs:153-171`**:
   ```rust
   plugin_id: block_data["plugin_id"].as_str().ok_or_else(...)?
   ```

@@ -9,7 +9,7 @@ architecturally decoupled from the Chat path — its own transport, its own stor
 shared module state with `crate::chat`.
 
 The audit trail must be queryable through both the GUI (gRPC `EventChainService`) AND
-through a proper D-Bus/MCP plugin method (`PluginV1.Call` on the `blockchain` plugin),
+through a proper D-Bus/MCP plugin method (`PluginV1.Call` on the `snowball` plugin),
 so that external AI agents and MCP clients can query accountability data without
 coupling to the gRPC proto surface.
 
@@ -59,22 +59,22 @@ coupling to the gRPC proto surface.
   real `zeroclaw` plugin with `ChatInput` / `op_llm::ChatManager`. This is genuinely
   wired end-to-end.
 
-- **On-disk StreamingBlockchain** (`crates/op-blockchain/src/streaming_blockchain.rs:164`)
+- **On-disk StreamingSnowball** (`crates/op-snowball/src/streaming_snowball.rs:164`)
   has a `timing_subvol` field commented `// Audit trail (immutable history)`, written via
   `add_footprint` (line 247). But `mutation_engine.rs` never calls `add_footprint` — the
   two systems are disconnected today.
 
-- **blockchain plugin has schema methods but no dispatch arm**:
-  `crates/op-plugins/src/state_plugins/blockchain_plugin.rs:343-410` declares 7 methods
+- **snowball plugin has schema methods but no dispatch arm**:
+  `crates/op-plugins/src/state_plugins/snowball_plugin.rs:343-410` declares 7 methods
   (`create_snapshot`, `list_snapshots`, `get_snapshot`, `rollback`, `get_current_state`,
-  `set_retention`, `get_stats`). However, `"blockchain"` does NOT appear as a match arm
+  `set_retention`, `get_stats`). However, `"snowball"` does NOT appear as a match arm
   in `crates/op-grpc-bridge/src/mutation_engine.rs` — it falls to the `_ =>` catch-all
   (line 1082: `_ => serde_json::to_value(&parsed_value)`) which echoes args back.
 
-- **blockchain_plugin.rs is the sanctioned home for audit chain capabilities**: Its doc
-  comment (`crates/op-plugins/src/state_plugins/blockchain_plugin.rs:1-16`) explicitly
+- **snowball_plugin.rs is the sanctioned home for audit chain capabilities**: Its doc
+  comment (`crates/op-plugins/src/state_plugins/snowball_plugin.rs:1-16`) explicitly
   states: "This is the correct home for the capability the Lovable frontend mistakenly
-  called as a standalone `operation.blockchain.v1.BlockchainService` gRPC package — there
+  called as a standalone `operation.snowball.v1.SnowballService` gRPC package — there
   is no such proto and there must not be one. New backend capabilities register here as
   plugins."
 
@@ -87,7 +87,7 @@ coupling to the gRPC proto surface.
 
 2. **EventChain is RAM-only**: `record_method_call` appends to an in-memory `Vec<ChainEvent>`
    (`crates/op-state-store/src/event_chain.rs:469`). Nothing persists it to disk. On
-   process restart, the chain is empty. The `StreamingBlockchain` timing_subvol IS
+   process restart, the chain is empty. The `StreamingSnowball` timing_subvol IS
    durable but is not connected to the per-method-call EventChain writes.
 
 3. **No plugin method exposes EventChain for querying via D-Bus**: `events()` (line 750)
@@ -97,9 +97,9 @@ coupling to the gRPC proto surface.
    includes an "audit query" method. This means MCP clients and external AI agents have
    no path to the audit trail through the D-Bus control plane.
 
-4. **blockchain plugin's existing methods are not dispatched**: The 7 existing schema
+4. **snowball plugin's existing methods are not dispatched**: The 7 existing schema
    methods (`list_snapshots`, `get_snapshot`, etc.) fall to the catch-all echo — calling
-   them via `zcall blockchain list_snapshots` echoes the args back, not real data.
+   them via `zcall snowball list_snapshots` echoes the args back, not real data.
 
 5. **No PII detection/redaction/review code exists**: `grep -ril "\bpii\b" crates/ --include=*.rs`
    returns references in comments and schema field descriptions (`ctl_plane_chatbot.rs:358`
@@ -119,7 +119,7 @@ coupling to the gRPC proto surface.
 - **The gRPC EventChainService**: Already works, already serves `GetEvents` and
   `SubscribeEvents`. The Accountability view uses this for the GUI path.
 
-- **blockchain_plugin.rs existing 7 schema methods**: Their declarations stay as-is.
+- **snowball_plugin.rs existing 7 schema methods**: Their declarations stay as-is.
   Wiring their full dispatch (DR snapshots, retention, rollback) is part of the paused
   13-plugin schema-methods sweep, NOT this spec. This spec only adds NEW audit-query
   methods and a minimal dispatch arm for them.
@@ -237,10 +237,10 @@ actor_id, capability_id, plugin_id, schema_version, operation_type, target,
 tags_touched, decision, deny_reason, input_patch_hash, result_effective_hash). An
 expandable detail row shows all fields.
 
-### FR-6: Durability decision — EventChain persists via StreamingBlockchain
+### FR-6: Durability decision — EventChain persists via StreamingSnowball
 
 **Decision**: Unify the two audit backends. On every `record_method_call`, after appending
-to the in-memory `Vec<ChainEvent>`, also call `StreamingBlockchain::add_footprint` to
+to the in-memory `Vec<ChainEvent>`, also call `StreamingSnowball::add_footprint` to
 write the event durably to the `timing_subvol`. This gives:
 
 - **Live-queryable**: the in-memory `EventChain` serves real-time queries via
@@ -256,7 +256,7 @@ zeroclaw-gui crate. The GUI is a pure consumer via gRPC.
 
 **Rationale**: The `timing_subvol` was explicitly designed for this purpose (its comment
 reads `// Audit trail (immutable history)`). The `PluginFootprint` struct
-(`crates/op-blockchain/src/footprint.rs:54`) is general enough to carry method-call event
+(`crates/op-snowball/src/footprint.rs:54`) is general enough to carry method-call event
 data: it has `plugin_id`, `operation`, `timestamp`, `data_hash`, `content_hash`, and a
 `metadata: HashMap<String, OwnedValue>` field for arbitrary data.
 
@@ -272,22 +272,22 @@ this exact purpose.
 visible in the Accountability view (fetched via `GetEvents`). The `timing_subvol`
 directory contains one JSON file per event.
 
-### FR-7: Schema-declared audit query methods on the `blockchain` plugin
+### FR-7: Schema-declared audit query methods on the `snowball` plugin
 
-New methods are added to the `blockchain` plugin schema
-(`crates/op-plugins/src/state_plugins/blockchain_plugin.rs`) to expose the audit trail
+New methods are added to the `snowball` plugin schema
+(`crates/op-plugins/src/state_plugins/snowball_plugin.rs`) to expose the audit trail
 through `PluginV1.Call`. This makes the audit trail queryable by MCP clients, external
 AI agents, and any consumer of the D-Bus plugin surface — not only by gRPC clients.
 
-The `blockchain` plugin is the sanctioned home for this capability per its own doc comment
+The `snowball` plugin is the sanctioned home for this capability per its own doc comment
 (lines 1-16: "This is the correct home... New backend capabilities register here as plugins").
 
 Two new methods:
 
 1. **`query_events`** — paginated, filtered query of the event chain.
    - **Effect**: `Read` (pure query, no state mutation).
-   - **Capability**: `blockchain.read`.
-   - **Subid**: `obs.service.blockchain.events.query@v1`.
+   - **Capability**: `snowball.read`.
+   - **Subid**: `obs.service.snowball.events.query@v1`.
    - **Input**: `QueryEventsInput { plugin_id: Option<String>, from_event_id: Option<u64>, to_event_id: Option<u64>, limit: Option<u32>, decision: Option<String> }`.
    - **Output**: `QueryEventsOutput { events: Vec<AuditEventRecord>, has_more: bool, total_in_chain: u64 }`.
    - `AuditEventRecord` contains: `event_id`, `event_hash`, `prev_hash`, `timestamp`,
@@ -297,34 +297,34 @@ Two new methods:
 
 2. **`verify_chain`** — integrity verification of the hash chain.
    - **Effect**: `Read`.
-   - **Capability**: `blockchain.read`.
-   - **Subid**: `obs.service.blockchain.chain.verify@v1`.
+   - **Capability**: `snowball.read`.
+   - **Subid**: `obs.service.snowball.chain.verify@v1`.
    - **Input**: `VerifyChainInput { from_event_id: Option<u64>, to_event_id: Option<u64> }`.
    - **Output**: `VerifyChainOutput { valid: bool, events_verified: u64, errors: Vec<String> }`.
 
-These methods are dispatched by a NEW `"blockchain"` match arm in
+These methods are dispatched by a NEW `"snowball"` match arm in
 `MutationEngine::dispatch_method_call` — but ONLY for `query_events` and `verify_chain`.
 The existing 7 methods (`list_snapshots`, `get_snapshot`, etc.) remain un-dispatched
 (falling to the catch-all echo) until the paused schema-methods sweep wires them.
 
 **Acceptance criteria**:
-- `./bin/zcall methods blockchain` shows `query_events` and `verify_chain` alongside the
+- `./bin/zcall methods snowball` shows `query_events` and `verify_chain` alongside the
   existing 7 methods.
-- `./bin/zcall blockchain query_events -a '{"limit": 10}'` returns a JSON object with
+- `./bin/zcall snowball query_events -a '{"limit": 10}'` returns a JSON object with
   `events` array and `has_more` boolean — NOT an echo of the input.
-- `./bin/zcall blockchain verify_chain -a '{}'` returns `{"valid": true, ...}`.
-- `./bin/zcall blockchain list_snapshots` STILL echoes args (existing methods remain
+- `./bin/zcall snowball verify_chain -a '{}'` returns `{"valid": true, ...}`.
+- `./bin/zcall snowball list_snapshots` STILL echoes args (existing methods remain
   un-wired — confirming the scope boundary).
 
-### FR-8: blockchain_plugin existing methods remain un-dispatched
+### FR-8: snowball_plugin existing methods remain un-dispatched
 
 The existing 7 schema methods (`create_snapshot`, `list_snapshots`, `get_snapshot`,
 `rollback`, `get_current_state`, `set_retention`, `get_stats`) remain un-dispatched.
-The new `"blockchain"` dispatch arm handles ONLY `query_events` and `verify_chain`;
-all other blockchain methods fall through to the catch-all echo.
+The new `"snowball"` dispatch arm handles ONLY `query_events` and `verify_chain`;
+all other snowball methods fall through to the catch-all echo.
 
-This is the explicit scope boundary: wiring the full blockchain dispatch (which involves
-`StreamingBlockchain` DR/snapshot operations) belongs to the paused 13-plugin
+This is the explicit scope boundary: wiring the full snowball dispatch (which involves
+`StreamingSnowball` DR/snapshot operations) belongs to the paused 13-plugin
 schema-methods sweep, not this spec.
 
 **Acceptance criteria**: No new match logic for `list_snapshots`, `get_snapshot`,
@@ -366,8 +366,8 @@ New items carry subids:
 - `AccountabilityStore` view surface: `exp.software.zeroclaw.accountability.render@v1`
 - `AccountabilityTransport` client: `obs.service.event-chain.query@v1`
 - The durability write path: `evt.service.event-chain.persist@v1`
-- `query_events` schema method: `obs.service.blockchain.events.query@v1`
-- `verify_chain` schema method: `obs.service.blockchain.chain.verify@v1`
+- `query_events` schema method: `obs.service.snowball.events.query@v1`
+- `verify_chain` schema method: `obs.service.snowball.chain.verify@v1`
 
 ---
 
@@ -376,7 +376,7 @@ New items carry subids:
 - **Rewiring `op-gemma/src/ui_gallery.rs`** to use zeroclaw for real generation — paused,
   not this spec.
 - **The 13-plugin schema-methods sweep** — paused until this spec's tasks land.
-- **Wiring the `blockchain` dispatch arm for its existing 7 schema methods** (DR
+- **Wiring the `snowball` dispatch arm for its existing 7 schema methods** (DR
   snapshots, retention, rollback) — belongs to the schema-methods sweep. This spec ONLY
   wires `query_events` and `verify_chain`.
 - **Automated PII detection/classification** — no code for this exists; explicitly deferred.

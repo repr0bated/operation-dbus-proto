@@ -1,6 +1,6 @@
 {
   "id": "4",
   "subject": "Task 9: Add add_footprint durability call in MutationEngine",
-  "description": "StreamingBlockchain field + event_to_footprint conversion; warn on failure, do not fail dispatch",
+  "description": "StreamingSnowball field + event_to_footprint conversion; warn on failure, do not fail dispatch",
   "status": "pending"
 }

@@ -28,7 +28,7 @@
 | Target | Kind | Status | Notes |
 |---|---|---|---|
 | [op-agents](./crates/op-agents.md) | Rust crate | Builds | Partial |
-| [op-blockchain](./crates/op-blockchain.md) | Rust crate | Builds | Buildable |
+| [op-snowball](./crates/op-snowball.md) | Rust crate | Builds | Buildable |
 | [op-cache](./crates/op-cache.md) | Rust crate | Builds | Partial |
 | [op-chat](./crates/op-chat.md) | Rust crate | Builds | Partial |
 | [op-cognitive-mcp](./crates/op-cognitive-mcp.md) | Rust crate | Fails | Broken |

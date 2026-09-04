@@ -64,7 +64,7 @@ The root package `op-dbus` defines the following features:
 This codebase is designed to follow a schema-as-code discipline using Protocol Buffers and OSCAL. The following locations violate this discipline by defining data contracts as ad-hoc, unstructured JSON (`Value`/`simd_json::OwnedValue`) or raw database string queries rather than versioned, typed schemas:
 
 *   **`crates/op-state-store/src/lib.rs:63`**: `StoredObject` defines `data: simd_json::OwnedValue`. This is an untyped escape hatch that allows schema-less JSON payloads to bypass validation.
-*   **`crates/op-state-store/src/lib.rs:72`**: `CanonicalDbExport` represents database state using `Vec<simd_json::OwnedValue>` for both `executions` and `blockchain` fields.
+*   **`crates/op-state-store/src/lib.rs:72`**: `CanonicalDbExport` represents database state using `Vec<simd_json::OwnedValue>` for both `executions` and `snowball` fields.
 *   **`crates/op-state-store/src/execution_job.rs:25`**: `ExecutionJob` represents its parameters using `arguments: simd_json::OwnedValue`. Similarly, `ExecutionResult` defines `output: Option<simd_json::OwnedValue>`.
 *   **`crates/op-state-store/src/disaster_recovery.rs:30`**: `PluginStateExport` wraps the state field as `state: Value` (simd_json dynamic object).
 *   **`crates/op-state-store/src/plugin_schema.rs:32`**: The `FieldType` enum contains `FieldType::Any`, which acts as a dynamic bypass for type enforcement.
@@ -108,7 +108,7 @@ This codebase is designed to follow a schema-as-code discipline using Protocol B
 #### Finding 3: Use of Cryptographically Broken Hash Algorithm (MD5) for Chain Verification
 *   **File**: `crates/op-state-store/src/event_chain.rs:592-602`
 *   **Severity**: Medium
-*   **Description**: The blockchain-style compliance layer relies on MD5 (`md5::compute`) to enforce structural integrity, compute Merkle proofs, and verify the chain of custody. MD5 is highly vulnerable to hash collision attacks. An attacker with access to the state store could craft database state changes with identical hashes to bypass audit trail checks and break the tamper-evident guarantee.
+*   **Description**: The snowball-style compliance layer relies on MD5 (`md5::compute`) to enforce structural integrity, compute Merkle proofs, and verify the chain of custody. MD5 is highly vulnerable to hash collision attacks. An attacker with access to the state store could craft database state changes with identical hashes to bypass audit trail checks and break the tamper-evident guarantee.
 *   **Remediation**: Transition the hashing functions to SHA-256 (`sha2::Sha256`), which is already defined as a workspace-level dependency.
 
 #### Finding 4: Unsafe JSON Deserialization of Disaster Recovery State

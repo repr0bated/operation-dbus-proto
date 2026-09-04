@@ -5716,7 +5716,7 @@ impl Tool for ReportInternalErrorTool {
 //!
 //! The chatbot is a FULL SYSTEM ADMINISTRATOR.
 //! Admin users can read/write any file (except path traversal).
-//! Audit logging is handled by the blockchain plugin.
+//! Audit logging is handled by the snowball plugin.
 
 use async_trait::async_trait;
 use simd_json::prelude::*;
@@ -18443,7 +18443,7 @@ impl Clone for ToolExecutor {
 //! - LLM decisions and tool calls
 //! - Session lifecycle events
 //!
-//! This integrates with blockchain for immutable audit logging.
+//! This integrates with snowball for immutable audit logging.
 
 pub mod builtin;
 pub mod discovery;
@@ -18952,7 +18952,7 @@ fn extract_text_content(payload: &Value) -> Option<String> {
 //!
 //! ## Use Cases
 //!
-//! - **Blockchain Logging**: Immutable audit trail on blockchain
+//! - **Snowball Logging**: Immutable audit trail on snowball
 //! - **Metrics/Observability**: Prometheus, Grafana integration
 //! - **Alerting**: Real-time notifications for critical operations
 //! - **Replay/Debugging**: Record and replay orchestration sessions
@@ -18960,13 +18960,13 @@ fn extract_text_content(payload: &Value) -> Option<String> {
 //! ## Example
 //!
 //! ```rust,ignore
-//! struct BlockchainActivityPlugin { /* ... */ }
+//! struct SnowballActivityPlugin { /* ... */ }
 //!
 //! #[async_trait]
-//! impl OrchestrationActivityPlugin for BlockchainActivityPlugin {
+//! impl OrchestrationActivityPlugin for SnowballActivityPlugin {
 //!     async fn on_tool_executed(&self, event: ToolExecutedEvent) {
-//!         // Write to blockchain
-//!         self.blockchain.write_event(event).await;
+//!         // Write to snowball
+//!         self.snowball.write_event(event).await;
 //!     }
 //! }
 //! ```

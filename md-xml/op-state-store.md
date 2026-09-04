@@ -1639,7 +1639,7 @@ pub type Result<T> = std::result::Result<T, StateStoreError>;
 </file>
 
 <file path="src/event_chain.rs">
-//! Event Chain - Blockchain-style Compliance and Reproducibility Layer
+//! Event Chain - Snowball-style Compliance and Reproducibility Layer
 //!
 //! Provides tamper-evident audit trail through:
 //! - Hash-linked events for every state transition
@@ -2664,7 +2664,7 @@ pub struct ExecutionJob {
 //! - Plugin schema catalog with JSON Schema 2026 support
 //! - Disaster recovery export/import
 //! - OpenTelemetry tracing integration
-//! - Blockchain-style event chain for compliance and reproducibility
+//! - Snowball-style event chain for compliance and reproducibility
 //! - Schema-aware canonical hashing with Merkle batching
 
 pub mod disaster_recovery;
@@ -2720,7 +2720,7 @@ pub struct StoredObject {
 pub struct CanonicalDbExport {
     pub objects: Vec<StoredObject>,
     pub executions: Vec<simd_json::OwnedValue>,
-    pub blockchain: Vec<simd_json::OwnedValue>,
+    pub snowball: Vec<simd_json::OwnedValue>,
 }
 </file>
 
@@ -2728,7 +2728,7 @@ pub struct CanonicalDbExport {
 //! Pure in-memory StateStore — no SQLite, no drift.
 //!
 //! Used for plugin projection bootstrap and ephemeral state tracking
-//! where persistence is handled externally (SHM, blockchain, JSON files).
+//! where persistence is handled externally (SHM, snowball, JSON files).
 
 use crate::error::Result;
 use crate::execution_job::ExecutionJob;
@@ -2825,7 +2825,7 @@ impl StateStore for MemoryStore {
         Ok(CanonicalDbExport {
             objects: objects.values().cloned().collect(),
             executions,
-            blockchain: Vec::new(),
+            snowball: Vec::new(),
         })
     }
 
@@ -9106,7 +9106,7 @@ pub async fn run_shuttle() -> Result<(), Box<dyn std::error::Error>> {
             let state: serde_json::Value = response.json().await?;
             let current_index = state["result"].as_u64().unwrap_or(last_mutation_index);
 
-            // If the Btrfs blockchain mutates, instantly update the gRPC headers
+            // If the Btrfs snowball mutates, instantly update the gRPC headers
             if current_index > last_mutation_index {
                 last_mutation_index = current_index;
 
@@ -10314,7 +10314,7 @@ impl StateStore for SqliteStore {
         Ok(CanonicalDbExport {
             objects,
             executions: vec![], // To be populated if needed
-            blockchain: vec![], // To be populated if needed
+            snowball: vec![], // To be populated if needed
         })
     }
 

@@ -42,7 +42,7 @@ This document provides a line-by-line requirement verification for every specifi
 | ID | Requirement Statement | Code Location & Verification | Verdict |
 |---|---|---|:---:|
 | **REQ-1** | Container start/stop operations route via `org.opdbus.v1.plugins.incus`. | [`crates/op-plugins/src/state_plugins/incus.rs:1-150`](file:///srv/git/odbus/crates/op-plugins/src/state_plugins/incus.rs#L1-L150): D-Bus methods `start_instance`, `stop_instance`. | **PASS** |
-| **REQ-2** | Blockchain audit log records container lifecycle events. | Mutations route through `MutationEngine` and append to `EventChain`. | **PASS** |
+| **REQ-2** | Snowball audit log records container lifecycle events. | Mutations route through `MutationEngine` and append to `EventChain`. | **PASS** |
 | **REQ-3** | Production containers (`xray`, `NetMaker`, `cozo`, `qdrant`, `mail-3tched`, `assistant`) supervised via runit. | [`deploy/runit/incus-ct-mail-3tched/run`](file:///srv/git/odbus/deploy/runit/incus-ct-mail-3tched/run) & `3tched-incus-svcgen`. | **PASS** |
 
 ---

@@ -56,7 +56,7 @@ The subid-mapping lens. Per field: subid, category, computed role
 subject-join to a field. Rows with no subid render as explicit **GAP** entries
 (this is what makes the 133-field / 570-method work lists visible in the UI
 instead of in a script). Category-mismatched rows (e.g. `obs.*` field that is
-read-write and has a setter, like `blockchain.retention`) render as conflicts.
+read-write and has a setter, like `snowball.retention`) render as conflicts.
 
 Projected mode consumes the seal-time role facet (planned: role computed once
 by the sealer, sealed into the blob). Until that lands, the mode reads the

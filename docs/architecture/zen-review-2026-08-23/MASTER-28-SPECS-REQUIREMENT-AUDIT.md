@@ -226,7 +226,7 @@ This document provides the definitive, requirement-by-requirement verification f
 | Requirement ID | Statement | Code Implementation | Status |
 |---|---|---|:---:|
 | `REQ-1` | Mutations append linear `StateChange` records to `EventChain`. | [`crates/op-grpc-bridge/src/mutation_engine.rs:913-1032`](file:///srv/git/odbus/crates/op-grpc-bridge/src/mutation_engine.rs#L913-L1032) | **PASS** |
-| `REQ-2` | Append-only event block replication to `/var/lib/opdbus/blockchain`. | [`crates/op-blockchain/src/blockchain.rs:1-120`](file:///srv/git/odbus/crates/op-blockchain/src/blockchain.rs#L1-L120) | **PASS** |
+| `REQ-2` | Append-only event block replication to `/var/lib/opdbus/snowball`. | [`crates/op-snowball/src/snowball.rs:1-120`](file:///srv/git/odbus/crates/op-snowball/src/snowball.rs#L1-L120) | **PASS** |
 | `REQ-3` | EMQX non-blocking audit tap: returns `ResponsedType::Ignore`. | [`crates/op-grpc-bridge/src/server.rs`](file:///srv/git/odbus/crates/op-grpc-bridge/src/server.rs) | **PASS** |
 
 ---

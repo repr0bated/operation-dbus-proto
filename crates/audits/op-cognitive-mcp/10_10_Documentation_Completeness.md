@@ -213,7 +213,7 @@ The codebase enforces a schema-as-code discipline using Protocol Buffers and OSC
 
 ### 5.2 Untyped Telemetry Event Payloads
 * **Citation**: `crates/op-cognitive-mcp/src/activity_filter.rs:197`
-* **Violation**: `ActivityEvent::payload` is typed as a raw `serde_json::Value`. Because these events are stored in the vector database and eventually emitted to the blockchain audit trail, they must be represented as structured, schema-validated elements (such as versioned Protocol Buffer messages).
+* **Violation**: `ActivityEvent::payload` is typed as a raw `serde_json::Value`. Because these events are stored in the vector database and eventually emitted to the snowball audit trail, they must be represented as structured, schema-validated elements (such as versioned Protocol Buffer messages).
 
 ### 5.3 Weakly Typed Memory Store Values
 * **Citation**: `crates/op-cognitive-mcp/src/memory_store.rs:53`, `crates/op-cognitive-mcp/src/memory_store.rs:64`

@@ -92,7 +92,7 @@ The codebase follows an ad-hoc struct-definition discipline rather than a strict
 * **File Citation:** `crates/op-state-store/src/event_chain.rs:348`, `crates/op-state-store/src/event_chain.rs:353`, `crates/op-state-store/src/event_chain.rs:358`, `crates/op-state-store/src/disaster_recovery.rs:115`, `crates/op-state-store/src/disaster_recovery.rs:172`
 * **Impact:** Evasion of audit trail integrity, silent state modification, and unauthorized privilege/capability escalation.
 * **Description:**
-  The `EventChain` module is designed to provide a "tamper-evident audit trail" using a blockchain-style append-only architecture. However, the hashes linking previous events to current events are computed entirely using **MD5**:
+  The `EventChain` module is designed to provide a "tamper-evident audit trail" using a snowball-style append-only architecture. However, the hashes linking previous events to current events are computed entirely using **MD5**:
   ```rust
   // event_chain.rs:348
   fn compute_hash(value: &Value) -> String {

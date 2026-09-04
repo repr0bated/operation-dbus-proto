@@ -1,4 +1,4 @@
-# OP-Blockchain Security and Quality Audit
+# OP-Snowball Security and Quality Audit
 
 ## 1. Data Structures Metrics & Analysis
 
@@ -8,14 +8,14 @@ This section tracks the usage of synchronization primitives, memory-management w
 
 | File | `Arc` | `Rc` | `RefCell` | `RwLock` | `Mutex` | `OnceCell` |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `crates/op-blockchain/src/btrfs_numa_integration.rs` | 8 | 0 | 0 | 2 | 0 | 0 |
-| `crates/op-blockchain/src/footprint.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `crates/op-blockchain/src/lib.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `crates/op-blockchain/src/plugin_footprint.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `crates/op-blockchain/src/retention.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `crates/op-blockchain/src/snapshot.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `crates/op-blockchain/src/blockchain.rs` | 4 | 0 | 0 | 4 | 0 | 0 |
-| `crates/op-blockchain/src/streaming_blockchain.rs` | 2 | 0 | 0 | 2 | 0 | 0 |
+| `crates/op-snowball/src/btrfs_numa_integration.rs` | 8 | 0 | 0 | 2 | 0 | 0 |
+| `crates/op-snowball/src/footprint.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `crates/op-snowball/src/lib.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `crates/op-snowball/src/plugin_footprint.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `crates/op-snowball/src/retention.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `crates/op-snowball/src/snapshot.rs` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `crates/op-snowball/src/snowball.rs` | 4 | 0 | 0 | 4 | 0 | 0 |
+| `crates/op-snowball/src/streaming_snowball.rs` | 2 | 0 | 0 | 2 | 0 | 0 |
 
 ---
 
@@ -26,8 +26,8 @@ No files exceed the threshold of 20 `.clone()` calls.
 *   `btrfs_numa_integration.rs`: **5** clones
 *   `footprint.rs`: **4** clones
 *   `plugin_footprint.rs`: **6** clones
-*   `blockchain.rs`: **8** clones
-*   `streaming_blockchain.rs`: **11** clones
+*   `snowball.rs`: **8** clones
+*   `streaming_snowball.rs`: **11** clones
 *   All other files: **0** clones
 
 ---
@@ -36,10 +36,10 @@ No files exceed the threshold of 20 `.clone()` calls.
 
 The following structs violate design simplicity by exposing more than 5 public fields, increasing coupling and breaking encapsulation:
 
-*   **`BlockEvent`** (`crates/op-blockchain/src/footprint.rs:9`): 6 public fields (`timestamp`, `category`, `action`, `data`, `hash`, `vector`).
-*   **`PluginFootprint`** (`crates/op-blockchain/src/footprint.rs:44`): 7 public fields (`plugin_id`, `operation`, `timestamp`, `data_hash`, `content_hash`, `metadata`, `vector_features`).
-*   **`PluginFootprint` (Legacy)** (`crates/op-blockchain/src/plugin_footprint.rs:10`): 7 public fields (`plugin_id`, `operation`, `timestamp`, `data_hash`, `content_hash`, `metadata`, `vector_features`).
-*   **`BlockEvent` (Local)** (`crates/op-blockchain/src/streaming_blockchain.rs:21`): 6 public fields (`timestamp`, `category`, `action`, `data`, `hash`, `vector`).
+*   **`BlockEvent`** (`crates/op-snowball/src/footprint.rs:9`): 6 public fields (`timestamp`, `category`, `action`, `data`, `hash`, `vector`).
+*   **`PluginFootprint`** (`crates/op-snowball/src/footprint.rs:44`): 7 public fields (`plugin_id`, `operation`, `timestamp`, `data_hash`, `content_hash`, `metadata`, `vector_features`).
+*   **`PluginFootprint` (Legacy)** (`crates/op-snowball/src/plugin_footprint.rs:10`): 7 public fields (`plugin_id`, `operation`, `timestamp`, `data_hash`, `content_hash`, `metadata`, `vector_features`).
+*   **`BlockEvent` (Local)** (`crates/op-snowball/src/streaming_snowball.rs:21`): 6 public fields (`timestamp`, `category`, `action`, `data`, `hash`, `vector`).
 
 ---
 
@@ -52,9 +52,9 @@ No globally mutable state (`static mut` or `lazy_static` with internal mutabilit
 
 The codebase does not consistently enforce a schema-as-code discipline. Data contracts are represented as ad-hoc, untyped Rust structures rather than versioned schemas (such as Protocol Buffers or OSCAL profiles).
 
-*   **`BlockEvent` and `PluginFootprint` Structs** (`crates/op-blockchain/src/footprint.rs:9-70`): These core types are defined as ad-hoc Rust structs with serializable fields. The payload uses `simd_json::OwnedValue` (essentially free-form JSON) rather than a versioned schema, making backward compatibility guarantees impossible to statically verify.
-*   **Ad-hoc Config Parsing** (`crates/op-blockchain/src/retention.rs:93-100`): The system parses snapshot retention configurations using raw string lookups on a generic JSON object (`value.get("hourly").and_then(|v| v.as_u64())`). This bypasses versioned schema validation, leading to silent config failures if schema fields are renamed or types mismatch.
-*   **Ad-hoc Legacy Struct Duplication** (`crates/op-blockchain/src/plugin_footprint.rs:10`): `PluginFootprint` is duplicated in an ad-hoc manner across modules, creating desynchronization risks when structural fields are modified.
+*   **`BlockEvent` and `PluginFootprint` Structs** (`crates/op-snowball/src/footprint.rs:9-70`): These core types are defined as ad-hoc Rust structs with serializable fields. The payload uses `simd_json::OwnedValue` (essentially free-form JSON) rather than a versioned schema, making backward compatibility guarantees impossible to statically verify.
+*   **Ad-hoc Config Parsing** (`crates/op-snowball/src/retention.rs:93-100`): The system parses snapshot retention configurations using raw string lookups on a generic JSON object (`value.get("hourly").and_then(|v| v.as_u64())`). This bypasses versioned schema validation, leading to silent config failures if schema fields are renamed or types mismatch.
+*   **Ad-hoc Legacy Struct Duplication** (`crates/op-snowball/src/plugin_footprint.rs:10`): `PluginFootprint` is duplicated in an ad-hoc manner across modules, creating desynchronization risks when structural fields are modified.
 
 ---
 
@@ -62,13 +62,13 @@ The codebase does not consistently enforce a schema-as-code discipline. Data con
 
 ### [CRITICAL] Command Injection via Unsanitized Shell Spawning
 *   **Citations**: 
-    *   `crates/op-blockchain/src/blockchain.rs:229`
-    *   `crates/op-blockchain/src/streaming_blockchain.rs:312`
-    *   `crates/op-blockchain/src/streaming_blockchain.rs:342-348`
+    *   `crates/op-snowball/src/snowball.rs:229`
+    *   `crates/op-snowball/src/streaming_snowball.rs:312`
+    *   `crates/op-snowball/src/streaming_snowball.rs:342-348`
 *   **Impact**: Execution of arbitrary shell commands with the privileges of the running application.
 *   **Description**: The codebase invokes system shells (`sh` and `bash`) with `-c` and formats external arguments directly into the command string without sanitization or shell-escaping:
     ```rust
-    // crates/op-blockchain/src/blockchain.rs
+    // crates/op-snowball/src/snowball.rs
     let output = Command::new("sh")
         .arg("-c")
         .arg(format!(
@@ -85,13 +85,13 @@ The codebase does not consistently enforce a schema-as-code discipline. Data con
 
 ### [HIGH] Memory Safety Violation / UB via Unpadded `simd-json` Deserialization
 *   **Citations**:
-    *   `crates/op-blockchain/src/btrfs_numa_integration.rs:126`
-    *   `crates/op-blockchain/src/blockchain.rs:198`
-    *   `crates/op-blockchain/src/streaming_blockchain.rs:253`
+    *   `crates/op-snowball/src/btrfs_numa_integration.rs:126`
+    *   `crates/op-snowball/src/snowball.rs:198`
+    *   `crates/op-snowball/src/streaming_snowball.rs:253`
 *   **Impact**: Potential out-of-bounds memory reads, leading to segmentation faults or memory disclosure during JSON parsing.
 *   **Description**: The code uses `unsafe { simd_json::from_str(&mut data) }` on strings read directly from disk via standard library file-reading methods:
     ```rust
-    // crates/op-blockchain/src/btrfs_numa_integration.rs
+    // crates/op-snowball/src/btrfs_numa_integration.rs
     let mut data = tokio::fs::read_to_string(&block_file).await?;
     let block_data: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut data)? };
     ```
@@ -102,15 +102,15 @@ The codebase does not consistently enforce a schema-as-code discipline. Data con
 
 ### [HIGH] Path Traversal in State and Cache Retrieval
 *   **Citations**:
-    *   `crates/op-blockchain/src/btrfs_numa_integration.rs:116`
-    *   `crates/op-blockchain/src/blockchain.rs:189`
-    *   `crates/op-blockchain/src/blockchain.rs:196`
-    *   `crates/op-blockchain/src/blockchain.rs:220`
-    *   `crates/op-blockchain/src/streaming_blockchain.rs:242`
+    *   `crates/op-snowball/src/btrfs_numa_integration.rs:116`
+    *   `crates/op-snowball/src/snowball.rs:189`
+    *   `crates/op-snowball/src/snowball.rs:196`
+    *   `crates/op-snowball/src/snowball.rs:220`
+    *   `crates/op-snowball/src/streaming_snowball.rs:242`
 *   **Impact**: Arbitrary file read/write across the host filesystem.
 *   **Description**: File paths are constructed by directly joining directory bases with raw strings (`block_hash`, `key`, `snapshot_name`, `plugin_name`) without validating that they are clean relative paths:
     ```rust
-    // crates/op-blockchain/src/btrfs_numa_integration.rs
+    // crates/op-snowball/src/btrfs_numa_integration.rs
     let block_file = cache_dir
         .join("blocks")
         .join("by-hash")
@@ -123,11 +123,11 @@ The codebase does not consistently enforce a schema-as-code discipline. Data con
 
 ### [MEDIUM] PATH Hijacking via Relative Command Execution
 *   **Citations**:
-    *   `crates/op-blockchain/src/blockchain.rs:83`
-    *   `crates/op-blockchain/src/blockchain.rs:158`
-    *   `crates/op-blockchain/src/blockchain.rs:356`
-    *   `crates/op-blockchain/src/streaming_blockchain.rs:151`
-    *   `crates/op-blockchain/src/streaming_blockchain.rs:491`
+    *   `crates/op-snowball/src/snowball.rs:83`
+    *   `crates/op-snowball/src/snowball.rs:158`
+    *   `crates/op-snowball/src/snowball.rs:356`
+    *   `crates/op-snowball/src/streaming_snowball.rs:151`
+    *   `crates/op-snowball/src/streaming_snowball.rs:491`
 *   **Impact**: Local privilege escalation or arbitrary code execution if the application path environment is misconfigured.
 *   **Description**: System binaries (`btrfs`) are called using relative executable names rather than absolute paths (e.g., `Command::new("btrfs")`). If the system's `PATH` environment variable contains user-writable directories or is manipulated, a malicious binary named `btrfs` could be executed.
 *   **Remediation**: Hardcode absolute paths to known system binaries (e.g., `/usr/bin/btrfs`, `/bin/sh`) or resolve them through a strictly controlled and sanitized configuration.

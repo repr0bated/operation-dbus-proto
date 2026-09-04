@@ -41,7 +41,7 @@ The `op-state` crate does not spin up or configure HTTP or gRPC servers directly
 ---
 
 ### 4. Cross-Crate Circular Dependency Analysis
-*   **Manifest Level**: `op-state` depends on `op-core`, `op-blockchain`, `op-jsonrpc`, `op-state-store`, and `op-network` (`crates/op-state/Cargo.toml:11-16`). None of these sub-crates depend back on `op-state` directly. Therefore, there is zero risk of compile-time circular dependency cycles at the Cargo manifest level.
+*   **Manifest Level**: `op-state` depends on `op-core`, `op-snowball`, `op-jsonrpc`, `op-state-store`, and `op-network` (`crates/op-state/Cargo.toml:11-16`). None of these sub-crates depend back on `op-state` directly. Therefore, there is zero risk of compile-time circular dependency cycles at the Cargo manifest level.
 *   **Runtime Level**: A subtle circularity risk exists when high-level modules (e.g., `op-plugins` or `op-projection`) dynamically configure hooks or register dynamic workflows back into the global `StateManager` (hosted inside `op-state`), which in turn triggers callbacks or D-Bus events handled by those same high-level modules. Careful ordering of `zbus` event loops is required to prevent deadlocks on state mutexes.
 
 ---
@@ -86,8 +86,8 @@ D-Bus interfaces exchange raw serialized JSON strings and bind them to untyped s
     async fn apply_contract_mutation(&self, request_json: String) -> zbus::fdo::Result<String>
     ```
 
-### 4. Dynamic Blockchain Footprints
-Blockchain state recording passes untyped dynamic values, which compromises audit trail integrity because the schemas of log entries are not deterministically locked.
+### 4. Dynamic Snowball Footprints
+Snowball state recording passes untyped dynamic values, which compromises audit trail integrity because the schemas of log entries are not deterministically locked.
 *   **Citation**: `crates/op-state/src/dbus_plugin_base.rs:10`
 *   **Code**:
     ```rust

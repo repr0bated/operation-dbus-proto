@@ -38,7 +38,7 @@ These follow a consistent machine-generated format with named sections:
 # [[bin]] entries verbatim or "# No binaries"
 ```
 
-Crates with auto-generated SPEC: `op-agents`, `op-blockchain`, `op-cache`, `op-cognitive-mcp`, `op-core`, `op-dbus-mirror`, `op-dynamic-loader`, `op-execution-tracker`, `op-gateway`, `op-grpc-bridge`, `op-http`, `op-identity`, `op-inspector`, `op-introspection`, `op-llm`, `op-mcp`, `op-mcp-aggregator`, `op-mcp-proxy`, `op-network`, `op-plugins`, `op-services`, `op-state`, `op-state-store`, `op-tools`, `op-web`, `op-workflows`
+Crates with auto-generated SPEC: `op-agents`, `op-snowball`, `op-cache`, `op-cognitive-mcp`, `op-core`, `op-dbus-mirror`, `op-dynamic-loader`, `op-execution-tracker`, `op-gateway`, `op-grpc-bridge`, `op-http`, `op-identity`, `op-inspector`, `op-introspection`, `op-llm`, `op-mcp`, `op-mcp-aggregator`, `op-mcp-proxy`, `op-network`, `op-plugins`, `op-services`, `op-state`, `op-state-store`, `op-tools`, `op-web`, `op-workflows`
 
 ### Hand-Written / Rich SPECs (feature-heavy crates)
 

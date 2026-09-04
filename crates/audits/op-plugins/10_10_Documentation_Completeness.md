@@ -3,7 +3,7 @@
 ## 1. Documentation and Quality Check (Role: Docs)
 
 ### Crate-Level Documentation
-* **`lib.rs`**: Crate-level `//!` documentation is present and sufficient. It details the plugin system, state management, blockchain footprint features, and auto-creation of missing plugins. (Citations: `crates/op-plugins/src/lib.rs:3-13`)
+* **`lib.rs`**: Crate-level `//!` documentation is present and sufficient. It details the plugin system, state management, snowball footprint features, and auto-creation of missing plugins. (Citations: `crates/op-plugins/src/lib.rs:3-13`)
 
 ### Sample of 10 Public Items (`///` rustdoc presence)
 The following 10 public items were sampled to verify the presence of `///` rustdoc:
@@ -136,7 +136,7 @@ The repository asserts a schema-as-code discipline using Protocol Buffers and OS
   * `crates/op-plugins/src/state_plugins/dinit.rs:223`
 * **Vulnerability Type**: Use of Weak Cryptographic Hash (CWE-328)
 * **Description**:
-  The system calculates fingerprints of both current and desired configurations for its "automatic hash footprints for blockchain audit trails" using MD5 (`md5::compute`). Since MD5 is highly vulnerable to collision attacks, an attacker can craft different configuration states that yield the exact same MD5 digest, thereby bypassing blockchain audit integrity checks and modifying system states undetected.
+  The system calculates fingerprints of both current and desired configurations for its "automatic hash footprints for snowball audit trails" using MD5 (`md5::compute`). Since MD5 is highly vulnerable to collision attacks, an attacker can craft different configuration states that yield the exact same MD5 digest, thereby bypassing snowball audit integrity checks and modifying system states undetected.
 * **Remediation**:
   Migrate all audit and configuration fingerprint hashes to SHA-256 (via the `sha2` crate already present in dependencies).
 

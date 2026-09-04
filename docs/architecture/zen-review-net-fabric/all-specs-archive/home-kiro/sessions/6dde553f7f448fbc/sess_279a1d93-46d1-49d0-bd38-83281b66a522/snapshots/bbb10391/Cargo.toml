@@ -22,7 +22,7 @@ members = [
     "crates/op-plugin-lint",
     "crates/op-workflows",
     # "crates/op-ml",  # Disabled: ort API compatibility issues (see #ml-fixme)
-    "crates/op-blockchain",
+    "crates/op-snowball",
     "crates/op-deployment",
     "crates/op-mcp",
     "crates/op-mcp-aggregator",
@@ -70,7 +70,7 @@ op-state-store = { path = "crates/op-state-store" }
 op-blob = { path = "crates/op-blob" }
 op-plugins = { path = "crates/op-plugins" }
 op-workflows = { path = "crates/op-workflows" }
-op-blockchain = { path = "crates/op-blockchain" }
+op-snowball = { path = "crates/op-snowball" }
 op-inspector = { path = "crates/op-inspector" }
 op-mcp = { path = "crates/op-mcp" }
 op-web = { path = "crates/op-web" }
@@ -228,7 +228,7 @@ op-state.workspace = true
 op-state-store.workspace = true
 op-plugins.workspace = true
 op-workflows.workspace = true
-op-blockchain.workspace = true
+op-snowball.workspace = true
 op-inspector.workspace = true
 op-web.workspace = true
 op-grpc-bridge.workspace = true

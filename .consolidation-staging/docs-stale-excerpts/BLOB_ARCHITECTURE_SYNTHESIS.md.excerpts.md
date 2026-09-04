@@ -18,7 +18,7 @@ established patterns.
   - Mountable as device or bind (read heavy, avoid write mutation loops)
   - Snapshot, send/receive, isolation/hide design
   - "so you can either mount them add as device (i think that may erase, ...so prb mount)"
-- Caution per AGENTS.md: "Zero-Btrfs Overhead" for identity/Xray paths. NVMe only for vectorized *footprint transport* (see `op-blockchain` two/three subvol design).
+- Caution per AGENTS.md: "Zero-Btrfs Overhead" for identity/Xray paths. NVMe only for vectorized *footprint transport* (see `op-snowball` two/three subvol design).
 
 ---
 

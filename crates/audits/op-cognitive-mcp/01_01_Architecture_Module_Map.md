@@ -193,7 +193,7 @@ If it is not a duplicate, it releases the read lock, does some processing, and t
 ```
 
 ### Impact
-Between releasing the read lock and acquiring the write lock, a concurrent execution thread can process an identical duplicate event. This TOCTOU race condition allows duplicate events to bypass the filter and end up recorded in the persistent blockchain ledger.
+Between releasing the read lock and acquiring the write lock, a concurrent execution thread can process an identical duplicate event. This TOCTOU race condition allows duplicate events to bypass the filter and end up recorded in the persistent snowball ledger.
 
 ---
 

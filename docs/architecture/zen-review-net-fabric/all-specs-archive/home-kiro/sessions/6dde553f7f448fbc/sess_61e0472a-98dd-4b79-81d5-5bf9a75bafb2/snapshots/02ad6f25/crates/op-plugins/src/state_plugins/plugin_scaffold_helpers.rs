@@ -54,7 +54,7 @@ pub(crate) use super::xray::xray_schema as xray_plugin_schema;
 pub(crate) use super::tched_router::tched_router_schema as tched_router_plugin_schema;
 
 // Added missing schema re-exports
-pub(crate) use super::blockchain_plugin::blockchain_schema as blockchain_plugin_schema;
+pub(crate) use super::snowball_plugin::snowball_schema as snowball_plugin_schema;
 pub(crate) use super::config::config_plugin_schema;
 pub(crate) use super::cozo::cozo_schema as cozo_plugin_schema;
 pub(crate) use super::datastore::datastore_schema as datastore_plugin_schema;

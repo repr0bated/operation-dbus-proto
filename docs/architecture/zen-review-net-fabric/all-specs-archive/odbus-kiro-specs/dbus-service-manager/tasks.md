@@ -37,7 +37,7 @@
 - [ ] 4.3 Implement `calculate_diff()`
 - [ ] 4.4 Implement `apply_state()` with proper ordering
 - [ ] 4.5 Add rollback support
-- [ ] 4.6 Integrate with blockchain footprint
+- [ ] 4.6 Integrate with snowball footprint
 
 ## Phase 5: Dinit Backend
 

@@ -94,7 +94,7 @@ Complete implementation blueprints planned for:
 
 ### Infrastructure Layer (5 crates)
 - [x] op-deployment - Analyzed (deployment automation)
-- [x] op-blockchain - Analyzed (blockchain audit trail)
+- [x] op-snowball - Analyzed (snowball audit trail)
 - [x] op-identity - Analyzed (identity and authentication)
 - [x] op-dynamic-loader - Analyzed (dynamic plugin loading)
 - [x] op-inspector - Analyzed (system inspection and diagnostics)
@@ -189,7 +189,7 @@ Each DESIGN.md includes:
 - D-Bus native integration (no CLI wrappers)
 - Plugin-based extensibility
 - Comprehensive execution tracking
-- Blockchain-anchored audit trail
+- Snowball-anchored audit trail
 
 ### Integration Dependencies
 ```

@@ -43,7 +43,7 @@ Replacement for monolithic `/dev/shm/live-schema.json` or whole projections.
   - Mountable as device or bind (read heavy, avoid write mutation loops)
   - Snapshot, send/receive, isolation/hide design
   - "so you can either mount them add as device (i think that may erase, ...so prb mount)"
-- Caution per AGENTS.md: "Zero-Btrfs Overhead" for identity/Xray paths. NVMe only for vectorized *footprint transport* (see `op-blockchain` two/three subvol design).
+- Caution per AGENTS.md: "Zero-Btrfs Overhead" for identity/Xray paths. NVMe only for vectorized *footprint transport* (see `op-snowball` two/three subvol design).
 
 **Concrete LLM goal** (direct quotes):
 - "first need to make sure that gemma is up zeroclaw ollama"
@@ -67,7 +67,7 @@ Replacement for monolithic `/dev/shm/live-schema.json` or whole projections.
   - Schema dynamically generated via `schema_from_state` from live ZeroclawState (schema-as-code correct).
 - SchemaEngine + /dev/shm projections authoritative, D-Bus objects live from schema only (no hard inline).
 - op-grpc-bridge has zeroclaw special path + binary `op-grpc-bridge-zeroclaw`
-- BTRFS primitives used: `op-blockchain` implements timed/vector/state subvolumes.
+- BTRFS primitives used: `op-snowball` implements timed/vector/state subvolumes.
 - deploy/btrfs-layout.sh + module subvols (agents, mcp etc) + s6 services.
 - Live model pull success: `gemma4:12b` (gguf Q4, 7.5GB, vision+tools+thinking) exists under ollama.
 - Ollama: supervised by s6 (root `ollama-srv`), user `ollama`, binary present. Endpoint expected `http://localhost:11434`.
@@ -92,7 +92,7 @@ Replacement for monolithic `/dev/shm/live-schema.json` or whole projections.
    - Incus/qdrant shuttle wiring.
    - D-Bus first everywhere, no bypasses.
 2. Blob vision surfaced late + conversation heavy. Directives ("read codex about blobs", "gemma up first") came *after* much runtime work.
-3. Engineering caution (AGENTS): do not create unintended Btrfs mutation overhead in hot paths. Subvols proven only in blockchain footprint first.
+3. Engineering caution (AGENTS): do not create unintended Btrfs mutation overhead in hot paths. Subvols proven only in snowball footprint first.
 4. Deploy fragility observed: symlinked s6 dirs caused cp issues in scripts; release builds heavy, needed single-job builds.
 5. "Complete blob" requires solving the packaging + mount semantics + reflection reload (rethink monolithic) — not gated on core interop anymore but follow-on.
 6. Model present (good!) but services are normal s6 rather than "blob subvol activated instance."

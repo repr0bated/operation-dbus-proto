@@ -121,10 +121,10 @@ let parsed: ConfigStoreState = simd_json::from_slice(&mut padded_bytes)?;
   * `crates/op-plugins/src/state_plugins/lxc.rs:748-749`
   * `crates/op-plugins/src/state_plugins/keyring.rs:217-218`
   * `crates/op-plugins/src/state_plugins/privacy_routes.rs:130-131`
-* **Impact**: Falsification of state change history and bypassing of blockchain-backed configuration audits.
+* **Impact**: Falsification of state change history and bypassing of snowball-backed configuration audits.
 
 #### Technical Analysis
-The crate uses `md5::compute` to calculate `current_hash` and `desired_hash` metadata fields which are recorded on a blockchain-based audit trail:
+The crate uses `md5::compute` to calculate `current_hash` and `desired_hash` metadata fields which are recorded on a snowball-based audit trail:
 
 ```rust
 metadata: op_state::DiffMetadata {
@@ -134,7 +134,7 @@ metadata: op_state::DiffMetadata {
 }
 ```
 
-MD5 is a cryptographically broken hash function susceptible to practical collision attacks. An attacker who can write or modify desired state configurations can generate two distinct configuration sets that yield the exact same MD5 digest. This allows the attacker to push unauthorized changes to the system while keeping the logged blockchain hash identical, rendering the security audit trail ineffective.
+MD5 is a cryptographically broken hash function susceptible to practical collision attacks. An attacker who can write or modify desired state configurations can generate two distinct configuration sets that yield the exact same MD5 digest. This allows the attacker to push unauthorized changes to the system while keeping the logged snowball hash identical, rendering the security audit trail ineffective.
 
 #### Remediation
 Replace all MD5 hashing operations used for state footprints and audit verification with a cryptographically secure hash function, such as SHA-256 (which is already imported via the `sha2` crate in dependencies):

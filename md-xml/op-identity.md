@@ -355,7 +355,7 @@ impl AnnaScribe {
     /// `mutation_index`, and performs the **Strike/Etch** to generate the first hashed
     /// footprint. This creates the **Snowball** session ledger entry entirely in memory,
     /// completely avoiding unintended Btrfs mutation loops while preserving NVMe I/O
-    /// strictly for the blockchain transport.
+    /// strictly for the snowball transport.
     ///
     /// Uses Blake3 per the spec for all Strike/Etch operations.
     pub fn notarize_arrival(wg_pubkey: &str) -> Result<SessionLedger, String> {
@@ -423,7 +423,7 @@ impl AnnaScribe {
         let footprint_hex = hex::encode(footprint);
         let entry = format!("[{}] {} | {}\n", timestamp, footprint_hex, action);
 
-        // Path is in tmpfs to preserve NVMe I/O for Btrfs blockchain transport
+        // Path is in tmpfs to preserve NVMe I/O for Btrfs snowball transport
         let snowball_path = "/dev/shm/snowball_session.log";
 
         let mut file = OpenOptions::new()
@@ -1129,7 +1129,7 @@ const TMPFS_MAGIC: libc::c_long = 0x01021994;
 ///
 /// The Shuttle must never trigger unintended Btrfs mutation loops.
 /// NVMe I/O is reserved strictly for the vectorized footprint transport
-/// (blockchain); all sled and Xray config writes must live in tmpfs.
+/// (snowball); all sled and Xray config writes must live in tmpfs.
 fn assert_tmpfs_or_abort(path: &str) -> std::io::Result<()> {
     let parent = std::path::Path::new(path)
         .parent()

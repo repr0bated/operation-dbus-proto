@@ -102,7 +102,7 @@ human device ──WG──► Oracle decoy ──signs──► OracleIdentityA
 
 Unchanged paths: ghostbridge footprint path for containers/host sled,
 capability grants file format + wildcard fallback + fail-closed semantics,
-MutationEngine → EventChain → blockchain audit, xray lifecycle surface,
+MutationEngine → EventChain → snowball audit, xray lifecycle surface,
 identity_sled container provisioning.
 
 ## 4 · Component Design
@@ -331,7 +331,7 @@ contains no `identity|session_id|assertion` references. Includes a self-test
 |---|---|
 | Ghostbridge footprint path (headers, sled verify, `verify_per_identity`) | Containers/host sled keep working; assertion path is additive and opt-in per request |
 | `enforce_bridge_capability` mechanism, grants file format, wildcard fallback, fail-closed | The gate is correct; only its principal input widens |
-| MutationEngine → EventChain → blockchain audit | All new mutations flow through it unchanged |
+| MutationEngine → EventChain → snowball audit | All new mutations flow through it unchanged |
 | `identity_sled` plugin + `provision_container` | Containers are not humans; reused as-is |
 | `op-xray-daemon` | Lifecycle only; never gains identity logic |
 | Xray live config location and reload path | `/etc/xray/xray_config.json` in-container; models never write/reload |

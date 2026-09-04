@@ -29,7 +29,7 @@ DEFAULT_OUTPUT = ".zenflow/tasks/new-task-b048/codebase-scan.md"
 # ---------------------------------------------------------------------------
 LAYER_MAP = [
     ("Foundation",   ["op-core", "op-execution-tracker"]),
-    ("Storage",      ["op-blockchain", "op-cache", "op-state-store", "op-dbus-model"]),
+    ("Storage",      ["op-snowball", "op-cache", "op-state-store", "op-dbus-model"]),
     ("State",        ["op-state", "op-plugins", "op-dbus-mirror"]),
     ("Tools",        ["op-tools", "op-dynamic-loader", "op-introspection", "op-inspector"]),
     ("Agents",       ["op-agents", "op-chat", "op-llm"]),

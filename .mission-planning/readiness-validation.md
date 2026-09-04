@@ -143,7 +143,7 @@ This requires no auth header and confirms the service is alive and reporting hea
 | 17 | op-plugins | ✅ |
 | 18 | op-workflows | |
 | 19 | op-ml | |
-| 20 | op-blockchain | |
+| 20 | op-snowball | |
 | 21 | op-deployment | |
 | 22 | op-mcp | |
 | 23 | op-mcp-aggregator | |

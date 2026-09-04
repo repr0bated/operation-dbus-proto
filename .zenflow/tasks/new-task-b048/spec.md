@@ -40,7 +40,7 @@ This task requires documenting and structuring a complete, production-scale cogn
 | Layer | Crates |
 |-------|--------|
 | Foundation | `op-core`, `op-execution-tracker` |
-| Storage | `op-blockchain`, `op-cache`, `op-state-store`, `op-dbus-model` |
+| Storage | `op-snowball`, `op-cache`, `op-state-store`, `op-dbus-model` |
 | State | `op-state`, `op-plugins`, `op-dbus-mirror` |
 | Tools | `op-tools`, `op-dynamic-loader`, `op-introspection`, `op-inspector` |
 | Agents | `op-agents`, `op-chat`, `op-llm` |

@@ -43,7 +43,7 @@ This replaces the old monolithic `/dev/shm/live-schema.json` or whole-projection
 
 The source document also discusses btrfs subvolumes as a future packaging layer for complete
 deployment units. In this repo, the zero-btrfs-overhead identity rule (`AGENTS.md`) limits
-btrfs to vectorized footprint transport (e.g., `op-blockchain`) and forbids btrfs overhead on
+btrfs to vectorized footprint transport (e.g., `op-snowball`) and forbids btrfs overhead on
 identity/Xray paths. Those btrfs-as-deployment-unit details are therefore excluded from this
 appendix and captured in the stale-excerpts file.
 
@@ -59,7 +59,7 @@ appendix and captured in the stale-excerpts file.
   - Schema is dynamically generated via `schema_from_state` from live `ZeroclawState` (schema-as-code is correct).
 - SchemaEngine + `/dev/shm` projections are authoritative; D-Bus objects are live from schema only.
 - The zeroclaw gRPC path was consolidated into the main `op-grpc-bridge` binary on port 8090. The separate `op-grpc-bridge-zeroclaw` binary has been retired.
-- BTRFS primitives are used in the blockchain footprint: `op-blockchain` implements timed/vector/state subvolumes; `deploy/btrfs-layout.sh` provides module subvolumes and s6 services.
+- BTRFS primitives are used in the snowball footprint: `op-snowball` implements timed/vector/state subvolumes; `deploy/btrfs-layout.sh` provides module subvolumes and s6 services.
 - `ZeroclawPlugin` `apply_state`/`calculate_diff` are still stubs (schema-declared only, no real mutation yet).
 - Ollama is expected to be available locally; there is no `ollama-srv` s6 service in the canonical installer (`install/3tched-artix-s6-install.sh`).
 
@@ -82,7 +82,7 @@ appendix and captured in the stale-excerpts file.
    - Incus/qdrant shuttle wiring.
    - D-Bus first everywhere, no bypasses.
 2. The blob vision surfaced late and is conversation-heavy. Directives ("read codex about blobs", "gemma up first") came *after* much runtime work.
-3. **Engineering caution** (`AGENTS.md`): avoid unintended btrfs mutation overhead in hot paths. Subvolumes are proven only in the blockchain footprint first.
+3. **Engineering caution** (`AGENTS.md`): avoid unintended btrfs mutation overhead in hot paths. Subvolumes are proven only in the snowball footprint first.
 4. **Deploy fragility observed**: symlinked s6 dirs caused `cp` issues in scripts; release builds are heavy, so single-job builds were needed.
 5. The "complete blob" requires solving packaging + mount semantics + reflection reload (rethinking the monolithic model) — no longer gated on core interop, but a follow-on effort.
 6. The model is present and services are normal s6, rather than a "blob subvolume activated instance."

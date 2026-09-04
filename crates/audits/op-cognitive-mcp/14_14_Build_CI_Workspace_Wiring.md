@@ -67,7 +67,7 @@
         w.push_back(WindowEntry { ... });
         ```
     
-    Because the read lock is dropped before the write lock is acquired, two concurrent, identical events processed in parallel threads can both successfully pass the duplicate check. This allows duplicate events to bypass the filter and pollute downstream consensus systems (blockchain audit logs and Qdrant vector spaces). To fix this, the check and insertion must be performed atomically within a single write lock block.
+    Because the read lock is dropped before the write lock is acquired, two concurrent, identical events processed in parallel threads can both successfully pass the duplicate check. This allows duplicate events to bypass the filter and pollute downstream consensus systems (snowball audit logs and Qdrant vector spaces). To fix this, the check and insertion must be performed atomically within a single write lock block.
 
 ---
 

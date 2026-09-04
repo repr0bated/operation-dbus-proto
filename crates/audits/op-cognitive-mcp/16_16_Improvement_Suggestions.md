@@ -7,7 +7,7 @@
 
 2. **Deduplication State Durability**
    * **Suggestion**: Replace the in-memory sliding window `VecDeque` in the `ActivityFilter` with CozoDB-backed storage or a persistent, shared cache.
-   * **Rationale**: In `activity_filter.rs:197`, the deduplication window is kept purely in-memory. Because the cognitive server acts as a system daemon (as indicated by the system D-Bus registration in `server.rs:194`), restarting the daemon entirely wipes the history of processed hashes. An attacker can exploit this by crashing the daemon or triggering a restart, allowing them to bypass sliding-window deduplication constraints and flood the blockchain audit trail with identical event payloads.
+   * **Rationale**: In `activity_filter.rs:197`, the deduplication window is kept purely in-memory. Because the cognitive server acts as a system daemon (as indicated by the system D-Bus registration in `server.rs:194`), restarting the daemon entirely wipes the history of processed hashes. An attacker can exploit this by crashing the daemon or triggering a restart, allowing them to bypass sliding-window deduplication constraints and flood the snowball audit trail with identical event payloads.
    * **Example**: `crates/op-cognitive-mcp/src/activity_filter.rs:197`
 
 3. **Subprocess Lifecycle Watchdog**

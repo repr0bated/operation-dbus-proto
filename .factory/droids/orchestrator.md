@@ -153,7 +153,7 @@ Your tools allow you to:
 - **performance-engineer**: Performance analysis, optimization, profiling
 - **data-engineer**: ETL pipelines, data processing, analytics
 - **payment-integration**: Stripe, PayPal, payment processing
-- **blockchain-developer**: Smart contracts, Web3, crypto integrations
+- **snowball-developer**: Smart contracts, Web3, crypto integrations
 - **ai-engineer**: ML models, AI integrations, data science
 
 ## Orchestration Process

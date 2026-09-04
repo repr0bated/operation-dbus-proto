@@ -96,15 +96,15 @@ them). This entire file would never execute.
 
 ---
 
-## Blockchain & Voyage Vectors — Separate, Live
+## Snowball & Voyage Vectors — Separate, Live
 
-`blockchain_plugin.rs` instantiates `StreamingBlockchain` and is actively running.
+`snowball_plugin.rs` instantiates `StreamingSnowball` and is actively running.
 Voyage vectors flow end-to-end (confirmed by user). This is independent of the
 projection removal and requires no changes.
 
 The Btrfs seed volume path (`/var/lib/opdbus/snapshots/latest`) referenced in the prior
 spec's Task 0.4 is a separate concern from both the state-tree reactivity and the
-blockchain/voyage pipeline.
+snowball/voyage pipeline.
 
 ---
 
@@ -117,7 +117,7 @@ blockchain/voyage pipeline.
 | `Updated` signal | **Working** (unused) | Correct for D-Bus-native consumers; none exist yet |
 | `ProjectionEngine` discovery | **Working** (dead branch) | Branch never matches; discovery continues for other interfaces |
 | `PluginProjectionTool` code | **Dead** (zero callers) | No functional impact; never instantiated |
-| Blockchain & vectors | **Working** | Independent of this spec; continues normally |
+| Snowball & vectors | **Working** | Independent of this spec; continues normally |
 
 ---
 
@@ -127,7 +127,7 @@ blockchain/voyage pipeline.
 
 The projection-removal spec (Task 0.4, "Verify Snapshot Code Reachability") claimed to
 have proven this path survives mutation_engine deletion. But no actual evidence was
-presented — only an assumption that "op-blockchain is called, so the snapshot must be
+presented — only an assumption that "op-snowball is called, so the snapshot must be
 working."
 
 **Why this matters**: REQ-3 of the projection spec requires cold-start hydration from a
@@ -135,8 +135,8 @@ single Btrfs snapshot. If this volume is never written, cold-start initializes a
 forever — a silent regression that violates REQ-3.1.
 
 **What's missing**: Investigation of whether:
-1. The snapshot rotation code in op-blockchain ever fires
-2. `StreamingBlockchain` is called with the right base path (`/var/lib/opdbus/snapshots/`)
+1. The snapshot rotation code in op-snowball ever fires
+2. `StreamingSnowball` is called with the right base path (`/var/lib/opdbus/snapshots/`)
 3. The rotation is happening but the path is different than expected
 4. The code is there but the conditions to trigger it are never met
 

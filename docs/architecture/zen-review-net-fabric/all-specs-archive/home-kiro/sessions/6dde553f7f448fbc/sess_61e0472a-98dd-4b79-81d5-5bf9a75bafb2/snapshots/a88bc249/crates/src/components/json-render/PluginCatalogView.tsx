@@ -13,7 +13,7 @@ import type { Spec } from '@json-render/react';
 
 // All sealed plugin catalog names
 const PLUGIN_CATALOG = [
-  'adc', 'agentConfig', 'antigravity', 'blockchain', 'btrfs',
+  'adc', 'agentConfig', 'antigravity', 'snowball', 'btrfs',
   'cognitiveMcp', 'compactMcp', 'config', 'cron', 'ctlPlaneChatbot',
   'datastore', 'dnsresolver', 'embeddingModel', 'emqx', 'endpoint',
   'factory', 'fail2ban', 'freedesktop', 'fullSystem', 'gcloudAdc',
@@ -96,7 +96,7 @@ const PLUGIN_CATEGORIES: Record<string, PluginName[]> = {
   'Infrastructure': ['btrfs', 'hardware', 'hostRuntime', 'incus', 'oci', 'packagekit', 'procfs', 'service', 'software'],
   'Routing': ['tchedRouter', 'rovsCommands', 'privacyRoutes', 'ghostbridge', 'endpoint'],
   'Data': ['datastore', 'config', 'jsonRender', 'schemaRenderer', 'workflows'],
-  'Security': ['fail2ban', 'blockchain', 'adc', 'gcloudAdc'],
+  'Security': ['fail2ban', 'snowball', 'adc', 'gcloudAdc'],
   'System': ['cron', 'freedesktop', 'fullSystem', 'mailServer', 'sessDecl', 'unixSocket', 'sharedUnixSocket', 'pcidecl'],
   'Other': ['agentConfig', 'antigravity', 'emqx', 'factory', 'persona', 'webUi'],
 };

@@ -171,7 +171,7 @@ All plugins follow this structure (see `net.rs`, `systemd.rs` for reference):
 /// - plugin_type: "ui"
 /// - driver: "rust-embed"
 /// 
-/// SECTION 2: TUNABLE CONFIG (can change, blockchain tracks all changes)
+/// SECTION 2: TUNABLE CONFIG (can change, snowball tracks all changes)
 /// - enabled: bool
 /// - port: u16
 /// - cors_origins: Vec<String>
@@ -409,13 +409,13 @@ impl WebUiPlugin {
         })
     }
 
-    /// JSON Schema for Tunables (mutable, blockchain-tracked)
+    /// JSON Schema for Tunables (mutable, snowball-tracked)
     pub fn tunables_schema() -> Value {
         simd_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": "https://op-dbus.local/schemas/web-ui/tunables.json",
             "title": "WebUiTunables",
-            "description": "Tunable configuration for Web UI plugin (changes tracked in blockchain)",
+            "description": "Tunable configuration for Web UI plugin (changes tracked in snowball)",
             "type": "object",
             "properties": {
                 "enabled": {
@@ -679,7 +679,7 @@ impl WebUiPlugin {
         simd_json::to_string(&self.tunables).unwrap_or_default()
     }
 
-    /// Set tunables (validates against schema, tracks in blockchain)
+    /// Set tunables (validates against schema, tracks in snowball)
     async fn set_tunables(&mut self, tunables_json: &str) -> Result<(), zbus::fdo::Error> {
         let mut json = tunables_json.to_string();
         let tunables: WebUiTunables = unsafe {
@@ -765,7 +765,7 @@ pub fn register_default_plugins(registry: &mut PluginRegistry) {
 ### Why Plugin Architecture Matters
 
 1. **Schema-as-Code**: JSON Schemas defined in Rust code, not external files
-2. **Blockchain Tracking**: All tunable changes tracked in audit ledger
+2. **Snowball Tracking**: All tunable changes tracked in audit ledger
 3. **Consistent Interface**: Same `StatePlugin` trait as systemd, net, etc.
 4. **Runtime Reconfiguration**: Tunables can be changed without restart
 5. **Capability Discovery**: Other plugins can query what UI can do
@@ -790,7 +790,7 @@ pub fn register_default_plugins(registry: &mut PluginRegistry) {
 │  │ Workflows   │  │ DAGCanvas   │  │ useGrpc     │  │            │ │
 │  │ DBusBrowser │  │ MetricChart │  │             │  │            │ │
 │  │ MCPs        │  │ RBACGate    │  │             │  │            │ │
-│  │ Blockchain  │  │ QuotaMeter  │  │             │  │            │ │
+│  │ Snowball  │  │ QuotaMeter  │  │             │  │            │ │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘ │
 ├─────────────────────────────────────────────────────────────────────┤
 │                        API Layer                                     │
@@ -839,7 +839,7 @@ src/pages/
 │   ├── McpList.tsx        # MCP server list
 │   ├── McpDetail.tsx      # MCP dashboard
 │   └── McpPolicies.tsx    # Policy editor
-├── Blockchain/
+├── Snowball/
 │   ├── AuditTrail.tsx     # Event browser
 │   └── EventChain.tsx     # Chain visualization
 ├── State/
@@ -899,7 +899,7 @@ src/components/
 │   ├── RBACGate.tsx       # Role-based visibility
 │   ├── QuotaMeter.tsx     # Quota usage display
 │   ├── QuotaCostBadge.tsx # Action cost indicator
-│   └── BlockchainComment.tsx # Audit comment input
+│   └── SnowballComment.tsx # Audit comment input
 └── payload/
     ├── PayloadViewer.tsx  # JSON/binary viewer
     ├── PayloadModal.tsx   # Full payload with unmask
@@ -1285,7 +1285,7 @@ function PayloadViewer({ payload, masked, onUnmask }: PayloadViewerProps) {
       <div className="bg-zinc-800 p-4 rounded">
         <p className="text-zinc-400 mb-2">
           Payload redacted. Request unmask (admins only). 
-          This action will be blockchained.
+          This action will be snowballed.
         </p>
         <RBACGate requiredRoles={['admin']}>
           <button onClick={onUnmask} className="btn-primary">
@@ -1357,7 +1357,7 @@ const routes = [
   { path: '/workflows/:id', element: <WorkflowRun /> },
   { path: '/mcps', element: <McpList /> },
   { path: '/mcps/:mcpId', element: <McpDetail /> },
-  { path: '/blockchain', element: <AuditTrail /> },
+  { path: '/snowball', element: <AuditTrail /> },
   { path: '/state', element: <StateDiff /> },
   { path: '/network', element: <Topology /> },
   { path: '/execution', element: <Timeline /> },
@@ -1385,9 +1385,9 @@ const routes = [
 **Property**: Actions exceeding quota are blocked with appropriate error message.
 **Test**: Set quota to 0, attempt action, verify block and error display.
 
-### P5: Blockchain Logging
-**Property**: All audited actions create blockchain entries before execution.
-**Test**: Execute audited action, verify blockchain entry exists with correct data.
+### P5: Snowball Logging
+**Property**: All audited actions create snowball entries before execution.
+**Test**: Execute audited action, verify snowball entry exists with correct data.
 
 ### P6: Cursor Pagination
 **Property**: Pagination maintains consistency across page loads.
@@ -1413,7 +1413,7 @@ const routes = [
 2. **XSS Prevention**: React's default escaping + CSP headers
 3. **CSRF Protection**: SameSite cookies + custom headers
 4. **Input Validation**: JSON Schema validation before submission
-5. **Audit Trail**: All mutations logged to blockchain with user context
+5. **Audit Trail**: All mutations logged to snowball with user context
 
 ---
 
@@ -1486,7 +1486,7 @@ crates/op-web/
 │   │   │   ├── DBus/
 │   │   │   ├── Workflows/
 │   │   │   ├── MCPs/
-│   │   │   ├── Blockchain/
+│   │   │   ├── Snowball/
 │   │   │   ├── State/
 │   │   │   ├── Network/
 │   │   │   ├── Execution/

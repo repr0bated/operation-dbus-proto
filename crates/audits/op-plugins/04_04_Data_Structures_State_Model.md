@@ -168,7 +168,7 @@
 
 ---
 
-### HIGH: Cryptographically Broken Hash Usage for Blockchain Audit Footprints
+### HIGH: Cryptographically Broken Hash Usage for Snowball Audit Footprints
 * **Locations**:
   * `crates/op-plugins/src/auto_create.rs:103-104`
   * `crates/op-plugins/src/state_plugins/config.rs:114-115`
@@ -180,7 +180,7 @@
   * `crates/op-plugins/src/state_plugins/dinit.rs:242`
 * **Vulnerability Type**: Cryptographic Integrity Defect
 * **Description**:
-  The audit trail framework generates state footprint hashes using the MD5 algorithm (`md5::compute(...)`). MD5 is cryptographically broken and prone to collision attacks. If these footprints are written to a blockchain or ledger for tamper-proofing and immutability tracking, an attacker can modify the state configuration, craft an MD5 collision, and commit a fraudulent state change that matches a previously verified footprint.
+  The audit trail framework generates state footprint hashes using the MD5 algorithm (`md5::compute(...)`). MD5 is cryptographically broken and prone to collision attacks. If these footprints are written to a snowball or ledger for tamper-proofing and immutability tracking, an attacker can modify the state configuration, craft an MD5 collision, and commit a fraudulent state change that matches a previously verified footprint.
 * **Remediation**: Upgrade all MD5 usages in auditing/diff logic to `sha2::Sha256` (which is already imported and used correctly in `crates/op-plugins/src/dynamic_loading.rs` and `crates/op-plugins/src/state_plugins/openflow.rs`).
 
 ---

@@ -112,9 +112,9 @@ Refactor the Config page to use Generative UI instead of raw JSON text areas.
 - **Structured Editor:** Pass the section's backend schema and current values into `<JsonRenderer />` to generate a perfectly typed form.
 
 **19. Upgrade the Security & Audit View (`src/pages/SecurityPage.tsx`)**
-Transform this page into a dashboard for the Blockchain Audit Trail and Semantic Search.
+Transform this page into a dashboard for the Snowball Audit Trail and Semantic Search.
 - **Semantic Search:** Add a search bar that targets the vectorized Qdrant audit logs.
-- **Blockchain Ledger:** Render audit events as a list. Each row is expandable (`<Collapsible>`).
+- **Snowball Ledger:** Render audit events as a list. Each row is expandable (`<Collapsible>`).
 - **Audit Detail:** When expanded, pass the block's payload (LLM reasoning + tool call + state mutation) into `<JsonRenderer />`.
 
 **20. Create the Connected Peers Monitor**

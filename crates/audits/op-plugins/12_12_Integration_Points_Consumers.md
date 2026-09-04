@@ -39,8 +39,8 @@ No HTTP or gRPC servers are started directly within the provided `op-plugins` cr
 * `PrivacyRouterPlugin` *(via `state_plugins/privacy_router.rs`)* probes and communicates with an external OpenFlow controller endpoint configured via `PRIVACY_OPENFLOW_CONTROLLER` (defaulting to `10.200.0.1:6653`).
 
 ### 4. Cross-Crate Circular Dependency Risks
-The workspace `Cargo.toml` shows that `op-dbus` depends directly on both `op-plugins` and its individual component crates (such as `op-network`, `op-state`, and `op-state-store`). 
-* **Risk:** `op-plugins` depends directly on `op-core`, `op-dbus-model`, `op-state`, `op-state-store`, `op-blockchain`, `op-network`, `op-dynamic-loader`, and `op-execution-tracker` *(via `Cargo.toml:10-17`)*. 
+The workspace `Cargo.toml` shows that `op-dbus` depends directly on both `op-plugins` and its individual component crates (such as `op-network`, `op-state`, and `op-state-store`).
+* **Risk:** `op-plugins` depends directly on `op-core`, `op-dbus-model`, `op-state`, `op-state-store`, `op-snowball`, `op-network`, `op-dynamic-loader`, and `op-execution-tracker` *(via `Cargo.toml:10-17`)*.
 * If any of these lower-level state or network crates attempt to reference or deserialize types directly from `op-plugins` (rather than keeping abstract interfaces in `op-state` / `op-core`), a circular dependency compilation failure will occur. Architectural boundaries must be strictly maintained.
 
 ---
@@ -154,5 +154,5 @@ The codebase has committed to a schema-as-code discipline using Protocol Buffers
   * `crates/op-plugins/src/state_plugins/keyring.rs:172-173`
   * `crates/op-plugins/src/state_plugins/login1.rs:72-73`
 * **Impact:** Cryptographic Hash Collisions in Audit Trails.
-* **Description:** The system utilizes MD5 to calculate state hashes for diffs and verification tracking (`md5::compute(...)`). Since MD5 is highly vulnerable to collision attacks, attackers could craft distinct states that yield identical MD5 hashes, compromising blockchain audit trail integrity and allowing unauthorized state mutations to go unnoticed.
+* **Description:** The system utilizes MD5 to calculate state hashes for diffs and verification tracking (`md5::compute(...)`). Since MD5 is highly vulnerable to collision attacks, attackers could craft distinct states that yield identical MD5 hashes, compromising snowball audit trail integrity and allowing unauthorized state mutations to go unnoticed.
 * **Remediation:** Replace all instances of `md5::compute` with `sha2::Sha256` hashing (which is already imported and used elsewhere in the codebase).

@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Only files matching these patterns are included: /home/jeremy/git/operation-dbus-proto/crates/op-blockchain/**
+- Only files matching these patterns are included: /home/jeremy/git/operation-dbus-proto/crates/op-snowball/**
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -47,18 +47,18 @@ The content is organized as follows:
       git/
         operation-dbus-proto/
           crates/
-            op-blockchain/
+            op-snowball/
               src/
-                blockchain.rs
+                snowball.rs
                 btrfs_numa_integration.rs
                 footprint.rs
                 lib.rs
                 plugin_footprint.rs
                 retention.rs
                 snapshot.rs
-                streaming_blockchain.rs
+                streaming_snowball.rs
               Cargo.toml
-              compare-op-blockchain.md
+              compare-op-snowball.md
               DESIGN.md
               REQUIREMENTS.md
               SPEC.md
@@ -67,8 +67,8 @@ The content is organized as follows:
 <files>
 This section contains the contents of the repository's files.
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/blockchain.rs">
-//! Streaming blockchain with dual BTRFS subvolumes
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/snowball.rs">
+//! Streaming snowball with dual BTRFS subvolumes
 //!
 //! Architecture:
 //! - timing_subvol: Immutable audit trail (append-only)
@@ -90,8 +90,8 @@ use crate::footprint::{BlockEvent, PluginFootprint};
 use crate::retention::RetentionPolicy;
 use crate::snapshot::SnapshotInterval;
 
-/// Streaming blockchain with BTRFS subvolumes
-pub struct StreamingBlockchain {
+/// Streaming snowball with BTRFS subvolumes
+pub struct StreamingSnowball {
     base_path: PathBuf,
     timing_subvol: PathBuf,
     vector_subvol: PathBuf,
@@ -102,8 +102,8 @@ pub struct StreamingBlockchain {
     block_counter: Arc<RwLock<u64>>,
 }
 
-impl StreamingBlockchain {
-    /// Create a new streaming blockchain at the given path
+impl StreamingSnowball {
+    /// Create a new streaming snowball at the given path
     pub async fn new(base_path: impl AsRef<Path>) -> Result<Self> {
         Self::new_with_interval(base_path, SnapshotInterval::from_env()).await
     }
@@ -131,7 +131,7 @@ impl StreamingBlockchain {
         tokio::fs::create_dir_all(&snapshots_dir).await?;
 
         info!(
-            "Streaming blockchain initialized at {:?} with {} interval",
+            "Streaming snowball initialized at {:?} with {} interval",
             base_path, snapshot_interval
         );
 
@@ -180,13 +180,13 @@ impl StreamingBlockchain {
         Ok(())
     }
 
-    /// Add a plugin footprint to the blockchain
+    /// Add a plugin footprint to the snowball
     pub async fn add_footprint(&self, footprint: PluginFootprint) -> Result<String> {
         let event = footprint.to_block_event();
         self.add_event(event).await
     }
 
-    /// Add a block event to the blockchain
+    /// Add a block event to the snowball
     pub async fn add_event(&self, event: BlockEvent) -> Result<String> {
         // Increment block counter
         let block_num = {
@@ -617,16 +617,16 @@ impl StreamingBlockchain {
         &self,
         mut receiver: tokio::sync::mpsc::Receiver<PluginFootprint>,
     ) -> Result<()> {
-        info!("Starting blockchain footprint receiver");
+        info!("Starting snowball footprint receiver");
 
         while let Some(footprint) = receiver.recv().await {
             if let Err(e) = self.add_footprint(footprint).await {
-                warn!("Failed to add footprint to blockchain: {}", e);
+                warn!("Failed to add footprint to snowball: {}", e);
                 // Continue processing other footprints
             }
         }
 
-        info!("Blockchain footprint receiver stopped");
+        info!("Snowball footprint receiver stopped");
         Ok(())
     }
 
@@ -786,21 +786,21 @@ mod tests {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/btrfs_numa_integration.rs">
-//! Unified BTRFS cache and NUMA integration for blockchain footprints
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/btrfs_numa_integration.rs">
+//! Unified BTRFS cache and NUMA integration for snowball footprints
 //!
 //! This module integrates:
-//! - StreamingBlockchain: Immutable audit trail with vectorization
+//! - StreamingSnowball: Immutable audit trail with vectorization
 //! - BtrfsCache: Unlimited disk-based caching with compression
 //! - NumaTopology: NUMA-aware CPU/memory optimization
 //!
 //! Benefits:
-//! - Blockchain blocks cached in BTRFS cache (faster retrieval)
+//! - Snowball blocks cached in BTRFS cache (faster retrieval)
 //! - NUMA-aware writes (optimal CPU/memory placement)
 //! - Unified snapshot management
 //! - Shared compression and deduplication
 
-use crate::streaming_blockchain::StreamingBlockchain;
+use crate::streaming_snowball::StreamingSnowball;
 use crate::PluginFootprint;
 use anyhow::{Context, Result};
 use op_cache::{BtrfsCache, NumaTopology};
@@ -810,25 +810,25 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-/// Unified blockchain with BTRFS cache and NUMA optimization
-pub struct OptimizedBlockchain {
-    blockchain: Arc<StreamingBlockchain>,
+/// Unified snowball with BTRFS cache and NUMA optimization
+pub struct OptimizedSnowball {
+    snowball: Arc<StreamingSnowball>,
     cache: Arc<BtrfsCache>,
     numa_topology: Arc<RwLock<Option<NumaTopology>>>,
     cache_enabled: bool,
 }
 
-impl OptimizedBlockchain {
-    /// Create optimized blockchain with BTRFS cache and NUMA support
+impl OptimizedSnowball {
+    /// Create optimized snowball with BTRFS cache and NUMA support
     pub async fn new(
-        blockchain_path: impl AsRef<Path>,
+        snowball_path: impl AsRef<Path>,
         cache_path: impl AsRef<Path>,
     ) -> Result<Self> {
-        // Initialize blockchain
-        let blockchain = Arc::new(
-            StreamingBlockchain::new(blockchain_path)
+        // Initialize snowball
+        let snowball = Arc::new(
+            StreamingSnowball::new(snowball_path)
                 .await
-                .context("Failed to initialize streaming blockchain")?,
+                .context("Failed to initialize streaming snowball")?,
         );
 
         // Initialize BTRFS cache
@@ -858,7 +858,7 @@ impl OptimizedBlockchain {
         let cache_enabled = true;
 
         Ok(Self {
-            blockchain,
+            snowball,
             cache,
             numa_topology,
             cache_enabled,
@@ -868,19 +868,19 @@ impl OptimizedBlockchain {
     /// Add footprint with NUMA-aware caching
     pub async fn add_footprint(&self, footprint: PluginFootprint) -> Result<String> {
         // Apply NUMA affinity for write operations
-        self.apply_numa_affinity("blockchain_write").await?;
+        self.apply_numa_affinity("snowball_write").await?;
 
-        // Store in blockchain (primary storage)
+        // Store in snowball (primary storage)
         let block_hash = self
-            .blockchain
+            .snowball
             .add_footprint(footprint.clone())
             .await
-            .context("Failed to add footprint to blockchain")?;
+            .context("Failed to add footprint to snowball")?;
 
         // Cache in BTRFS cache for fast retrieval
         if self.cache_enabled {
             if let Err(e) = self.cache_block(block_hash.clone(), &footprint).await {
-                warn!("Failed to cache blockchain block {}: {}", block_hash, e);
+                warn!("Failed to cache snowball block {}: {}", block_hash, e);
                 // Don't fail the operation if caching fails
             }
         }
@@ -888,7 +888,7 @@ impl OptimizedBlockchain {
         Ok(block_hash)
     }
 
-    /// Cache blockchain block in BTRFS cache
+    /// Cache snowball block in BTRFS cache
     async fn cache_block(&self, block_hash: String, footprint: &PluginFootprint) -> Result<()> {
         // Serialize footprint for caching
         let block_data = simd_json::json!({
@@ -913,7 +913,7 @@ impl OptimizedBlockchain {
             .await
             .context("Failed to write block to cache")?;
 
-        debug!("Cached blockchain block {} in BTRFS cache", block_hash);
+        debug!("Cached snowball block {} in BTRFS cache", block_hash);
         Ok(())
     }
 
@@ -967,7 +967,7 @@ impl OptimizedBlockchain {
         Ok(Some(footprint))
     }
 
-    /// Apply NUMA affinity for blockchain operations
+    /// Apply NUMA affinity for snowball operations
     async fn apply_numa_affinity(&self, operation: &str) -> Result<()> {
         let numa = self.numa_topology.read().await;
         if let Some(ref topology) = *numa {
@@ -991,9 +991,9 @@ impl OptimizedBlockchain {
         Ok(())
     }
 
-    /// Get blockchain instance (for direct access if needed)
-    pub fn blockchain(&self) -> &Arc<StreamingBlockchain> {
-        &self.blockchain
+    /// Get snowball instance (for direct access if needed)
+    pub fn snowball(&self) -> &Arc<StreamingSnowball> {
+        &self.snowball
     }
 
     /// Get cache instance
@@ -1024,36 +1024,36 @@ impl OptimizedBlockchain {
         Ok(())
     }
 
-    /// Create unified snapshot (blockchain + cache)
+    /// Create unified snapshot (snowball + cache)
     pub async fn create_unified_snapshot(&self) -> Result<Vec<PathBuf>> {
         let mut snapshots = Vec::new();
 
-        // Snapshot blockchain
-        let blockchain_snapshot = self
-            .blockchain
+        // Snapshot snowball
+        let snowball_snapshot = self
+            .snowball
             .as_ref()
             .state_subvolume_path()
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("No parent path for blockchain"))?
+            .ok_or_else(|| anyhow::anyhow!("No parent path for snowball"))?
             .join("snapshots")
             .join(format!(
-                "blockchain-{}",
+                "snowball-{}",
                 chrono::Utc::now().format("%Y%m%d-%H%M%S")
             ));
 
         // Use btrfs snapshot command
         let output = tokio::process::Command::new("btrfs")
             .args(["subvolume", "snapshot", "-r"])
-            .arg(self.blockchain.as_ref().state_subvolume_path())
-            .arg(&blockchain_snapshot)
+            .arg(self.snowball.as_ref().state_subvolume_path())
+            .arg(&snowball_snapshot)
             .output()
             .await
-            .context("Failed to create blockchain snapshot")?;
+            .context("Failed to create snowball snapshot")?;
 
         if output.status.success() {
-            snapshots.push(blockchain_snapshot);
+            snapshots.push(snowball_snapshot);
             info!(
-                "Created blockchain snapshot: {}",
+                "Created snowball snapshot: {}",
                 snapshots.last().unwrap().display()
             );
         }
@@ -1076,14 +1076,14 @@ impl OptimizedBlockchain {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/footprint.rs">
-//! Block events and plugin footprints for the streaming blockchain
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/footprint.rs">
+//! Block events and plugin footprints for the streaming snowball
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
-/// A block event in the streaming blockchain
+/// A block event in the streaming snowball
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockEvent {
     pub timestamp: u64,
@@ -1221,27 +1221,27 @@ mod tests {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/lib.rs">
-//! op-blockchain: Streaming blockchain with BTRFS subvolumes
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/lib.rs">
+//! op-snowball: Streaming snowball with BTRFS subvolumes
 //!
 //! This crate provides:
-//! - Streaming blockchain for audit trails
+//! - Streaming snowball for audit trails
 //! - Plugin footprints for change tracking
 //! - Dual BTRFS subvolumes (timing/vectors/state)
 //! - Automatic snapshots with configurable intervals
 //! - Rolling retention policies
 //! - btrfs send/receive for replication
 
-pub mod blockchain;
+pub mod snowball;
 pub mod btrfs_numa_integration;
 pub mod footprint;
 pub mod plugin_footprint;
 pub mod retention;
 pub mod snapshot;
-pub mod streaming_blockchain;
+pub mod streaming_snowball;
 
 // Re-export main types
-pub use blockchain::StreamingBlockchain;
+pub use snowball::StreamingSnowball;
 pub use footprint::{BlockEvent, PluginFootprint};
 pub use retention::RetentionPolicy;
 pub use snapshot::SnapshotInterval;
@@ -1251,15 +1251,15 @@ pub use plugin_footprint::PluginFootprint as LegacyPluginFootprint;
 
 /// Prelude for convenient imports
 pub mod prelude {
-    pub use super::blockchain::StreamingBlockchain;
+    pub use super::snowball::StreamingSnowball;
     pub use super::footprint::{BlockEvent, PluginFootprint};
     pub use super::retention::RetentionPolicy;
     pub use super::snapshot::SnapshotInterval;
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/plugin_footprint.rs">
-//! Plugin footprint mechanism with hash for blockchain vectorization
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/plugin_footprint.rs">
+//! Plugin footprint mechanism with hash for snowball vectorization
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -1350,7 +1350,7 @@ impl FootprintGenerator {
         );
         let content_hash = format!("{:x}", Sha256::digest(context.as_bytes()));
 
-        // Generate vector features for blockchain
+        // Generate vector features for snowball
         let vector_features = self.generate_vector_features(operation, data, &metadata)?;
 
         Ok(PluginFootprint {
@@ -1364,7 +1364,7 @@ impl FootprintGenerator {
         })
     }
 
-    /// Generate vector features for blockchain vectorization.
+    /// Generate vector features for snowball vectorization.
     /// Heuristic-based only — ML feature is not compiled in this crate.
     fn generate_vector_features(
         &self,
@@ -1490,7 +1490,7 @@ impl FootprintGenerator {
 pub trait FootprintPlugin {
     fn plugin_id(&self) -> &str;
 
-    /// Create footprint and send to blockchain
+    /// Create footprint and send to snowball
     fn create_and_record_footprint(
         &self,
         operation: &str,
@@ -1500,29 +1500,29 @@ pub trait FootprintPlugin {
         let generator = FootprintGenerator::new(self.plugin_id());
         let footprint = generator.create_footprint(operation, data, metadata)?;
 
-        // Send to blockchain for vectorization
-        self.send_to_blockchain(&footprint)?;
+        // Send to snowball for vectorization
+        self.send_to_snowball(&footprint)?;
 
         Ok(footprint)
     }
 
-    /// Send footprint to blockchain (implemented by each plugin)
-    fn send_to_blockchain(&self, footprint: &PluginFootprint) -> Result<()>;
+    /// Send footprint to snowball (implemented by each plugin)
+    fn send_to_snowball(&self, footprint: &PluginFootprint) -> Result<()>;
 }
 
 /// Network plugin with footprint
 #[allow(dead_code)]
 pub struct NetworkPlugin {
     footprint_gen: FootprintGenerator,
-    blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
+    snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
 }
 
 impl NetworkPlugin {
     #[allow(dead_code)]
-    pub fn new(blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>) -> Self {
+    pub fn new(snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>) -> Self {
         Self {
             footprint_gen: FootprintGenerator::new("network"),
-            blockchain_sender,
+            snowball_sender,
         }
     }
 
@@ -1545,7 +1545,7 @@ impl NetworkPlugin {
         let footprint = self
             .footprint_gen
             .create_footprint("create", &config, Some(metadata))?;
-        self.blockchain_sender.send(footprint)?;
+        self.snowball_sender.send(footprint)?;
         Ok(())
     }
 }
@@ -1555,8 +1555,8 @@ impl FootprintPlugin for NetworkPlugin {
         "network"
     }
 
-    fn send_to_blockchain(&self, footprint: &PluginFootprint) -> Result<()> {
-        self.blockchain_sender.send(footprint.clone())?;
+    fn send_to_snowball(&self, footprint: &PluginFootprint) -> Result<()> {
+        self.snowball_sender.send(footprint.clone())?;
         Ok(())
     }
 }
@@ -1602,7 +1602,7 @@ mod tests {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/retention.rs">
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/retention.rs">
 //! Snapshot retention policies with rolling windows
 
 use anyhow::Result;
@@ -1752,7 +1752,7 @@ mod tests {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/snapshot.rs">
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/snapshot.rs">
 //! Snapshot interval configuration
 
 use serde::{Deserialize, Serialize};
@@ -1895,11 +1895,11 @@ mod tests {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/src/streaming_blockchain.rs">
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/src/streaming_snowball.rs">
 #![allow(unused_imports)]
-//! Streaming blockchain with vectorization and dual btrfs subvolumes
+//! Streaming snowball with vectorization and dual btrfs subvolumes
 //!
-//! This module provides a streaming blockchain implementation that:
+//! This module provides a streaming snowball implementation that:
 //! 1. Automatically generates hashed footprints for all object modifications
 //! 2. Stores timing and vector data in separate btrfs subvolumes
 //! 3. Creates snapshots for each block
@@ -2047,7 +2047,7 @@ impl SnapshotInterval {
     }
 }
 
-pub struct StreamingBlockchain {
+pub struct StreamingSnowball {
     base_path: PathBuf,
     timing_subvol: PathBuf, // Audit trail (immutable history)
     vector_subvol: PathBuf, // ML embeddings
@@ -2057,7 +2057,7 @@ pub struct StreamingBlockchain {
     last_snapshot_time: Arc<RwLock<Instant>>,
 }
 
-impl StreamingBlockchain {
+impl StreamingSnowball {
     pub async fn new(base_path: impl AsRef<Path>) -> Result<Self> {
         Self::new_with_interval(base_path, SnapshotInterval::from_env()).await
     }
@@ -2408,7 +2408,7 @@ impl StreamingBlockchain {
         let output = Command::new("bash")
             .arg("-c")
             .arg(format!(
-                "btrfs send {} | ssh {} 'btrfs receive /var/lib/blockchain/vectors/'",
+                "btrfs send {} | ssh {} 'btrfs receive /var/lib/snowball/vectors/'",
                 vector_snapshot.display(),
                 remote
             ))
@@ -2433,7 +2433,7 @@ impl StreamingBlockchain {
         let mut tee_args = Vec::new();
         for replica in replicas {
             tee_args.push(format!(
-                ">(ssh {} 'btrfs receive /var/lib/blockchain/vectors/')",
+                ">(ssh {} 'btrfs receive /var/lib/snowball/vectors/')",
                 replica
             ));
         }
@@ -2721,14 +2721,14 @@ impl StreamingBlockchain {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/Cargo.toml">
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/Cargo.toml">
 [package]
-name = "op-blockchain"
+name = "op-snowball"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Streaming blockchain with BTRFS subvolumes for op-dbus-v2"
+description = "Streaming snowball with BTRFS subvolumes for op-dbus-v2"
 
 [dependencies]
 op-core = { workspace = true }
@@ -2748,8 +2748,8 @@ gethostname = { workspace = true }
 default = []
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/compare-op-blockchain.md">
-# compare-op-blockchain
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/compare-op-snowball.md">
+# compare-op-snowball
 
 **Date**: 2026-04-05  
 **Spec files analyzed**: SPEC.md  
@@ -2773,34 +2773,34 @@ default = []
 
 ## Current Implementation Overview
 
-- Streaming blockchain with BTRFS subvolumes for op-dbus-v2
+- Streaming snowball with BTRFS subvolumes for op-dbus-v2
 - Internal crate integrations: op-core, op-cache.
 
 ## Module / File Comparison
 
 | Module or File | State | Current Role | Notes |
 |---|---|---|---|
-| `src/streaming_blockchain.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/streaming_blockchain.rs |
+| `src/streaming_snowball.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/streaming_snowball.rs |
 | `src/snapshot.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/snapshot.rs |
 | `src/retention.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/retention.rs |
 | `src/plugin_footprint.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/plugin_footprint.rs |
 | `src/lib.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/lib.rs |
 | `src/footprint.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/footprint.rs |
 | `src/btrfs_numa_integration.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/btrfs_numa_integration.rs |
-| `src/blockchain.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/blockchain.rs |
-| `root` | ✅ Present | root source group | src/blockchain.rs, src/btrfs_numa_integration.rs, src/footprint.rs, src/lib.rs, src/plugin_footprint.rs, src/retention.rs, src/snapshot.rs, src/streaming_blockchain.rs |
+| `src/snowball.rs` | ✅ Present | Declared in source inventory from spec/design docs | src/snowball.rs |
+| `root` | ✅ Present | root source group | src/snowball.rs, src/btrfs_numa_integration.rs, src/footprint.rs, src/lib.rs, src/plugin_footprint.rs, src/retention.rs, src/snapshot.rs, src/streaming_snowball.rs |
 
 ## Feature / Capability Comparison
 
 | Capability | State | Evidence | Source |
 |---|---|---|---|
-| streaming_blockchain | ✅ Implemented | src/streaming_blockchain.rs | SPEC main module |
+| streaming_snowball | ✅ Implemented | src/streaming_snowball.rs | SPEC main module |
 | snapshot | ✅ Implemented | src/snapshot.rs | SPEC main module |
 | retention | ✅ Implemented | src/retention.rs | SPEC main module |
 | plugin_footprint | ✅ Implemented | src/plugin_footprint.rs | SPEC main module |
 | footprint | ✅ Implemented | src/footprint.rs | SPEC main module |
 | btrfs_numa_integration | ✅ Implemented | src/btrfs_numa_integration.rs | SPEC main module |
-| blockchain | ✅ Implemented | src/blockchain.rs | SPEC main module |
+| snowball | ✅ Implemented | src/snowball.rs | SPEC main module |
 
 ## Dependencies Comparison
 
@@ -2826,15 +2826,15 @@ default = []
 ## Notes and Observations
 
 - Local documentation files present: SPEC.md.
-- Root module declarations found in `lib.rs`/`main.rs`: blockchain, btrfs_numa_integration, footprint, plugin_footprint, retention, snapshot, streaming_blockchain.
+- Root module declarations found in `lib.rs`/`main.rs`: snowball, btrfs_numa_integration, footprint, plugin_footprint, retention, snapshot, streaming_snowball.
 - Cargo feature flags: default, ml.
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/DESIGN.md">
-# op-blockchain — Technical Design
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/DESIGN.md">
+# op-snowball — Technical Design
 
-**Crate**: `op-blockchain`  
-**Scope**: `mutation_footprint` plugin implementation, schema design, blockchain persistence, chain integrity
+**Crate**: `op-snowball`  
+**Scope**: `mutation_footprint` plugin implementation, schema design, snowball persistence, chain integrity
 
 See `REQUIREMENTS.md` for the acceptance criteria this design satisfies.
 
@@ -2846,7 +2846,7 @@ The `mutation_footprint` plugin has two co-equal responsibilities that are insep
 
 1. **The plugin IS the schema.** `StatePlugin::schema()` returns the canonical `PluginSchema`
    that defines every field of a mutation footprint record. That schema is the single source of
-   truth for what a blockchain block looks like.
+   truth for what a snowball block looks like.
 
 2. **The schema IS the vectorization filter.** The `semantic_index.include_paths` and
    `privacy_index.redaction` sections of the generated contract document govern exactly which
@@ -2864,7 +2864,7 @@ This follows the identical pattern to all other plugins in the system.
 |---|---|---|
 | Plugin definition, schema, `StatePlugin` impl | `op-plugins` | `src/state_plugins/mutation_footprint.rs` |
 | `PluginSchema`, `FieldSchema`, `FieldType`, `Constraint`, `SchemaRegistry` | `op-state-store` | `src/plugin_schema.rs` (unchanged) |
-| `StreamingBlockchain`, `PluginFootprint`, `FootprintGenerator` | `op-blockchain` | (unchanged) |
+| `StreamingSnowball`, `PluginFootprint`, `FootprintGenerator` | `op-snowball` | (unchanged) |
 | Mutation interception | `op-state` | `src/dbus_plugin_base.rs` — `record_state_transition` sends `MutationEvent` |
 | Schema catalog index | `op-state-store` | `SchemaRegistry` — indexes the persisted schema |
 
@@ -2876,11 +2876,11 @@ Following `web_ui.rs` and other plugins, the module is structured in three secti
 
 ```
 SECTION 1: Immutable Identity  — set once at registration, never changes
-SECTION 2: Footprint Record    — the schema for each blockchain block (all readOnly)
+SECTION 2: Footprint Record    — the schema for each snowball block (all readOnly)
 SECTION 3: Capabilities        — what this plugin can do (read-only)
 ```
 
-Because blockchain footprint records are **append-only and immutable once written**, the entire
+Because snowball footprint records are **append-only and immutable once written**, the entire
 `FootprintRecord` is `readOnly`. The `PluginSchema` is tagged `"immutable"` so
 `to_json_schema()` adds `"readOnly": true` to every property automatically.
 
@@ -2893,7 +2893,7 @@ pub struct MutationFootprintIdentity {
     pub name: String,        // const: "mutation_footprint"
     pub version: String,     // semver: "1.0.0"
     pub plugin_type: String, // const: "audit"
-    pub driver: String,      // const: "op-blockchain"
+    pub driver: String,      // const: "op-snowball"
 }
 ```
 
@@ -2906,7 +2906,7 @@ JSON Schema (`$id: …/mutation-footprint/identity.json`):
     "name":        { "type": "string", "const": "mutation_footprint" },
     "version":     { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
     "plugin_type": { "type": "string", "const": "audit" },
-    "driver":      { "type": "string", "const": "op-blockchain" }
+    "driver":      { "type": "string", "const": "op-snowball" }
   },
   "required": ["name", "version", "plugin_type", "driver"],
   "additionalProperties": false
@@ -2944,7 +2944,7 @@ pub fn schema() -> PluginSchema {
     PluginSchema::builder("mutation_footprint")
         .version("1.0.0")
         .category("audit")
-        .description("Immutable blockchain footprint records for all system mutations")
+        .description("Immutable snowball footprint records for all system mutations")
         .tag("immutable")        // → readOnly: true on every property in to_json_schema()
         .tag("append-only")
         .immutable_paths(&[
@@ -3093,7 +3093,7 @@ required top-level sections. The `mutation_footprint` plugin customises two sect
 {
   "system_id":     "<host UUID>",
   "source":        "mutation_footprint",
-  "source_ref":    "op-blockchain/timing_subvol",
+  "source_ref":    "op-snowball/timing_subvol",
   "discovered_at": "<ISO-8601>"
 }
 ```
@@ -3197,7 +3197,7 @@ pub struct MutationFootprintCapabilities {
 ### Validation
 
 `PluginSchema::validate()` is called on every `FootprintRecord` before it is submitted to
-`StreamingBlockchain::add_footprint`. A record that fails validation is **rejected** — not
+`StreamingSnowball::add_footprint`. A record that fails validation is **rejected** — not
 written to the chain. A `mutation_footprint.validation_failed` error span is emitted.
 
 ---
@@ -3255,7 +3255,7 @@ Any plugin::apply_state()
             computes content_hash   (SHA-256 of all above)
             constructs FootprintRecord
             PluginSchema::validate(record)  → reject + span if invalid
-            StreamingBlockchain::add_footprint()
+            StreamingSnowball::add_footprint()
               → timing_subvol/block-{N:012}.json  (atomic write)
               → vector_subvol/vec-{N:012}.bin      (if ml feature)
             updates ChainHead RwLock
@@ -3285,7 +3285,7 @@ vec![
 
 // In load_plugin()
 "mutation_footprint" => Arc::new(MutationFootprintPlugin::new(
-    blockchain_path,      // path to op-blockchain storage dir
+    snowball_path,      // path to op-snowball storage dir
     chain_head_state,     // Arc<RwLock<ChainHead>>
     mutation_rx,          // Receiver<MutationEvent>
 )),
@@ -3295,19 +3295,19 @@ The registration order matters: `mutation_footprint` should start before other p
 chain is ready to receive events when other plugins run their first `apply_state`.
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/REQUIREMENTS.md">
-# op-blockchain — Requirements
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/REQUIREMENTS.md">
+# op-snowball — Requirements
 
-**Crate**: `op-blockchain`  
-**Scope**: Mutation footprint capture, blockchain persistence, chain integrity, vectorization, and the `mutation_footprint` plugin
+**Crate**: `op-snowball`  
+**Scope**: Mutation footprint capture, snowball persistence, chain integrity, vectorization, and the `mutation_footprint` plugin
 
 ---
 
 ## Introduction
 
 Every mutation applied to the system through the plugin + schema flow must produce a
-cryptographically hashed footprint that is appended to the immutable blockchain audit trail
-maintained by `op-blockchain`. The `mutation_footprint` plugin is the canonical plugin that
+cryptographically hashed footprint that is appended to the immutable snowball audit trail
+maintained by `op-snowball`. The `mutation_footprint` plugin is the canonical plugin that
 owns this audit trail. It registers once at startup, produces a `PluginCatalogDocument`
 describing its schema, and receives mutation events from every other state plugin via a shared
 async channel.
@@ -3318,8 +3318,8 @@ async channel.
   No other component invents a competing audit record shape.
 - Every mutation is captured as a `PluginFootprint` — containing the source plugin ID, operation
   type, SHA-256 hashes of the old and new state, a chained block hash linking to the previous
-  footprint, and full metadata — before being appended to the `StreamingBlockchain`.
-- The blockchain's `timing_subvol` is **append-only**. Once a footprint block is written it is
+  footprint, and full metadata — before being appended to the `StreamingSnowball`.
+- The snowball's `timing_subvol` is **append-only**. Once a footprint block is written it is
   never modified; only new blocks are added. Snapshots and retention policy control pruning.
 - The plugin schema is the **ground truth** for validation, rendering, vectorization, and
   compliance queries. All downstream consumers resolve the audit record shape through
@@ -3400,17 +3400,17 @@ previous block.
 
 ---
 
-## 3. Blockchain Persistence & BTRFS Storage
+## 3. Snowball Persistence & BTRFS Storage
 
 ### Intent
 
-Footprints are written to the `StreamingBlockchain`'s immutable `timing_subvol` and optionally
+Footprints are written to the `StreamingSnowball`'s immutable `timing_subvol` and optionally
 to `vector_subvol` when semantic features are available. Snapshots and retention policy preserve
 the audit history within configurable rolling windows.
 
 ### Acceptance Criteria
 
-1. WHEN a footprint is ready THEN it is submitted to `StreamingBlockchain::add_footprint` which
+1. WHEN a footprint is ready THEN it is submitted to `StreamingSnowball::add_footprint` which
    writes a JSON block file to `timing_subvol/block-{N:012}.json` atomically.
 
 2. WHEN the `ml` cargo feature is enabled THEN `FootprintGenerator` uses transformer embeddings
@@ -3418,7 +3418,7 @@ the audit history within configurable rolling windows.
    stored in `vector_subvol`.
 
 3. WHEN a snapshot interval elapses (configurable via `OPDBUS_SNAPSHOT_INTERVAL`, defaulting to
-   `every-15-minutes`) THEN the blockchain creates a read-only BTRFS snapshot of `state_subvol`.
+   `every-15-minutes`) THEN the snowball creates a read-only BTRFS snapshot of `state_subvol`.
    The `timing_subvol` is never snapshotted-and-pruned; it is append-only.
 
 4. WHEN the retention policy fires THEN old `state_subvol` snapshots are pruned according to
@@ -3511,7 +3511,7 @@ mutation itself. Telemetry surfaces chain health, throughput, and any audit gaps
 
 5. WHEN the mutation footprint worker is under load THEN it runs at lower priority than direct
    control-plane operations, but higher than schema footprint embedding. NUMA affinity for
-   queue/storage is applied using `OptimizedBlockchain` where available.
+   queue/storage is applied using `OptimizedSnowball` where available.
 
 ---
 
@@ -3531,19 +3531,19 @@ Before the plugin is considered complete:
       `SchemaCatalog` on startup.
 - [ ] `op-state` intercepts `apply_state` and sends `MutationEvent` through a shared async channel
       to the mutation_footprint worker.
-- [ ] The blockchain writer appends to `StreamingBlockchain::timing_subvol` using schema-defined
+- [ ] The snowball writer appends to `StreamingSnowball::timing_subvol` using schema-defined
       fields and emits the tracing spans from Section 6.
 - [ ] Chain verification (`verify_chain`) is callable independently of the write path.
 - [ ] On restart, the chain head is restored from the last block file before new mutations are accepted.
 - [ ] Vectorization worker reads semantic fields from `SchemaCatalog` — no hardcoded field lists.
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-blockchain/SPEC.md">
-# op-blockchain — Specification
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-snowball/SPEC.md">
+# op-snowball — Specification
 
-**Crate**: `op-blockchain`  
-**Location**: `crates/op-blockchain`  
-**Purpose**: Streaming blockchain with BTRFS subvolumes for append-only mutation audit trails,
+**Crate**: `op-snowball`  
+**Location**: `crates/op-snowball`  
+**Purpose**: Streaming snowball with BTRFS subvolumes for append-only mutation audit trails,
 vectorized footprints, point-in-time snapshots, and tamper-evident chain integrity.
 
 See `REQUIREMENTS.md` for what this crate must do and `DESIGN.md` for the implementation approach.
@@ -3555,7 +3555,7 @@ See `REQUIREMENTS.md` for what this crate must do and `DESIGN.md` for the implem
 ### Cargo.toml
 ```toml
 [package]
-name = "op-blockchain"
+name = "op-snowball"
 version.workspace = true
 edition.workspace = true
 
@@ -3580,28 +3580,28 @@ ml      = []        # enables transformer-based vectorization via FootprintGener
 
 ### Source Structure
 ```
-op-blockchain/src/
+op-snowball/src/
   lib.rs                      — crate root, re-exports
-  blockchain.rs               — StreamingBlockchain, OptimizedBlockchain
+  snowball.rs               — StreamingSnowball, OptimizedSnowball
   footprint.rs                — BlockEvent, PluginFootprint (current production struct)
   plugin_footprint.rs         — LegacyPluginFootprint, FootprintGenerator
-  streaming_blockchain.rs     — StreamingBlockchain full implementation, SnapshotInterval
+  streaming_snowball.rs     — StreamingSnowball full implementation, SnapshotInterval
   retention.rs                — RetentionPolicy (hourly/daily/weekly/quarterly)
   snapshot.rs                 — SnapshotInterval enum and snapshot helpers
-  btrfs_numa_integration.rs   — NUMA topology detection, OptimizedBlockchain wrapper
+  btrfs_numa_integration.rs   — NUMA topology detection, OptimizedSnowball wrapper
 ```
 
 ---
 
 ## Module Structure
 
-### `blockchain` — Core Blockchain
+### `snowball` — Core Snowball
 
-- **`StreamingBlockchain`** — main struct managing three BTRFS subvolumes:
+- **`StreamingSnowball`** — main struct managing three BTRFS subvolumes:
   - `timing_subvol` — append-only audit ledger (`block-{N:012}.json`)
   - `vector_subvol` — ML embedding vectors per block
   - `state_subvol` — current system state for disaster recovery (snapshotted)
-- **`OptimizedBlockchain`** — NUMA-aware wrapper around `StreamingBlockchain` with BTRFS cache
+- **`OptimizedSnowball`** — NUMA-aware wrapper around `StreamingSnowball` with BTRFS cache
 
 Key methods:
 - `new(base_path, snapshot_interval, retention_policy)` — initialize
@@ -3639,7 +3639,7 @@ Current `PluginFootprint` fields:
   - `create_footprint(operation, data, metadata)` — heuristic features (64-dim)
   - When `ml` feature enabled: `generate_transformer_features()` uses `ModelManager::global()`
 
-### `streaming_blockchain` — Storage Engine
+### `streaming_snowball` — Storage Engine
 
 - Implements the three-subvolume layout
 - `SnapshotInterval` enum: `PerOperation` | `EveryMinute` | `Every5Minutes` | `Every15Minutes` |
@@ -3662,7 +3662,7 @@ Current `PluginFootprint` fields:
 ### `btrfs_numa_integration` — NUMA Support
 
 - Detects NUMA topology from `/sys/devices/system/node/`
-- `OptimizedBlockchain` assigns blockchain I/O to NUMA-local nodes
+- `OptimizedSnowball` assigns snowball I/O to NUMA-local nodes
 - Improves throughput on multi-socket systems for high-mutation workloads
 
 ---

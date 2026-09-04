@@ -1,6 +1,6 @@
 {
   "id": "3",
-  "subject": "Task 2: Add scoped \"blockchain\" dispatch arm in MutationEngine",
+  "subject": "Task 2: Add scoped \"snowball\" dispatch arm in MutationEngine",
   "description": "crates/op-grpc-bridge/src/mutation_engine.rs — only query_events + verify_chain, inner _ => echo",
   "status": "pending"
 }

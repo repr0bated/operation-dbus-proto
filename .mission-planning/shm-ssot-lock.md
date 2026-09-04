@@ -107,7 +107,7 @@ SchemaEngine (op-projection/src/schema_engine.rs)
      │
      ▼ 1:1 direct read (zero-copy)
      │
-Consumers: UI, gRPC, blockchain, MCP, plugins, op-dbus-mirror, op-web
+Consumers: UI, gRPC, snowball, MCP, plugins, op-dbus-mirror, op-web
 ```
 
 - **`op-projection::SchemaEngine`** — the authoritative registry. Validates schemas, persists

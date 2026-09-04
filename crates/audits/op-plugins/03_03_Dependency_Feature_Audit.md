@@ -10,7 +10,7 @@
 | `op-dbus-model` | `workspace = true` | Inherited from workspace | None |
 | `op-state` | `{ path = "../op-state" }` | None | None |
 | `op-state-store` | `{ path = "../op-state-store" }` | None | None |
-| `op-blockchain` | `{ path = "../op-blockchain" }` | None | None |
+| `op-snowball` | `{ path = "../op-snowball" }` | None | None |
 | `op-network` | `{ path = "../op-network" }` | None | None |
 | `op-dynamic-loader` | `{ path = "../op-dynamic-loader" }` | None | None |
 | `op-execution-tracker` | `{ path = "../op-execution-tracker" }` | None | None |
@@ -152,7 +152,7 @@ The `op-plugins` crate represents a major "schema-as-code" gap because several c
   ```rust
   current_hash: format!("{:x}", md5::compute(simd_json::to_string(current)?))
   ```
-  If these hashes are stored in the block registry or a blockchain footprint to ensure integrity and prevent tampering, MD5's known susceptibility to collision attacks allows an attacker to swap a valid configuration with a malicious one that yields the exact same MD5 digest, making the alteration undetectable by hash-based auditing mechanisms.
+  If these hashes are stored in the block registry or a snowball footprint to ensure integrity and prevent tampering, MD5's known susceptibility to collision attacks allows an attacker to swap a valid configuration with a malicious one that yields the exact same MD5 digest, making the alteration undetectable by hash-based auditing mechanisms.
 * **Remediation**:
   Standardize on `sha2::Sha256` for all diff hashing operations, mirroring the correct pattern used in `crates/op-plugins/src/state.rs:136`.
 

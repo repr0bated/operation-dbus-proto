@@ -3,7 +3,7 @@
 ## 1. Critical Findings
 
 ### Critical: Memory Safety Vulnerability (Heap Out-of-Bounds Read / Undefined Behavior)
-* **Location**: 
+* **Location**:
   * `crates/op-state-store/src/disaster_recovery.rs:114`
   * `crates/op-state-store/src/redis_stream.rs:313`
   * `crates/op-state-store/src/redis_stream.rs:347`
@@ -20,9 +20,9 @@
   * `crates/op-state-store/src/sqlite_store.rs:746`
 
 #### Description
-The crate heavily relies on `unsafe { simd_json::from_str(...) }` and `unsafe { simd_json::from_slice(...) }` targeting unpadded standard Rust `String` objects retrieved from SQLite, Redis, or built via `to_string()`. 
+The crate heavily relies on `unsafe { simd_json::from_str(...) }` and `unsafe { simd_json::from_slice(...) }` targeting unpadded standard Rust `String` objects retrieved from SQLite, Redis, or built via `to_string()`.
 
-The `simd-json` parser is highly optimized and relies on SIMD hardware vector instructions (AVX2, NEON) to scan chunks of bytes at once. To avoid bound checks on every byte, `simd-json` strictly requires the input buffer to be padded with at least `simd_json::PADDING_SIZE` (typically 32 or 64 bytes) of addressable allocated memory past the JSON payload. 
+The `simd-json` parser is highly optimized and relies on SIMD hardware vector instructions (AVX2, NEON) to scan chunks of bytes at once. To avoid bound checks on every byte, `simd-json` strictly requires the input buffer to be padded with at least `simd_json::PADDING_SIZE` (typically 32 or 64 bytes) of addressable allocated memory past the JSON payload.
 
 Standard Rust `String` instances returned from database lookups (SQLx or Redis) are allocated without this mandatory padding. Using `unsafe simd_json::from_str` on these instances forces SIMD operations to read memory past the allocated boundary. This triggers undefined behavior, heap-based out-of-bounds reads, and immediate segmentation faults (Denial of Service), or potential leakage of adjacent memory addresses.
 
@@ -44,7 +44,7 @@ The `SchemaShuttle` spawns an interactive shell process (`sh -c`) to update Xray
 Command::new("sh")
     .arg("-c")
     .arg(format!(
-        "export X_GHOSTBRIDGE_FOOTPRINT='{}' && export X_GHOSTBRIDGE_TRACE_ID='{}' && systemctl reload xray", 
+        "export X_GHOSTBRIDGE_FOOTPRINT='{}' && export X_GHOSTBRIDGE_TRACE_ID='{}' && systemctl reload xray",
         new_footprint_hex, trace_id
     ))
     .spawn()?;
@@ -65,14 +65,14 @@ Command::new("systemctl")
 ---
 
 ### Medium: Cryptographically Broken Hash Algorithm (MD5)
-* **Location**: 
+* **Location**:
   * `crates/op-state-store/src/event_chain.rs:563`
   * `crates/op-state-store/src/disaster_recovery.rs:98`
   * `crates/op-state-store/src/schema_shuttle.rs:43`
   * `crates/op-state-store/src/schema_shuttle.rs:114`
 
 #### Description
-The `EventChain` acts as a blockchain-style, tamper-evident audit ledger designed for compliance verification and state reproducibility. However, its chain state integrity is computed entirely using `md5::compute` (via the MD5 hashing algorithm). 
+The `EventChain` acts as a snowball-style, tamper-evident audit ledger designed for compliance verification and state reproducibility. However, its chain state integrity is computed entirely using `md5::compute` (via the MD5 hashing algorithm).
 
 MD5 has been cryptographically broken for decades and is highly vulnerable to hash collision attacks. A malicious actor with access to the state store could craft custom conflicting state payloads that yield identical MD5 hashes, enabling silent modification of historical transition logs while passing event validation checks.
 
@@ -95,7 +95,7 @@ use sha2::{Sha256, Digest};
   * `crates/op-state-store/src/redis_stream.rs:28-44` (`JobEvent`, `PluginEvent`)
 
 #### Description
-This codebase utilizes a strict schema-as-code discipline using Protocol Buffers and OSCAL. However, multiple key system contracts—specifically disaster recovery archives, real-time message stream notifications, blockchain event payloads, database export formats, and execution tracking entries—are expressed as ad-hoc Rust structs with inline Serde attributes rather than version-controlled schemas. 
+This codebase utilizes a strict schema-as-code discipline using Protocol Buffers and OSCAL. However, multiple key system contracts—specifically disaster recovery archives, real-time message stream notifications, snowball event payloads, database export formats, and execution tracking entries—are expressed as ad-hoc Rust structs with inline Serde attributes rather than version-controlled schemas.
 
 This leads to schema drift across multi-language process boundaries (e.g., when communicating via gRPC or D-Bus with other workspace components) and undermines formal, automated compliance verification.
 
@@ -107,12 +107,12 @@ Define all cross-boundary state structs, event payloads, and export schemas as s
 ## 4. Performance & Allocation Findings
 
 ### Low/Performance: Inefficient Internal Loop Allocations
-* **Location**: 
+* **Location**:
   * `crates/op-state-store/src/event_chain.rs:583`
   * `crates/op-state-store/src/event_chain.rs:621`
 
 #### Description
-In Merkle tree calculation algorithms (`compute_merkle_root` and `compute_merkle_proof`), a temporary vector `next_level` is instantiated via `Vec::new()` during every iteration of a progressive reduction `while` loop. 
+In Merkle tree calculation algorithms (`compute_merkle_root` and `compute_merkle_proof`), a temporary vector `next_level` is instantiated via `Vec::new()` during every iteration of a progressive reduction `while` loop.
 Because the size of `next_level` is deterministically predictable at the start of each iteration (`(level.len() + 1) / 2`), initializing an empty vector causes multiple reallocations and unnecessary heap overhead during active state logging.
 
 #### Remediation
@@ -124,12 +124,12 @@ let mut next_level = Vec::with_capacity((level.len() + 1) / 2);
 ---
 
 ### Low/Performance: Excessive String Allocations (Format Bloat in Hot Paths)
-* **Location**: 
+* **Location**:
   * `crates/op-state-store/src/event_chain.rs:570`
   * `crates/op-state-store/src/event_chain.rs:415`
 
 #### Description
-In `event_chain.rs:570`, `compute_hash_pair` concatenates two hex hashes using `format!("{}{}", left, right)` during every step of the Merkle tree evaluation. 
+In `event_chain.rs:570`, `compute_hash_pair` concatenates two hex hashes using `format!("{}{}", left, right)` during every step of the Merkle tree evaluation.
 For large batches (e.g., matching the `batch_size: 1000` default), this generates thousands of micro-allocations on the heap. Similarly, constructing snapshot lookup strings in `StateSnapshot::new` (line 415) generates extensive format overhead.
 
 #### Remediation
@@ -156,7 +156,7 @@ Refactor `expand_property_dependencies` to accept an owned `Value` or modify the
 
 ## 5. Performance, Allocation & Memory Map
 
-This codebase maps shared state across runtime environments. The zero-copy representation table is structured below. Note that no explicit calls to native system mappings (`memmap2`, native `mmap`, `MmapMut`, or `MmapOptions`) are directly instantiated in the audited files. 
+This codebase maps shared state across runtime environments. The zero-copy representation table is structured below. Note that no explicit calls to native system mappings (`memmap2`, native `mmap`, `MmapMut`, or `MmapOptions`) are directly instantiated in the audited files.
 
 ### Memory Map Table
 

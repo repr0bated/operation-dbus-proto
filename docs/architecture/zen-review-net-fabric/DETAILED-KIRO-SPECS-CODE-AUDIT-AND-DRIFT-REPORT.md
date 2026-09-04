@@ -137,12 +137,12 @@ pie title Status Breakdown Across 24 Specification Packages
 * **What the Spec Asked For**:
   - Session genesis written to `/dev/shm/opdbus/identity_sled.dat` with atomic 152-byte memory-map bounds.
   - Zero-downtime session handoff (`torch-pass`).
-  - Linear state mutation audit trail appended to `EventChain` and replicated to `/var/lib/opdbus/blockchain`.
+  - Linear state mutation audit trail appended to `EventChain` and replicated to `/var/lib/opdbus/snowball`.
 * **What the Code Actually Does**:
   - [`crates/op-identity/src/anna_scribe.rs:1-90`](file:///srv/git/odbus/crates/op-identity/src/anna_scribe.rs#L1-L90): `write_session_genesis()` creates immutable records.
   - [`crates/op-identity/src/lib.rs:25-45`](file:///srv/git/odbus/crates/op-identity/src/lib.rs#L25-L45): Enforces `file.metadata()?.len() >= 152` before `mmap` to prevent SIGBUS crashes.
   - [`crates/op-grpc-bridge/src/mutation_engine.rs:913-1032`](file:///srv/git/odbus/crates/op-grpc-bridge/src/mutation_engine.rs#L913-L1032): Appends `StateChange` records to `EventChain`.
-  - [`crates/op-blockchain/src/blockchain.rs:1-120`](file:///srv/git/odbus/crates/op-blockchain/src/blockchain.rs#L1-L120): Streaming blockchain writer syncing every 15 minutes.
+  - [`crates/op-snowball/src/snowball.rs:1-120`](file:///srv/git/odbus/crates/op-snowball/src/snowball.rs#L1-L120): Streaming snowball writer syncing every 15 minutes.
 * **Verdict**: **PASS (100% Compliant)**
 
 ---
@@ -202,7 +202,7 @@ pie title Status Breakdown Across 24 Specification Packages
 | `dbus-service-manager` | D-Bus systemd/runit proxy | `SystemdAutoCreator` reads live runit sockets | **PASS** |
 | `session-genesis-identity` | Sled session persistence | Scribe genesis + 152-byte mmap safety | **PASS** |
 | `torch-pass` | Zero-downtime reconnect | Sled sequence increment | **PASS** |
-| `accountability-audit-trail` | Linear mutation blockchain | EventChain + `/var/lib/opdbus/blockchain` | **PASS** |
+| `accountability-audit-trail` | Linear mutation snowball | EventChain + `/var/lib/opdbus/snowball` | **PASS** |
 | `cognitive-mcp-bridge-only-door` | Loopback cognitive MCP ingress | Gated through gRPC bridge UDS | **PASS** |
 | `cognitive-mcp-only-door-phase2` | Fanin proxy / multi-transport | Streamlined in `op-cognitive-mcp` | **PASS** |
 | `zeroclaw-router-wiring` | Separate zeroclaw binary | Folded into `op-grpc-bridge` as `tched_router` | **EVOLVED & PASS** |

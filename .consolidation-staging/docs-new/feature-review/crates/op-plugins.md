@@ -6,7 +6,7 @@
 - Tests in tree: 35
 - Static incompleteness markers: 13
 - Patch / backup artifacts in tree: 0
-- Purpose: Plugin system with state management, domain plugins, and blockchain footprints
+- Purpose: Plugin system with state management, domain plugins, and snowball footprints
 - Assessment: op-plugins builds, but the codebase still exposes unfinished paths or contract drift relative to its advertised purpose.
 
 ## Spec References

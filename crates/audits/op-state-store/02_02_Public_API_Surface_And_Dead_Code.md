@@ -98,7 +98,7 @@ The following items represent the core architectural interface of the state stor
 2. **`SqliteStore`** (`crates/op-state-store/src/sqlite_store.rs:19`)  
    *Architectural Impact:* The primary persistent engine. It initializes system schemas, performs raw SQL execution, and handles backups, checkpoints, and tool configurations.
 3. **`EventChain`** (`crates/op-state-store/src/event_chain.rs:369`)  
-   *Architectural Impact:* An append-only ledger designed to provide blockchain-style immutability. If compromised, the system's entire security audit log can be falsified.
+   *Architectural Impact:* An append-only ledger designed to provide snowball-style immutability. If compromised, the system's entire security audit log can be falsified.
 4. **`PluginSchema`** (`crates/op-state-store/src/plugin_schema.rs:90`)  
    *Architectural Impact:* The authoritative data contract. It handles runtime type constraints, default value generation, and defines translation structures for compliance validations.
 5. **`SchemaRegistry`** (`crates/op-state-store/src/plugin_schema.rs:495`)  

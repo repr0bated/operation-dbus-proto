@@ -370,22 +370,22 @@ atomic rename.
 
 The design's earlier draft proposed renaming `etch_footprint` to
 `etch_chain_footprint` on the assumption its only live consumer was the
-blockchain record path. That was wrong.
+snowball record path. That was wrong.
 
 **Actual live callers:**
 1. `identity_sled_dispatch.rs:388` — backfills empty hashed_footprint on
-   re-registration (identity-anchor usage, not blockchain).
+   re-registration (identity-anchor usage, not snowball).
 2. `identity_sled_dispatch.rs:428` — mints footprint at initial provisioning
    (identity-anchor usage).
 3. `anna_scribe.rs` — deleted.
 4. The `advance_identity_sled` / `write_sled_full` path — deleted.
 
-The blockchain path (`event_to_footprint`) never calls `etch_footprint`. It
+The snowball path (`event_to_footprint`) never calls `etch_footprint`. It
 assembles `PluginFootprint` metadata from the chain event fields directly.
 
 With callers 1 and 2 replaced by `mint_genesis` and callers 3 and 4 deleted,
 `etch_footprint` has **zero live consumers**. Renaming a dead function to
-something blockchain-sounding would create a misleading zombie. Delete it.
+something snowball-sounding would create a misleading zombie. Delete it.
 
 ### 6.5 `hashed_footprint` → `genesis` (no dual storage)
 

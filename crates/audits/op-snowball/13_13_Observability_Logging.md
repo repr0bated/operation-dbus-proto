@@ -1,27 +1,27 @@
 # Production Security & Quality Audit Report
-**Crate:** `op-blockchain`
+**Crate:** `op-snowball`
 
 ---
 
 ## 1. Critical Vulnerabilities
 
 ### 1.1. Arbitrary Shell Command Injection in Replications (Critical)
-*   **File:** `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 473–487, 492–516)
-*   **File:** `crates/op-blockchain/src/blockchain.rs` (Lines 274–284)
+*   **File:** `crates/op-snowball/src/streaming_snowball.rs` (Lines 473–487, 492–516)
+*   **File:** `crates/op-snowball/src/snowball.rs` (Lines 274–284)
 *   **Description:**
     The application executes external shell interpreters (`bash` and `sh`) via `Command::new` using the `-c` argument. It directly concatenates string variables (`remote`, `block_hash`, `replicas`, `remote_path`) formatted dynamically into the command string.
     
-    In `streaming_blockchain.rs`:
+    In `streaming_snowball.rs`:
     ```rust
     let output = Command::new("bash")
         .arg("-c")
         .arg(format!(
-            "btrfs send {} | ssh {} 'btrfs receive /var/lib/blockchain/vectors/'",
+            "btrfs send {} | ssh {} 'btrfs receive /var/lib/snowball/vectors/'",
             vector_snapshot.display(),
             remote
         ))
     ```
-    And in `blockchain.rs`:
+    And in `snowball.rs`:
     ```rust
     let output = Command::new("sh")
         .arg("-c")
@@ -40,8 +40,8 @@
     3. If piping is required, use Rust's `std::process::Stdio::piped()` to connect the stdout of `btrfs` to the stdin of `ssh` programmatically.
 
 ### 1.2. Path Traversal & Unvalidated Arbitrary File Writes (High)
-*   **File:** `crates/op-blockchain/src/btrfs_numa_integration.rs` (Lines 77–118, 125–136)
-*   **File:** `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 163–204)
+*   **File:** `crates/op-snowball/src/btrfs_numa_integration.rs` (Lines 77–118, 125–136)
+*   **File:** `crates/op-snowball/src/streaming_snowball.rs` (Lines 163–204)
 *   **Description:**
     The cache and timing storage implementations trust the `block_hash` property of incoming `PluginFootprint` structures without validating its format or preventing directory traversal sequences.
     
@@ -68,7 +68,7 @@ The codebase exhibits excellent observability hygiene by using the structured `t
 
 ### 2.2. Swallowed Errors
 1.  **Silent Fallback masking BTRFS errors:**
-    *   **File:** `crates/op-blockchain/src/blockchain.rs` (Lines 371–386)
+    *   **File:** `crates/op-snowball/src/snowball.rs` (Lines 371–386)
     *   **Description:**
         ```rust
         let result = Command::new("btrfs")
@@ -94,15 +94,15 @@ The codebase exhibits excellent observability hygiene by using the structured `t
         ```
         If the primary `btrfs` subcommand fails, the logic falls back to `rm -rf` (`remove_dir_all`). If the fallback succeeds, the original `btrfs` command's error output (the exact reason why BTRFS subvolume deletion failed) is completely swallowed without logging. This can mask subvolume permission, lock, or structural disk integrity issues.
 2.  **Swallowed Clock Skew & Serialization Errors:**
-    *   **File:** `crates/op-blockchain/src/plugin_footprint.rs` (Lines 29, 34, 261)
+    *   **File:** `crates/op-snowball/src/plugin_footprint.rs` (Lines 29, 34, 261)
     *   **Description:**
         The use of `.unwrap_or_default()` when querying system time (`duration_since(UNIX_EPOCH)`) and serializing data via `simd_json::to_string` silently discards transient environment errors and serialization failures without recording the events.
 
 ### 2.3. PII & Secret Leakage Risks
-*   **Process Output Logging:** `String::from_utf8_lossy(&output.stderr)` is printed to logs on snapshot failures (`streaming_blockchain.rs:417, 434, 451`). Since these commands interact with system tools and SSH endpoints, the printed error messages can inadvertently leak internal file structures, network configurations, or private usernames to the system logs.
+*   **Process Output Logging:** `String::from_utf8_lossy(&output.stderr)` is printed to logs on snapshot failures (`streaming_snowball.rs:417, 434, 451`). Since these commands interact with system tools and SSH endpoints, the printed error messages can inadvertently leak internal file structures, network configurations, or private usernames to the system logs.
 
 ### 2.4. Metrics Instrumentation
-*   **Observation:** Although `prometheus` is included in the root workspace configuration as a dependency, there is **zero metrics instrumentation** configured or utilized inside the audited `op-blockchain` files. Block counts, cache hits/misses, and replication pipelines operate purely on in-memory counters and filesystem structures without registering with Prometheus registries.
+*   **Observation:** Although `prometheus` is included in the root workspace configuration as a dependency, there is **zero metrics instrumentation** configured or utilized inside the audited `op-snowball` files. Block counts, cache hits/misses, and replication pipelines operate purely on in-memory counters and filesystem structures without registering with Prometheus registries.
 
 ---
 
@@ -111,20 +111,20 @@ The codebase exhibits excellent observability hygiene by using the structured `t
 This codebase utilizes a schema-as-code discipline, but several areas violate this rule by using ad-hoc, unversioned, and loosely typed configurations and structures instead of strict, versioned schemas (such as Protocol Buffers or OSCAL JSON schemas).
 
 ### 3.1. Ad-Hoc Payload Structs
-*   **File:** `crates/op-blockchain/src/footprint.rs` (Lines 9–16, 46–54)
-*   **File:** `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 21–29)
+*   **File:** `crates/op-snowball/src/footprint.rs` (Lines 9–16, 46–54)
+*   **File:** `crates/op-snowball/src/streaming_snowball.rs` (Lines 21–29)
 *   **Description:**
-    The core data contracts of the blockchain audit trail (`BlockEvent` and `PluginFootprint`) are defined as ad-hoc Rust structs with generic dynamic JSON payloads represented as `simd_json::OwnedValue` or open-ended maps (`HashMap<String, OwnedValue>`). Because these contracts do not utilize structured Protobuf schemas or OSCAL-compliant formats, they cannot be safely versioned across service upgrades.
+    The core data contracts of the snowball audit trail (`BlockEvent` and `PluginFootprint`) are defined as ad-hoc Rust structs with generic dynamic JSON payloads represented as `simd_json::OwnedValue` or open-ended maps (`HashMap<String, OwnedValue>`). Because these contracts do not utilize structured Protobuf schemas or OSCAL-compliant formats, they cannot be safely versioned across service upgrades.
 
 ### 3.2. Duplicate & Competing Type Definitions
-*   **File:** `crates/op-blockchain/src/footprint.rs` (Lines 46–54)
-*   **File:** `crates/op-blockchain/src/plugin_footprint.rs` (Lines 11–19)
+*   **File:** `crates/op-snowball/src/footprint.rs` (Lines 46–54)
+*   **File:** `crates/op-snowball/src/plugin_footprint.rs` (Lines 11–19)
 *   **Description:**
     The type `PluginFootprint` is duplicated across two separate source files with slightly different field semantic histories and initialization logic. This violates the single-source-of-truth schema principle.
 
 ### 3.3. Ad-Hoc Serialization Maps
-*   **File:** `crates/op-blockchain/src/btrfs_numa_integration.rs` (Lines 75–83)
-*   **File:** `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 164–170, 188–195, 198–208)
+*   **File:** `crates/op-snowball/src/btrfs_numa_integration.rs` (Lines 75–83)
+*   **File:** `crates/op-snowball/src/streaming_snowball.rs` (Lines 164–170, 188–195, 198–208)
 *   **Description:**
     Serialization of timing and block events relies on dynamic, inline JSON objects generated via the `simd_json::json!` macro with hardcoded literal string keys. These structures are not checked against a master contract definition.
 
@@ -133,9 +133,9 @@ This codebase utilizes a schema-as-code discipline, but several areas violate th
 ## 4. General Quality & Robustness Issues
 
 ### 4.1. Unsafe Use of `simd_json::from_str`
-*   **File:** `crates/op-blockchain/src/btrfs_numa_integration.rs` (Line 141)
-*   **File:** `crates/op-blockchain/src/blockchain.rs` (Line 214)
-*   **File:** `crates/op-blockchain/src/streaming_blockchain.rs` (Line 263)
+*   **File:** `crates/op-snowball/src/btrfs_numa_integration.rs` (Line 141)
+*   **File:** `crates/op-snowball/src/snowball.rs` (Line 214)
+*   **File:** `crates/op-snowball/src/streaming_snowball.rs` (Line 263)
 *   **Description:**
     The codebase leverages `simd_json`'s raw deserialization capability by passing mutable strings using `unsafe` blocks:
     ```rust
@@ -144,6 +144,6 @@ This codebase utilizes a schema-as-code discipline, but several areas violate th
     `simd_json::from_str` modifies the input string buffer directly in-place (performing destructive parsing for escape characters). This unsafe operation expects the input buffer to be privately held and mutable. While acceptable in isolated contexts, if the input buffer contains malformed or unexpected bytes, or if the string's backing memory is modified concurrently, it can trigger memory corruption or undefined behavior.
 
 ### 4.2. Hardcoded File Formats
-*   **File:** `crates/op-blockchain/src/blockchain.rs` (Line 126–134)
+*   **File:** `crates/op-snowball/src/snowball.rs` (Line 126–134)
 *   **Description:**
     The timing blocks write JSON files (`.json`) while vectors write binary outputs (`.bin`) without matching magic byte headers, making them prone to silent corruption or truncation errors if a disk write is interrupted.

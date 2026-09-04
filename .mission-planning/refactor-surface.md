@@ -219,7 +219,7 @@ binaries the task asked to flag.
 **`dhclient`**
 - `crates/op-network/src/plugin.rs:404` (`tokio::process::Command::new("dhclient")`)
 
-**`btrfs` / `chmod` / misc** (lxc.rs DISABLED): `lxc.rs:478,497` btrfs, `:659,719` chmod. `op-blockchain/src/btrfs_numa_integration.rs:256` btrfs.
+**`btrfs` / `chmod` / misc** (lxc.rs DISABLED): `lxc.rs:478,497` btrfs, `:659,719` chmod. `op-snowball/src/btrfs_numa_integration.rs:256` btrfs.
 
 ### ALLOWED (bootstrap binaries / `src/bin/*` entrypoints — AGENTS.md §4 exception)
 - `crates/op-network/src/bin/op-ovsbr0-setup.rs:110,119,177` (`s6-svc`), `:126` (`s6-svstat`), `:168` (`ovs-dpctl`), `:171,540` (`ip`). This bin is the rovs-ovsdb-native bridge setup tool invoked by deploy hooks.

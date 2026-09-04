@@ -19,7 +19,7 @@ Foundational choices:
 - **Containers:** Incus; privacy services (Xray, mail) run inside containers over
   Unix sockets with OpenFlow routing.
 - **Storage:** CozoDB (graph-relational-vector) + Btrfs vectorized footprint
-  transport for the blockchain ledger.
+  transport for the snowball ledger.
 - **AI:** LLM backend with per-container memory (CozoDB + Qdrant semantic search).
 
 ## 2. Core principles
@@ -81,7 +81,7 @@ flowchart TB
         NETWORK["op-network<br/>OVSDB / OpenFlow / rtnetlink"]
         SERVICES["op-services / op-s6-systemctl<br/>runit (sv) lifecycle"]
         COZO["op-cozo-store<br/>CozoDB graph-vector"]
-        BLOCKCHAIN["op-blockchain<br/>Btrfs footprint ledger"]
+        SNOWBALL["op-snowball<br/>Btrfs footprint ledger"]
         IDENTITY["op-identity<br/>WireGuard identity, magic link"]
         XRAY["op-xray-daemon / op-gemma<br/>privacy routing"]
     end
@@ -102,7 +102,7 @@ The layers, top to bottom:
 | Agent / chat | Reasoning, orchestration, tool execution | `op-chat`, `op-cache`, `op-agents`, `op-workflows`, `op-llm` |
 | Bridge | Bidirectional D-Bus ↔ gRPC, schema engine, projection | `op-grpc-bridge`, `op-grpc-adapters`, `op-dbus-mirror`, `op-assistant-grpc` |
 | Schema / plugin core | Source of truth, plugin trait, validation | `op-plugins`, `op-state`, `op-state-store`, `op-projection`, `op-dbus-model` |
-| Data / system | Native protocol drivers and stores | `op-network`, `op-services`, `op-s6-systemctl`, `op-cozo-store`, `op-blockchain`, `op-identity`, `op-xray-daemon`, `op-gemma`, `op-cache` |
+| Data / system | Native protocol drivers and stores | `op-network`, `op-services`, `op-s6-systemctl`, `op-cozo-store`, `op-snowball`, `op-identity`, `op-xray-daemon`, `op-gemma`, `op-cache` |
 | Support | Cross-cutting utilities | `op-core`, `op-http`, `op-jsonrpc`, `op-tools`, `op-introspection`, `op-inspector`, `op-execution-tracker`, `op-dynamic-loader`, `op-deployment`, `op-compliance` |
 
 ## 4. Crate map
@@ -114,7 +114,7 @@ Descriptions are taken from each crate's `Cargo.toml` and current source.
   signals, capabilities, subids) plus the execution state store / job ledger.
 - **op-state** — `StatePlugin` trait, `StateManager`, diff/apply/checkpoint, and
   schema validation.
-- **op-plugins** — The plugin system: 70+ state plugins, blockchain footprints,
+- **op-plugins** — The plugin system: 70+ state plugins, snowball footprints,
   and the D-Bus host export. Plugins self-register via `inventory::submit!`.
 - **op-projection** — Schema-validated state transformation engine.
 - **op-dbus-model** — Plugin catalog document model (schema + D-Bus path +
@@ -157,7 +157,7 @@ Descriptions are taken from each crate's `Cargo.toml` and current source.
 - **op-xray-daemon** — D-Bus service managing the Xray proxy daemon lifecycle.
 - **op-gemma** — Gemma routing brain: maps `subid → tag → xray + OpenFlow` rules.
 - **op-cozo-store** — Embedded CozoDB graph-relational-vector database.
-- **op-blockchain** — Streaming blockchain over Btrfs subvolumes (footprint
+- **op-snowball** — Streaming snowball over Btrfs subvolumes (footprint
   transport).
 - **op-identity** — WireGuard identity + magic-link registration.
 

@@ -1,6 +1,6 @@
 {
   "id": "2",
-  "subject": "Task 1: Add query_events + verify_chain schema methods to blockchain plugin",
-  "description": "crates/op-plugins/src/state_plugins/blockchain_plugin.rs — Input/Output structs + schema.methods.insert",
+  "subject": "Task 1: Add query_events + verify_chain schema methods to snowball plugin",
+  "description": "crates/op-plugins/src/state_plugins/snowball_plugin.rs — Input/Output structs + schema.methods.insert",
   "status": "pending"
 }

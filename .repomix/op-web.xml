@@ -3555,7 +3555,7 @@ fn escape_html(input: &str) -> String {
 //! Schema Handler — Single Source of Truth from Shared Memory
 //!
 //! Serves the canonical PluginSchema catalog from `/dev/shm/live-schema.json`.
-//! All UI, blockchain, and downstream consumers read from this endpoint.
+//! All UI, snowball, and downstream consumers read from this endpoint.
 
 use axum::{
     body::Body,
@@ -24314,7 +24314,7 @@ const SECTION_SCHEMAS: Record<string, Record<string, unknown>> = {
       tls_enabled: { type: "boolean", title: "TLS Enabled" },
       tls_cert_path: { type: "string", title: "TLS Certificate Path" },
       tls_key_path: { type: "string", title: "TLS Key Path" },
-      audit_chain: { type: "boolean", title: "Blockchain Audit Enabled" },
+      audit_chain: { type: "boolean", title: "Snowball Audit Enabled" },
       exec_approval: { type: "boolean", title: "Require Exec Approval" },
       allowed_cidrs: { type: "string", title: "Allowed CIDRs (comma-separated)" },
     },
@@ -27162,10 +27162,10 @@ export default function SecurityPage() {
         />
       </div>
 
-      {/* Blockchain Ledger */}
+      {/* Snowball Ledger */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-foreground">Blockchain Ledger</h3>
+          <h3 className="text-sm font-semibold text-foreground">Snowball Ledger</h3>
           <span className="text-xs text-muted-foreground">{blocks.length} blocks</span>
         </div>
         {blocks.map((block) => {
@@ -29583,7 +29583,7 @@ echo ""
 
 # Specialty Agents
 echo "🎨 SPECIALTY AGENTS:"
-echo "  ✅ blockchain-developer  - Blockchain development"
+echo "  ✅ snowball-developer  - Snowball development"
 echo "  ✅ unity-developer       - Unity game development"
 echo "  ✅ quant-analyst         - Quantitative analysis"
 echo "  ✅ arm-cortex-expert     - ARM development"

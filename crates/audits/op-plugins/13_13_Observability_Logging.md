@@ -109,10 +109,10 @@ This codebase violates the Schema-as-Code discipline by relying on unstructured,
   ```
   An attacker can set `storage` to a traversal string (e.g. `../../etc` or `../../tmp`). The filesystem operations (including directory creation, BTRFS snapshot execution, and token writing) will be executed relative to the traversed path. This allows arbitrary directory creation and file injection (such as firstboot script execution and configuration replacement) outside of the `/var/lib/pve` boundary.
 
-#### 2. Weak Cryptographic Hashes (MD5) for Blockchain Audit Trail
+#### 2. Weak Cryptographic Hashes (MD5) for Snowball Audit Trail
 * **File & Line**: Widely used across state engines (e.g. `crates/op-plugins/src/auto_create.rs:90`, `crates/op-plugins/src/state_plugins/config.rs:172`, `crates/op-plugins/src/state_plugins/incus.rs:411`, `crates/op-plugins/src/state_plugins/lxc.rs:756`).
 * **Severity**: **Medium** (Violates integrity guarantees of the audit trail).
-* **Description**: The system relies on `md5::compute` to generate state hashes for the blockchain-persisted audit trail. MD5 is highly vulnerable to cryptographic collision attacks. A malicious actor can easily generate two distinct system states (one benign, one malicious) that produce identical MD5 hashes, rendering the blockchain audit trail ineffective at verifying control plane integrity.
+* **Description**: The system relies on `md5::compute` to generate state hashes for the snowball-persisted audit trail. MD5 is highly vulnerable to cryptographic collision attacks. A malicious actor can easily generate two distinct system states (one benign, one malicious) that produce identical MD5 hashes, rendering the snowball audit trail ineffective at verifying control plane integrity.
 
 #### 3. Command/Argument Injection in Dinit Service Generation
 * **File & Line**: `crates/op-plugins/src/service_def.rs:136`

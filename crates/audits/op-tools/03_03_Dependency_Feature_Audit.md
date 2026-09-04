@@ -184,7 +184,7 @@ pub struct ToolExecutedEvent {
     pub metadata: Value,  // Ad-hoc untyped payload
 }
 ```
-Because these events are designed to be committed to an immutable ledger (such as a blockchain or audit database), they must be declared in strongly-versioned schemas (e.g., Protobuf `.proto` or OSCAL JSON schemas) to prevent data corruption or serialization mismatch errors as the code evolves.
+Because these events are designed to be committed to an immutable ledger (such as a snowball or audit database), they must be declared in strongly-versioned schemas (e.g., Protobuf `.proto` or OSCAL JSON schemas) to prevent data corruption or serialization mismatch errors as the code evolves.
 
 ### Gap 3: Untyped Dynamic D-Bus Projection and JSON Text-Passing
 * **File:** `crates/op-tools/src/builtin/plugin_projection.rs`

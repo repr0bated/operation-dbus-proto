@@ -3,17 +3,17 @@
 ## 1. Extracted License Field
 The workspace package license is declared in the root `Cargo.toml` as:
 * **License**: `Apache-2.0`
-* **Inheritance**: The audited crate `op-blockchain` inherits this license in `crates/op-blockchain/Cargo.toml` via `license.workspace = true`.
+* **Inheritance**: The audited crate `op-snowball` inherits this license in `crates/op-snowball/Cargo.toml` via `license.workspace = true`.
 
 ## 2. GPL/AGPL/SSPL Crates and Incompatibility Flag
 Scanning `Cargo.lock` and workspace dependencies:
 * **Incompatible Crate**: `cozo` (version `0.7.6`)
 * **License**: **AGPL-3.0** (GNU Affero General Public License v3.0)
-* **Risk & Impact**: The `cozo` database is licensed under the AGPL-3.0. Linking against or embedding an AGPL-3.0 crate in the control plane (`op-dbus` / `op-blockchain`) subjects the combined work to viral copyleft provisions. If this software is distributed or exposed over a network, the entire source code of the calling application must be made available under the AGPL-3.0. This directly conflicts with the permissive `Apache-2.0` license declared at the workspace root.
+* **Risk & Impact**: The `cozo` database is licensed under the AGPL-3.0. Linking against or embedding an AGPL-3.0 crate in the control plane (`op-dbus` / `op-snowball`) subjects the combined work to viral copyleft provisions. If this software is distributed or exposed over a network, the entire source code of the calling application must be made available under the AGPL-3.0. This directly conflicts with the permissive `Apache-2.0` license declared at the workspace root.
 
 ## 3. Crates with No License Field
 * `Cargo.lock` files do not natively store package licensing fields.
-* Within the workspace members specified in the root `Cargo.toml`, we can only verify the license fields for `op-blockchain` and `op-dbus` as their `Cargo.toml` files were provided. Both properly declare their license.
+* Within the workspace members specified in the root `Cargo.toml`, we can only verify the license fields for `op-snowball` and `op-dbus` as their `Cargo.toml` files were provided. Both properly declare their license.
 * The license fields for other workspace members (e.g., `op-services`, `op-gateway`, `op-core`, `op-tools`, `op-introspection`, `op-chat`, `op-http`, `op-web`, `op-cache`, `op-state`, `op-state-store`, `op-jsonrpc`, `op-llm`, `op-network`, `op-inspector`, `op-agents`, `op-plugins`, `op-workflows`, `op-ml`, `op-deployment`, `op-mcp`, `op-mcp-aggregator`, `op-mcp-proxy`, `op-identity`, `op-execution-tracker`, `op-dynamic-loader`, `op-cognitive-mcp`, `op-cozo-store`, `op-dbus-model`, `op-grpc-bridge`, `op-dbus-mirror`, `op-compliance`, `op-projection`) **cannot be verified** because their `Cargo.toml` manifests were excluded from the provided files.
 
 ---
@@ -24,13 +24,13 @@ The codebase violates the strict **schema-as-code** discipline by expressing pri
 
 ### Violations:
 1. **Ad-hoc `BlockEvent` Struct**:
-   * `crates/op-blockchain/src/footprint.rs:10-17` and `crates/op-blockchain/src/streaming_blockchain.rs:25-32` define an ad-hoc Rust struct representing immutable blockchain block events.
+   * `crates/op-snowball/src/footprint.rs:10-17` and `crates/op-snowball/src/streaming_snowball.rs:25-32` define an ad-hoc Rust struct representing immutable snowball block events.
    * The `data` field uses a dynamically typed `simd_json::OwnedValue` instead of a strongly typed, versioned schema contract.
 2. **Ad-hoc `PluginFootprint` Struct**:
-   * `crates/op-blockchain/src/footprint.rs:41-49` and `crates/op-blockchain/src/plugin_footprint.rs:10-18` declare a duplicate footprint structure.
+   * `crates/op-snowball/src/footprint.rs:41-49` and `crates/op-snowball/src/plugin_footprint.rs:10-18` declare a duplicate footprint structure.
    * The `metadata` field is defined as an ad-hoc `HashMap<String, simd_json::OwnedValue>` that bypasses structured validation.
 3. **Ad-hoc State Storage Contracts**:
-   * `crates/op-blockchain/src/blockchain.rs:194-208` reads and writes state keys to disk as arbitrary, unvalidated JSON documents via `simd_json::OwnedValue`. There is no schema validation or contract enforcement against an OSCAL profile or Protocol Buffer.
+   * `crates/op-snowball/src/snowball.rs:194-208` reads and writes state keys to disk as arbitrary, unvalidated JSON documents via `simd_json::OwnedValue`. There is no schema validation or contract enforcement against an OSCAL profile or Protocol Buffer.
 
 ---
 
@@ -39,14 +39,14 @@ The codebase violates the strict **schema-as-code** discipline by expressing pri
 ## [Critical] OS Command Injection in BTRFS/SSH Replication Pipelines
 
 ### File Context:
-* `crates/op-blockchain/src/blockchain.rs:241-268`
-* `crates/op-blockchain/src/streaming_blockchain.rs:480-505`
-* `crates/op-blockchain/src/streaming_blockchain.rs:509-548`
+* `crates/op-snowball/src/snowball.rs:241-268`
+* `crates/op-snowball/src/streaming_snowball.rs:480-505`
+* `crates/op-snowball/src/streaming_snowball.rs:509-548`
 
 ### Vulnerability Analysis:
 The system invokes local shell interpreters (`sh` and `bash`) to execute commands for BTRFS subvolume streaming over SSH. These invocations format commands using raw string interpolation:
 
-`crates/op-blockchain/src/blockchain.rs:252-257`:
+`crates/op-snowball/src/snowball.rs:252-257`:
 ```rust
 let output = Command::new("sh")
     .arg("-c")
@@ -58,18 +58,18 @@ let output = Command::new("sh")
     ))
 ```
 
-`crates/op-blockchain/src/streaming_blockchain.rs:487-492`:
+`crates/op-snowball/src/streaming_snowball.rs:487-492`:
 ```rust
 let output = Command::new("bash")
     .arg("-c")
     .arg(format!(
-        "btrfs send {} | ssh {} 'btrfs receive /var/lib/blockchain/vectors/'",
+        "btrfs send {} | ssh {} 'btrfs receive /var/lib/snowball/vectors/'",
         vector_snapshot.display(),
         remote
     ))
 ```
 
-`crates/op-blockchain/src/streaming_blockchain.rs:524-528`:
+`crates/op-snowball/src/streaming_snowball.rs:524-528`:
 ```rust
 let cmd = format!(
     "btrfs send {} | tee {} > /dev/null",
@@ -82,7 +82,7 @@ let cmd = format!(
 If an attacker is able to influence the `remote_path`, `remote`, or any entry in the `replicas` string slice (e.g., through a manipulated plugin metadata payload, dynamic configuration register, or compromised DBus interface), they can inject shell metacharacters. 
 For instance, setting `remote` to:
 `"localhost; rm -rf / #"`
-will result in the local shell executing `rm -rf /` with the permissions of the running blockchain daemon.
+will result in the local shell executing `rm -rf /` with the permissions of the running snowball daemon.
 
 ### Remediation:
 1. Avoid executing shell command strings via `sh -c` or `bash -c`.
@@ -94,18 +94,18 @@ will result in the local shell executing `rm -rf /` with the permissions of the 
 ## [Medium] Path Traversal via Unsanitized State and Plugin Keys
 
 ### File Context:
-* `crates/op-blockchain/src/blockchain.rs:194-208`
-* `crates/op-blockchain/src/streaming_blockchain.rs:310-323`
+* `crates/op-snowball/src/snowball.rs:194-208`
+* `crates/op-snowball/src/streaming_snowball.rs:310-323`
 
 ### Vulnerability Analysis:
 The `write_state`, `read_state`, and `update_plugin_state` routines construct target file paths by joining a BTRFS subvolume base path with a key parameter directly.
 
-`crates/op-blockchain/src/blockchain.rs:195`:
+`crates/op-snowball/src/snowball.rs:195`:
 ```rust
 let state_file = self.state_subvol.join(format!("{}.json", key));
 ```
 
-`crates/op-blockchain/src/streaming_blockchain.rs:314-315`:
+`crates/op-snowball/src/streaming_snowball.rs:314-315`:
 ```rust
 let plugin_file = plugins_dir.join(format!("{}.json", plugin_name));
 let temp_file = plugins_dir.join(format!(".{}.json.tmp", plugin_name));
@@ -130,9 +130,9 @@ if !safe_path.starts_with(&self.state_subvol) {
 ## [Medium] Undefined Behavior / Out-Of-Bounds Read in `simd_json::from_str`
 
 ### File Context:
-* `crates/op-blockchain/src/btrfs_numa_integration.rs:133`
-* `crates/op-blockchain/src/blockchain.rs:207`
-* `crates/op-blockchain/src/streaming_blockchain.rs:326`
+* `crates/op-snowball/src/btrfs_numa_integration.rs:133`
+* `crates/op-snowball/src/snowball.rs:207`
+* `crates/op-snowball/src/streaming_snowball.rs:326`
 
 ### Vulnerability Analysis:
 The code parses deserialized JSON files using `simd_json::from_str` wrapped in `unsafe`:
@@ -151,11 +151,11 @@ Convert the parsed input into a padded byte vector using `simd_json::to_vec` or 
 ## [Low] Silent Degradation of Security Invariants via FS Fallbacks
 
 ### File Context:
-* `crates/op-blockchain/src/blockchain.rs:105-116`
-* `crates/op-blockchain/src/blockchain.rs:165-174`
+* `crates/op-snowball/src/snowball.rs:105-116`
+* `crates/op-snowball/src/snowball.rs:165-174`
 
 ### Quality Analysis:
-When BTRFS commands are unavailable (e.g. on non-BTRFS partitions), the streaming blockchain falls back to standard directory structures and recursive copies:
+When BTRFS commands are unavailable (e.g. on non-BTRFS partitions), the streaming snowball falls back to standard directory structures and recursive copies:
 ```rust
 if stderr.contains("command not found") || stderr.contains("not a btrfs filesystem") {
     warn!(

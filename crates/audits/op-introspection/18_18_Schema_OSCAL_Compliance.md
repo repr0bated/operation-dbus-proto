@@ -15,7 +15,7 @@
 | Control Area | Implemented at file:line | OSCAL Artifact | Gap |
 | :--- | :--- | :--- | :--- |
 | **Vulnerability Monitoring & Diagnostics** (NIST SP 800-53 RA-5 / SI-2) | `crates/op-introspection/src/cpu_features.rs:109` | None | CPU vulnerability checking (Spectre, Meltdown) and BIOS-level security configurations are hardcoded and not linked to machine-readable OSCAL component definition validation. |
-| **System Backup & Recovery** (NIST SP 800-53 CP-9 / CP-10) | `crates/op-introspection/src/projection.rs:114` | None | Programmatic triggering of BTRFS state persistence and system recovery state changes via the blockchain layer lacks corresponding OSCAL mapping. |
+| **System Backup & Recovery** (NIST SP 800-53 CP-9 / CP-10) | `crates/op-introspection/src/projection.rs:114` | None | Programmatic triggering of BTRFS state persistence and system recovery state changes via the snowball layer lacks corresponding OSCAL mapping. |
 | **Least Privilege & Cache Access Control** (NIST SP 800-53 AC-3 / AC-6) | `crates/op-introspection/src/hierarchical.rs:200` | None | Discovered system services, method structures, and parameters are cached directly to disk with loose permissions and without security boundary documentation. |
 
 ---

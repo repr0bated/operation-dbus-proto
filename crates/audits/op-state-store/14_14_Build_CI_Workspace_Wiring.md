@@ -38,7 +38,7 @@ The codebase bypasses versioned, declarative data contracts in favor of ad-hoc R
 
 ## 3. Vulnerability and Quality Findings
 
-### Finding 1: CRITICAL - Weak Cryptographic Hash (MD5) for "Blockchain-style" Compliance Audit Chain
+### Finding 1: CRITICAL - Weak Cryptographic Hash (MD5) for "Snowball-style" Compliance Audit Chain
 *   **File / Line**: 
     *   `crates/op-state-store/src/event_chain.rs:172`
     *   `crates/op-state-store/src/event_chain.rs:608-620`

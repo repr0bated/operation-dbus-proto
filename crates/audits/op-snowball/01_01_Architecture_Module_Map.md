@@ -1,17 +1,17 @@
-# Production Security & Quality Audit: op-blockchain
+# Production Security & Quality Audit: op-snowball
 
 ## Architecture & Module Map
 
 ### Overview
-`op-blockchain` is a control-plane storage and replication utility designed to maintain a dual-subvolume immutable audit trail (using BTRFS subvolumes: `timing`, `vectors`, and `state`) combined with NUMA node optimization and asynchronous replication via BTRFS send/receive. It targets high-throughput change tracking for system configurations and plugin states.
+`op-snowball` is a control-plane storage and replication utility designed to maintain a dual-subvolume immutable audit trail (using BTRFS subvolumes: `timing`, `vectors`, and `state`) combined with NUMA node optimization and asynchronous replication via BTRFS send/receive. It targets high-throughput change tracking for system configurations and plugin states.
 
 ### Module Tree
 ```
-crates/op-blockchain/src/
+crates/op-snowball/src/
  ├── lib.rs (Crate Entry Point)
- ├── blockchain.rs (Core BTRFS-backed StreamingBlockchain)
- ├── streaming_blockchain.rs (Parallel/Divergent StreamingBlockchain with Vector streaming)
- ├── btrfs_numa_integration.rs (NUMA-aware OptimizedBlockchain cache wrapper)
+ ├── snowball.rs (Core BTRFS-backed StreamingSnowball)
+ ├── streaming_snowball.rs (Parallel/Divergent StreamingSnowball with Vector streaming)
+ ├── btrfs_numa_integration.rs (NUMA-aware OptimizedSnowball cache wrapper)
  ├── footprint.rs (Current timing-authoritative BlockEvent & PluginFootprint types)
  ├── plugin_footprint.rs (Legacy footprint generator with heuristic/ML vectorization)
  ├── retention.rs (Rolling retention policy parser/enforcer)
@@ -19,11 +19,11 @@ crates/op-blockchain/src/
 ```
 
 ### Entry Points
-- **Library Entry Point**: `crates/op-blockchain/src/lib.rs`
+- **Library Entry Point**: `crates/op-snowball/src/lib.rs`
 - **Binary/Executable Targets**: None identified in this crate (managed at the workspace level).
 
 ### Architectural Notes & Risk Profile
-- **Namespace Collision and Divergence**: The crate contains two parallel implementations of `StreamingBlockchain` (in `blockchain.rs` and `streaming_blockchain.rs`). They are divergent; `blockchain.rs` implements BTRFS failure degradation (falling back to standard directories), whereas `streaming_blockchain.rs` forces hard failures on non-BTRFS systems. Because `btrfs_numa_integration.rs` binds directly to `streaming_blockchain::StreamingBlockchain`, NUMA-aware storage paths will crash unconditionally on non-BTRFS nodes.
+- **Namespace Collision and Divergence**: The crate contains two parallel implementations of `StreamingSnowball` (in `snowball.rs` and `streaming_snowball.rs`). They are divergent; `snowball.rs` implements BTRFS failure degradation (falling back to standard directories), whereas `streaming_snowball.rs` forces hard failures on non-BTRFS systems. Because `btrfs_numa_integration.rs` binds directly to `streaming_snowball::StreamingSnowball`, NUMA-aware storage paths will crash unconditionally on non-BTRFS nodes.
 - **Privilege Escalation Risk**: This crate spawns processes executing native host commands (`btrfs subvolume ...`, `ssh ...`). Since BTRFS subvolume manipulation usually requires `CAP_SYS_ADMIN` or root privileges, the control plane is assumed to run with high privileges. Any command execution vulnerability here presents an immediate root privilege compromise.
 
 ---
@@ -31,14 +31,14 @@ crates/op-blockchain/src/
 ## Security & Quality Findings
 
 ### [CRITICAL] Shell Command Injection via Unsanitized Remote Replicated Inputs
-- **File**: `crates/op-blockchain/src/blockchain.rs` (Lines 269–275)
-- **File**: `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 480–488, 505–520)
+- **File**: `crates/op-snowball/src/snowball.rs` (Lines 269–275)
+- **File**: `crates/op-snowball/src/streaming_snowball.rs` (Lines 480–488, 505–520)
 
 #### Description
 The replication and vector streaming functions construct shell commands via string interpolation and execute them under system shells (`sh -c` and `bash -c`). The arguments—including `remote_path`, `remote`, and individual items in `replicas`—are formatted directly into the command payload without sanitization, shell-escaping, or validation:
 
 ```rust
-// crates/op-blockchain/src/blockchain.rs:
+// crates/op-snowball/src/snowball.rs:
 let output = Command::new("sh")
     .arg("-c")
     .arg(format!(
@@ -49,9 +49,9 @@ let output = Command::new("sh")
     ))
 ```
 
-And similarly in `streaming_blockchain.rs`:
+And similarly in `streaming_snowball.rs`:
 ```rust
-// crates/op-blockchain/src/streaming_blockchain.rs:
+// crates/op-snowball/src/streaming_snowball.rs:
 let cmd = format!(
     "btrfs send {} | tee {} > /dev/null",
     vector_snapshot.display(),
@@ -69,21 +69,21 @@ An attacker controlling the `remote` destination, a target `replica` IP/hostname
 ---
 
 ### [CRITICAL] Arbitrary File Write & Path Traversal via Unvalidated Hashes
-- **File**: `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 242, 254)
-- **File**: `crates/op-blockchain/src/btrfs_numa_integration.rs` (Line 160)
+- **File**: `crates/op-snowball/src/streaming_snowball.rs` (Lines 242, 254)
+- **File**: `crates/op-snowball/src/btrfs_numa_integration.rs` (Line 160)
 
 #### Description
 When adding a new plugin footprint, the `event.hash` is bound directly to the user-supplied `footprint.content_hash`. The framework writes JSON audit blocks and binary vector frames to disk by joining the base directories with `event.hash` without performing path traversal checks:
 
 ```rust
-// crates/op-blockchain/src/streaming_blockchain.rs:
+// crates/op-snowball/src/streaming_snowball.rs:
 let timing_file = self.timing_subvol.join(format!("{}.json", event.hash));
 tokio::fs::write(&timing_file, ...).await?;
 ```
 
 Similarly, when fetching cached blocks, the `block_hash` parameter is directly formatted into paths:
 ```rust
-// crates/op-blockchain/src/btrfs_numa_integration.rs:
+// crates/op-snowball/src/btrfs_numa_integration.rs:
 let block_file = cache_dir
     .join("blocks")
     .join("by-hash")
@@ -99,15 +99,15 @@ Before joining paths with any hash string derived from client inputs, validate t
 ---
 
 ### [HIGH] Undefined Behavior via Unsafe `simd_json::from_str` on Unpadded String Buffers
-- **File**: `crates/op-blockchain/src/btrfs_numa_integration.rs` (Line 168)
-- **File**: `crates/op-blockchain/src/blockchain.rs` (Line 217)
-- **File**: `crates/op-blockchain/src/streaming_blockchain.rs` (Line 341)
+- **File**: `crates/op-snowball/src/btrfs_numa_integration.rs` (Line 168)
+- **File**: `crates/op-snowball/src/snowball.rs` (Line 217)
+- **File**: `crates/op-snowball/src/streaming_snowball.rs` (Line 341)
 
 #### Description
 The application reads serialized JSON strings from disk and passes them to `simd_json::from_str` within `unsafe` blocks:
 
 ```rust
-// crates/op-blockchain/src/btrfs_numa_integration.rs:
+// crates/op-snowball/src/btrfs_numa_integration.rs:
 let mut data = tokio::fs::read_to_string(&block_file).await?;
 let block_data: simd_json::OwnedValue = unsafe { simd_json::from_str(&mut data)? };
 ```
@@ -126,13 +126,13 @@ let block_data: simd_json::OwnedValue = simd_json::from_slice(&mut data)?;
 ---
 
 ### [MEDIUM] Concurrency Race Conditions on Hardcoded Temp File Names
-- **File**: `crates/op-blockchain/src/streaming_blockchain.rs` (Lines 311, 328)
+- **File**: `crates/op-snowball/src/streaming_snowball.rs` (Lines 311, 328)
 
 #### Description
 To achieve atomic writes, the methods `update_current_state` and `update_plugin_state` write state content to a hardcoded temporary file name prior to renaming it to the final target file:
 
 ```rust
-// crates/op-blockchain/src/streaming_blockchain.rs:
+// crates/op-snowball/src/streaming_snowball.rs:
 let temp_file = self.state_subvol.join(".current.json.tmp");
 tokio::fs::write(&temp_file, simd_json::to_string_pretty(state)?).await?;
 tokio::fs::rename(&temp_file, &current_state_file).await?;
@@ -153,9 +153,9 @@ let temp_file = self.state_subvol.join(format!(".current.json.{}.tmp", uuid::Uui
 ---
 
 ### [MEDIUM] Schema-As-Code Violations (Ad-hoc Struct Contracts)
-- **File**: `crates/op-blockchain/src/footprint.rs` (Lines 10, 43)
-- **File**: `crates/op-blockchain/src/plugin_footprint.rs` (Line 10)
-- **File**: `crates/op-blockchain/src/retention.rs` (Line 10)
+- **File**: `crates/op-snowball/src/footprint.rs` (Lines 10, 43)
+- **File**: `crates/op-snowball/src/plugin_footprint.rs` (Line 10)
+- **File**: `crates/op-snowball/src/retention.rs` (Line 10)
 
 #### Description
 This system’s architecture requires strict schema-as-code discipline, utilizing versioned Protocol Buffers and OSCAL profiles for security and contract stability. However, the `BlockEvent` and `PluginFootprint` structures bypass this pattern, modeling system change tracking payloads as ad-hoc Rust structs with generic JSON containers (`simd_json::OwnedValue`):
@@ -180,7 +180,7 @@ Re-declare all block events, transaction audit elements, and footprints as versi
 ---
 
 ### [LOW] Stack Overflow Vulnerability in `copy_dir_recursive` via Unchecked Symlinks
-- **File**: `crates/op-blockchain/src/blockchain.rs` (Lines 488–505)
+- **File**: `crates/op-snowball/src/snowball.rs` (Lines 488–505)
 
 #### Description
 The auxiliary utility `copy_dir_recursive` copies directory content by recursively calling itself whenever a directory file type is encountered. It fails to check if the directory entry is a symbolic link before recursing:

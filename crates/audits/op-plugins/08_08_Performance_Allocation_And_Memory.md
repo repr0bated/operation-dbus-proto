@@ -207,7 +207,7 @@ Execute the update and install operations as two distinct, sequential `Command::
     *   `crates/op-plugins/src/state_plugins/privacy_router.rs:728`
 
 #### Analysis
-The codebase uses `md5::compute(...)` to generate state hashes for the blockchain audit trail (`current_hash` and `desired_hash`). MD5 is highly vulnerable to collision attacks. While state hashes are primarily used for drift detection, utilizing an insecure hashing algorithm undermines the integrity of the blockchain ledger.
+The codebase uses `md5::compute(...)` to generate state hashes for the snowball audit trail (`current_hash` and `desired_hash`). MD5 is highly vulnerable to collision attacks. While state hashes are primarily used for drift detection, utilizing an insecure hashing algorithm undermines the integrity of the snowball ledger.
 
 #### Remediation
-Use `Sha256` (from the already imported `sha2` crate) to generate hashes for blockchain footprints consistently across all plugins.
+Use `Sha256` (from the already imported `sha2` crate) to generate hashes for snowball footprints consistently across all plugins.

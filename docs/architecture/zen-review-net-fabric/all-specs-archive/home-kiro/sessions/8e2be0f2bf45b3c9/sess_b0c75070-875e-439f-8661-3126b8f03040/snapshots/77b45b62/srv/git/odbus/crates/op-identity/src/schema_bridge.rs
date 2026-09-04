@@ -257,7 +257,7 @@ const TMPFS_MAGIC: libc::c_long = 0x01021994;
 ///
 /// The Shuttle must never trigger unintended Btrfs mutation loops.
 /// NVMe I/O is reserved strictly for the vectorized footprint transport
-/// (blockchain); all sled and Xray config writes must live in tmpfs.
+/// (snowball); all sled and Xray config writes must live in tmpfs.
 fn assert_tmpfs_or_abort(path: &str) -> std::io::Result<()> {
     let parent = std::path::Path::new(path)
         .parent()

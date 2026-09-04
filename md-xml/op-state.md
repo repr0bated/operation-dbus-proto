@@ -437,9 +437,9 @@ mod tests {
 <file path="src/dbus_plugin_base.rs">
 #![allow(async_fn_in_trait)]
 //! Base trait for D-Bus state plugins
-//! Provides common D-Bus operations, hash footprints, and blockchain integration
+//! Provides common D-Bus operations, hash footprints, and snowball integration
 
-// Blockchain module not yet added - stub the type for now
+// Snowball module not yet added - stub the type for now
 pub struct PluginFootprint;
 
 impl PluginFootprint {
@@ -466,8 +466,8 @@ pub trait DbusStatePluginBase: StatePlugin {
     /// Base object path (e.g., "/org/freedesktop/systemd1")
     fn base_path(&self) -> &str;
 
-    /// Optional blockchain footprint sender
-    fn blockchain_sender(&self) -> Option<&UnboundedSender<PluginFootprint>> {
+    /// Optional snowball footprint sender
+    fn snowball_sender(&self) -> Option<&UnboundedSender<PluginFootprint>> {
         None
     }
 
@@ -607,18 +607,18 @@ pub trait DbusStatePluginBase: StatePlugin {
         PluginFootprint::new(self.name().to_string(), action.to_string(), diff_data)
     }
 
-    /// Record state change to blockchain
+    /// Record state change to snowball
     async fn record_footprint(&self, action: &str, data: Value) -> Result<()> {
-        if let Some(sender) = self.blockchain_sender() {
+        if let Some(sender) = self.snowball_sender() {
             let footprint = PluginFootprint::new(self.name().to_string(), action.to_string(), data);
 
             sender
                 .send(footprint)
-                .map_err(|e| anyhow::anyhow!("Failed to send footprint to blockchain: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to send footprint to snowball: {}", e))?;
 
             log::debug!("Recorded footprint for {} action: {}", self.name(), action);
         } else {
-            log::trace!("No blockchain sender configured, skipping footprint");
+            log::trace!("No snowball sender configured, skipping footprint");
         }
 
         Ok(())
@@ -2402,7 +2402,7 @@ description = "State management system with plugin infrastructure, crypto, and s
 [dependencies]
 parking_lot = { workspace = true }
 op-core = { path = "../op-core" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-state-store = { path = "../op-state-store" }
 op-network = { path = "../op-network" }
@@ -2458,7 +2458,7 @@ mcp = []
 ## Current Implementation Overview
 
 - State management system with plugin infrastructure, crypto, and schema validation
-- Internal crate integrations: op-core, op-blockchain, op-jsonrpc, op-state-store, op-network.
+- Internal crate integrations: op-core, op-snowball, op-jsonrpc, op-state-store, op-network.
 
 ## Module / File Comparison
 
@@ -2496,7 +2496,7 @@ mcp = []
 
 ### Internal Workspace Dependencies
 - `op-core` - documented in SPEC
-- `op-blockchain` - documented in SPEC
+- `op-snowball` - documented in SPEC
 - `op-jsonrpc` - documented in SPEC
 - `op-state-store` - documented in SPEC
 - `op-network` - not listed in SPEC dependency block
@@ -2572,7 +2572,7 @@ op-state/src/dbus_server.rs
 ### Key Dependencies
 ```toml
 op-core = { path = "../op-core" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-jsonrpc = { path = "../op-jsonrpc" }
 op-state-store = { path = "../op-state-store" }
 tokio = { workspace = true }
@@ -2634,7 +2634,7 @@ State management system with plugin infrastructure, crypto, and schema validatio
 ## Related Crates
 Internal dependencies:
 - op-core
-- op-blockchain
+- op-snowball
 - op-jsonrpc
 - op-state-store
 

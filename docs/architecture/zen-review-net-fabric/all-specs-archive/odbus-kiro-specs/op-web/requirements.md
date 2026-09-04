@@ -20,7 +20,7 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 | Crate | UI Priority | UI Elements Needed |
 |-------|-------------|-------------------|
 | op-agents | HIGH | Agent catalog, agent status, agent execution |
-| op-blockchain | HIGH | Audit trail viewer, event chain, blockchain explorer |
+| op-snowball | HIGH | Audit trail viewer, event chain, snowball explorer |
 | op-cache | MEDIUM | Cache stats, NUMA topology, workstack promotion |
 | op-chat | HIGH | Chat interface, conversation history, tool execution |
 | op-core | LOW | Core types display (internal) |
@@ -80,23 +80,23 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 - [ ] Dynamic form generation based on operation schema
 - [ ] Execute with confirmation for elevated operations
 - [ ] Display execution results with syntax highlighting
-- [ ] Blockchain logging for all executions
+- [ ] Snowball logging for all executions
 
 ---
 
-## 2. op-blockchain (HIGH PRIORITY)
+## 2. op-snowball (HIGH PRIORITY)
 
-**Purpose**: Streaming blockchain for audit trails and compliance
+**Purpose**: Streaming snowball for audit trails and compliance
 
 ### User Stories
 
-#### 2.1 Blockchain Explorer
+#### 2.1 Snowball Explorer
 **As an** admin
-**I want to** browse the blockchain audit trail
+**I want to** browse the snowball audit trail
 **So that** I can verify system integrity and compliance
 
 **Acceptance Criteria**:
-- [ ] Paginated list of blockchain events
+- [ ] Paginated list of snowball events
 - [ ] Filter by event type, actor, target, time range
 - [ ] Event detail view with full payload
 - [ ] Merkle proof verification display
@@ -182,7 +182,7 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 **Acceptance Criteria**:
 - [ ] Real-time tool execution feed
 - [ ] Show tool name, parameters, result, duration
-- [ ] Link to blockchain audit entry
+- [ ] Link to snowball audit entry
 - [ ] Filter by tool category or status
 
 ---
@@ -225,7 +225,7 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 - [ ] Type-safe parameter input
 - [ ] Execute with RBAC gating
 - [ ] Display return values with type info
-- [ ] Blockchain logging for mutations
+- [ ] Snowball logging for mutations
 
 ---
 
@@ -517,7 +517,7 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 - [ ] RBACGate component for UI elements
 - [ ] Role-based menu visibility
 - [ ] Confirmation modal for elevated actions
-- [ ] Blockchain comment input for audited actions
+- [ ] Snowball comment input for audited actions
 
 ### Quota & Rate Limiting
 
@@ -576,7 +576,7 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 ### Security
 - All mutations require RBAC gating
 - Sensitive actions require confirmation modal
-- Blockchain logging for audited operations
+- Snowball logging for audited operations
 - Payload masking with unmask confirmation
 
 ---
@@ -627,7 +627,7 @@ This document analyzes each crate in the op-dbus workspace to identify UI requir
 - `GET /api/v1/logs` - Log search
 - `GET /api/v1/mcps` - MCP list
 - `GET /api/v1/quotas` - Quota status
-- `GET /api/v1/blockchain` - Audit trail
+- `GET /api/v1/snowball` - Audit trail
 - `POST /api/v1/chat` - Chat message
 - `POST /api/v1/jobs` - Create job
 

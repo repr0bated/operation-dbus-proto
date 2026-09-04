@@ -1,8 +1,8 @@
 # Requirements: Control-Plane Chatbot Reasoning Episode Vectorization
 
-**Status:** Requirements / pre-design  
-**Scope:** Production  
-**Related:** `op-cognitive-mcp`, `op-blockchain`, `op-plugins`, Qdrant, Voyage AI  
+**Status:** Requirements / pre-design
+**Scope:** Production
+**Related:** `op-cognitive-mcp`, `op-snowball`, `op-plugins`, Qdrant, Voyage AI
 **Open decision:** Voyage model selection (POC to validate voyage-4-lite vs voyage-4)
 
 ---
@@ -84,7 +84,7 @@ A new plugin `ctl-plane-chatbot` must be registered in the plugin schema registr
 
 **Order of operations (must be strictly preserved):**
 
-1. Episode record written to persistent store (blockchain / event log)
+1. Episode record written to persistent store (snowball / event log)
 2. Embedding enqueued immediately (non-blocking — must not delay reasoning exit)
 3. Voyage API called asynchronously
 4. Vector upserted to Qdrant on response

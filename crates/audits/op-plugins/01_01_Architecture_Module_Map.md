@@ -134,7 +134,7 @@ op-plugins/ (crates/op-plugins/src/)
 *   **File & Line Citation**: `crates/op-plugins/src/state.rs:67`, `crates/op-plugins/src/state_plugins/config.rs:160`, `crates/op-plugins/src/state_plugins/dnsresolver.rs:348`, `crates/op-plugins/src/state_plugins/privacy_router.rs:697`, `crates/op-plugins/src/state_plugins/systemd.rs:431`
 *   **Severity**: High
 *   **Description**:
-    The system purports to establish "automatic hash footprints for blockchain audit trail" to ensure cryptographic non-repudiation of past state configurations. However, the majority of plugins compute their state and desired diff footprints using **MD5**:
+    The system purports to establish "automatic hash footprints for snowball audit trail" to ensure cryptographic non-repudiation of past state configurations. However, the majority of plugins compute their state and desired diff footprints using **MD5**:
     ```rust
     metadata: DiffMetadata {
         timestamp: chrono::Utc::now().timestamp(),

@@ -23,7 +23,7 @@ The root package corresponding to the `src` directory is named **`op-dbus`** (`C
         *   `op-state-store`
         *   `op-plugins`
         *   `op-workflows`
-        *   `op-blockchain`
+        *   `op-snowball`
         *   `op-inspector`
         *   `op-web`
         *   `op-grpc-bridge`

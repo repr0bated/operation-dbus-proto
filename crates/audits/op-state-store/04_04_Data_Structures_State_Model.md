@@ -74,10 +74,10 @@ This crate exhibits several violations of the schema-as-code discipline, where d
   pub struct CanonicalDbExport {
       pub objects: Vec<StoredObject>,
       pub executions: Vec<simd_json::OwnedValue>,
-      pub blockchain: Vec<simd_json::OwnedValue>,
+      pub snowball: Vec<simd_json::OwnedValue>,
   }
   ```
-  The fields `executions` and `blockchain` are typed as raw, unstructured arrays of `simd_json::OwnedValue`. This bypasses schema compilation boundaries and allows arbitrary, unvalidated payload shapes into disaster recovery imports/exports.
+  The fields `executions` and `snowball` are typed as raw, unstructured arrays of `simd_json::OwnedValue`. This bypasses schema compilation boundaries and allows arbitrary, unvalidated payload shapes into disaster recovery imports/exports.
 * **`src/execution_job.rs:25` (`ExecutionJob` / `ExecutionResult`)**:
   ```rust
   pub struct ExecutionJob {
@@ -99,7 +99,7 @@ This crate exhibits several violations of the schema-as-code discipline, where d
 * **Vulnerability Class**: CWE-328 (Use of Weak Cryptographic Hash) / CWE-353 (Missing Cryptographic Signature)
 
 #### Description
-The Event Chain module implements a "blockchain-style compliance and reproducibility layer" to guarantee a "tamper-evident audit trail" through hash-linked events and Merkle tree batching. However, both the block-hashing mechanism (`compute_hash` and `compute_hash_str`) and the Merkle tree parent hashing (`compute_hash_pair`) utilize MD5:
+The Event Chain module implements a "snowball-style compliance and reproducibility layer" to guarantee a "tamper-evident audit trail" through hash-linked events and Merkle tree batching. However, both the block-hashing mechanism (`compute_hash` and `compute_hash_str`) and the Merkle tree parent hashing (`compute_hash_pair`) utilize MD5:
 
 ```rust
 fn compute_hash(value: &Value) -> String {

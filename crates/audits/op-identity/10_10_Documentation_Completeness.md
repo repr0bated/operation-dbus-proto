@@ -150,7 +150,7 @@ This codebase operates under a strict schema-as-code discipline using Protocol B
   let payload = format!("{}:{}", wg_pubkey, current_mutation);
   let genesis_hash = format!("{:x}", md5::compute(payload.as_bytes()));
   ```
-  MD5 is completely broken and vulnerable to collision attacks. If this genesis hash is utilized as a secure identifier or cryptographic commitment in the downstream event blockchain, an attacker can create colliding payloads to manipulate the accountability log.
+  MD5 is completely broken and vulnerable to collision attacks. If this genesis hash is utilized as a secure identifier or cryptographic commitment in the downstream event snowball, an attacker can create colliding payloads to manipulate the accountability log.
 * **Remediation:** 
   Replace MD5 with SHA-256 for all hashing operations across the notary arbitrage system.
 

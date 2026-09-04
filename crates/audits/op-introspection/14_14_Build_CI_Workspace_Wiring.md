@@ -4,7 +4,7 @@
 *   **Rust Version**: Not specified in either the workspace `Cargo.toml` or the crate-local `Cargo.toml`.
 *   **Bins/Examples**: None present in `op-introspection`.
 *   **Codegen Risks (`build.rs`)**: There is no `build.rs` present in `crates/op-introspection`. No arbitrary shell executions or code generation risks exist at the crate level.
-*   **Workspace Inheritance**: The crate inherits standard metadata (`version`, `edition`, `authors`, `license`) from the workspace. It overrides/specifies its local path dependency `op-blockchain = { path = "../op-blockchain" }` while inheriting external dependencies like `tokio`, `serde`, `simd-json`, and `zbus` from the workspace.
+*   **Workspace Inheritance**: The crate inherits standard metadata (`version`, `edition`, `authors`, `license`) from the workspace. It overrides/specifies its local path dependency `op-snowball = { path = "../op-snowball" }` while inheriting external dependencies like `tokio`, `serde`, `simd-json`, and `zbus` from the workspace.
 
 ---
 

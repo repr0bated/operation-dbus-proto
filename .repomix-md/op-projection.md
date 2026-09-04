@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
     }
 
     // Register all builtin schemas from op-state-store so the shm catalog
-    // is the single source of truth for UI, blockchain, everything.
+    // is the single source of truth for UI, snowball, everything.
     // These include web_ui, mcp, wireguard, incus, openflow, etc.
     for runtime_schema in op_state_store::builtin_plugin_schemas() {
         let schema = convert_schema(&runtime_schema);
@@ -3417,7 +3417,7 @@ use std::io::Write;
 use tracing::{debug, error, info, warn};
 
 /// Shared-memory path for the canonical PluginSchema catalog.
-/// This is the single source of truth for UI, blockchain, and all components.
+/// This is the single source of truth for UI, snowball, and all components.
 const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
 
 /// Schema version identifier
@@ -3515,7 +3515,7 @@ impl SchemaEngine {
     }
 
     /// Write the entire schema catalog to shared memory as JSON.
-    /// This is the single source of truth: UI, blockchain, gRPC reflection,
+    /// This is the single source of truth: UI, snowball, gRPC reflection,
     /// and all downstream consumers read from this file.
     pub fn write_schemas_to_shm(&self) -> Result<String> {
         let catalog: std::collections::HashMap<String, Vec<&PluginSchema>> = self
@@ -3617,7 +3617,7 @@ impl SchemaRegistry for SchemaEngine {
         );
 
         // Write the updated canonical catalog to shared memory.
-        // This is the single source of truth for UI, blockchain, everything.
+        // This is the single source of truth for UI, snowball, everything.
         if let Err(e) = self.write_schemas_to_shm() {
             warn!(error = %e, "Failed to sync schema catalog to shared memory");
         }
@@ -4356,7 +4356,7 @@ op-state-store = { path = "../op-state-store" }
 op-plugins = { path = "../op-plugins" }
 op-dbus-mirror = { path = "../op-dbus-mirror" }
 op-grpc-bridge = { path = "../op-grpc-bridge" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-identity = { path = "../op-identity" }
 
 # Async runtime

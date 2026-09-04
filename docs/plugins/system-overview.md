@@ -1,6 +1,6 @@
 # Plugin System Overview
 
-This document is the official reference for the plugin creation/registration lifecycle, the schema catalog, and the control plane workflows that consume plugins. It synthesizes the refactor, the blockchain mutation spec, and the chatbot-vector spec into a single authoritative guide.
+This document is the official reference for the plugin creation/registration lifecycle, the schema catalog, and the control plane workflows that consume plugins. It synthesizes the refactor, the snowball mutation spec, and the chatbot-vector spec into a single authoritative guide.
 
 ## 1. Plugin-as-schema Rule
 - Every plugin implements `op_state::plugin::StatePlugin` and provides `fn schema(&self) -> Option<PluginSchema>`.
@@ -14,8 +14,8 @@ This document is the official reference for the plugin creation/registration lif
 4. Consumers access schema copies through `SchemaCatalog::get_copies(plugin_name)` for validation, rendering, footprint projection, vectorization, and compatibility exports.
 
 ## 3. Mutation-footprint Integration
-- The `mutation_footprint` plugin (see `.kiro/specs/blockchain-mutation-footprint`) owns the audit schema fields, persistence logic, blockchain writes, and optional vectors.
-- Mutation producers send events to this plugin, which uses the catalog to resolve hashes/chain linkage, writes to `StreamingBlockchain`, and emits tracing spans.
+- The `mutation_footprint` plugin (see `.kiro/specs/snowball-mutation-footprint`) owns the audit schema fields, persistence logic, snowball writes, and optional vectors.
+- Mutation producers send events to this plugin, which uses the catalog to resolve hashes/chain linkage, writes to `StreamingSnowball`, and emits tracing spans.
 
 ## 4. Control-plane chatbot vectors
 - The `ctl-plane-chatbot` schema (see `.kiro/specs/ctl-plane-chatbot-reasoning-vectorization`) defines reasoning episode fields and privacy/semantic tags.

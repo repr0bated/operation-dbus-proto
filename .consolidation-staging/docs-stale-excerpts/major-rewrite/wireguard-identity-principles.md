@@ -49,6 +49,6 @@
 - **Memory safety**: sensitive material is zeroized when dropped. Key material is not persisted beyond the session record.
 - **Constant-time operations**: cryptographic operations use constant-time primitives where required to avoid timing side-channels.
 - **Input validation**: all derived inputs (pubkey strings, timestamps) are validated for correct length and format before being used in KDFs.
-- **No SQL for session state**: active session state is kept in memory (DashMap/SHM) to avoid Btrfs mutation loops and unintended disk I/O. Durability is the immutable blockchain.
+- **No SQL for session state**: active session state is kept in memory (DashMap/SHM) to avoid Btrfs mutation loops and unintended disk I/O. Durability is the immutable snowball.
 
 <!-- Extracted from WG-SESSION-ID.md on 2026-07-20 -->
