@@ -270,8 +270,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/v1/chat/completions",
             post(handlers::zeroclaw::zeroclaw_chat_handler),
         )
-        // Device pairing (egui / dashboard) — top-level paths match zeroclaw-gui AuthState
-        .route("/pair", post(handlers::pair::pair_handler))
         // Human-facing privacy verification flow (magic-link target)
         .route("/privacy/verify", get(handlers::privacy::verify_redirect))
         .route(
