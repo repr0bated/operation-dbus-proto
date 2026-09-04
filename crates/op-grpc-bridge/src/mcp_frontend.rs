@@ -33,6 +33,18 @@ use crate::oracle_assertion::AssertionValidator;
 
 pub const MCP_PATH: &str = "/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+/// Official MCP spec dates this frontend can speak, plus the local canonical
+/// revision. Codex's rmcp client sends `2025-06-18` and will disconnect if
+/// initialize errors or returns a date it does not know (`2026-07-28`).
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    MCP_PROTOCOL_VERSION,
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+];
+/// Latest official MCP spec date this frontend implements. Used when a client
+/// requests an unknown revision so stock SDKs can continue.
+const LATEST_OFFICIAL_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const MCP_VERSION_HEADER: &str = "mcp-protocol-version";
 pub const MCP_METHOD_HEADER: &str = "mcp-method";
 pub const MCP_NAME_HEADER: &str = "mcp-name";
@@ -819,12 +831,7 @@ async fn dispatch_rpc(
                 .get("protocolVersion")
                 .and_then(Value::as_str)
                 .ok_or_else(|| RpcDispatchError::invalid_params("missing protocolVersion"))?;
-            if requested != MCP_PROTOCOL_VERSION {
-                return Err(RpcDispatchError::invalid_params(format!(
-                    "unsupported protocolVersion: {requested}"
-                )));
-            }
-            Ok(initialize_result())
+            Ok(initialize_result(negotiate_protocol_version(requested)))
         }
         "notifications/initialized" => Ok(json!({})),
         "ping" => Ok(json!({})),
@@ -869,9 +876,21 @@ async fn dispatch_rpc(
     }
 }
 
-fn initialize_result() -> Value {
+fn negotiate_protocol_version(requested: &str) -> &'static str {
+    SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .copied()
+        .find(|version| *version == requested)
+        .unwrap_or(LATEST_OFFICIAL_PROTOCOL_VERSION)
+}
+
+fn protocol_version_supported(version: &str) -> bool {
+    SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+}
+
+fn initialize_result(protocol_version: &str) -> Value {
     json!({
-        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "protocolVersion": protocol_version,
         "capabilities": {
             "tools": {"listChanged": false},
             "resources": {"subscribe": false, "listChanged": false}
@@ -886,24 +905,26 @@ fn initialize_result() -> Value {
 
 fn discovery_result() -> Value {
     json!({
-        "protocolVersions": [MCP_PROTOCOL_VERSION],
+        "protocolVersions": SUPPORTED_PROTOCOL_VERSIONS,
         "endpoint": MCP_PATH,
         "transport": "streamable-http",
         "sessionMode": "stateless",
         "requiredHeaders": ["MCP-Protocol-Version"],
         "identityHeaderAlternatives": [HTTP_ASSERTION_HEADER, HTTP_SEALED_ID_HEADER],
         "optionalIntegrityHeaders": ["Mcp-Method", "Mcp-Name"],
-        "capabilities": initialize_result()["capabilities"].clone()
+        "capabilities": initialize_result(MCP_PROTOCOL_VERSION)["capabilities"].clone()
     })
 }
 
 fn validate_protocol_headers(headers: &HeaderMap, rpc: &JsonRpcRequest) -> Result<(), String> {
     // Per Streamable HTTP, the initialize request negotiates the protocol and
     // therefore need not carry MCP-Protocol-Version yet. All later requests
-    // must carry the negotiated value.
+    // must carry a negotiated value this frontend can speak.
     match one_optional_header(headers, MCP_VERSION_HEADER)? {
-        Some(version) if version != MCP_PROTOCOL_VERSION => {
-            return Err(format!("unsupported MCP protocol version: {version}"));
+        Some(version) if !protocol_version_supported(&version) => {
+            if rpc.method != "initialize" {
+                return Err(format!("unsupported MCP protocol version: {version}"));
+            }
         }
         None if rpc.method != "initialize" => {
             return Err(format!("missing {MCP_VERSION_HEADER} header"));
@@ -1626,6 +1647,95 @@ mod tests {
             response_json(response).await["result"]["protocolVersion"],
             MCP_PROTOCOL_VERSION
         );
+    }
+
+    #[tokio::test]
+    async fn initialize_echoes_codex_official_protocol_version() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("x-test-auth", "ok")
+                    .body(Body::from(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {"protocolVersion": "2025-06-18"}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert!(
+            body.get("error").is_none(),
+            "Codex handshake must not fail: {body}"
+        );
+        assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
+    }
+
+    #[tokio::test]
+    async fn subsequent_request_accepts_codex_protocol_header() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("x-test-auth", "ok")
+                    .header(MCP_VERSION_HEADER, "2025-06-18")
+                    .header(MCP_METHOD_HEADER, "tools/list")
+                    .body(Body::from(
+                        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert!(
+            body.get("error").is_none(),
+            "post-initialize Codex requests must be accepted: {body}"
+        );
+        assert_eq!(body["result"]["tools"][0]["name"], "echo");
+    }
+
+    #[tokio::test]
+    async fn unknown_protocol_version_down_negotiates_instead_of_erroring() {
+        let response = test_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("x-test-auth", "ok")
+                    .body(Body::from(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {"protocolVersion": "2025-11-25"}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert!(
+            body.get("error").is_none(),
+            "MCP lifecycle requires down-negotiation, not -32602: {body}"
+        );
+        assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
     }
 
     fn principal_record(
