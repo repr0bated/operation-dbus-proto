@@ -512,14 +512,18 @@ mod tests {
         let identity = SessionIdentity {
             session_id: "session-a".into(),
             wireguard_pubkey: "pubkey".into(),
+            principal_kind: Some(op_identity::PRINCIPAL_KIND_HUMAN.into()),
             mutation_index: 1,
             genesis: Some("ab".repeat(32)),
             trace_id: "cd".repeat(16),
+            sealed_id: None,
             schema_version: 3,
             active: true,
             expires_at: None,
             arrival_timestamp: 1,
             chain_head_at_arrival: "ef".repeat(32),
+            catalog_hash_at_arrival: "12".repeat(32),
+            head_timestamp_at_arrival: 0,
         };
         let (genesis, trace_id) =
             OpenClawProvider::ghostbridge_identity_headers(&identity).expect("session anchored");

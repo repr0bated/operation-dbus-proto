@@ -33,7 +33,7 @@ pub use session::{Session, SessionManager};
 pub use session_projection::{
     configured_identity_session, read_identity_credential_sessions, read_identity_sessions,
     resolve_identity_credential_session, resolve_identity_session, SessionIdentity,
-    SessionProjectionError, SESSION_SELECTOR_ENV,
+    SessionProjectionError, PRINCIPAL_KIND_HUMAN, PRINCIPAL_KIND_SERVICE, SESSION_SELECTOR_ENV,
 };
 
 #[allow(deprecated)]

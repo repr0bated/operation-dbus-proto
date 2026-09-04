@@ -10,12 +10,29 @@ use thiserror::Error;
 /// Environment variable used by host-side clients to select their identity.
 pub const SESSION_SELECTOR_ENV: &str = "OP_IDENTITY_SESSION_ID";
 
+/// A sled belonging to a human end user. Only these may be selected implicitly.
+pub const PRINCIPAL_KIND_HUMAN: &str = "human";
+/// A sled belonging to a daemon/service principal, e.g. the singleton
+/// control-plane chatbot. Never eligible for implicit selection.
+pub const PRINCIPAL_KIND_SERVICE: &str = "service";
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SessionIdentity {
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
     pub wireguard_pubkey: String,
+    /// Actor class this sled belongs to: [`PRINCIPAL_KIND_HUMAN`] or
+    /// [`PRINCIPAL_KIND_SERVICE`].
+    ///
+    /// This is deliberately **not** the SID1 envelope's `principal_kind`, which
+    /// is always `wireguard-principal` and describes *how* a principal is
+    /// identified. This field describes *what class of actor* holds the sled and
+    /// exists solely to gate the implicit single-current-session fallback. Do
+    /// not seal this value into a SID1 envelope — `mcp_frontend` rejects any
+    /// envelope whose `principal_kind` is not `wireguard-principal`.
+    #[serde(default)]
+    pub principal_kind: Option<String>,
     #[serde(default)]
     pub mutation_index: u64,
     #[serde(default, alias = "hashed_footprint")]
@@ -51,6 +68,26 @@ impl SessionIdentity {
             && self.arrival_timestamp != 0
             && !self.chain_head_at_arrival.is_empty()
             && !self.trace_id.is_empty()
+    }
+
+    /// True when this sled is explicitly labelled a service principal.
+    ///
+    /// Callers that hand out identity to a human (pairing, dashboard login)
+    /// must refuse these regardless of how the sled was selected — naming a
+    /// service session explicitly is not authorisation to borrow it.
+    pub fn is_service_principal(&self) -> bool {
+        self.principal_kind.as_deref() == Some(PRINCIPAL_KIND_SERVICE)
+    }
+
+    /// Whether this sled may be resolved with no selector at all.
+    ///
+    /// Fail-closed: only a sled positively labelled [`PRINCIPAL_KIND_HUMAN`]
+    /// qualifies. An unlabelled sled is *not* eligible, so a host whose only
+    /// anchored sled is the control-plane chatbot cannot silently become the
+    /// ambient identity for op-web, pairing, or any other caller that omitted a
+    /// selector. Naming a session explicitly still resolves it.
+    pub fn may_resolve_implicitly(&self) -> bool {
+        self.principal_kind.as_deref() == Some(PRINCIPAL_KIND_HUMAN)
     }
 
     pub fn genesis(&self) -> Result<&str, SessionProjectionError> {
@@ -167,6 +204,16 @@ pub enum SessionProjectionError {
         "identity is ambiguous across {0} current sessions; set OP_IDENTITY_SESSION_ID explicitly"
     )]
     Ambiguous(usize),
+    #[error(
+        "no human identity session is current; the only current session(s) are service or \
+         unlabelled principals, which are never adopted implicitly. Name one with \
+         OP_IDENTITY_SESSION_ID if this process is meant to run as that principal."
+    )]
+    NoImplicitHumanSession,
+    #[error(
+        "identity session '{0}' is a service principal and must not be issued to a human caller"
+    )]
+    ServicePrincipalRefused(String),
 }
 
 pub fn read_identity_sessions() -> Result<Vec<SessionIdentity>, SessionProjectionError> {
@@ -192,7 +239,12 @@ fn read_identity_sessions_at(path: String) -> Result<Vec<SessionIdentity>, Sessi
 
 /// Resolve a current session by session id, WireGuard key, trace id, or
 /// genesis. An empty selector is accepted only when exactly one current
-/// session exists, which avoids recreating a process-wide "current identity".
+/// session exists *and it is a human principal*, which avoids recreating a
+/// process-wide "current identity" and stops a service sled (the singleton
+/// control-plane chatbot) from being adopted as an ambient identity.
+///
+/// A process that is legitimately meant to run as a service principal must
+/// name its session explicitly via `OP_IDENTITY_SESSION_ID`.
 pub fn resolve_identity_session(
     selector: Option<&str>,
 ) -> Result<SessionIdentity, SessionProjectionError> {
@@ -252,11 +304,25 @@ fn resolve_from_sessions(
         return Ok(record);
     }
 
-    let mut current = sessions.into_iter().filter(SessionIdentity::is_current);
-    let first = current
+    // No selector: adopt an ambient identity only from a sled positively
+    // labelled human. A service sled (or an unlabelled one) is never adopted
+    // implicitly, so the singleton control-plane chatbot cannot become the
+    // fallback identity for callers that named no session.
+    let current: Vec<SessionIdentity> = sessions
+        .into_iter()
+        .filter(SessionIdentity::is_current)
+        .collect();
+    if current.is_empty() {
+        return Err(SessionProjectionError::NotFound("<current>".to_string()));
+    }
+
+    let mut human = current
+        .into_iter()
+        .filter(SessionIdentity::may_resolve_implicitly);
+    let first = human
         .next()
-        .ok_or_else(|| SessionProjectionError::NotFound("<current>".to_string()))?;
-    let extra = current.count();
+        .ok_or(SessionProjectionError::NoImplicitHumanSession)?;
+    let extra = human.count();
     if extra != 0 {
         return Err(SessionProjectionError::Ambiguous(extra + 1));
     }
@@ -278,10 +344,25 @@ pub fn configured_identity_session() -> Result<SessionIdentity, SessionProjectio
 mod tests {
     use super::*;
 
+    fn human(session_id: &str) -> SessionIdentity {
+        SessionIdentity {
+            principal_kind: Some(PRINCIPAL_KIND_HUMAN.to_string()),
+            ..anchored(session_id)
+        }
+    }
+
+    fn service(session_id: &str) -> SessionIdentity {
+        SessionIdentity {
+            principal_kind: Some(PRINCIPAL_KIND_SERVICE.to_string()),
+            ..anchored(session_id)
+        }
+    }
+
     fn anchored(session_id: &str) -> SessionIdentity {
         SessionIdentity {
             session_id: session_id.to_string(),
             wireguard_pubkey: "pubkey".to_string(),
+            principal_kind: None,
             mutation_index: 1,
             genesis: Some("ab".repeat(32)),
             trace_id: "cd".repeat(16),
@@ -326,6 +407,76 @@ mod tests {
         assert!(record.matches("pubkey"));
         assert!(record.matches(&"cd".repeat(16)));
         assert!(!record.matches("some-other-session"));
+    }
+
+    #[test]
+    fn service_principal_is_never_adopted_without_a_selector() {
+        // The live shape of this host: the control-plane chatbot is the only
+        // anchored sled. Nothing may inherit it by omitting a selector.
+        let sessions = vec![service("chatbot-session")];
+        assert!(matches!(
+            resolve_from_sessions(sessions, None),
+            Err(SessionProjectionError::NoImplicitHumanSession)
+        ));
+    }
+
+    #[test]
+    fn unlabelled_sled_is_not_adopted_without_a_selector() {
+        // Fail closed: absent `principal_kind` is not evidence of a human.
+        let sessions = vec![anchored("unlabelled-session")];
+        assert!(matches!(
+            resolve_from_sessions(sessions, None),
+            Err(SessionProjectionError::NoImplicitHumanSession)
+        ));
+    }
+
+    #[test]
+    fn service_principal_still_resolves_when_named_explicitly() {
+        // A daemon that is meant to run as its service principal names it via
+        // OP_IDENTITY_SESSION_ID; that path is unchanged.
+        let sessions = vec![service("chatbot-session")];
+        let resolved = resolve_from_sessions(sessions, Some("chatbot-session"))
+            .expect("explicit selector resolves a service sled");
+        assert_eq!(resolved.session_id, "chatbot-session");
+        assert!(resolved.is_service_principal());
+    }
+
+    #[test]
+    fn lone_human_sled_is_adopted_without_a_selector() {
+        let sessions = vec![human("human-session")];
+        let resolved =
+            resolve_from_sessions(sessions, None).expect("a single human sled is adoptable");
+        assert_eq!(resolved.session_id, "human-session");
+    }
+
+    #[test]
+    fn human_sled_is_adopted_past_a_current_service_sled() {
+        // Mixed host: the chatbot must not make the human ambiguous, and must
+        // not win the fallback either.
+        let sessions = vec![service("chatbot-session"), human("human-session")];
+        let resolved = resolve_from_sessions(sessions, None)
+            .expect("the service sled is filtered out, leaving one human");
+        assert_eq!(resolved.session_id, "human-session");
+    }
+
+    #[test]
+    fn multiple_human_sleds_remain_ambiguous() {
+        let sessions = vec![human("human-a"), human("human-b")];
+        assert!(matches!(
+            resolve_from_sessions(sessions, None),
+            Err(SessionProjectionError::Ambiguous(2))
+        ));
+    }
+
+    #[test]
+    fn no_current_sessions_still_reports_not_found() {
+        // An empty projection must not be reported as "only service principals".
+        let mut record = human("human-session");
+        record.active = false;
+        assert!(matches!(
+            resolve_from_sessions(vec![record], None),
+            Err(SessionProjectionError::NotFound(_))
+        ));
     }
 
     #[test]
