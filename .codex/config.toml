@@ -1,0 +1,42 @@
+[mcp_servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+
+[mcp_servers.filesystem]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "${ODBUS_HOME:-/var/lib/odbus}",
+]
+
+[mcp_servers.memory]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-memory",
+]
+
+[mcp_servers.op-dbus-agents]
+url = ""
+
+[mcp_servers.op-web-compact]
+command = "/usr/local/bin/op-mcp-server"
+args = [
+    "--stdio",
+    "-m",
+    "cognitive",
+]
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = [
+    "-y",
+    "@modelcontextprotocol/server-sequential-thinking",
+]
+
+[mcp_servers.cognitive-mcp]
+url = ""
+
+[mcp_servers.cognitive-mcp.http_headers]
+X-Ghostbridge-Footprint = "mcp-client"
