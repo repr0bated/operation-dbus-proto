@@ -6,7 +6,7 @@ no running daemon, no special privileges required beyond reading a file.
 
 ## What the data is
 
-Every plugin (network, identity, chat, blockchain, …) is published as one
+Every plugin (network, identity, chat, snowball, …) is published as one
 **sealed blob** in shared memory:
 
 ```

@@ -12,7 +12,7 @@
     Checking op-network v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-network)
     Checking op-agents v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-agents)
     Checking op-dbus-model v0.1.0 (/home/jeremy/git/operation-dbus-proto/crates/op-dbus-model)
-    Checking op-blockchain v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-blockchain)
+    Checking op-snowball v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-snowball)
     Checking op-introspection v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-introspection)
     Checking op-state v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-state)
     Checking op-inspector v1.0.0 (/home/jeremy/git/operation-dbus-proto/crates/op-inspector)

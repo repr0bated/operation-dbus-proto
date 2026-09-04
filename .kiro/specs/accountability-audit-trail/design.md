@@ -10,7 +10,7 @@ Five design questions resolved below with decisions, rationale, and rejected alt
 
 **Decision**: Unify. The in-memory `EventChain` remains the live-query source (served by
 gRPC `EventChainService.GetEvents`). Additionally, each `record_method_call` now ALSO
-writes the event durably to `StreamingBlockchain`'s `timing_subvol`. On startup, the
+writes the event durably to `StreamingSnowball`'s `timing_subvol`. On startup, the
 chain is rebuilt by reading back the timing_subvol directory.
 
 **Why both, not one**:
@@ -26,7 +26,7 @@ PluginV1.Call arrives
   → schema_router validates + capability check
     → MutationEngine::dispatch_method_call()
       → event_chain.record_method_call(actor, plugin, method, cap, args)  [in-memory]
-      → streaming_blockchain.add_footprint(event_to_footprint(chain_event)) [on-disk]
+      → streaming_snowball.add_footprint(event_to_footprint(chain_event)) [on-disk]
       → dispatch actual method logic
       → return result with event_id + event_hash
 ```
@@ -54,15 +54,15 @@ Over-engineering. The timing_subvol already exists and is purpose-built.
 
 ### DQ-2: What schema methods expose audit data through PluginV1.Call?
 
-**Decision**: Add `query_events` and `verify_chain` methods to the `blockchain` plugin.
+**Decision**: Add `query_events` and `verify_chain` methods to the `snowball` plugin.
 This makes the audit trail queryable through the D-Bus/MCP plugin surface, not only
 through the gRPC `EventChainService`.
 
-**Why the `blockchain` plugin**: Its doc comment
-(`crates/op-plugins/src/state_plugins/blockchain_plugin.rs:1-16`) explicitly states:
+**Why the `snowball` plugin**: Its doc comment
+(`crates/op-plugins/src/state_plugins/snowball_plugin.rs:1-16`) explicitly states:
 "This is the correct home for the capability... New backend capabilities register here
 as plugins; the served gRPC surface stays the one shared route-builder." The audit trail
-IS the streaming blockchain's timing_subvol — this is literally what the plugin was
+IS the streaming snowball's timing_subvol — this is literally what the plugin was
 designed to expose.
 
 **Why D-Bus methods and not only gRPC**: The repo's architecture mandates "D-Bus is the
@@ -74,7 +74,7 @@ audit trail through the canonical `PluginV1.Call` path. Without D-Bus methods:
 - AI agents in the control-plane chatbot cannot access the audit trail through tools.
 
 **Scope limitation**: Only `query_events` and `verify_chain` are dispatched. The existing
-7 blockchain schema methods (DR snapshots, retention, rollback) remain un-wired — that
+7 snowball schema methods (DR snapshots, retention, rollback) remain un-wired — that
 work belongs to the paused schema-methods sweep. The new dispatch arm checks the method
 name and only handles the two new methods; all others fall through to the catch-all echo.
 
@@ -83,22 +83,22 @@ name and only handles the two new methods; all others fall through to the catch-
 ```
 query_events:
   Effect: Read
-  Capability: blockchain.read
-  Subid: obs.service.blockchain.events.query@v1
+  Capability: snowball.read
+  Subid: obs.service.snowball.events.query@v1
   Input:  QueryEventsInput { plugin_id?, from_event_id?, to_event_id?, limit?, decision? }
   Output: QueryEventsOutput { events: [AuditEventRecord], has_more, total_in_chain }
 
 verify_chain:
   Effect: Read
-  Capability: blockchain.read
-  Subid: obs.service.blockchain.chain.verify@v1
+  Capability: snowball.read
+  Subid: obs.service.snowball.chain.verify@v1
   Input:  VerifyChainInput { from_event_id?, to_event_id? }
   Output: VerifyChainOutput { valid, events_verified, errors: [String] }
 ```
 
 **Rejected alternative — new dedicated `accountability` plugin**:
 Would add a new plugin file, new schema function, new blob. Over-engineering when
-`blockchain_plugin.rs` already exists and is explicitly designated for this.
+`snowball_plugin.rs` already exists and is explicitly designated for this.
 
 **Rejected alternative — no D-Bus methods, only gRPC**:
 Violates the "D-Bus is the only control plane" principle. Leaves MCP clients and
@@ -165,19 +165,19 @@ accountability ledger, not a payload store.
 
 ---
 
-### DQ-5: blockchain dispatch arm scope boundary
+### DQ-5: snowball dispatch arm scope boundary
 
-**Decision**: The new `"blockchain"` dispatch arm in `MutationEngine::dispatch_method_call`
-handles ONLY `query_events` and `verify_chain`. All other blockchain methods (the existing
+**Decision**: The new `"snowball"` dispatch arm in `MutationEngine::dispatch_method_call`
+handles ONLY `query_events` and `verify_chain`. All other snowball methods (the existing
 7: `list_snapshots`, `get_snapshot`, `create_snapshot`, `rollback`, `get_current_state`,
 `set_retention`, `get_stats`) explicitly fall through to the catch-all echo.
 
 **Implementation pattern**:
 ```rust
-"blockchain" => {
+"snowball" => {
     match method {
-        "query_events" => dispatch_blockchain_query_events(&self.event_chain, json_args).await?,
-        "verify_chain" => dispatch_blockchain_verify_chain(&self.event_chain, json_args).await?,
+        "query_events" => dispatch_snowball_query_events(&self.event_chain, json_args).await?,
+        "verify_chain" => dispatch_snowball_verify_chain(&self.event_chain, json_args).await?,
         _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
     }
 }
@@ -187,12 +187,12 @@ The inner `_ =>` reproduces the outer catch-all behavior for the un-wired method
 ensures calling `list_snapshots` today produces the same echo behavior as before — no
 regression, no silent breakage.
 
-**Rationale**: The existing 7 methods require `StreamingBlockchain` DR operations (real
+**Rationale**: The existing 7 methods require `StreamingSnowball` DR operations (real
 snapshot creation, rollback, retention policy changes) which are complex and unrelated
 to the audit-query concern. Bundling them would make this spec un-reviewable and risks
 the demo timeline.
 
-**Rejected alternative — full blockchain dispatch arm**:
+**Rejected alternative — full snowball dispatch arm**:
 Out of scope. The 7 existing methods are complex DR operations that need their own
 verification. They belong to the paused schema-methods sweep.
 
@@ -202,11 +202,11 @@ verification. They belong to the paused schema-methods sweep.
 
 | File | Change type |
 |------|-------------|
-| `crates/op-plugins/src/state_plugins/blockchain_plugin.rs` | **Modify** — add `query_events` + `verify_chain` methods + Input/Output structs |
-| `crates/op-grpc-bridge/src/mutation_engine.rs` | **Modify** — add `"blockchain"` dispatch arm (scoped to 2 methods) |
+| `crates/op-plugins/src/state_plugins/snowball_plugin.rs` | **Modify** — add `query_events` + `verify_chain` methods + Input/Output structs |
+| `crates/op-grpc-bridge/src/mutation_engine.rs` | **Modify** — add `"snowball"` dispatch arm (scoped to 2 methods) |
 | `crates/op-grpc-bridge/src/mutation_engine.rs` | **Modify** — add `add_footprint` durability call |
 | `crates/op-grpc-bridge/src/mutation_engine.rs` | **Modify** — add startup chain rebuild from timing_subvol |
-| `crates/op-grpc-bridge/Cargo.toml` | **Verify** — already depends on `op-blockchain` (if not, add) |
+| `crates/op-grpc-bridge/Cargo.toml` | **Verify** — already depends on `op-snowball` (if not, add) |
 | `crates/op-state-store/src/event_chain.rs` | **Modify** — add `replay_from_footprint` method |
 | `crates/zeroclaw-gui/src/accountability/mod.rs` | **New** — module declaration |
 | `crates/zeroclaw-gui/src/accountability/store.rs` | **New** — AccountabilityStore |
@@ -220,12 +220,12 @@ verification. They belong to the paused schema-methods sweep.
 
 ## Exact Signatures and JSON Shapes
 
-### New schema methods (blockchain_plugin.rs)
+### New schema methods (snowball_plugin.rs)
 
 ```rust
 /// Input for `query_events` — paginated audit trail query.
 ///
-/// OSCAL subid: sch.service.blockchain.query-events-input@v1
+/// OSCAL subid: sch.service.snowball.query-events-input@v1
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct QueryEventsInput {
     /// Filter by plugin_id (empty/None = all plugins).
@@ -266,7 +266,7 @@ pub struct AuditEventRecord {
 
 /// Output for `query_events`.
 ///
-/// OSCAL subid: sch.service.blockchain.query-events-output@v1
+/// OSCAL subid: sch.service.snowball.query-events-output@v1
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct QueryEventsOutput {
     pub events: Vec<AuditEventRecord>,
@@ -276,7 +276,7 @@ pub struct QueryEventsOutput {
 
 /// Input for `verify_chain` — hash chain integrity check.
 ///
-/// OSCAL subid: sch.service.blockchain.verify-chain-input@v1
+/// OSCAL subid: sch.service.snowball.verify-chain-input@v1
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct VerifyChainInput {
     /// Verify from this event_id (0 or None = from genesis).
@@ -289,7 +289,7 @@ pub struct VerifyChainInput {
 
 /// Output for `verify_chain`.
 ///
-/// OSCAL subid: sch.service.blockchain.verify-chain-output@v1
+/// OSCAL subid: sch.service.snowball.verify-chain-output@v1
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct VerifyChainOutput {
     pub valid: bool,
@@ -298,7 +298,7 @@ pub struct VerifyChainOutput {
 }
 ```
 
-Schema registration (inside `blockchain_schema()` function):
+Schema registration (inside `snowball_schema()` function):
 ```rust
 schema.methods.insert(
     "query_events".to_string(),
@@ -306,8 +306,8 @@ schema.methods.insert(
         "query_events",
         SideEffect::Read,
         true,
-        "blockchain.read",
-        "obs.service.blockchain.events.query@v1",
+        "snowball.read",
+        "obs.service.snowball.events.query@v1",
     ),
 );
 schema.methods.insert(
@@ -316,8 +316,8 @@ schema.methods.insert(
         "verify_chain",
         SideEffect::Read,
         true,
-        "blockchain.read",
-        "obs.service.blockchain.chain.verify@v1",
+        "snowball.read",
+        "obs.service.snowball.chain.verify@v1",
     ),
 );
 ```
@@ -325,13 +325,13 @@ schema.methods.insert(
 ### MutationEngine dispatch arm (mutation_engine.rs)
 
 ```rust
-"blockchain" => {
+"snowball" => {
     match method {
         "query_events" => {
-            dispatch_blockchain_query_events(&self.event_chain, &parsed_value).await?
+            dispatch_snowball_query_events(&self.event_chain, &parsed_value).await?
         }
         "verify_chain" => {
-            dispatch_blockchain_verify_chain(&self.event_chain, &parsed_value).await?
+            dispatch_snowball_verify_chain(&self.event_chain, &parsed_value).await?
         }
         // Existing 7 methods remain un-dispatched until schema-methods sweep.
         _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
@@ -341,7 +341,7 @@ schema.methods.insert(
 
 Free functions:
 ```rust
-async fn dispatch_blockchain_query_events(
+async fn dispatch_snowball_query_events(
     event_chain: &Arc<RwLock<EventChain>>,
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -373,7 +373,7 @@ async fn dispatch_blockchain_query_events(
     Ok(serde_json::to_value(QueryEventsOutput { events, has_more, total_in_chain: total })?)
 }
 
-async fn dispatch_blockchain_verify_chain(
+async fn dispatch_snowball_verify_chain(
     event_chain: &Arc<RwLock<EventChain>>,
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -419,8 +419,8 @@ fn chain_event_to_record(event: &ChainEvent) -> AuditEventRecord {
 // After record_method_call at line 525 / 971:
 {
     let footprint = event_to_footprint(chain_event);
-    if let Some(ref blockchain) = self.streaming_blockchain {
-        if let Err(e) = blockchain.add_footprint(footprint).await {
+    if let Some(ref snowball) = self.streaming_snowball {
+        if let Err(e) = snowball.add_footprint(footprint).await {
             tracing::warn!("audit durability write failed: {e}");
         }
     }
@@ -457,12 +457,12 @@ fn event_to_footprint(event: &ChainEvent) -> PluginFootprint {
 | `event_to_footprint` (durability write) | `evt.service.event-chain.persist@v1` |
 | `rebuild_chain_from_disk` (startup) | `src.service.event-chain.rebuild@v1` |
 | `render_accountability` (egui view) | `exp.software.zeroclaw.accountability.view@v1` |
-| `query_events` schema method | `obs.service.blockchain.events.query@v1` |
-| `verify_chain` schema method | `obs.service.blockchain.chain.verify@v1` |
-| `QueryEventsInput` struct | `sch.service.blockchain.query-events-input@v1` |
-| `QueryEventsOutput` struct | `sch.service.blockchain.query-events-output@v1` |
-| `VerifyChainInput` struct | `sch.service.blockchain.verify-chain-input@v1` |
-| `VerifyChainOutput` struct | `sch.service.blockchain.verify-chain-output@v1` |
+| `query_events` schema method | `obs.service.snowball.events.query@v1` |
+| `verify_chain` schema method | `obs.service.snowball.chain.verify@v1` |
+| `QueryEventsInput` struct | `sch.service.snowball.query-events-input@v1` |
+| `QueryEventsOutput` struct | `sch.service.snowball.query-events-output@v1` |
+| `VerifyChainInput` struct | `sch.service.snowball.verify-chain-input@v1` |
+| `VerifyChainOutput` struct | `sch.service.snowball.verify-chain-output@v1` |
 
 ---
 
@@ -484,13 +484,13 @@ PATH 1 — GUI (gRPC, efficient for streaming/pagination):
 
 PATH 2 — MCP/D-Bus (PluginV1.Call, for agents and zcall):
 
-  ./bin/zcall blockchain query_events -a '{"limit":10,"plugin_id":"zeroclaw"}'
+  ./bin/zcall snowball query_events -a '{"limit":10,"plugin_id":"zeroclaw"}'
        │  D-Bus: PluginV1.Call("query_events", '{"limit":10,...}')
-       │  on /org/opdbus/v1/plugins/blockchain
+       │  on /org/opdbus/v1/plugins/snowball
        ▼
   op-grpc-bridge → schema_router validates + capability check
-       │  MutationEngine::dispatch_method_call("blockchain", "query_events", ...)
-       │  → dispatch_blockchain_query_events(&event_chain, args)
+       │  MutationEngine::dispatch_method_call("snowball", "query_events", ...)
+       │  → dispatch_snowball_query_events(&event_chain, args)
        │  → reads same Arc<RwLock<EventChain>>
        ▼
   Returns JSON: {"events":[...],"has_more":false,"total_in_chain":42}
@@ -503,7 +503,7 @@ WRITE PATH (how events get into the chain):
        ▼
   MutationEngine::dispatch_method_call()
        ├─► event_chain.write().record_method_call(...)  ← in-memory
-       ├─► streaming_blockchain.add_footprint(...)      ← on-disk (timing_subvol)
+       ├─► streaming_snowball.add_footprint(...)      ← on-disk (timing_subvol)
        └─► actual method dispatch → result
 ```
 
@@ -516,7 +516,7 @@ WRITE PATH (how events get into the chain):
 | `crate::chat` (store/transport/view) | Decoupled — Accountability has its own module |
 | `ChatService` / `ChatServiceImpl` | Chat path untouched |
 | `zeroclaw` plugin dispatch arm | Not involved |
-| `blockchain_plugin.rs` existing 7 methods | Declarations stay; dispatch deferred |
+| `snowball_plugin.rs` existing 7 methods | Declarations stay; dispatch deferred |
 | `EventChainService` proto definition | Already has everything needed |
 | `EventChainService` server implementation | Already handles GetEvents correctly |
 | `op-state-store/src/event_chain.rs` structs | May add `replay_from_footprint` but existing API stays |

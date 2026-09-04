@@ -74,7 +74,7 @@ will propose optimal methods per plugin AFTER you curate (keep/deprecate).
 |-------|--------|------|-------|
 |       | adc | adc.rs | |
 |       | agent_config | agent_config.rs | |
-|       | blockchain | blockchain_plugin.rs | |
+|       | snowball | snowball_plugin.rs | |
 | keep  | cognitive_mcp | cognitive_mcp.rs | Universal MCP gateway :3003. Absorbs `mcp` registry + compact toolset. Gating: local agents = full execute access; chatbot = read-only (no execute). |
 | keep  | compact_mcp | compact_mcp.rs | Compact toolset surfaced via cognitive_mcp (local-agent gated). compact_mcp server lifecycle retained. |
 |       | config | config.rs | |

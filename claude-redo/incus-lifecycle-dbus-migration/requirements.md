@@ -9,7 +9,7 @@ CLI calls (`incus start`, `incus stop`, `incus list -f csv`) inside host runit
 for live state") even though a fully-formed `incus` D-Bus plugin already
 exists and exposes real lifecycle mutations. This spec closes the gap so
 container start/stop goes through `org.opdbus.v1.plugins.incus`, with an
-audited, blockchain-backed mutation trail, instead of bypassing the control
+audited, snowball-backed mutation trail, instead of bypassing the control
 plane.
 
 Scope is the six container lifecycle runit services

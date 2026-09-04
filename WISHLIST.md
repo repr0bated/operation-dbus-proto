@@ -53,6 +53,7 @@ Replaces scattered TODO fragments across `.zenflow/tasks/`, `.kiro/specs/`, and 
 
 | ID | Task | Agent | Status | Notes |
 |----|------|-------|--------|-------|
+| OD-33 | **User-configurable MCP tool-set preferences** — let a principal pin a default warm set / preferred ordering on top of the HOT five, so a CLI opens on the tools that person actually uses | `general-purpose` | TODO | Builds on the shipped projection in `crates/op-grpc-bridge/src/mcp_policy.rs` + `/etc/opdbus/mcp-toolsets.json` (gen 3). **Hard constraint from `.kiro/specs/standalone-emqx-identity-mcp/design.md` §9–10: a preference may only NARROW, never grant.** Visible = exact grants ∩ audience ∩ selected set ∩ provider health; a preference is one more ∩ term, never a ∪. Also per §10.2 promotion/demotion between HOT/WARM/COLD stays a reviewed manifest change with a catalog generation bump — never automatic frequency-based mutation, so "preferences" must not silently re-tier tools. Preference storage should be principal-keyed server-side (same shape as the audience policy), not client-asserted, since `clientInfo.name` is not authentication. |
 | OD-22 | Fold op-xray-daemon into mirror-projected plugin (currently standalone owning `opdbus.v1`) | `general-purpose` | TODO | path fixed; deeper fold deferred |
 | OD-21 | Fill Inception narrative `TODO(jeremy)` blocks (background, dates, lightbulb moments) | `claude` | TODO | `docs/inception-narrative-plan.md` |
 

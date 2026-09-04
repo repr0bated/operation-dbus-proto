@@ -1291,8 +1291,8 @@
 
   Host, runit as PID 1 — op-grpc-bridge is the single ingress. Requests pass an
   OIA1 interceptor with a replay cache into the MutationEngine, which appends to
-  the EventChain, mirrors to the durable blockchain at
-  /var/lib/opdbus/blockchain, and drives the D-Bus authority.
+  the EventChain, mirrors to the durable snowball at
+  /var/lib/opdbus/snowball, and drives the D-Bus authority.
 
   Two SHM authorities — sealed blobs at /dev/shm/opdbus/plugin-blobs define
   types and methods; live values at /dev/shm/opdbus/state come from the

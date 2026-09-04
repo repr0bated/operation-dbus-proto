@@ -74,11 +74,11 @@ git config --global credential.helper store    # then one interactive push with 
 ### Accountability audit trail (`.kiro/specs/accountability-audit-trail`)
 All 11 spec tasks implemented.
 
-- `blockchain` plugin: `query_events` + `verify_chain` schema methods, typed
+- `snowball` plugin: `query_events` + `verify_chain` schema methods, typed
   I/O structs at module scope so `op-grpc-bridge` can import them.
-- `MutationEngine`: scoped `"blockchain"` dispatch arm — only those two methods;
+- `MutationEngine`: scoped `"snowball"` dispatch arm — only those two methods;
   the plugin's other seven still hit the catch-all echo (spec scope boundary).
-- Durability: events mirrored into the streaming blockchain `timing` subvolume
+- Durability: events mirrored into the streaming snowball `timing` subvolume
   inline with dispatch; failures warn and never fail the call. Startup replays
   from disk preserving stored `event_hash`/`prev_hash`.
 - `EventChain`: added `replay_event`, `replay_from_footprint`, `verify_range`.

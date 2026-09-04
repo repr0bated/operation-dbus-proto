@@ -3,7 +3,7 @@
 Each task is self-contained, ends with a verifiable outcome, and builds on the previous.
 The push signal MUST land before any deletion — consumers need the replacement before
 the old path is removed. (The former Task 0.4 snapshot-reachability gate is VOID —
-see Task 0.4: the seed volume is external to op-blockchain, so there is nothing to
+see Task 0.4: the seed volume is external to op-snowball, so there is nothing to
 rehome or prove.)
 
 ---
@@ -98,10 +98,10 @@ Smoke script exists and is executable.
 ### Task 0.4 — VOID (superseded by seed-volume independence)
 
 **Status**: VOID — do not implement. This task was predicated on the seed volume
-being produced by `op-blockchain`'s snapshot code. Per REQ-6 (revised), the seed
-volume has NO relationship to op-blockchain: it is an external, deploy-time Btrfs
+being produced by `op-snowball`'s snapshot code. Per REQ-6 (revised), the seed
+volume has NO relationship to op-snowball: it is an external, deploy-time Btrfs
 artifact (the install path is itself `btrfs send`). The mutation engine neither
-has nor needs an op-blockchain dependency. Nothing is rehomed; no reachability
+has nor needs an op-snowball dependency. Nothing is rehomed; no reachability
 proof is required. Phase 2 is not gated on this task.
 
 ---
@@ -196,7 +196,7 @@ dead code related to projection.
 
 **Dependency**: Phase 2 requires Phase 1 complete (the consumer path must survive
 without projection_client). The former Task 0.4 gate is VOID — the seed volume is
-external to op-blockchain (see Task 0.4), so deleting op-projection cannot stop
+external to op-snowball (see Task 0.4), so deleting op-projection cannot stop
 seed production.
 
 ### Task 2.1 — Remove `op-projection` from Workspace ✅
@@ -205,7 +205,7 @@ seed production.
 
 **Context**: 19 files. Referenced in workspace Cargo.toml (member + dep). Install
 scripts are DEPRECATED (install is `btrfs send`) — their stale op-projection
-references are out of scope per REQ-4.5. No op-blockchain rehoming is needed:
+references are out of scope per REQ-4.5. No op-snowball rehoming is needed:
 the seed volume is external to it (REQ-6).
 
 **Steps**:
@@ -385,7 +385,7 @@ The projection removal is complete when:
 - [x] `Updated` signal is defined on `org.opdbus.v1.PluginV1` and observable
 - [x] Signal payload carries state data (`plugin` + `key`/`keys`) — not a bare notification (REQ-1.5)
 - [x] Signal is emitted from all 3 `write_projection` sites in mutation_engine
-- [x] Task 0.4 — VOID: seed volume is external to op-blockchain; no rehoming or reachability proof needed (REQ-6)
+- [x] Task 0.4 — VOID: seed volume is external to op-snowball; no rehoming or reachability proof needed (REQ-6)
 - [x] `state_tree.rs` exists and serves all 4 former call sites (2 zeroclaw + 3 dashboard readers across 2 of the 3 files)
 - [x] `projection_client.rs` is deleted
 - [x] `crates/op-projection/` is deleted
@@ -401,14 +401,14 @@ The projection removal is complete when:
 
 ```
 Phase 0: Task 0.1 → Task 0.2 → Task 0.3
-         Task 0.4 — VOID (seed volume is external to op-blockchain; no gate)
+         Task 0.4 — VOID (seed volume is external to op-snowball; no gate)
 
 Phase 1: Task 1.1 → Task 1.2 + Task 1.3 (parallel) → Task 1.4
          (depends on Phase 0: signal must exist before consumer rewrite)
 
 Phase 2: Task 2.1 → Task 2.2 → Task 2.3
          GATE: Phase 1 complete (consumer path survives without projection_client).
-         No snapshot gate — the seed volume was never an op-blockchain product.
+         No snapshot gate — the seed volume was never an op-snowball product.
 
 Phase 3: Task 3.1
          (depends on Phase 2: deletion complete, seed volume path confirmed)

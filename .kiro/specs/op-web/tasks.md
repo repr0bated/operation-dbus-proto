@@ -77,13 +77,13 @@
 - [x] 7.2 Create FilterBar with chips and clear
 - [x] 7.3 Implement TimeRangeSelector (presets + custom)
 - [x] 7.4 Build SearchInput with suggestions
-- [x] 7.5 Create ConfirmModal with blockchain comment
+- [x] 7.5 Create ConfirmModal with snowball comment
 
 ### 8. Security Components
 - [x] 8.1 Implement RBACGate component
 - [x] 8.2 Create QuotaMeter visualization
 - [x] 8.3 Build QuotaCostBadge for actions
-- [x] 8.4 Implement BlockchainComment input
+- [x] 8.4 Implement SnowballComment input
 - [x] 8.5 Create ProtectedRoute wrapper
 
 ### 9. Visualization Components
@@ -172,7 +172,7 @@
 
 ---
 
-## Phase 7: MCP & Blockchain
+## Phase 7: MCP & Snowball
 
 ### 19. MCP Pages
 - [x] 19.1 Create McpList with search
@@ -181,7 +181,7 @@
 - [x] 19.4 Create McpActionPanel
 - [x] 19.5 Build McpPolicyEditor
 
-### 20. Blockchain Pages
+### 20. Snowball Pages
 - [x] 20.1 Create AuditTrail browser
 - [x] 20.2 Build EventCard component
 - [x] 20.3 Implement EventChain visualization
@@ -293,7 +293,7 @@ Phase 4 (Agents/Tools) ← Phase 2                                              
                                                                                         ↗
 Phase 6 (Workflows) ← Phase 2 + Phase 5
 
-Phase 7 (MCP/Blockchain) ← Phase 2
+Phase 7 (MCP/Snowball) ← Phase 2
 Phase 8 (State/Network) ← Phase 2
 Phase 9 (Execution) ← Phase 2
 

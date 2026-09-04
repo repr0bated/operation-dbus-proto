@@ -41,7 +41,7 @@ review and commit on a working branch per the mission doc.
 - Capability gate enforce_bridge_capability in PluginService::call_method /
   StateSync::mutate (grpc_server.rs); grants from schema blob +
   /dev/shm/opdbus/capability-grants.json, wildcard fallback, fail-closed
-- MutationEngine -> EventChain -> blockchain audit -> per-plugin dispatch
+- MutationEngine -> EventChain -> snowball audit -> per-plugin dispatch
   (mutation_engine.rs)
 - TLS at bridge: tonic ServerTlsConfig (ZEROCLAW_TLS_CERT/KEY or self-signed)
 - incus plugin (full lifecycle via PluginSchema), netmaker plugin (netclient + REST)

@@ -292,7 +292,7 @@ Let me read the net.rs file to understand what needs to be updated.
 1: // Net state plugin - authoritative OVS state management via D-Bus
 2: // Handles: interfaces, bridges, IPs, basic connectivity via plugin schema
 3: // Integrates with systemd-networkd as subordinate service for L3 configuration
-4: use op_blockchain::PluginFootprint;
+4: use op_snowball::PluginFootprint;
 5: 
 6: // Use D-Bus introspection instead of CLI commands
 7: use anyhow::{Context, Result};
@@ -327,13 +327,13 @@ Let me read the net.rs file to understand what needs to be updated.
 36:     #[serde(skip_serializing_if = "Option::is_none")]
 37:     pub driver: Option<String>,
 38: 
-39:     // TUNABLE - Configuration that can change (blockchain tracks all changes)
+39:     // TUNABLE - Configuration that can change (snowball tracks all changes)
 40:     /// All tunable configuration in a single object
 41:     #[serde(flatten)]
 42:     pub tunable: TunableConfig,
 43: }
 44: 
-45: /// Tunable configuration - can be changed, each change tracked in blockchain
+45: /// Tunable configuration - can be changed, each change tracked in snowball
 46: #[derive(Debug, Clone, Serialize, Deserialize)]
 47: pub struct TunableConfig {
 48:     /// Ports attached to this interface
@@ -708,7 +708,7 @@ Let me read the net.rs file with the correct parameters.
 1: // Net state plugin - authoritative OVS state management via D-Bus
 2: // Handles: interfaces, bridges, IPs, basic connectivity via plugin schema
 3: // Integrates with systemd-networkd as subordinate service for L3 configuration
-4: use op_blockchain::PluginFootprint;
+4: use op_snowball::PluginFootprint;
 5: 
 6: // Use D-Bus introspection instead of CLI commands
 7: use anyhow::{Context, Result};
@@ -743,13 +743,13 @@ Let me read the net.rs file with the correct parameters.
 36:     #[serde(skip_serializing_if = "Option::is_none")]
 37:     pub driver: Option<String>,
 38: 
-39:     // TUNABLE - Configuration that can change (blockchain tracks all changes)
+39:     // TUNABLE - Configuration that can change (snowball tracks all changes)
 40:     /// All tunable configuration in a single object
 41:     #[serde(flatten)]
 42:     pub tunable: TunableConfig,
 43: }
 44: 
-45: /// Tunable configuration - can be changed, each change tracked in blockchain
+45: /// Tunable configuration - can be changed, each change tracked in snowball
 46: #[derive(Debug, Clone, Serialize, Deserialize)]
 47: pub struct TunableConfig {
 48:     /// Ports attached to this interface
@@ -909,7 +909,7 @@ Good, the usages look correct now. Let me check the other locations (333 and 519
 1: // Net state plugin - authoritative OVS state management via D-Bus
 2: // Handles: interfaces, bridges, IPs, basic connectivity via plugin schema
 3: // Integrates with systemd-networkd as subordinate service for L3 configuration
-4: use op_blockchain::PluginFootprint;
+4: use op_snowball::PluginFootprint;
 5: 
 6: // Use D-Bus introspection instead of CLI commands
 7: use anyhow::{Context, Result};
@@ -944,13 +944,13 @@ Good, the usages look correct now. Let me check the other locations (333 and 519
 36:     #[serde(skip_serializing_if = "Option::is_none")]
 37:     pub driver: Option<String>,
 38: 
-39:     // TUNABLE - Configuration that can change (blockchain tracks all changes)
+39:     // TUNABLE - Configuration that can change (snowball tracks all changes)
 40:     /// All tunable configuration in a single object
 41:     #[serde(flatten)]
 42:     pub tunable: TunableConfig,
 43: }
 44: 
-45: /// Tunable configuration - can be changed, each change tracked in blockchain
+45: /// Tunable configuration - can be changed, each change tracked in snowball
 46: #[derive(Debug, Clone, Serialize, Deserialize)]
 47: pub struct TunableConfig {
 48:     /// Ports attached to this interface
@@ -1025,23 +1025,23 @@ Good, the usages look correct now. Let me check the other locations (333 and 519
 117: /// Net state plugin implementation - authoritative OVS state via D-Bus
 118: pub struct NetStatePlugin {
 119:     #[allow(dead_code)]
-120:     blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
+120:     snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
 121: }
 122: 
 123: #[allow(dead_code)]
 124: impl NetStatePlugin {
 125:     pub fn new() -> Self {
 126:         Self {
-127:             blockchain_sender: None,
+127:             snowball_sender: None,
 128:         }
 129:     }
 130: 
 131:     #[allow(dead_code)]
-132:     pub fn with_blockchain_sender(
-133:         blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
+132:     pub fn with_snowball_sender(
+133:         snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
 134:     ) -> Self {
 135:         Self {
-136:             blockchain_sender: Some(blockchain_sender),
+136:             snowball_sender: Some(snowball_sender),
 137:         }
 138:     }
 139: 
@@ -5811,7 +5811,7 @@ Now let me fix the `net.rs` file - `get_bridge_info` returns `Value`, not `Strin
 1: // Net state plugin - authoritative OVS state management via D-Bus
 2: // Handles: interfaces, bridges, IPs, basic connectivity via plugin schema
 3: // Integrates with systemd-networkd as subordinate service for L3 configuration
-4: use op_blockchain::PluginFootprint;
+4: use op_snowball::PluginFootprint;
 5: 
 6: // Use D-Bus introspection instead of CLI commands
 7: use anyhow::{Context, Result};
@@ -5846,13 +5846,13 @@ Now let me fix the `net.rs` file - `get_bridge_info` returns `Value`, not `Strin
 36:     #[serde(skip_serializing_if = "Option::is_none")]
 37:     pub driver: Option<String>,
 38: 
-39:     // TUNABLE - Configuration that can change (blockchain tracks all changes)
+39:     // TUNABLE - Configuration that can change (snowball tracks all changes)
 40:     /// All tunable configuration in a single object
 41:     #[serde(flatten)]
 42:     pub tunable: TunableConfig,
 43: }
 44: 
-45: /// Tunable configuration - can be changed, each change tracked in blockchain
+45: /// Tunable configuration - can be changed, each change tracked in snowball
 46: #[derive(Debug, Clone, Serialize, Deserialize)]
 47: pub struct TunableConfig {
 48:     /// Ports attached to this interface

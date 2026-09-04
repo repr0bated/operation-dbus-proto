@@ -182,10 +182,10 @@ I've completed a thorough analysis of the 31 Rust crates in the `crates/crates/`
 - Divergence: Some crypto features may be simplified vs spec
 - Status: Core state management working, advanced features partial
 
-**op-blockchain** ✅ EXCELLENT ALIGNMENT
-- Spec: Streaming blockchain with BTRFS subvolumes
+**op-snowball** ✅ EXCELLENT ALIGNMENT
+- Spec: Streaming snowball with BTRFS subvolumes
 - Implementation: Matches spec structure exactly
-- Modules: blockchain, streaming_blockchain, footprint, plugin_footprint, snapshot, retention, btrfs_numa_integration
+- Modules: snowball, streaming_snowball, footprint, plugin_footprint, snapshot, retention, btrfs_numa_integration
 - Status: Complete implementation
 
 ---
@@ -193,7 +193,7 @@ I've completed a thorough analysis of the 31 Rust crates in the `crates/crates/`
 ### PLUGIN & WORKFLOW CRATES
 
 **op-plugins** ✅ EXCELLENT ALIGNMENT (95%)
-- Spec: Plugin system with state management and blockchain footprints
+- Spec: Plugin system with state management and snowball footprints
 - Implementation: 45 source files with 32+ state plugins
 - Present: registry, plugin, state, auto_create, dynamic_loading, builtin, chat
 - State plugins: adc, agent_config, dinit, dnsresolver, endpoint, full_system, gcloud_adc, hardware, keypair, keyring, login1, lxc, mcp, net, netmaker, openflow, ovsdb_bridge, packagekit, pcidecl, privacy, proxmox, proxy_server, service, software, systemd, users, web_ui, wireguard, and more
@@ -334,7 +334,7 @@ I've completed a thorough analysis of the 31 Rust crates in the `crates/crates/`
 **STRENGTHS:**
 1. Comprehensive specification documentation (31 detailed spec files)
 2. Strong architectural coherence across all crates
-3. Excellent alignment in core infrastructure (op-core, op-execution-tracker, op-blockchain)
+3. Excellent alignment in core infrastructure (op-core, op-execution-tracker, op-snowball)
 4. Comprehensive tool and plugin systems (op-tools, op-plugins)
 5. Well-designed schema system with advanced features
 6. Multiple transport support (HTTP, WebSocket, stdio, gRPC)
@@ -418,7 +418,7 @@ I compared Kiro's original specs/design docs against the actual implementations 
 
 ### What's Good
 - **Comprehensive specs**: 31 detailed spec files in `SPECS/` directory
-- **Core infrastructure**: op-core, op-execution-tracker, op-blockchain are 95-100% aligned
+- **Core infrastructure**: op-core, op-execution-tracker, op-snowball are 95-100% aligned
 - **Tool systems**: op-tools, op-plugins have comprehensive implementations (95%)
 - **LLM providers**: op-llm has 14 modules supporting multiple providers (95%)
 - **Architecture**: Strong coherence across all crates
@@ -498,7 +498,7 @@ Focus on these key crates:
 - op-llm
 - op-state-store
 - op-workflows
-- op-blockchain
+- op-snowball
 - op-web
 
 For each crate, provide:
@@ -516,7 +516,7 @@ Return a detailed report for each crate with specific file references and code e
 
 ## Executive Summary
 
-Analyzed 10 key Rust crates comparing design specifications against actual implementations. Overall divergence is **MEDIUM** across the system, with significant gaps in op-chat (HIGH divergence) and op-web (MEDIUM-HIGH), while op-core, op-state-store, and op-blockchain show good alignment (LOW divergence).
+Analyzed 10 key Rust crates comparing design specifications against actual implementations. Overall divergence is **MEDIUM** across the system, with significant gaps in op-chat (HIGH divergence) and op-web (MEDIUM-HIGH), while op-core, op-state-store, and op-snowball show good alignment (LOW divergence).
 
 ---
 
@@ -564,7 +564,7 @@ Analyzed 10 key Rust crates comparing design specifications against actual imple
 #### Specified (SPEC.md)
 - Plugin system with state management
 - Domain plugins (systemd_networkd, dinit, dnsresolver, etc.)
-- Blockchain footprints integration
+- Snowball footprints integration
 - Dynamic loading capability
 - 45 Rust source files with registry, auto_create, builtin, chat, dynamic_loading modules
 
@@ -576,7 +576,7 @@ Analyzed 10 key Rust crates comparing design specifications against actual imple
 - **Plugin context**: PluginContext, PluginTunables, PluginCapabilities ✓
 
 #### Missing/Gaps
-- **Blockchain integration**: Spec mentions "blockchain footprints" but implementation shows limited integration with op-blockchain
+- **Snowball integration**: Spec mentions "snowball footprints" but implementation shows limited integration with op-snowball
 - **Chat plugin**: Mentioned in spec but minimal implementation in actual code
 - **Service definition validation**: PluginRegistry exists but service validation patterns unclear
 - **Plugin lifecycle hooks**: No clear pre/post execution hooks documented
@@ -586,7 +586,7 @@ Analyzed 10 key Rust crates comparing design specifications against actual imple
 - **service_def.rs**: ServiceName validation (not explicitly in spec)
 - **state.rs**: DesiredState with hash computation (not in spec)
 
-**Status**: Core plugin system implemented but blockchain integration and chat plugin functionality incomplete.
+**Status**: Core plugin system implemented but snowball integration and chat plugin functionality incomplete.
 
 ---
 
@@ -845,26 +845,26 @@ Comprehensive specification with:
 
 ---
 
-## 9. op-blockchain - Streaming Blockchain with BTRFS
+## 9. op-snowball - Streaming Snowball with BTRFS
 
 ### Specification vs Implementation
 
 **DIVERGENCE: LOW** ✓
 
 #### Specified (SPEC.md)
-- Streaming blockchain with BTRFS subvolumes for op-dbus-v2
+- Streaming snowball with BTRFS subvolumes for op-dbus-v2
 - 8 Rust source files
-- Modules: streaming_blockchain, snapshot, retention, plugin_footprint, footprint, btrfs_numa_integration, blockchain
+- Modules: streaming_snowball, snapshot, retention, plugin_footprint, footprint, btrfs_numa_integration, snowball
 - Features: default, ml
 
 #### Implemented
-- **blockchain.rs**: StreamingBlockchain with subvolume creation ✓
-- **btrfs_numa_integration.rs**: OptimizedBlockchain with NUMA-aware caching ✓
+- **snowball.rs**: StreamingSnowball with subvolume creation ✓
+- **btrfs_numa_integration.rs**: OptimizedSnowball with NUMA-aware caching ✓
 - **footprint.rs**: BlockEvent, PluginFootprint with vector support ✓
 - **plugin_footprint.rs**: PluginFootprint, FootprintGenerator ✓
 - **retention.rs**: RetentionPolicy with hourly/daily/weekly/quarterly ✓
 - **snapshot.rs**: SnapshotInterval enum with duration support ✓
-- **streaming_blockchain.rs**: Duplicate definitions (consolidation opportunity) ✓
+- **streaming_snowball.rs**: Duplicate definitions (consolidation opportunity) ✓
 
 #### Missing/Gaps
 - **ML feature**: Spec mentions "ml" feature but no ML-specific code visible
@@ -874,7 +874,7 @@ Comprehensive specification with:
 #### Extra Implementation
 - None significant
 
-**Status**: Implementation matches specification. Core blockchain and BTRFS integration present.
+**Status**: Implementation matches specification. Core snowball and BTRFS integration present.
 
 ---
 
@@ -934,14 +934,14 @@ Comprehensive specification with:
 | Crate | Modules | Binaries | Divergence | Status |
 |-------|---------|----------|-----------|--------|
 | op-core | 9/9 ✓ | 0/0 ✓ | LOW | ✓ Complete |
-| op-plugins | 45/45 ✓ | 0/0 ✓ | MEDIUM | ⚠️ Blockchain integration incomplete |
+| op-plugins | 45/45 ✓ | 0/0 ✓ | MEDIUM | ⚠️ Snowball integration incomplete |
 | op-tools | 47/47 ✓ | 1/1 ✓ | MEDIUM-HIGH | ⚠️ Validation/security layers unclear |
 | op-mcp | 39/39 ✓ | 3/3 ✓ | MEDIUM | ⚠️ Router/resources modules unclear |
 | op-chat | 32/32 ✓ | 1/1 ✓ | HIGH | ❌ Workstacks/skills/agent pool missing |
 | op-llm | 14/14 ✓ | 0/0 ✓ | LOW | ✓ Complete |
 | op-state-store | 11/11 ✓ | 0/0 ✓ | LOW | ✓ Complete |
 | op-workflows | 13/13 ✓ | 0/0 ✓ | MEDIUM | ⚠️ State persistence unclear |
-| op-blockchain | 8/8 ✓ | 0/0 ✓ | LOW | ✓ Complete |
+| op-snowball | 8/8 ✓ | 0/0 ✓ | LOW | ✓ Complete |
 | op-web | 55/55 ✓ | 1/1 ✓ | MEDIUM-HIGH | ⚠️ Orchestrator/MCP layers unclear |
 
 ---
@@ -966,11 +966,11 @@ Comprehensive specification with:
 - **Impact**: Request orchestration and anti-hallucination verification at web layer missing
 - **Recommendation**: Clarify orchestrator module structure and implement missing components
 
-### 4. **op-plugins: Blockchain Integration Incomplete** (MEDIUM)
-- **Spec defines**: Blockchain footprints integration
+### 4. **op-plugins: Snowball Integration Incomplete** (MEDIUM)
+- **Spec defines**: Snowball footprints integration
 - **Implementation has**: Plugin system, state management
-- **Impact**: Plugin operations not tracked in blockchain
-- **Recommendation**: Integrate with op-blockchain for footprint tracking
+- **Impact**: Plugin operations not tracked in snowball
+- **Recommendation**: Integrate with op-snowball for footprint tracking
 
 ---
 
@@ -979,7 +979,7 @@ Comprehensive specification with:
 1. **Priority 1**: Complete op-chat orchestration layer (workstacks, skills, agent pool)
 2. **Priority 2**: Implement op-tools validation and security modules
 3. **Priority 3**: Clarify and complete op-web orchestrator layer
-4. **Priority 4**: Integrate op-plugins with op-blockchain for footprint tracking
+4. **Priority 4**: Integrate op-plugins with op-snowball for footprint tracking
 5. **Priority 5**: Document unclear modules in op-mcp and op-workflows
 
 ", "files": [
@@ -991,7 +991,7 @@ Comprehensive specification with:
     { "path": "crates/crates/SPECS/19-op-llm.md" },
     { "path": "crates/crates/SPECS/27-op-state-store.md" },
     { "path": "crates/crates/SPECS/31-op-workflows.md" },
-    { "path": "crates/crates/SPECS/02-op-blockchain.md" },
+    { "path": "crates/crates/SPECS/02-op-snowball.md" },
     { "path": "crates/crates/SPECS/30-op-web.md" },
     { "path": "crates/crates/op-core/src" },
     { "path": "crates/crates/op-plugins/src" },
@@ -1001,7 +1001,7 @@ Comprehensive specification with:
     { "path": "crates/crates/op-llm/src" },
     { "path": "crates/crates/op-state-store/src" },
     { "path": "crates/crates/op-workflows/src" },
-    { "path": "crates/crates/op-blockchain/src" },
+    { "path": "crates/crates/op-snowball/src" },
     { "path": "crates/crates/op-web/src" }
   ]
 }
@@ -1040,14 +1040,14 @@ The subagent performed a comprehensive analysis comparing Kiro's original specs/
 | Crate | Divergence | Status |
 |-------|-----------|--------|
 | op-core | LOW | ✓ Complete |
-| op-plugins | MEDIUM | ⚠️ Blockchain integration incomplete |
+| op-plugins | MEDIUM | ⚠️ Snowball integration incomplete |
 | op-tools | MEDIUM-HIGH | ⚠️ Validation/security layers unclear |
 | op-mcp | MEDIUM | ⚠️ Router/resources modules unclear |
 | op-chat | **HIGH** | ❌ Workstacks/skills/agent pool missing |
 | op-llm | LOW | ✓ Complete |
 | op-state-store | LOW | ✓ Complete |
 | op-workflows | MEDIUM | ⚠️ State persistence unclear |
-| op-blockchain | LOW | ✓ Complete |
+| op-snowball | LOW | ✓ Complete |
 | op-web | MEDIUM-HIGH | ⚠️ Orchestrator/MCP layers unclear |
 
 ### Critical Issues
@@ -1055,10 +1055,10 @@ The subagent performed a comprehensive analysis comparing Kiro's original specs/
 1. **op-chat** - Missing orchestration layer (workstacks, skills, GrpcAgentPool, 7 gRPC services)
 2. **op-tools** - Incomplete validation/security modules
 3. **op-web** - Orchestrator layer unclear
-4. **op-plugins** - Blockchain integration incomplete
+4. **op-plugins** - Snowball integration incomplete
 
 ### What's Good
-- Core infrastructure (op-core, op-llm, op-state-store, op-blockchain) is well-aligned
+- Core infrastructure (op-core, op-llm, op-state-store, op-snowball) is well-aligned
 - Basic implementations exist for most crates
 - Module structure generally matches specs
 
@@ -1066,7 +1066,7 @@ The subagent performed a comprehensive analysis comparing Kiro's original specs/
 - op-chat: workstacks.rs, skills.rs, grpc_pool.rs, protocol definitions
 - op-tools: validation.rs, security.rs, router.rs
 - op-web: orchestrator modules, MCP integration
-- op-plugins: blockchain footprint tracking
+- op-plugins: snowball footprint tracking
 
 Would you like me to create a detailed implementation plan for any specific crate?
 
@@ -1102,7 +1102,7 @@ Based on the analysis, here's my assessment of what's most robust:
 
 **op-state-store** - Complete state management with SQLite/Redis, schema validation, disaster recovery. Well-structured.
 
-**op-blockchain** - BTRFS-based streaming blockchain with footprints. Matches spec closely.
+**op-snowball** - BTRFS-based streaming snowball with footprints. Matches spec closely.
 
 ## Weakest Link
 
