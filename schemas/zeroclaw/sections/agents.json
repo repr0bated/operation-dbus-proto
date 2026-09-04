@@ -1,0 +1,380 @@
+{
+  "$defs": {
+    "AccessMode": {
+      "description": "A cross-agent filesystem grant from a workspace allowlist entry.",
+      "oneOf": [
+        {
+          "const": "read",
+          "description": "Read access only. Cross-agent `file_read` is permitted; writes are not.",
+          "type": "string"
+        },
+        {
+          "const": "write",
+          "description": "Write access only. Cross-agent `file_write` is permitted; reads are not.",
+          "type": "string"
+        },
+        {
+          "const": "read_write",
+          "description": "Both read and write. The agent can `file_read` and `file_write` against\nthe target's workspace.",
+          "type": "string"
+        }
+      ]
+    },
+    "AgentA2aConfig": {
+      "description": "Per-agent A2A publication and exposed-skill configuration.",
+      "properties": {
+        "exposed_skills": {
+          "default": [],
+          "description": "Filter selecting which resolved skill ids appear on this alias's\ncard. Empty = no skills advertised. Entries that do not resolve to\na real skill in the alias's bundles are dropped (the bundles are\ncanonical; this only selects from them).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "published": {
+          "default": false,
+          "description": "Publish this alias as a discoverable A2A agent. Default `false`:\nthe alias is excluded from the discovery catalog and serves no\nper-alias card even when the server is enabled.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AgentAlias": {
+      "description": "Reference to a configured `[agents.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "AgentMemoryConfig": {
+      "description": "Per-agent memory backend selection and its persistence contract.",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/MemoryBackendKind",
+          "default": "sqlite",
+          "description": "The backend kind this agent uses. Defaults to `Sqlite` for new\nagents; once an agent has on-disk data the value is locked."
+        }
+      },
+      "type": "object"
+    },
+    "AgentWorkspaceConfig": {
+      "description": "Per-agent workspace and cross-agent access configuration.",
+      "properties": {
+        "access": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccessMode"
+          },
+          "default": {},
+          "description": "Cross-agent workspace allowlist. An empty map grants no sibling access.",
+          "type": "object"
+        },
+        "path": {
+          "description": "Optional explicit workspace path. `None` = derive from\n`<install>/agents/<alias>/workspace/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read_memory_from": {
+          "default": [],
+          "description": "Cross-agent memory allowlist. An empty list grants access only to local memory.",
+          "items": {
+            "$ref": "#/$defs/AgentAlias"
+          },
+          "type": "array"
+        },
+        "unrestricted_filesystem": {
+          "default": false,
+          "description": "Escape hatch: when `true`, the agent can read or write anywhere\nthe host filesystem permits. Off by default; flipping this on is\nauditable.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AliasedAgentConfig": {
+      "description": "Configuration for an aliased agent. Each `[agents.<alias>]` TOML\nblock deserializes into one of these. The `DelegateTool` looks up\nentries here to dispatch a subtask to a named sibling agent.",
+      "properties": {
+        "a2a": {
+          "$ref": "#/$defs/AgentA2aConfig",
+          "default": {
+            "exposed_skills": [],
+            "published": false
+          },
+          "description": "Per-agent A2A publication block (`[agents.<alias>.a2a]`). Gates\nwhether this alias is discoverable as a spec-conforming A2A agent\nand which resolved skills appear on its card. Default-closed\n(`published = false`, no exposed skills). See\n`crate::multi_agent::AgentA2aConfig`."
+        },
+        "acp_enable_mcp": {
+          "default": false,
+          "description": "Initialize this agent's `mcp_bundles` tools when it serves an ACP\n(`session/new`) session.\n\nOff by default: MCP servers are external processes/services that can\nblock startup while they connect, and ACP `session/new` is expected to\nreturn promptly. Enable it when this agent must call its `mcp_bundles`\ntools over ACP; `session/new` then pays the one-time MCP connection cost\n(bounded and non-fatal per server). Set per agent so each ACP profile\nopts in independently; when this agent is the ACP default\n(`acp.default_agent`, or the sole configured agent), the flag is picked\nup automatically for sessions that omit `agentAlias`.",
+          "type": "boolean"
+        },
+        "channels": {
+          "default": [],
+          "description": "Channel aliases this agent handles (e.g. `[\"telegram.<alias>\", \"discord.<alias>\"]`).\nEach entry is a `ChannelRef` resolving through `[channels.<type>.<alias>]`;\n`Config::validate()` fails loud on dangling references.",
+          "items": {
+            "$ref": "#/$defs/ChannelRef"
+          },
+          "type": "array"
+        },
+        "classifier_provider": {
+          "$ref": "#/$defs/ModelProviderRef",
+          "default": "",
+          "description": "Optional override for the per-message LLM reply-intent classifier\n(`classify_channel_reply_intent` in zeroclaw-channels). When non-empty,\nthe channel orchestrator routes the \"should this message be replied to?\"\nclassification call to `[providers.models.<type>.<alias>]` referenced\nhere, instead of reusing the main agent's `model_provider`.\n\nSource of truth for api_key / uri / model / temperature etc. is the\nreferenced `[providers.models.<type>.<alias>]` entry. This field is\na reference only (NEVER a copy), per AGENTS.md SINGLE SOURCE OF TRUTH.\n\nEmpty (`Default`) = inherit the main agent's resolved provider+model\n(preserves pre-PR behavior; backward compatible).\n\nUse case: classification is a cheap REPLY/NO_REPLY decision, doesn't\nneed a high-end model. Point this at a fast/free small model\n(e.g. `kimi-k2.5`, `qwen-turbo`) while `model_provider` stays on the\nexpensive answering model (e.g. `qwen3.6-plus`).\n\nNote: TOML table names cannot contain `.`, so alias `kimi-k2.5`\nmust be written as `[providers.models.custom.kimi-k2-5]`. The\nunderlying `model = \"kimi-k2.5\"` string can still contain dots.\n\nACP channels (IDE-direct) always reply and skip the classifier\nentirely, so this field has no effect on ACP traffic."
+        },
+        "cron_jobs": {
+          "default": [],
+          "description": "Cron job aliases. Each entry references `cron[key]`, a declarative\nscheduled job invoked by the scheduler on its configured trigger.\nWhen the cron fires, this agent is the actor that executes the job.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "delegate_same_risk_profile": {
+          "default": true,
+          "description": "Auto-allow delegation to every agent sharing this agent's risk\nprofile. Default `true` preserves the historical reach where any\nsame-profile peer is a delegation target. Set `false` to opt this\nagent out so only the explicit `delegates` list is reachable.\nGating (whether delegation is permitted at all) still lives on the\nrisk profile's `delegation_policy.mode`; this only narrows reach.",
+          "type": "boolean"
+        },
+        "delegates": {
+          "default": [],
+          "description": "Explicit delegate roster: additional agent aliases this agent may\ndelegate to, beyond same-profile peers. Possibly empty. String\nentries are accepted for concise manual editing and load as bounded\ndelegates; saved config emits object entries with explicit modes.\nEntries may name agents on a different risk profile. `Config::validate()`\nfails loud on a dangling alias, duplicate alias, or self-reference.",
+          "items": {
+            "$ref": "#/$defs/DelegateTargetConfig"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether this agent is active. Set false to disable without removing the definition.",
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/IdentityConfig",
+          "default": {
+            "aieos_inline": null,
+            "aieos_path": null,
+            "format": "openclaw"
+          },
+          "description": "Per-agent identity format (`[agents.<alias>.identity]`). Each\nagent renders its own IDENTITY.md / SOUL.md inside its\nper-agent workspace; this block selects the format (OpenClaw or\nAIEOS) and optional inline/file source for the agent's identity\ndocument."
+        },
+        "knowledge_bundles": {
+          "default": [],
+          "description": "Knowledge bundle aliases. Additive: the agent loads every listed\nbundle.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mcp_bundles": {
+          "default": [],
+          "description": "MCP bundle aliases. Each entry references `mcp_bundles[key]`, a named\ngroup of MCP servers. Secure by default: an agent is granted only the\nservers named by its bundles. An agent with no `mcp_bundles` receives\nno MCP servers (omission is not a grant). See\n`Config::mcp_servers_for_agent`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "$ref": "#/$defs/AgentMemoryConfig",
+          "default": {
+            "backend": "sqlite"
+          },
+          "description": "Per-agent memory backend selection (`[agents.<alias>.memory]`).\nThe `backend` field is locked at agent creation and immutable on\nsubsequent loads. Defaults to `Sqlite`. See\n`crate::multi_agent::AgentMemoryConfig`."
+        },
+        "model_provider": {
+          "$ref": "#/$defs/ModelProviderRef",
+          "default": "",
+          "description": "Dotted model-provider alias (e.g. `\"anthropic.<alias>\"`).\nResolves through `model_providers.<type>.<alias>` at runtime;\n`Config::validate()` fails loud on dangling references."
+        },
+        "precheck": {
+          "$ref": "#/$defs/ChannelPrecheckConfig",
+          "default": {
+            "enabled": true,
+            "timeout_secs": 5
+          },
+          "description": "Per-agent reply-intent precheck controls. The classifier call reads\nthis block at message time; model/provider selection stays on\n`classifier_provider` so there is only one routing source of truth."
+        },
+        "risk_profile": {
+          "$ref": "#/$defs/RiskProfileRef",
+          "default": "",
+          "description": "Risk profile alias (e.g. `\"default\"`). Resolves delegation guardrails at runtime."
+        },
+        "runtime_profile": {
+          "$ref": "#/$defs/RuntimeProfileRef",
+          "default": "",
+          "description": "Runtime profile alias (e.g. `\"default\"`). Resolves agentic/iteration settings."
+        },
+        "skill_bundles": {
+          "default": [],
+          "description": "Skill bundle aliases. Each entry resolves to\n`skill_bundles[key].directory` at runtime; the agent loads every\nlisted bundle.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary_provider": {
+          "$ref": "#/$defs/ModelProviderRef",
+          "default": "",
+          "description": "Per-agent override for the context-compression summarizer provider, as\na `providers.models.<type>.<alias>` reference. Empty (Default) = inherit\nthe runtime profile's `context_compression.summary_provider`, else the\nagent's own resolved provider+model. Reference only, never a copy;\nresolved by [`Config::effective_summary_provider`]. Validated in\n`Config::validate()`."
+        },
+        "transcription_provider": {
+          "$ref": "#/$defs/TranscriptionProviderRef",
+          "default": "",
+          "description": "Transcription / STT provider as a dotted alias reference\n(`<type>.<alias>`, e.g. `\"groq.<alias>\"`). Resolves through\n`transcription_providers.<type>.<alias>`. Empty = agent has no\ntranscription preference; channels that ingest voice still need a\nresolved provider (there is no global default), so an inbound voice\nflow into an agent with empty `transcription_provider` errors loudly\nat the channel boundary."
+        },
+        "tts_provider": {
+          "$ref": "#/$defs/TtsProviderRef",
+          "default": "",
+          "description": "TTS provider as a dotted alias reference (`<type>.<alias>`,\ne.g. `\"openai.<alias>\"`). Resolves through `tts_providers.<type>.<alias>`.\nEmpty = no TTS for this agent (there is no global default-provider concept;\nevery agent that wants TTS sets its own `tts_provider`)."
+        },
+        "workspace": {
+          "$ref": "#/$defs/AgentWorkspaceConfig",
+          "default": {
+            "access": {},
+            "read_memory_from": [],
+            "unrestricted_filesystem": false
+          },
+          "description": "Per-agent workspace block (`[agents.<alias>.workspace]`).\nHolds the agent's filesystem path, cross-agent access allowlist,\nfilesystem-escape boolean, and cross-agent memory allowlist.\nDefault is fully jailed (no cross-agent access). See\n`crate::multi_agent::AgentWorkspaceConfig`."
+        }
+      },
+      "type": "object"
+    },
+    "ChannelPrecheckConfig": {
+      "description": "Per-channel reply-intent precheck configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "When false, the precheck is skipped entirely for this agent and every\naccepted channel message triggers the full agent loop. Default: `true`.",
+          "type": "boolean"
+        },
+        "timeout_secs": {
+          "default": 5,
+          "description": "Hard ceiling (seconds) on the precheck LLM call. On timeout the\nprecheck fails open to REPLY. Default: `5`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ChannelRef": {
+      "description": "Reference to a configured `[channels.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "DelegateExecutionMode": {
+      "description": "Execution semantics for one explicit delegate target.",
+      "oneOf": [
+        {
+          "const": "bounded",
+          "description": "Parent-bounded delegation: the target is reachable through the caller,\nshares caller budgets, and agentic tools are capped by the caller's\ntool envelope.",
+          "type": "string"
+        },
+        {
+          "const": "independent",
+          "description": "Independent delegation: the target runs under its own configured\npolicy/tool envelope, like opening a new chat with that agent.",
+          "type": "string"
+        }
+      ]
+    },
+    "DelegateTargetConfig": {
+      "description": "One explicit delegate target listed under `[agents.<alias>].delegates`.\n\nString entries deserialize as `{ agent = \"<string>\", mode = \"bounded\" }`\nfor concise manual editing. Serialization always emits the object form so\nthe config surface is a pure object array.",
+      "properties": {
+        "agent": {
+          "description": "Target agent alias.",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/DelegateExecutionMode",
+          "default": "bounded",
+          "description": "Whether this target is parent-bounded or independent."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "type": "object"
+    },
+    "IdentityConfig": {
+      "description": "Identity format configuration (`[identity]` section).\n\nSupports `\"openclaw\"` (default) or `\"aieos\"` identity documents.",
+      "properties": {
+        "aieos_inline": {
+          "default": null,
+          "description": "Inline AIEOS JSON (alternative to file path)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aieos_path": {
+          "default": null,
+          "description": "Path to AIEOS JSON file (relative to workspace)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format": {
+          "default": "openclaw",
+          "description": "Identity format: \"openclaw\" (default) or \"aieos\"",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MemoryBackendKind": {
+      "description": "Selects the memory backend used by an agent.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No memory backend. Recall returns empty; stores are no-ops.",
+          "type": "string"
+        },
+        {
+          "const": "sqlite",
+          "description": "Embedded SQLite (`crates/zeroclaw-memory/src/sqlite.rs`). Default for\nnew installs because every supported platform can run it without\nextra services.",
+          "type": "string"
+        },
+        {
+          "const": "postgres",
+          "description": "PostgreSQL with optional pgvector\n(`crates/zeroclaw-memory/src/postgres.rs`, feature `memory-postgres`).",
+          "type": "string"
+        },
+        {
+          "const": "qdrant",
+          "description": "Qdrant vector store (`crates/zeroclaw-memory/src/qdrant.rs`).",
+          "type": "string"
+        },
+        {
+          "const": "markdown",
+          "description": "Markdown files in the agent's workspace\n(`crates/zeroclaw-memory/src/markdown.rs`).",
+          "type": "string"
+        },
+        {
+          "const": "lucid",
+          "description": "Hybrid local SQLite + external Lucid CLI\n(`crates/zeroclaw-memory/src/lucid.rs`).",
+          "type": "string"
+        }
+      ]
+    },
+    "ModelProviderRef": {
+      "description": "Reference to a configured `[providers.models.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "RiskProfileRef": {
+      "description": "Reference to a configured `[risk_profiles.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "RuntimeProfileRef": {
+      "description": "Reference to a configured `[runtime_profiles.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "TranscriptionProviderRef": {
+      "description": "Reference to a configured `[providers.transcription.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "TtsProviderRef": {
+      "description": "Reference to a configured `[providers.tts.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/AliasedAgentConfig"
+  },
+  "default": {},
+  "description": "Aliased agents in this install. Each entry under `[agents.<alias>]`\nis one user-facing agent with its own identity, channels, model\nprovider, risk profile, workspace, and memory scope.\n`DelegateTool` consults this map when one agent delegates a\nsubtask to another.",
+  "type": "object"
+}

@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "FirecrawlConfig": {
+      "description": "Firecrawl fallback configuration for JS-heavy and bot-blocked sites.\n\nWhen enabled, if the standard web fetch fails (HTTP error, empty body, or\nbody shorter than 100 characters suggesting a JS-only page), the tool\nfalls back to the Firecrawl API for stealth content extraction.",
+      "properties": {
+        "api_key_env": {
+          "default": "FIRECRAWL_API_KEY",
+          "description": "Environment variable name for the Firecrawl API key",
+          "type": "string"
+        },
+        "api_url": {
+          "default": "https://api.firecrawl.dev/v1",
+          "description": "Firecrawl API base URL",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable Firecrawl fallback",
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/$defs/FirecrawlMode",
+          "default": "scrape",
+          "description": "Firecrawl extraction mode"
+        }
+      },
+      "type": "object"
+    },
+    "FirecrawlMode": {
+      "description": "Firecrawl fallback mode: scrape a single page or crawl linked pages.",
+      "oneOf": [
+        {
+          "enum": [
+            "scrape"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "crawl",
+          "description": "Reserved for future multi-page crawl support. Accepted in config\ndeserialization to avoid breaking existing files, but not yet\nimplemented — `fetch_via_firecrawl` always uses the `/scrape` endpoint.",
+          "type": "string"
+        }
+      ]
+    },
+    "WebFetchConfig": {
+      "description": "Web fetch tool configuration (`[web_fetch]` section).\n\nFetches web pages and converts HTML to plain text for LLM consumption.\nDomain filtering: `allowed_domains` controls which hosts are reachable (use `[\"*\"]`\nfor all public hosts). `blocked_domains` takes priority over `allowed_domains`.\nIf `allowed_domains` is empty, all requests are rejected (deny-by-default).",
+      "properties": {
+        "allowed_domains": {
+          "default": [
+            "*"
+          ],
+          "description": "Allowed domains for web fetch (exact or subdomain match; `[\"*\"]` = all public hosts)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_private_hosts": {
+          "default": [],
+          "description": "Private/internal hosts allowed to bypass SSRF protection (e.g. `[\"192.168.1.10\", \"internal.local\"]`).\nExact and subdomain matches are supported. Listing a host skips the\nresolved-IP SSRF check for it; a *literal* private/local host (IP literal,\nlocalhost, .local) listed here also bypasses `allowed_domains`. The `*`\nwildcard permits any literal private/local host and lets a name already in\n`allowed_domains` resolve to a private IP, but it does NOT widen\n`allowed_domains` — a non-private host (matched explicitly or via `*`) still\nneeds `allowed_domains`, so `*` cannot reach an arbitrary public host.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocked_domains": {
+          "default": [],
+          "description": "Blocked domains (exact or subdomain match; always takes priority over allowed_domains)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable `web_fetch` tool for fetching web page content",
+          "type": "boolean"
+        },
+        "firecrawl": {
+          "$ref": "#/$defs/FirecrawlConfig",
+          "default": {
+            "api_key_env": "FIRECRAWL_API_KEY",
+            "api_url": "https://api.firecrawl.dev/v1",
+            "enabled": false,
+            "mode": "scrape"
+          },
+          "description": "Firecrawl fallback configuration (`[web_fetch.firecrawl]`)"
+        },
+        "max_response_size": {
+          "default": 500000,
+          "description": "Maximum response size in bytes (default: 500KB, plain text is much smaller than raw HTML)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 30,
+          "description": "Request timeout in seconds (default: 30)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/WebFetchConfig",
+  "default": {
+    "allowed_domains": [
+      "*"
+    ],
+    "allowed_private_hosts": [],
+    "blocked_domains": [],
+    "enabled": true,
+    "firecrawl": {
+      "api_key_env": "FIRECRAWL_API_KEY",
+      "api_url": "https://api.firecrawl.dev/v1",
+      "enabled": false,
+      "mode": "scrape"
+    },
+    "max_response_size": 500000,
+    "timeout_secs": 30
+  },
+  "description": "Web fetch tool configuration (`[web_fetch]`)."
+}

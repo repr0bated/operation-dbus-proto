@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "JiraConfig": {
+      "description": "Jira integration configuration (`[jira]`).\n\nWhen `enabled = true`, registers the `jira` tool which can get tickets,\nsearch with JQL, and add comments. Requires `base_url` and `api_token`\n(or the `JIRA_API_TOKEN` env var).\n\n## Defaults\n- `enabled`: `false`\n- `allowed_actions`: `[\"get_ticket\"]` — read-only by default.\n  Add `\"search_tickets\"` or `\"comment_ticket\"` to unlock them.\n- `timeout_secs`: `30`\n\n## Auth\nJira Cloud uses HTTP Basic auth: `email` + `api_token`.\nJira Server/Data Center uses Bearer token auth: omit `email` and set\n`api_token` to a personal access token.\n`api_token` is stored encrypted at rest; set it here or via `JIRA_API_TOKEN`.",
+      "properties": {
+        "allowed_actions": {
+          "default": [
+            "get_ticket"
+          ],
+          "description": "Actions the agent is permitted to call.\nValid values: `\"get_ticket\"`, `\"search_tickets\"`, `\"comment_ticket\"`,\n`\"list_projects\"`, `\"myself\"`, `\"list_transitions\"`,\n`\"transition_ticket\"`, `\"create_ticket\"`.\nDefaults to `[\"get_ticket\"]` (read-only).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "api_token": {
+          "default": "",
+          "description": "Jira API token. Encrypted at rest. Falls back to `JIRA_API_TOKEN` env var.",
+          "type": "string",
+          "x-secret": true
+        },
+        "base_url": {
+          "default": "",
+          "description": "Atlassian instance base URL, e.g. `https://yourco.atlassian.net`.",
+          "type": "string"
+        },
+        "email": {
+          "description": "Jira account email used for Basic auth (Cloud).\nOmit for Server/DC deployments using Bearer token auth.\nAn empty string (`email = \"\"`) deserializes as `None`. Configs\nthat round-tripped the empty default to disk would otherwise\nsilently regress to Basic auth with empty username, since the\nemail-required validation was dropped when Server/DC Bearer-token\nsupport landed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the `jira` tool. Default: `false`.",
+          "type": "boolean"
+        },
+        "timeout_secs": {
+          "default": 30,
+          "description": "Request timeout in seconds. Default: `30`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/JiraConfig",
+  "default": {
+    "allowed_actions": [
+      "get_ticket"
+    ],
+    "api_token": "",
+    "base_url": "",
+    "enabled": false,
+    "timeout_secs": 30
+  },
+  "description": "Jira integration configuration (`[jira]`)."
+}

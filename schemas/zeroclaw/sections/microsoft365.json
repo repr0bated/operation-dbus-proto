@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "Microsoft365Config": {
+      "description": "Microsoft 365 integration via Microsoft Graph API (`[microsoft365]` section).\n\nProvides access to Outlook mail, Teams messages, Calendar events,\nOneDrive files, and SharePoint search.",
+      "properties": {
+        "auth_flow": {
+          "default": "client_credentials",
+          "description": "Authentication flow: \"client_credentials\" or \"device_code\"",
+          "type": "string"
+        },
+        "client_id": {
+          "default": null,
+          "description": "Azure AD application (client) ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_secret": {
+          "default": null,
+          "description": "Azure AD client secret (stored encrypted when secrets.encrypt = true)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable Microsoft 365 integration",
+          "type": "boolean"
+        },
+        "scopes": {
+          "default": [
+            "https://graph.microsoft.com/.default"
+          ],
+          "description": "OAuth scopes to request",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tenant_id": {
+          "default": null,
+          "description": "Azure AD tenant ID",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "token_cache_encrypted": {
+          "default": true,
+          "description": "Encrypt the token cache file on disk",
+          "type": "boolean"
+        },
+        "user_id": {
+          "default": null,
+          "description": "User principal name or \"me\" (for delegated flows)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/Microsoft365Config",
+  "default": {
+    "auth_flow": "client_credentials",
+    "client_id": null,
+    "client_secret": null,
+    "enabled": false,
+    "scopes": [
+      "https://graph.microsoft.com/.default"
+    ],
+    "tenant_id": null,
+    "token_cache_encrypted": true,
+    "user_id": null
+  },
+  "description": "Microsoft 365 Graph API integration (`[microsoft365]`)."
+}

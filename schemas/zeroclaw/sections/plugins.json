@@ -1,0 +1,147 @@
+{
+  "$defs": {
+    "PluginEntryConfig": {
+      "description": "Per-plugin config section keyed by plugin alias; values are secret so they\nencrypt at rest under the same adjacent `.secret_key` as every other secret.",
+      "properties": {
+        "config": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object",
+          "x-secret": true
+        },
+        "name": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "PluginLimitsConfig": {
+      "description": "Per-call WASM execution limits (`[plugins.limits]`).\n\nBounds a single plugin call so a runaway or malicious component traps\ninstead of hanging the host or exhausting memory. `call_fuel` caps\ninstructions per call; the memory, table, and instance ceilings bound a\nstore's growth. Every value is operator-tunable and validated as non-zero.",
+      "properties": {
+        "call_fuel": {
+          "default": 1000000000,
+          "description": "Fuel budget per plugin call (wasmtime instruction units).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_instances": {
+          "default": 64,
+          "description": "Maximum component instances a plugin store may create.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_memory_mb": {
+          "default": 256,
+          "description": "Maximum linear memory a plugin store may grow to, in megabytes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_table_elements": {
+          "default": 100000,
+          "description": "Maximum table elements a plugin store may allocate.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "PluginSecurityConfig": {
+      "description": "Plugin signature verification configuration (`[plugins.security]`).\n\nControls Ed25519 signature verification for plugin manifests.\nIn `strict` mode, only plugins signed by a trusted publisher key are loaded.\nIn `permissive` mode, unsigned or untrusted plugins produce warnings but are\nstill loaded. In `disabled` mode (the default), no signature checking occurs.",
+      "properties": {
+        "signature_mode": {
+          "default": "disabled",
+          "description": "Signature enforcement mode: \"disabled\", \"permissive\", or \"strict\".",
+          "type": "string"
+        },
+        "trusted_publisher_keys": {
+          "default": [],
+          "description": "Hex-encoded Ed25519 public keys of trusted plugin publishers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PluginsConfig": {
+      "description": "Plugin system configuration.",
+      "properties": {
+        "auto_discover": {
+          "default": false,
+          "description": "Auto-discover and load plugins on startup",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the plugin system (default: false)",
+          "type": "boolean"
+        },
+        "entries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginEntryConfig"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "$ref": "#/$defs/PluginLimitsConfig",
+          "default": {
+            "call_fuel": 1000000000,
+            "max_instances": 64,
+            "max_memory_mb": 256,
+            "max_table_elements": 100000
+          },
+          "description": "Per-call WASM execution limits"
+        },
+        "max_plugins": {
+          "default": 50,
+          "description": "Maximum number of plugins that can be loaded",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plugins_dir": {
+          "default": "/home/jeremy/.zeroclaw/plugins",
+          "description": "Directory where plugins are stored",
+          "type": "string"
+        },
+        "security": {
+          "$ref": "#/$defs/PluginSecurityConfig",
+          "default": {
+            "signature_mode": "disabled",
+            "trusted_publisher_keys": []
+          },
+          "description": "Plugin signature verification security settings"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PluginsConfig",
+  "default": {
+    "auto_discover": false,
+    "enabled": false,
+    "entries": [],
+    "limits": {
+      "call_fuel": 1000000000,
+      "max_instances": 64,
+      "max_memory_mb": 256,
+      "max_table_elements": 100000
+    },
+    "max_plugins": 50,
+    "plugins_dir": "/home/jeremy/.zeroclaw/plugins",
+    "security": {
+      "signature_mode": "disabled",
+      "trusted_publisher_keys": []
+    }
+  },
+  "description": "Plugin system configuration (`[plugins]`)."
+}

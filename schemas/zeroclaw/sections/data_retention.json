@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "DataRetentionConfig": {
+      "description": "Data retention and purge configuration (`[data_retention]` section).",
+      "properties": {
+        "categories": {
+          "default": [],
+          "description": "Limit retention enforcement to specific data categories (empty = all).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Preview what would be deleted without actually removing anything.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the `data_management` tool.",
+          "type": "boolean"
+        },
+        "retention_days": {
+          "default": 90,
+          "description": "Days of data to retain before purge eligibility.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/DataRetentionConfig",
+  "default": {
+    "categories": [],
+    "dry_run": false,
+    "enabled": false,
+    "retention_days": 90
+  },
+  "description": "Data retention and purge configuration (`[data_retention]`)."
+}

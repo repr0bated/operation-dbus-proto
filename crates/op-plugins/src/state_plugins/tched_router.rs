@@ -1004,7 +1004,7 @@ impl TchedRouterPlugin {
                 config_schema: ConfigSchema {
                     source: "zeroclaw config schema".to_string(),
                     schema_crate: "schemars".to_string(),
-                    native_type: "zeroclaw::config::schema::Config".to_string(),
+                    native_type: format!("zeroclaw config schema v{}", zeroclaw_binary_version()),
                     status: "available_via_cli_or_gateway".to_string(),
                     ..Default::default()
                 },
@@ -2586,39 +2586,70 @@ inventory::submit! {
     crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(TchedRouterPlugin::new()))
 }
 
-#[cfg(test)]
-mod upstream_schema_tests {
-    //! The raw schema lives in the upstream source: `schema_for!(zeroclaw::Config)`
-    //! generated from this crate must match what `zeroclaw config schema`
-    //! prints, because both derive from the same upstream types on the same
-    //! schemars 1.x. This test is the drift alarm for that invariant.
+/// Version of the official zeroclaw binary whose `config schema` output backs
+/// the generated config surface, from `schemas/zeroclaw/VERSION`.
+///
+/// Read from the captured file rather than the generated surface so this module
+/// never depends on generated code in order to compile — that circularity is
+/// what makes a stubbed regeneration hard to recover from.
+pub fn zeroclaw_binary_version() -> &'static str {
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../schemas/zeroclaw/VERSION"
+    ))
+    .trim()
+}
 
+#[cfg(test)]
+mod official_schema_tests {
+    //! The OFFICIAL zeroclaw binary is the source of truth for the config
+    //! surface: `zeroclaw config schema` is captured at
+    //! `schemas/zeroclaw/config.schema.json` and the surface is generated from
+    //! that document. There is no linked `zeroclaw` crate to drift against.
+    //!
+    //! These tests are the alarm for the failure that actually happened: the
+    //! dependency resolved to a 193-line stand-in whose every config type was
+    //! an empty struct, so the whole surface compiled and sealed while carrying
+    //! no fields at all. The previous version of this module early-returned in
+    //! exactly that case, which is why nothing caught it.
+
+    use super::zeroclaw_binary_version;
     use crate::state_plugins::tched_router_config_surface::GetGatewayConfigOutput;
 
-    #[test]
-    fn upstream_config_schema_is_the_cli_surface() {
-        let schema = schemars::schema_for!(zeroclaw::Config);
-        let value = serde_json::to_value(&schema).expect("schema serializes");
-        // Side-channel for out-of-band diffing against the CLI document.
-        std::fs::write(
-            "/tmp/opencode/zc-config-schema-crate.json",
-            serde_json::to_string_pretty(&value).expect("pretty json"),
-        )
-        .ok();
+    const CAPTURED: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../schemas/zeroclaw/config.schema.json"
+    ));
 
-        let Some(defs) = value.get("$defs").and_then(|d| d.as_object()) else {
-            // vendor/zeroclawlabs is an empty schemars stand-in. This drift
-            // alarm only applies when the real `/srv/git/zeroclaw` crate is
-            // wired in.
-            return;
-        };
-        let Some(gw) = defs
+    #[test]
+    fn captured_schema_is_not_a_stub() {
+        let value: serde_json::Value =
+            serde_json::from_str(CAPTURED).expect("captured schema is valid JSON");
+        let sections = value
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("captured schema has properties");
+        let defs = value
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("captured schema has $defs");
+        assert!(
+            sections.len() >= 32,
+            "captured schema has only {} sections — re-capture with \
+             `zeroclaw config schema > schemas/zeroclaw/config.schema.json`",
+            sections.len()
+        );
+        assert!(
+            defs.len() >= 64,
+            "captured schema has only {} $defs — looks stubbed or truncated",
+            defs.len()
+        );
+
+        let gateway = defs
             .get("GatewayConfig")
             .and_then(|g| g.get("properties"))
             .and_then(|p| p.as_object())
-        else {
-            return;
-        };
+            .expect("GatewayConfig is defined with properties");
         for field in [
             "port",
             "host",
@@ -2626,10 +2657,11 @@ mod upstream_schema_tests {
             "paired_tokens",
             "session_ttl_hours",
         ] {
-            assert!(gw.contains_key(field), "GatewayConfig missing {field}");
+            assert!(gateway.contains_key(field), "GatewayConfig missing {field}");
         }
         assert_eq!(
-            gw.get("require_pairing")
+            gateway
+                .get("require_pairing")
                 .and_then(|v| v.get("type"))
                 .and_then(|t| t.as_str()),
             Some("boolean")
@@ -2637,12 +2669,27 @@ mod upstream_schema_tests {
     }
 
     #[test]
-    fn sealed_method_schema_references_upstream_type() {
+    fn sealed_method_schema_carries_real_section_fields() {
+        // With a stubbed source this passed while the payload was `{}`.
         let schema = schemars::schema_for!(GetGatewayConfigOutput);
-        let value = serde_json::to_value(&schema).expect("schema serializes");
-        assert!(
-            value.to_string().contains("GatewayConfig"),
-            "GetGatewayConfigOutput schema must carry the upstream GatewayConfig definition"
+        let text = serde_json::to_value(&schema)
+            .expect("schema serializes")
+            .to_string();
+        for field in ["port", "host", "require_pairing", "session_ttl_hours"] {
+            assert!(
+                text.contains(field),
+                "GetGatewayConfigOutput payload is missing `{field}` — generated from a stub?"
+            );
+        }
+    }
+
+    #[test]
+    fn captured_schema_records_the_binary_version() {
+        let version = zeroclaw_binary_version();
+        assert!(!version.is_empty());
+        assert_ne!(
+            version, "unknown",
+            "populate schemas/zeroclaw/VERSION from `zeroclaw --version`"
         );
     }
 }

@@ -1,0 +1,760 @@
+{
+  "$defs": {
+    "CostConfig": {
+      "description": "Cost tracking and budget enforcement configuration (`[cost]` section).",
+      "properties": {
+        "allow_override": {
+          "default": false,
+          "description": "Allow requests to exceed budget with --override flag (default: false)",
+          "type": "boolean"
+        },
+        "daily_limit_usd": {
+          "default": 10.0,
+          "description": "Daily spending limit in USD (default: 10.00)",
+          "format": "double",
+          "type": "number"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable cost tracking (default: true)",
+          "type": "boolean"
+        },
+        "enforcement": {
+          "$ref": "#/$defs/CostEnforcementConfig",
+          "default": {
+            "mode": "warn",
+            "reserve_percent": 10,
+            "route_down_model": null
+          },
+          "description": "Cost enforcement behavior when budget limits are approached or exceeded."
+        },
+        "monthly_limit_usd": {
+          "default": 100.0,
+          "description": "Monthly spending limit in USD (default: 100.00)",
+          "format": "double",
+          "type": "number"
+        },
+        "rates": {
+          "$ref": "#/$defs/CostRatesConfig",
+          "default": {
+            "providers": {
+              "models": {},
+              "transcription": {},
+              "tts": {}
+            },
+            "tools": {}
+          },
+          "description": "Operator-managed rate sheet at `[cost.rates.*]`. Sections mirror\nthe `[providers.*]` dotted-path exactly with the trailing `alias`\nsegment replaced by the resource the rate applies to (model id,\ntool name, …). Layout:\n\n```toml\n[cost.rates.providers.models.anthropic.\"claude-opus-4-7\"]\ninput_per_mtok = 15.0\noutput_per_mtok = 75.0\ncached_input_per_mtok = 1.5\n\n[cost.rates.providers.tts.openai.\"tts-1-hd\"]\nper_mchar = 30.0\n\n[cost.rates.providers.transcription.openai.whisper-1]\nper_minute = 0.006\n\n[cost.rates.tools.web_search]\nper_call = 0.005\n```"
+        },
+        "track_per_agent": {
+          "default": true,
+          "description": "Stamp each recorded cost entry with the originating agent alias so\n`/api/cost?agent=<alias>` and CLI rollups can attribute spend to a\nspecific agent. Disable on high-volume deployments if the extra\nHashMap aggregation shows up in profiles (default: true).",
+          "type": "boolean"
+        },
+        "warn_at_percent": {
+          "default": 80,
+          "description": "Warn when spending reaches this percentage of limit (default: 80)",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CostEnforcementConfig": {
+      "description": "Configuration for cost enforcement behavior when budget limits are reached.",
+      "properties": {
+        "mode": {
+          "default": "warn",
+          "description": "Enforcement mode: \"warn\", \"block\", or \"route_down\".",
+          "type": "string"
+        },
+        "reserve_percent": {
+          "default": 10,
+          "description": "Reserve this percentage of budget for critical operations.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "route_down_model": {
+          "default": null,
+          "description": "Model hint to route to when budget is exceeded (used with \"route_down\" mode).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CostRatesConfig": {
+      "description": "`[cost.rates]` — top-level rate-sheet namespace. Mirrors the\n`[providers.*]` shape so each subsection here points at the same\nkind of resource its `[providers.*]` counterpart configures.",
+      "properties": {
+        "providers": {
+          "$ref": "#/$defs/ProviderCostRates",
+          "default": {
+            "models": {},
+            "transcription": {},
+            "tts": {}
+          },
+          "description": "`[cost.rates.providers.*]` — rates for everything under\n`[providers.*]` (models, TTS, transcription, …)."
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolCostRates"
+          },
+          "default": {},
+          "description": "`[cost.rates.tools.<name>]` — per-call rates for tools that\nhit paid APIs. Keyed by the tool's registered name.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ModelCostRates": {
+      "description": "Token-cost rates for a single chat / completion model, in USD per\n1M tokens. Every field optional so partial sheets work without\nceremony (an operator who only knows the input rate can record it).",
+      "properties": {
+        "cached_input_per_mtok": {
+          "description": "Cached input tokens (USD per 1M). Optional — leave unset on\nproviders that don't charge separately for prompt cache hits.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "input_per_mtok": {
+          "description": "Input tokens (USD per 1M).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "output_per_mtok": {
+          "description": "Output tokens (USD per 1M).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ModelCostRatesByProvider": {
+      "description": "`[cost.rates.providers.models.<type>.<model>]` — token-cost rates\nper (provider type, model). One slot per provider type; each\nslot is a `HashMap<model_id, ModelCostRates>`. The slot list\nmatches `ModelProviders` byte-for-byte (same source macro).",
+      "properties": {
+        "ai21": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "aihubmix": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "anthropic": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "anyscale": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "arcee": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "astrai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "atomic_chat": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "avian": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "azure": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "baichuan": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "baseten": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "bedrock": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "cerebras": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "cloudflare": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "cohere": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "copilot": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "custom": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "deepinfra": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "deepmyst": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "deepseek": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "doubao": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "featherless": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "fireworks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "friendli": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "gemini": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "gemini_cli": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "github_models": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "glm": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "groq": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "huggingface": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "hunyuan": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "hyperbolic": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "inception": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "kilo": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "kilocli": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "lambda_ai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "lepton": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "litellm": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "llamacpp": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "lmstudio": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "manifest": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "minimax": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "mistral": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "moonshot": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "morph": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "nearai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "nebius": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "novita": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "nscale": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "nvidia": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "ollama": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "openai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "opencode": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "openrouter": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "osaurus": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "ovh": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "perplexity": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "qianfan": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "qwen": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "reka": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "sambanova": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "sglang": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "siliconflow": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "stepfun": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "synthetic": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "telnyx": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "together": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "upstage": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "venice": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "vercel": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "vllm": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "xai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "yi": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        },
+        "zai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelCostRates"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ProviderCostRates": {
+      "description": "`[cost.rates.providers.*]` — provider-shaped rate sheets. Each field\nhere mirrors a corresponding field on `[providers.*]` with the\ntrailing alias segment replaced by the resource the rate prices.\nThe inner typed wrappers carry the per-provider-type slot layout\nand own dispatch (their slot list is the single source of truth,\nshared with their providers counterpart via the `for_each_*_provider_slot!`\nmacros in [`crate::providers`]).",
+      "properties": {
+        "models": {
+          "$ref": "#/$defs/ModelCostRatesByProvider",
+          "default": {},
+          "description": "`[cost.rates.providers.models.<type>.<model>]`."
+        },
+        "transcription": {
+          "$ref": "#/$defs/TranscriptionCostRatesByProvider",
+          "default": {},
+          "description": "`[cost.rates.providers.transcription.<type>.<model>]`."
+        },
+        "tts": {
+          "$ref": "#/$defs/TtsCostRatesByProvider",
+          "default": {},
+          "description": "`[cost.rates.providers.tts.<type>.<voice>]`."
+        }
+      },
+      "type": "object"
+    },
+    "ToolCostRates": {
+      "description": "Rates for a tool that hits a paid external API. Keyed in\n`[cost.rates.tools.<name>]` by the tool's registered name.",
+      "properties": {
+        "per_call": {
+          "description": "Per-call cost (USD).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TranscriptionCostRates": {
+      "description": "Rates for a transcription model, in USD per minute of audio.",
+      "properties": {
+        "per_minute": {
+          "description": "Audio transcribed (USD per minute).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TranscriptionCostRatesByProvider": {
+      "description": "`cost.rates.providers.transcription.<type>.<model>`\n — per-(provider type, resource) cost rates.",
+      "properties": {
+        "assemblyai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TranscriptionCostRates"
+          },
+          "type": "object"
+        },
+        "deepgram": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TranscriptionCostRates"
+          },
+          "type": "object"
+        },
+        "google": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TranscriptionCostRates"
+          },
+          "type": "object"
+        },
+        "groq": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TranscriptionCostRates"
+          },
+          "type": "object"
+        },
+        "local_whisper": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TranscriptionCostRates"
+          },
+          "type": "object"
+        },
+        "openai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TranscriptionCostRates"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "TtsCostRates": {
+      "description": "Rates for a TTS model, in USD per 1M characters.",
+      "properties": {
+        "per_mchar": {
+          "description": "Characters synthesised (USD per 1M).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TtsCostRatesByProvider": {
+      "description": "`cost.rates.providers.tts.<type>.<voice>`\n — per-(provider type, resource) cost rates.",
+      "properties": {
+        "edge": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TtsCostRates"
+          },
+          "type": "object"
+        },
+        "elevenlabs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TtsCostRates"
+          },
+          "type": "object"
+        },
+        "google": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TtsCostRates"
+          },
+          "type": "object"
+        },
+        "openai": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TtsCostRates"
+          },
+          "type": "object"
+        },
+        "piper": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TtsCostRates"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/CostConfig",
+  "default": {
+    "allow_override": false,
+    "daily_limit_usd": 10.0,
+    "enabled": true,
+    "enforcement": {
+      "mode": "warn",
+      "reserve_percent": 10,
+      "route_down_model": null
+    },
+    "monthly_limit_usd": 100.0,
+    "rates": {
+      "providers": {
+        "models": {},
+        "transcription": {},
+        "tts": {}
+      },
+      "tools": {}
+    },
+    "track_per_agent": true,
+    "warn_at_percent": 80
+  },
+  "description": "Cost tracking and budget enforcement configuration (`[cost]`).\nAlso hosts the operator-managed rate sheet at\n`[cost.rates.<type>.<model>]`."
+}

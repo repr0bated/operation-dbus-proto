@@ -1,0 +1,22 @@
+{
+  "$defs": {
+    "ShellToolConfig": {
+      "description": "Shell tool configuration (`[shell_tool]` section).\n\nControls the behaviour of the `shell` execution tool. The main\ntunable is `timeout_secs` — the maximum wall-clock time a single\nshell command may run before it is killed.",
+      "properties": {
+        "timeout_secs": {
+          "default": 60,
+          "description": "Maximum shell command execution time in seconds (default: 60).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ShellToolConfig",
+  "default": {
+    "timeout_secs": 60
+  },
+  "description": "Shell tool configuration (`[shell_tool]`)."
+}

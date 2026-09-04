@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "GeminiCliConfig": {
+      "description": "Gemini CLI tool configuration (`[gemini_cli]` section).\n\nDelegates coding tasks to the `gemini -p` CLI. Authentication uses the\nbinary's own session by default — no API key needed unless\n`env_passthrough` includes `GOOGLE_API_KEY`.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the `gemini_cli` tool",
+          "type": "boolean"
+        },
+        "env_passthrough": {
+          "default": [],
+          "description": "Extra env vars passed to the gemini subprocess (e.g. GOOGLE_API_KEY)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_output_bytes": {
+          "default": 2097152,
+          "description": "Maximum output size in bytes (2MB default)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 600,
+          "description": "Maximum execution time in seconds (coding tasks can be long)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/GeminiCliConfig",
+  "default": {
+    "enabled": false,
+    "env_passthrough": [],
+    "max_output_bytes": 2097152,
+    "timeout_secs": 600
+  },
+  "description": "Gemini CLI tool configuration (`[gemini_cli]`)."
+}

@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "SecurityOpsConfig": {
+      "description": "Managed Cybersecurity Service (MCSS) dashboard agent configuration (`[security_ops]`).",
+      "properties": {
+        "auto_triage": {
+          "default": false,
+          "description": "Automatically triage incoming alerts without user prompt.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable security operations tools.",
+          "type": "boolean"
+        },
+        "max_auto_severity": {
+          "default": "low",
+          "description": "Maximum severity level that can be auto-remediated without approval.\nOne of: \"low\", \"medium\", \"high\", \"critical\". Default: \"low\".",
+          "type": "string"
+        },
+        "playbooks_dir": {
+          "default": "/home/jeremy/.zeroclaw/playbooks",
+          "description": "Directory containing incident response playbook definitions (JSON).",
+          "type": "string"
+        },
+        "report_output_dir": {
+          "default": "/home/jeremy/.zeroclaw/security-reports",
+          "description": "Directory for generated security reports.",
+          "type": "string"
+        },
+        "require_approval_for_actions": {
+          "default": true,
+          "description": "Require human approval before executing playbook actions.",
+          "type": "boolean"
+        },
+        "siem_integration": {
+          "default": null,
+          "description": "Optional SIEM webhook URL for alert ingestion.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/SecurityOpsConfig",
+  "default": {
+    "auto_triage": false,
+    "enabled": false,
+    "max_auto_severity": "low",
+    "playbooks_dir": "/home/jeremy/.zeroclaw/playbooks",
+    "report_output_dir": "/home/jeremy/.zeroclaw/security-reports",
+    "require_approval_for_actions": true,
+    "siem_integration": null
+  },
+  "description": "Managed cybersecurity service configuration (`[security_ops]`)."
+}

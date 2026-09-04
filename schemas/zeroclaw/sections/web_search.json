@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "WebSearchConfig": {
+      "description": "Web search tool configuration (`[web_search]` section).",
+      "properties": {
+        "bocha_api_key": {
+          "default": null,
+          "description": "Bocha AI Web Search API key (required if search_provider is `\"bocha\"`). Obtain at <https://open.bochaai.com>.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "brave_api_key": {
+          "default": null,
+          "description": "Brave Search API key (required if search_provider is \"brave\")",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable `web_search_tool` for web searches",
+          "type": "boolean"
+        },
+        "jina_api_key": {
+          "default": null,
+          "description": "Jina AI API key (required if search_provider is \"jina\")",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "max_results": {
+          "default": 5,
+          "description": "Maximum results per search (1-10)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "search_provider": {
+          "default": "duckduckgo",
+          "description": "Search provider: \"duckduckgo\" (free), \"brave\" (requires API key), \"tavily\" (requires API key), \"searxng\" (self-hosted), \"jina\" (requires API key), or \"bocha\" (Bocha AI, requires API key — Chinese-friendly, <https://open.bochaai.com>)",
+          "type": "string"
+        },
+        "searxng_instance_url": {
+          "default": null,
+          "description": "SearXNG instance URL (required if search_provider is `\"searxng\"`), e.g. `\"https://searx.example.com\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tavily_api_key": {
+          "default": null,
+          "description": "Tavily Search API key (required if search_provider is \"tavily\")",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "timeout_secs": {
+          "default": 15,
+          "description": "Request timeout in seconds",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/WebSearchConfig",
+  "default": {
+    "bocha_api_key": null,
+    "brave_api_key": null,
+    "enabled": true,
+    "jina_api_key": null,
+    "max_results": 5,
+    "search_provider": "duckduckgo",
+    "searxng_instance_url": null,
+    "tavily_api_key": null,
+    "timeout_secs": 15
+  },
+  "description": "Web search tool configuration (`[web_search]`)."
+}

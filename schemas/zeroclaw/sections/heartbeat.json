@@ -1,0 +1,137 @@
+{
+  "$defs": {
+    "HeartbeatConfig": {
+      "description": "Heartbeat configuration for periodic health pings (`[heartbeat]` section).",
+      "properties": {
+        "adaptive": {
+          "default": false,
+          "description": "Enable adaptive intervals that back off on failures and speed up for\nhigh-priority tasks. Default: `false`.",
+          "type": "boolean"
+        },
+        "agent": {
+          "default": "",
+          "description": "Configured agent alias the heartbeat worker runs as. Required\nwhen `enabled = true`; refers to a `[agents.<alias>]` entry.",
+          "type": "string"
+        },
+        "deadman_channel": {
+          "default": null,
+          "description": "Channel for dead-man's switch alerts (e.g. `telegram`). Falls back to\nthe heartbeat delivery channel.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadman_timeout_minutes": {
+          "default": 0,
+          "description": "Dead-man's switch timeout in minutes. If the heartbeat has not ticked\nwithin this window, an alert is sent. `0` disables. Default: `0`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deadman_to": {
+          "default": null,
+          "description": "Recipient for dead-man's switch alerts. Falls back to `to`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable periodic heartbeat pings. Default: `false`. When enabled,\n`agent` must name a configured agent — there is no default agent\nfor heartbeat to fall through to.",
+          "type": "boolean"
+        },
+        "interval_minutes": {
+          "default": 30,
+          "description": "Interval in minutes between heartbeat pings. Minimum: `1`. Default: `30`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "load_session_context": {
+          "default": false,
+          "description": "Load the channel session history before each heartbeat task execution so\nthe LLM has conversational context. Default: `false`.\n\nWhen `true`, the session file for the configured `target`/`to` is passed\nto the agent as `session_state_file`, giving it access to the recent\nconversation history — just as if the user had sent a message.",
+          "type": "boolean"
+        },
+        "max_interval_minutes": {
+          "default": 120,
+          "description": "Maximum interval in minutes when adaptive mode backs off. Default: `120`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_run_history": {
+          "default": 100,
+          "description": "Maximum number of heartbeat run history records to retain. Default: `100`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message": {
+          "default": null,
+          "description": "Optional fallback task text when `HEARTBEAT.md` has no task entries.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min_interval_minutes": {
+          "default": 5,
+          "description": "Minimum interval in minutes when adaptive mode is enabled. Default: `5`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target": {
+          "default": null,
+          "description": "Optional delivery channel for heartbeat output (for example: `telegram`).\nWhen omitted, auto-selects the first configured channel.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_timeout_secs": {
+          "default": 600,
+          "description": "Maximum wall-clock seconds allowed for a single agent invocation\n(Phase 1 decision or Phase 2 task execution). `0` disables.\nDefault: `600` (10 minutes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "default": null,
+          "description": "Optional delivery recipient/chat identifier (required when `target` is\nexplicitly set).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "two_phase": {
+          "default": true,
+          "description": "Enable two-phase heartbeat: Phase 1 asks LLM whether to run, Phase 2\nexecutes only when the LLM decides there is work to do. Saves API cost\nduring quiet periods. Default: `true`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/HeartbeatConfig",
+  "default": {
+    "adaptive": false,
+    "agent": "",
+    "deadman_channel": null,
+    "deadman_timeout_minutes": 0,
+    "deadman_to": null,
+    "enabled": false,
+    "interval_minutes": 30,
+    "load_session_context": false,
+    "max_interval_minutes": 120,
+    "max_run_history": 100,
+    "message": null,
+    "min_interval_minutes": 5,
+    "target": null,
+    "task_timeout_secs": 600,
+    "to": null,
+    "two_phase": true
+  },
+  "description": "Heartbeat configuration for periodic health pings (`[heartbeat]`)."
+}

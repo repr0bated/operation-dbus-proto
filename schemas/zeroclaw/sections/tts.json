@@ -1,0 +1,40 @@
+{
+  "$defs": {
+    "TtsConfig": {
+      "description": "Text-to-Speech subsystem configuration (`[tts]`).\n\nPer-instance TTS configs live under `[tts_providers.<type>.<alias>]`\n(parallel to `providers.models`). What remains here are the global\nruntime knobs that apply to every model_provider invocation.",
+      "properties": {
+        "default_format": {
+          "default": "mp3",
+          "description": "Default audio output format (`\"mp3\"`, `\"opus\"`, `\"wav\"`).",
+          "type": "string"
+        },
+        "default_voice": {
+          "default": "alloy",
+          "description": "Default voice ID passed to the selected tts provider.",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable TTS synthesis.",
+          "type": "boolean"
+        },
+        "max_text_length": {
+          "default": 4096,
+          "description": "Maximum input text length in characters (default 4096).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/TtsConfig",
+  "default": {
+    "default_format": "mp3",
+    "default_voice": "alloy",
+    "enabled": false,
+    "max_text_length": 4096
+  },
+  "description": "Text-to-Speech configuration (`[tts]`)."
+}

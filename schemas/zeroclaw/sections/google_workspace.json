@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "GoogleWorkspaceAllowedOperation": {
+      "description": "Google Workspace CLI (`gws`) tool configuration (`[google_workspace]` section).\n\n## Defaults\n- `enabled`: `false` (tool is not registered unless explicitly opted-in).\n- `allowed_services`: empty vector, which grants access to the full default\n  service set: `drive`, `sheets`, `gmail`, `calendar`, `docs`, `slides`,\n  `tasks`, `people`, `chat`, `classroom`, `forms`, `keep`, `meet`, `events`.\n- `credentials_path`: `None` (uses default `gws` credential discovery).\n- `default_account`: `None` (uses the `gws` active account).\n- `rate_limit_per_minute`: `60`.\n- `timeout_secs`: `30`.\n- `audit_log`: `false`.\n- `credentials_path`: `None` (uses default `gws` credential discovery).\n- `default_account`: `None` (uses the `gws` active account).\n- `rate_limit_per_minute`: `60`.\n- `timeout_secs`: `30`.\n- `audit_log`: `false`.\n\n## Compatibility\nConfigs that omit the `[google_workspace]` section entirely are treated as\n`GoogleWorkspaceConfig::default()` (disabled, all defaults allowed). Adding\nthe section is purely opt-in and does not affect other config sections.\n\n## Rollback / Migration\nTo revert, remove the `[google_workspace]` section from the config file (or\nset `enabled = false`). No data migration is required; the tool simply stops\nbeing registered.",
+      "properties": {
+        "methods": {
+          "default": [],
+          "description": "Allowed methods for the service/resource/sub_resource combination.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "description": "Top-level resource name for the service (for example `users` for Gmail or `files` for Drive).",
+          "type": "string"
+        },
+        "service": {
+          "description": "Google Workspace service ID (for example `gmail` or `drive`).",
+          "type": "string"
+        },
+        "sub_resource": {
+          "default": null,
+          "description": "Optional sub-resource for 4-segment gws commands\n(for example `messages` or `drafts` under `gmail users`).\nWhen present, the entry only matches calls that include this exact sub_resource.\nWhen absent, the entry only matches calls with no sub_resource.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "service",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "GoogleWorkspaceConfig": {
+      "description": "Google Workspace CLI (`gws`) tool configuration (`[google_workspace]` section).\n\n## Defaults\n- `enabled`: `false` (tool is not registered unless explicitly opted-in).\n- `allowed_services`: empty vector, which grants access to the full default\n  service set: `drive`, `sheets`, `gmail`, `calendar`, `docs`, `slides`,\n  `tasks`, `people`, `chat`, `classroom`, `forms`, `keep`, `meet`, `events`.\n- `allowed_operations`: empty vector, which preserves the legacy behavior of\n  allowing any resource/method under the allowed service set.\n- `credentials_path`: `None` (uses default `gws` credential discovery).\n- `default_account`: `None` (uses the `gws` active account).\n- `rate_limit_per_minute`: `60`.\n- `timeout_secs`: `30`.\n- `audit_log`: `false`.\n\n## Compatibility\nConfigs that omit the `[google_workspace]` section entirely are treated as\n`GoogleWorkspaceConfig::default()` (disabled, all defaults allowed). Adding\nthe section is purely opt-in and does not affect other config sections.\n\n## Rollback / Migration\nTo revert, remove the `[google_workspace]` section from the config file (or\nset `enabled = false`). No data migration is required; the tool simply stops\nbeing registered.",
+      "properties": {
+        "allowed_operations": {
+          "default": [],
+          "description": "Restrict which resource/method combinations the agent can access.\n\nWhen empty (the default), all methods under `allowed_services` remain\navailable for backward compatibility. When non-empty, the runtime denies\nany `(service, resource, sub_resource, method)` combination that is not\nexplicitly listed. `sub_resource` is optional per entry: an entry without\nit matches only 3-segment `gws` calls; an entry with it matches only calls\nthat supply that exact sub_resource value.\n\nEach entry's `service` must appear in `allowed_services` when that list is\nnon-empty; config validation rejects entries that would never match at\nruntime.",
+          "items": {
+            "$ref": "#/$defs/GoogleWorkspaceAllowedOperation"
+          },
+          "type": "array"
+        },
+        "allowed_services": {
+          "default": [],
+          "description": "Restrict which Google Workspace services the agent can access.\n\nWhen empty (the default), the full default service set is allowed (see\nstruct-level docs). When non-empty, only the listed service IDs are\npermitted. Each entry must be non-empty, lowercase alphanumeric with\noptional underscores/hyphens, and unique.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "audit_log": {
+          "default": false,
+          "description": "Enable audit logging of every `gws` invocation (service, resource,\nmethod, timestamp). Default: `false`.",
+          "type": "boolean"
+        },
+        "credentials_path": {
+          "default": null,
+          "description": "Path to service account JSON or OAuth client credentials file.\n\nWhen `None`, the tool relies on the default `gws` credential discovery\n(`gws auth login`). Set this to point at a service-account key or an\nOAuth client-secrets JSON for headless / CI environments.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_account": {
+          "default": null,
+          "description": "Default Google account email to pass to `gws --account`.\n\nWhen `None`, the currently active `gws` account is used.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the `google_workspace` tool. Default: `false`.",
+          "type": "boolean"
+        },
+        "rate_limit_per_minute": {
+          "default": 60,
+          "description": "Maximum number of `gws` API calls allowed per minute. Default: `60`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 30,
+          "description": "Command execution timeout in seconds. Default: `30`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/GoogleWorkspaceConfig",
+  "default": {
+    "allowed_operations": [],
+    "allowed_services": [],
+    "audit_log": false,
+    "credentials_path": null,
+    "default_account": null,
+    "enabled": false,
+    "rate_limit_per_minute": 60,
+    "timeout_secs": 30
+  },
+  "description": "Google Workspace CLI (`gws`) tool configuration (`[google_workspace]`)."
+}

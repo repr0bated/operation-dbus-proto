@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "ClaudeCodeRunnerConfig": {
+      "description": "Claude Code task runner configuration (`[claude_code_runner]` section).\n\nSpawns Claude Code in a tmux session with HTTP hooks that POST tool\nexecution events back to ZeroClaw's gateway, updating a Slack message\nin-place with progress plus an SSH handoff link.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the `claude_code_runner` tool",
+          "type": "boolean"
+        },
+        "session_ttl": {
+          "default": 3600,
+          "description": "Session time-to-live in seconds before auto-cleanup (default: 3600)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ssh_host": {
+          "default": null,
+          "description": "SSH host for session handoff links (e.g. \"myhost.example.com\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tmux_prefix": {
+          "default": "zc-claude-",
+          "description": "Prefix for tmux session names (default: \"zc-claude-\")",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ClaudeCodeRunnerConfig",
+  "default": {
+    "enabled": false,
+    "session_ttl": 3600,
+    "ssh_host": null,
+    "tmux_prefix": "zc-claude-"
+  },
+  "description": "Claude Code task runner with Slack progress and SSH session handoff (`[claude_code_runner]`)."
+}

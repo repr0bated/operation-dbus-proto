@@ -1,0 +1,226 @@
+{
+  "$defs": {
+    "CronJobDecl": {
+      "description": "A declarative cron job definition (`[cron.<alias>]`).\n\nStored alias-keyed on `Config.cron`. The map key serves as the stable job id.\nSynced into the database at scheduler startup with `source = \"declarative\"`,\ndistinguishing them from jobs created imperatively via CLI or API.\nDeclarative config takes precedence on each sync: if the config changes,\nthe DB is updated to match. Imperative jobs are never deleted by sync.",
+      "properties": {
+        "allowed_tools": {
+          "default": null,
+          "description": "Optional allowlist of tool names for agent jobs. When omitted, scheduler\ndefaults may still exclude scheduler mutation tools for cron agent jobs.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "command": {
+          "default": null,
+          "description": "Shell command to run (required when `job_type = \"shell\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryConfigDecl"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Delivery configuration."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether the job is enabled. Default: `true`.",
+          "type": "boolean"
+        },
+        "job_type": {
+          "default": "shell",
+          "description": "Job type: `\"shell\"` (default) or `\"agent\"`.",
+          "type": "string"
+        },
+        "model": {
+          "default": null,
+          "description": "Model override for agent jobs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "default": null,
+          "description": "Human-readable name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "default": null,
+          "description": "Agent prompt (required when `job_type = \"agent\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schedule": {
+          "$ref": "#/$defs/CronScheduleDecl",
+          "default": {
+            "expr": "",
+            "kind": "cron",
+            "tz": null
+          },
+          "description": "Schedule for the job."
+        },
+        "session_target": {
+          "default": null,
+          "description": "Session target: `\"isolated\"` (default) or `\"main\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shell_output_format": {
+          "$ref": "#/$defs/CronShellOutputFormat",
+          "default": "wrapped",
+          "description": "Output format for shell jobs: `\"wrapped\"` (default) or `\"raw\"`.\n\n- `\"wrapped\"` (default): returns stdout and stderr wrapped in a\n  `status=... / stdout: / stderr:` envelope.\n- `\"raw\"`: returns trimmed stdout when the process exits zero. A\n  non-zero process exit still gets the wrapped status/stdout/stderr\n  envelope for diagnosis. Failures that never reach a process exit —\n  a security-policy denial, a shell setup/spawn failure, or a\n  timeout — return a plain error string in either format."
+        },
+        "uses_memory": {
+          "default": true,
+          "description": "Whether to recall and inject memory context before this agent job runs.\nDefaults to `true`; set to `false` for stateless digest jobs.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CronScheduleDecl": {
+      "description": "Schedule variant for declarative cron jobs.",
+      "oneOf": [
+        {
+          "description": "Classic cron expression.",
+          "properties": {
+            "expr": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "cron",
+              "type": "string"
+            },
+            "tz": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "expr"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Interval in milliseconds.",
+          "properties": {
+            "every_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "every",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "every_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One-shot at an RFC 3339 timestamp.",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "at",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "at"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CronShellOutputFormat": {
+      "description": "Output format for shell cron job stdout.",
+      "oneOf": [
+        {
+          "const": "wrapped",
+          "description": "Wrapped format: `status=...\\nstdout:\\n...\\nstderr:\\n...` (default).",
+          "type": "string"
+        },
+        {
+          "const": "raw",
+          "description": "Raw stdout on a zero process exit; wrapped status/stdout/stderr on a\nnon-zero exit; a plain error string for failures that never reach a\nprocess exit (security denial, spawn/setup failure, timeout).",
+          "type": "string"
+        }
+      ]
+    },
+    "DeliveryConfigDecl": {
+      "description": "Delivery configuration for declarative cron jobs.",
+      "properties": {
+        "best_effort": {
+          "default": true,
+          "description": "Best-effort delivery. Default: `true`.",
+          "type": "boolean"
+        },
+        "channel": {
+          "default": null,
+          "description": "Channel name (e.g. `\"telegram\"`, `\"discord\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "default": "none",
+          "description": "Delivery mode: `\"none\"` or `\"announce\"`.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Optional thread/conversation identifier carried into the outbound send.\nRequired by channels that route on a separate `thread_id` field (e.g.\nwebhook callbacks bridging into agent-chat platforms).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "default": null,
+          "description": "Target/recipient identifier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/CronJobDecl"
+  },
+  "description": "Declarative cron jobs (`[cron.<alias>]`), alias-keyed.\n\nEach entry is a named scheduled job synced into the database at\nscheduler startup. Subsystem runtime knobs (enable/disable, catch-up,\nrun-history retention) live on `[scheduler]`.",
+  "type": "object"
+}

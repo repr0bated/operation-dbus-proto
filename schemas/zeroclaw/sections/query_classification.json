@@ -1,0 +1,84 @@
+{
+  "$defs": {
+    "ClassificationRule": {
+      "description": "A single classification rule mapping message patterns to a model hint.",
+      "properties": {
+        "hint": {
+          "description": "Must match a `[[model_routes]]` hint value.",
+          "type": "string"
+        },
+        "keywords": {
+          "default": [],
+          "description": "Case-insensitive substring matches.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_length": {
+          "default": null,
+          "description": "Only match if message length <= N chars.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "min_length": {
+          "default": null,
+          "description": "Only match if message length >= N chars.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "patterns": {
+          "default": [],
+          "description": "Case-sensitive literal matches (for \"```\", \"fn \", etc.).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "default": 0,
+          "description": "Higher priority rules are checked first.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hint"
+      ],
+      "type": "object"
+    },
+    "QueryClassificationConfig": {
+      "description": "Automatic query classification — classifies user messages by keyword/pattern\nand routes to the appropriate model hint. Disabled by default.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable automatic query classification. Default: `false`.",
+          "type": "boolean"
+        },
+        "rules": {
+          "default": [],
+          "description": "Classification rules evaluated in priority order.",
+          "items": {
+            "$ref": "#/$defs/ClassificationRule"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/QueryClassificationConfig",
+  "default": {
+    "enabled": false,
+    "rules": []
+  },
+  "description": "Automatic query classification — maps user messages to model hints."
+}

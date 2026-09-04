@@ -1,0 +1,37 @@
+{
+  "$defs": {
+    "AcpConfig": {
+      "description": "ACP (Agent Client Protocol) server configuration (`[acp]` section).",
+      "properties": {
+        "default_agent": {
+          "description": "Agent alias to use when `session/new` omits `agentAlias` and more than\none agent is configured. When exactly one agent exists it is\nauto-selected regardless of this field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_sessions": {
+          "default": 10,
+          "description": "Maximum number of concurrent ACP sessions. Default: `10`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_timeout_secs": {
+          "default": 3600,
+          "description": "Idle session timeout in seconds. Sessions with no activity for this\nduration are eligible for eviction. Default: `3600` (1 hour).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/AcpConfig",
+  "default": {
+    "max_sessions": 10,
+    "session_timeout_secs": 3600
+  },
+  "description": "ACP (Agent Client Protocol) server configuration (`[acp]`)."
+}

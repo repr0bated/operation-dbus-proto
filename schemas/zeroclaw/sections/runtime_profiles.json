@@ -1,0 +1,526 @@
+{
+  "$defs": {
+    "AutoClassifyConfig": {
+      "properties": {
+        "complex_hint": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_optimized_hint": {
+          "default": "cost-optimized",
+          "type": "string"
+        },
+        "simple_hint": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "standard_hint": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ContextCompressionConfig": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "The runtime context compressor was removed; no runtime execution path\nconsumes this flag, so setting it to `true` currently has no effect.\nDefaults to `false` to match actual runtime behavior;\n`Config::collect_warnings` reads an explicit `true` only to report\n`context_compression_unsupported`.",
+          "type": "boolean"
+        },
+        "identifier_policy": {
+          "default": "strict",
+          "type": "string"
+        },
+        "max_passes": {
+          "default": 3,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protect_first_n": {
+          "default": 3,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protect_last_n": {
+          "default": 4,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_max_chars": {
+          "default": 50000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary_max_chars": {
+          "default": 4000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary_model": {
+          "default": null,
+          "description": "DEPRECATED bare model id retained as a compatibility fallback.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary_provider": {
+          "$ref": "#/$defs/ModelProviderRef",
+          "default": "",
+          "description": "Summarizer provider as a `<type>.<alias>` reference into `providers.models`."
+        },
+        "threshold_ratio": {
+          "default": 0.5,
+          "format": "double",
+          "type": "number"
+        },
+        "timeout_secs": {
+          "default": 60,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_result_retrim_chars": {
+          "default": 2000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_result_trim_exempt": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "EvalConfig": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "max_retries": {
+          "default": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_quality_score": {
+          "default": 0.5,
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "HistoryPrunerConfig": {
+      "properties": {
+        "collapse_tool_results": {
+          "default": true,
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "keep_recent": {
+          "default": 4,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tokens": {
+          "default": 8192,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ModelProviderRef": {
+      "description": "Reference to a configured `[providers.models.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "RuntimeProfileConfig": {
+      "description": "Named runtime/LLM execution profile (`[runtime_profiles.<alias>]`).\n\nReusable operational tuning: agentic mode, iteration caps, context\nbudget, parallel dispatch, resource ceilings, recursion depth, and\nthe budget knobs that `SecurityPolicy` enforces with subagent\nparent-subset discipline. Anything authorization-shaped (allowed\ncommands/tools/paths, approval gates, sandbox) lives on\n`[risk_profiles.<alias>]`. Anything model-provider shaped (model,\ntemperature, max_tokens, timeout_secs) lives on\n`[providers.models.<type>.<alias>]`.",
+      "properties": {
+        "agentic": {
+          "default": false,
+          "description": "Enable agentic (multi-turn tool-call loop) mode.",
+          "type": "boolean"
+        },
+        "agentic_timeout_secs": {
+          "default": null,
+          "description": "Agentic delegate run timeout in seconds. `None` inherits global.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "auto_classify": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AutoClassifyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "compact_context": {
+          "default": null,
+          "description": "Use compact bootstrap (6000 chars / 2 RAG chunks). `None` inherits.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "context_compression": {
+          "$ref": "#/$defs/ContextCompressionConfig",
+          "default": {
+            "enabled": false,
+            "identifier_policy": "strict",
+            "max_passes": 3,
+            "protect_first_n": 3,
+            "protect_last_n": 4,
+            "source_max_chars": 50000,
+            "summary_max_chars": 4000,
+            "summary_model": null,
+            "summary_provider": "",
+            "threshold_ratio": 0.5,
+            "timeout_secs": 60,
+            "tool_result_retrim_chars": 2000,
+            "tool_result_trim_exempt": []
+          }
+        },
+        "delegation_timeout_secs": {
+          "default": null,
+          "description": "Delegate call timeout in seconds. `None` inherits global delegate timeout.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "eval": {
+          "$ref": "#/$defs/EvalConfig",
+          "default": {
+            "enabled": false,
+            "max_retries": 1,
+            "min_quality_score": 0.5
+          }
+        },
+        "history_pruning": {
+          "$ref": "#/$defs/HistoryPrunerConfig",
+          "default": {
+            "collapse_tool_results": true,
+            "enabled": false,
+            "keep_recent": 4,
+            "max_tokens": 8192
+          }
+        },
+        "keep_tool_context_turns": {
+          "default": null,
+          "description": "Number of recent turns whose full tool context is preserved. `None` inherits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_actions_per_hour": {
+          "default": 20,
+          "description": "Maximum actions allowed per hour. `0` is a hard zero budget — the\nper-sender rate tracker treats a max of 0 as always exhausted\n(`PerSenderTracker::is_exhausted`), blocking every action. For an\neffectively-unlimited budget use a high value (e.g. `u32::MAX`), not 0.\n`SecurityPolicy::ensure_no_escalation_beyond` rejects subagents\nthat try to raise this above the parent's value.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_context_tokens": {
+          "default": null,
+          "description": "Maximum estimated tokens for context before compaction. `None` inherits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_cost_per_day_cents": {
+          "default": 500,
+          "description": "Maximum cost per day in cents. `0` inherits the global limit.\nParent-subset enforced for subagents.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_delegation_depth": {
+          "default": 0,
+          "description": "Maximum delegation recursion depth. `0` inherits the default.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_history_messages": {
+          "default": null,
+          "description": "Maximum conversation history messages retained per session. `None` inherits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_system_prompt_chars": {
+          "default": null,
+          "description": "Maximum characters for the assembled system prompt. `None` inherits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_tool_iterations": {
+          "default": 0,
+          "description": "Maximum tool-call iterations in agentic mode. `0` inherits the global default.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tool_result_chars": {
+          "default": null,
+          "description": "Maximum characters for a single tool result. `None` inherits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory_recall_limit": {
+          "default": null,
+          "description": "Maximum memory entries injected per turn. `None` inherits global default (5).\nSet to `0` for unlimited.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "parallel_tools": {
+          "default": null,
+          "description": "Enable parallel tool execution per iteration. `None` inherits.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "prompt_injection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillsPromptInjectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How skills are injected into the system prompt for agents on this\nprofile. `None` inherits the global `[skills] prompt_injection_mode`;\n`compact` inlines only compact skill metadata and registers the\n`read_skill` tool, `full` inlines full skill instructions. Resolved\nthrough [`Config::effective_skills_prompt_mode`], the single point both\nthe system-prompt builder and the `read_skill` tool-registration gate\nconsult so they always agree on the effective mode."
+        },
+        "shell_timeout_secs": {
+          "default": 60,
+          "description": "Shell subprocess timeout in seconds. `0` inherits the global timeout.\nParent-subset enforced for subagents.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "strict_tool_parsing": {
+          "default": false,
+          "type": "boolean"
+        },
+        "thinking": {
+          "$ref": "#/$defs/ThinkingConfig",
+          "default": {
+            "budget_tokens": {},
+            "default_level": "medium",
+            "native_thinking": false
+          }
+        },
+        "tool_call_dedup_exempt": {
+          "default": [],
+          "description": "Tools exempt from within-turn dedup check.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tool_dispatcher": {
+          "default": null,
+          "description": "Tool dispatch strategy (e.g. `\"auto\"`). `None` inherits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_filter_groups": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolFilterGroup"
+          },
+          "type": "array"
+        },
+        "tool_receipts": {
+          "$ref": "#/$defs/ToolReceiptsConfig",
+          "default": {
+            "enabled": false,
+            "inject_system_prompt": true,
+            "show_in_response": false
+          }
+        }
+      },
+      "type": "object"
+    },
+    "SkillsPromptInjectionMode": {
+      "description": "Skills loading configuration (`[skills]` section).",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "Inline full skill instructions and tool metadata into the system prompt.",
+          "type": "string"
+        },
+        {
+          "const": "compact",
+          "description": "Inline only compact skill metadata (name/description/location) and load details on demand.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThinkingConfig": {
+      "description": "Configuration for thinking/reasoning level control.",
+      "properties": {
+        "budget_tokens": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "default_level": {
+          "$ref": "#/$defs/ThinkingLevel",
+          "default": "medium"
+        },
+        "native_thinking": {
+          "default": false,
+          "description": "Enables provider-native thinking parameters when the selected level has a budget.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ThinkingLevel": {
+      "description": "How deeply the model should reason for a given message.",
+      "enum": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "type": "string"
+    },
+    "ToolFilterGroup": {
+      "description": "A named group of MCP tool patterns with an activation mode.\n\nEach group lists glob patterns for MCP tool names and an optional set of\nkeywords that trigger inclusion in `dynamic` mode. MCP tools are named\n`<server>__<tool>` (double-underscore separator, e.g. `filesystem__read_file`).\n\nClassification is by origin, not name shape: only tools that actually came\nfrom the MCP registry are subject to these groups. Built-in tools AND skill\ntools — which share the `<x>__<y>` naming convention (`{skill}__{tool}`) —\nalways pass through and are never affected by `tool_filter_groups`.\n\nUnder `[mcp] deferred_loading = true`, `mode = \"always\"` entries are\npre-activated at assembly time so matching tools are live from the first\nturn without a `tool_search` round-trip.\n\n# Example\n```toml\n[[runtime_profiles.default.tool_filter_groups]]\nmode = \"always\"\ntools = [\"filesystem__*\"]\nkeywords = []\n\n[[runtime_profiles.default.tool_filter_groups]]\nmode = \"dynamic\"\ntools = [\"browser__*\"]\nkeywords = [\"browse\", \"website\", \"url\", \"search\"]\n```",
+      "properties": {
+        "keywords": {
+          "default": [],
+          "description": "Keywords that activate this group in `dynamic` mode (case-insensitive substring).\nIgnored when `mode = \"always\"`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/ToolFilterGroupMode",
+          "default": "dynamic",
+          "description": "Activation mode: `\"always\"` or `\"dynamic\"`."
+        },
+        "tools": {
+          "default": [],
+          "description": "Glob patterns matching MCP tool names (single `*` wildcard supported).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ToolFilterGroupMode": {
+      "description": "Determines when a `ToolFilterGroup` is active.",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Tools in this group are always included in every turn.",
+          "type": "string"
+        },
+        {
+          "const": "dynamic",
+          "description": "Tools in this group are included only when the user message contains\nat least one of the configured `keywords` (case-insensitive substring match).",
+          "type": "string"
+        }
+      ]
+    },
+    "ToolReceiptsConfig": {
+      "description": "HMAC tool execution receipt configuration, per agent\n(`[agents.<alias>.tool_receipts]`).\n\nReceipts are short HMAC-SHA256 tags appended to tool results so the model\ncannot claim it ran a tool that never actually executed. See\n`docs/book/src/security/tool-receipts.md`.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Generate HMAC receipts on every tool execution. Default: `false`.\nWhen false, the entire receipt subsystem is inert (no key, no\ngeneration, no append, no system-prompt addendum).",
+          "type": "boolean"
+        },
+        "inject_system_prompt": {
+          "default": true,
+          "description": "Inject the receipt-echo instruction into the system prompt so the\nmodel carries receipts verbatim into its response. Default: `true`.\nNo effect when `enabled = false`.",
+          "type": "boolean"
+        },
+        "show_in_response": {
+          "default": false,
+          "description": "Append a trailing `Tool receipts:` block to user-visible replies so\nreceipts are auditable from the channel surface, not just the\ninternal history. Default: `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/RuntimeProfileConfig"
+  },
+  "description": "Named runtime/LLM execution profiles (`[runtime_profiles.<alias>]`).",
+  "type": "object"
+}

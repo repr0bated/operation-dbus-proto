@@ -25,8 +25,11 @@ op-network = { path = "../op-network" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
 op-agents = { path = "../op-agents" }
-# ZeroClaw base runtime types (schemars 1.x — matches this crate's schemars).
-zeroclaw = { workspace = true }
+# The 3tched Router config surface is generated from the OFFICIAL zeroclaw
+# binary's own `config schema` output (schemas/zeroclaw/), and validated
+# against it at runtime. There is deliberately NO zeroclaw crate dependency:
+# a linked crate pins us to a version that need not match the deployed binary.
+jsonschema = { workspace = true }
 
 tokio = { workspace = true }
 serde = { workspace = true }

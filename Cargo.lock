@@ -4490,6 +4490,7 @@ dependencies = [
  "chrono",
  "dirs",
  "inventory",
+ "jsonschema",
  "log",
  "md5",
  "nix 0.28.0",
@@ -4519,7 +4520,6 @@ dependencies = [
  "uuid",
  "xattr",
  "zbus",
- "zeroclawlabs",
 ]
 
 [[package]]
@@ -8524,14 +8524,6 @@ dependencies = [
  "winnow 1.0.4",
  "zbus_names",
  "zvariant",
-]
-
-[[package]]
-name = "zeroclawlabs"
-version = "0.0.0"
-dependencies = [
- "schemars",
- "serde",
 ]
 
 [[package]]

@@ -1,0 +1,195 @@
+{
+  "$defs": {
+    "LucidStorageConfig": {
+      "description": "Lucid CLI sync backend (`[storage.lucid.<alias>]`).",
+      "properties": {
+        "binary_path": {
+          "default": null,
+          "description": "Optional path to the lucid-memory binary. When unset, the bare `lucid`\nexecutable is resolved on `PATH`. A blank or whitespace-only value is\nrejected at config validation and remains invalid if startup continues,\nso an invalid explicit selector never falls through to `PATH`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recall_timeout_ms": {
+          "default": null,
+          "description": "Recall (context) timeout override, in milliseconds. Lucid CLI cold\nstarts (loading the local embedding model) can exceed 1.5s on ARM\nhosts; raise this if recalls still time out on your hardware.\nUnset falls back to the built-in default (3000ms). `0` is rejected\nat config validation; because startup warns and continues after\nvalidation errors, a `0` that reaches the runtime is treated as\nunset and falls back to the default.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "store_timeout_ms": {
+          "default": null,
+          "description": "Store timeout override, in milliseconds. Same cold-start\nconsideration as `recall_timeout_ms`. Unset falls back to the\nbuilt-in default (3000ms); `0` is rejected at validation and, if\nstartup continues after the warning, is likewise treated as unset.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MarkdownStorageConfig": {
+      "description": "Markdown directory storage (`[storage.markdown.<alias>]`).",
+      "properties": {
+        "directory": {
+          "default": null,
+          "description": "Optional override for the markdown root directory.\nWhen unset, defaults to `<workspace_dir>/memory/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PostgresStorageConfig": {
+      "description": "PostgreSQL storage backend (`[storage.postgres.<alias>]`).\n\nHolds connection parameters AND pgvector settings on one alias-keyed\nentry; previously these lived in two separate sections.",
+      "properties": {
+        "connect_timeout_secs": {
+          "default": null,
+          "description": "Optional connection timeout in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "db_url": {
+          "default": null,
+          "description": "Connection URL (e.g. `\"postgres://user:pass@host/db\"`).\nAccepts legacy aliases: dbURL, database_url, databaseUrl.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "schema": {
+          "default": "public",
+          "description": "Database schema for the memory table.",
+          "type": "string"
+        },
+        "table": {
+          "default": "memories",
+          "description": "Table name for memory entries.",
+          "type": "string"
+        },
+        "vector_dimensions": {
+          "default": 1536,
+          "description": "Vector dimensions for pgvector embeddings.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vector_enabled": {
+          "default": false,
+          "description": "Enable pgvector extension for hybrid vector+keyword recall.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "QdrantStorageConfig": {
+      "description": "Qdrant vector database backend (`[storage.qdrant.<alias>]`).\n\nURL, collection, and API key are typed config values. Use schema-mirror env\noverrides such as `ZEROCLAW_storage__qdrant__<alias>__url=...` for runtime\nenv injection.",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "API key for Qdrant Cloud or secured instances.\nUse `ZEROCLAW_storage__qdrant__<alias>__api_key=...` for env injection.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "collection": {
+          "default": "zeroclaw_memories",
+          "description": "Collection name for storing memories.\nUse `ZEROCLAW_storage__qdrant__<alias>__collection=...` for env injection.",
+          "type": "string"
+        },
+        "url": {
+          "default": null,
+          "description": "Qdrant server URL (e.g. `\"http://localhost:6333\"`).\nUse `ZEROCLAW_storage__qdrant__<alias>__url=...` for env injection.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SqliteStorageConfig": {
+      "description": "SQLite storage backend (`[storage.sqlite.<alias>]`).",
+      "properties": {
+        "open_timeout_secs": {
+          "default": null,
+          "description": "Maximum seconds to wait when opening the DB if it's locked.\n`None` waits indefinitely. Recommended max: 300.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "default": null,
+          "description": "Optional override for the SQLite database path.\nWhen unset, defaults to `<workspace_dir>/brain.db`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "StorageConfig": {
+      "description": "Persistent storage configuration (`[storage]` section).\n\nStorage is a two-tier alias-keyed map: `[storage.<backend>.<alias>]`,\nparallel to `[providers.models.<type>.<alias>]`. Each backend has its own typed\nconfig struct. `MemoryConfig.backend` carries a dotted reference (`\"sqlite.default\"`,\n`\"postgres.work\"`) that resolves to one of these entries via\n[`Config::resolve_active_storage`].",
+      "properties": {
+        "lucid": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LucidStorageConfig"
+          },
+          "description": "Lucid CLI sync instances (`[storage.lucid.<alias>]`).",
+          "type": "object"
+        },
+        "markdown": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MarkdownStorageConfig"
+          },
+          "description": "Markdown storage instances (`[storage.markdown.<alias>]`).",
+          "type": "object"
+        },
+        "postgres": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PostgresStorageConfig"
+          },
+          "description": "PostgreSQL storage instances (`[storage.postgres.<alias>]`).",
+          "type": "object"
+        },
+        "qdrant": {
+          "additionalProperties": {
+            "$ref": "#/$defs/QdrantStorageConfig"
+          },
+          "description": "Qdrant storage instances (`[storage.qdrant.<alias>]`).",
+          "type": "object"
+        },
+        "sqlite": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SqliteStorageConfig"
+          },
+          "description": "SQLite storage instances (`[storage.sqlite.<alias>]`).",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/StorageConfig",
+  "default": {},
+  "description": "Persistent storage model_provider configuration (`[storage]`)."
+}

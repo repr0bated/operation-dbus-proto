@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "HttpRequestConfig": {
+      "description": "HTTP request tool configuration (`[http_request]` section).\n\nDomain filtering: `allowed_domains` controls which hosts are reachable (use `[\"*\"]`\nfor all public hosts, which is the default). If `allowed_domains` is empty, all\nrequests are rejected.",
+      "properties": {
+        "allow_private_hosts": {
+          "default": false,
+          "description": "Allow requests to private/LAN hosts (RFC 1918, loopback, link-local, .local).\nDefault: false (deny private hosts for SSRF protection).",
+          "type": "boolean"
+        },
+        "allowed_domains": {
+          "default": [
+            "*"
+          ],
+          "description": "Allowed domains for HTTP requests (exact or subdomain match)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_private_hosts": {
+          "default": [],
+          "description": "Private/internal hosts explicitly allowed to bypass SSRF protection.\nExact and subdomain matches are supported; `*` permits all private/local hosts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable `http_request` tool for API interactions",
+          "type": "boolean"
+        },
+        "max_response_size": {
+          "default": 1000000,
+          "description": "Maximum response size in bytes (default: 1MB, 0 = unlimited)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Named authorization secrets for `auth_secret` requests.",
+          "type": "object",
+          "x-secret": true
+        },
+        "timeout_secs": {
+          "default": 30,
+          "description": "Request timeout in seconds (default: 30)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/HttpRequestConfig",
+  "default": {
+    "allow_private_hosts": false,
+    "allowed_domains": [
+      "*"
+    ],
+    "allowed_private_hosts": [],
+    "enabled": true,
+    "max_response_size": 1000000,
+    "secrets": {},
+    "timeout_secs": 30
+  },
+  "description": "HTTP request tool configuration (`[http_request]`)."
+}

@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "FileUploadConfig": {
+      "description": "Standalone file upload tool configuration (`[file_upload]`).\n\nWhen `url` is set to a non-empty value, registers a `file_upload` tool that\nPOSTs files from the agent's local filesystem to the configured endpoint\nusing `multipart/form-data`. The LLM provides only a file path; the host\nreads the bytes and uploads them without ever including file content in\nthe model context.\n\nWhen `url` is `None` or empty, the tool is not registered.",
+      "properties": {
+        "field_name": {
+          "default": "file",
+          "description": "Multipart form-field name for the file part. Default: `file`.",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Static HTTP headers attached to every upload request. Same shape as\n`[mcp.servers.*.headers]`.",
+          "type": "object",
+          "x-secret": true
+        },
+        "max_file_size_bytes": {
+          "default": 26214400,
+          "description": "Maximum file size in bytes. Larger files are rejected before any\nbytes hit the network. Default: 25 MiB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "method": {
+          "default": "POST",
+          "description": "HTTP method. Only `POST` (default) and `PUT` are accepted.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 60,
+          "description": "Request timeout in seconds. Default: 60.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "default": null,
+          "description": "Upload endpoint URL. Tool is disabled when this is `None` or empty.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/FileUploadConfig",
+  "default": {
+    "field_name": "file",
+    "headers": {},
+    "max_file_size_bytes": 26214400,
+    "method": "POST",
+    "timeout_secs": 60,
+    "url": null
+  },
+  "description": "Standalone file upload tool configuration (`[file_upload]`)."
+}

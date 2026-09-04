@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "A2aServerConfig": {
+      "description": "Inbound A2A discovery server configuration.",
+      "properties": {
+        "bind": {
+          "description": "Optional advertise-only host override for card endpoint URLs. The\nroutes always serve on the gateway's own listener; this only changes\nthe host printed in advertised endpoints when A2A is fronted at a\ndifferent address. `None` derives from the gateway host.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": false,
+          "description": "Master switch for the inbound A2A surface. Default `false`: no\nwell-known route, no per-alias cards, no inbound endpoints.",
+          "type": "boolean"
+        },
+        "port": {
+          "description": "Optional advertise-only port override, paired with `bind`. `None`\nderives from the gateway port. Advertise-only: nothing binds here.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "public_base_url": {
+          "default": "",
+          "description": "Operator-supplied base URL advertised in agent card endpoints.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "A2aServerSection": {
+      "description": "A2A section wrapper that leaves room for future sibling configuration.",
+      "properties": {
+        "server": {
+          "$ref": "#/$defs/A2aServerConfig",
+          "default": {
+            "enabled": false,
+            "public_base_url": ""
+          },
+          "description": "Inbound A2A discovery server (`[a2a.server]`)."
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/A2aServerSection",
+  "default": {
+    "server": {
+      "enabled": false,
+      "public_base_url": ""
+    }
+  },
+  "description": "Inbound A2A discovery server (`[a2a.server]`). Default-closed:\nserves the well-known catalog card and per-alias agent cards only\nwhen `enabled = true`. See `crate::multi_agent::A2aServerConfig`."
+}

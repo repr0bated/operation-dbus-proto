@@ -1,0 +1,31 @@
+{
+  "$defs": {
+    "McpBundleConfig": {
+      "description": "Named MCP server bundle (`[mcp_bundles.<alias>]`).\n\nA reusable group of MCP servers granted to an agent that references the\nbundle by alias in `agents.<alias>.mcp_bundles`. Server IDs are matched\nagainst `[mcp.servers]` by `name`. Resolution is secure by default (see\n`Config::mcp_servers_for_bundles`): an ID with no matching server grants\nnothing, and `exclude` wins over `servers` across every bundle an agent\nreferences.",
+      "properties": {
+        "exclude": {
+          "default": [],
+          "description": "MCP server IDs removed from the grant. Deny wins: a name listed here is\nexcluded even if another referenced bundle includes it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "servers": {
+          "default": [],
+          "description": "MCP server IDs (`[mcp.servers].name`) granted by this bundle.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/McpBundleConfig"
+  },
+  "description": "Named MCP server bundles (`[mcp_bundles.<alias>]`).",
+  "type": "object"
+}

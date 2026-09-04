@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "MdnsConfig": {
+      "description": "Configuration for LAN-local mDNS peer discovery (`[nodes.mdns]`).\n\nThis config controls only discovery behavior. The advertised gateway\nendpoint is derived from the running gateway's actual host, port, and path\nprefix at startup so `[nodes.mdns]` does not duplicate gateway listen state.",
+      "properties": {
+        "announce_interval_secs": {
+          "default": 30,
+          "description": "How often this node re-broadcasts its presence, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable mDNS local peer discovery.",
+          "type": "boolean"
+        },
+        "max_peers": {
+          "default": 16,
+          "description": "Maximum number of unauthenticated LAN peer hints retained in memory.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "node_name": {
+          "default": null,
+          "description": "Human-readable node name advertised to LAN peers. Defaults to a stable\nlocal fallback when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "peer_ttl_secs": {
+          "default": 90,
+          "description": "Seconds after the last announcement before a peer is evicted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "NodesConfig": {
+      "description": "Configuration for the dynamic node discovery system (`[nodes]`).\n\nWhen enabled, external processes/devices can connect via WebSocket\nat `/ws/nodes` and advertise their capabilities at runtime.",
+      "properties": {
+        "auth_token": {
+          "default": null,
+          "description": "Optional bearer token for node authentication.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable dynamic node discovery endpoint.",
+          "type": "boolean"
+        },
+        "max_nodes": {
+          "default": 16,
+          "description": "Maximum number of concurrent node connections.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mdns": {
+          "$ref": "#/$defs/MdnsConfig",
+          "default": {
+            "announce_interval_secs": 30,
+            "enabled": false,
+            "max_peers": 16,
+            "node_name": null,
+            "peer_ttl_secs": 90
+          },
+          "description": "LAN-local mDNS peer discovery."
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/NodesConfig",
+  "default": {
+    "auth_token": null,
+    "enabled": false,
+    "max_nodes": 16,
+    "mdns": {
+      "announce_interval_secs": 30,
+      "enabled": false,
+      "max_peers": 16,
+      "node_name": null,
+      "peer_ttl_secs": 90
+    }
+  },
+  "description": "Dynamic node discovery configuration (`[nodes]`)."
+}

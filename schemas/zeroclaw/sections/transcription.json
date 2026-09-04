@@ -1,0 +1,261 @@
+{
+  "$defs": {
+    "AssemblyAiSttConfig": {
+      "description": "AssemblyAI STT model_provider configuration (`[transcription.assemblyai]`).",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "AssemblyAI API key.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        }
+      },
+      "type": "object"
+    },
+    "DeepgramSttConfig": {
+      "description": "Deepgram STT model_provider configuration (`[transcription.deepgram]`).",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "Deepgram API key.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "model": {
+          "default": "nova-2",
+          "description": "Deepgram model name (default: \"nova-2\").",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GoogleSttConfig": {
+      "description": "Google Cloud Speech-to-Text model_provider configuration (`[transcription.google]`).",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "Google Cloud API key.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "language_code": {
+          "default": "en-US",
+          "description": "BCP-47 language code (default: \"en-US\").",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LocalWhisperConfig": {
+      "description": "Local/self-hosted Whisper-compatible STT endpoint (`[transcription.local_whisper]`).\n\nConfigures a self-hosted STT endpoint. Can be on localhost, a private network host, or any reachable URL.",
+      "properties": {
+        "bearer_token": {
+          "default": null,
+          "description": "Bearer token for endpoint authentication.\nOmit for unauthenticated local endpoints.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "max_audio_bytes": {
+          "default": 26214400,
+          "description": "Maximum audio file size in bytes accepted by this endpoint.\nDefaults to 25 MB — matching the cloud API cap for a safe out-of-the-box\nexperience. Self-hosted endpoints can accept much larger files; raise this\nas needed, but note that each transcription call clones the audio buffer\ninto a multipart payload, so peak memory per request is ~2× this value.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 300,
+          "description": "Request timeout in seconds. Defaults to 300 (large files on local GPU).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "HTTP or HTTPS endpoint URL, e.g. `\"http://10.10.0.1:8001/v1/transcribe\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "OpenAiSttConfig": {
+      "description": "OpenAI Whisper STT model_provider configuration (`[transcription.openai]`).",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "OpenAI API key for Whisper transcription.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "model": {
+          "default": "whisper-1",
+          "description": "Whisper model name (default: \"whisper-1\").",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "TranscriptionConfig": {
+      "description": "Voice transcription configuration with multi-provider support.\n\nThe top-level `api_url`, `model`, and `api_key` fields remain for backward\ncompatibility with existing Groq-based configurations.",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "API key used for transcription requests (Groq transcription provider).\n\nUse the schema-mirror env grammar (`ZEROCLAW_transcription__api_key=...`)\nfor runtime env injection. Legacy `GROQ_API_KEY` constructor fallback was\nremoved in v0.8.0.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "api_url": {
+          "default": "https://api.groq.com/openai/v1/audio/transcriptions",
+          "description": "Whisper API endpoint URL (Groq transcription provider).",
+          "type": "string"
+        },
+        "assemblyai": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssemblyAiSttConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "AssemblyAI STT model_provider configuration."
+        },
+        "deepgram": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeepgramSttConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Deepgram STT model_provider configuration."
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable voice transcription for channels that support it.",
+          "type": "boolean"
+        },
+        "google": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoogleSttConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Google Cloud Speech-to-Text model_provider configuration."
+        },
+        "initial_prompt": {
+          "default": null,
+          "description": "Optional initial prompt to bias transcription toward expected vocabulary\n(proper nouns, technical terms, etc.). Sent as the `prompt` field in the\nWhisper API request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "default": null,
+          "description": "Optional language hint (ISO-639-1, e.g. \"en\", \"ru\") for Groq transcription provider.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "local_whisper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalWhisperConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local/self-hosted Whisper-compatible STT model_provider."
+        },
+        "max_audio_bytes": {
+          "default": null,
+          "description": "Optional global audio size upper bound in bytes, enforced before\ndispatching to any transcription provider. Provider-specific caps still\napply.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_duration_secs": {
+          "default": 120,
+          "description": "Maximum voice duration in seconds (messages longer than this are skipped).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "default": "whisper-large-v3-turbo",
+          "description": "Whisper model name (Groq transcription provider).",
+          "type": "string"
+        },
+        "openai": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenAiSttConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OpenAI Whisper STT model_provider configuration."
+        },
+        "transcribe_non_ptt_audio": {
+          "default": false,
+          "description": "Also transcribe non-PTT (forwarded/regular) audio messages on WhatsApp,\nnot just voice notes. Default: `false` (preserves legacy behavior).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/TranscriptionConfig",
+  "default": {
+    "api_key": null,
+    "api_url": "https://api.groq.com/openai/v1/audio/transcriptions",
+    "assemblyai": null,
+    "deepgram": null,
+    "enabled": false,
+    "google": null,
+    "initial_prompt": null,
+    "language": null,
+    "local_whisper": null,
+    "max_audio_bytes": null,
+    "max_duration_secs": 120,
+    "model": "whisper-large-v3-turbo",
+    "openai": null,
+    "transcribe_non_ptt_audio": false
+  },
+  "description": "Voice transcription configuration (Whisper API via Groq)."
+}

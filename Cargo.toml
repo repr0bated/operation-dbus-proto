@@ -55,8 +55,6 @@ license = "Apache-2.0"
 # The sealed tched_router blob is projected from these, not from hand-written structs.
 # default-features = false: skip nostr/prometheus/skill-creation extras.
 # In-repo stand-in so this workspace loads without the live-host checkout.
-# On the host, override to `{ package = "zeroclawlabs", path = "/srv/git/zeroclaw", default-features = false }`.
-zeroclaw = { package = "zeroclawlabs", path = "vendor/zeroclawlabs", default-features = false }
 op-core = { path = "crates/op-core" }
 op-tools = { path = "crates/op-tools" }
 op-chat = { path = "crates/op-chat" }

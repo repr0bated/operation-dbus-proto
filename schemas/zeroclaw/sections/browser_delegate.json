@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "BrowserDelegateConfig": {
+      "properties": {
+        "allowed_domains": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocked_domains": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "chrome_profile_dir": {
+          "default": "",
+          "type": "string"
+        },
+        "cli_binary": {
+          "default": "claude",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "task_timeout_secs": {
+          "default": 120,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/BrowserDelegateConfig",
+  "default": {
+    "allowed_domains": [],
+    "blocked_domains": [],
+    "chrome_profile_dir": "",
+    "cli_binary": "claude",
+    "enabled": false,
+    "task_timeout_secs": 120
+  },
+  "description": "Browser delegation configuration (`[browser_delegate]`).\n\nDelegates browser-based tasks to a browser-capable CLI subprocess (e.g.\nClaude Code with `claude-in-chrome` MCP tools). Useful for interacting\nwith corporate web apps (Teams, Outlook, Jira, Confluence) that lack\ndirect API access. A persistent Chrome profile can be configured so SSO\nsessions survive across invocations.\n\nFields:\n- `enabled` (`bool`, default `false`) — enable the browser delegation tool.\n- `cli_binary` (`String`, default `\"claude\"`) — CLI binary to spawn for browser tasks.\n- `chrome_profile_dir` (`String`, default `\"\"`) — Chrome user-data directory for\n  persistent SSO sessions. When empty, a fresh profile is used each invocation.\n- `allowed_domains` (`Vec<String>`, default `[]`) — allowlist of domains the browser\n  may navigate to. Empty means all non-blocked domains are permitted.\n- `blocked_domains` (`Vec<String>`, default `[]`) — denylist of domains. Blocked\n  domains take precedence over allowed domains.\n- `task_timeout_secs` (`u64`, default `120`) — per-task timeout in seconds.\n\nCompatibility: additive and disabled by default; existing configs remain valid when omitted.\nRollback/migration: remove `[browser_delegate]` or keep `enabled = false` to disable."
+}

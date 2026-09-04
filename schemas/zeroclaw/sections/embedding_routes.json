@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "EmbeddingRouteConfig": {
+      "description": "Route an embedding hint to a specific model_provider + model.\n\n```toml\n[[embedding_routes]]\nhint = \"semantic\"\nmodel_provider = \"openai.embeddings\"\nmodel = \"text-embedding-3-small\"\ndimensions = 1536\n\n[memory]\nembedding_model = \"hint:semantic\"\n```",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "Optional API key override for this route's model_provider",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "dimensions": {
+          "default": null,
+          "description": "Optional embedding dimension override for this route",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hint": {
+          "default": "",
+          "description": "Route hint name (e.g. \"semantic\", \"archive\", \"faq\")\n`#[serde(default)]` lets the `create_map_key` macro default-construct\nfrom `{}` before the hint gets injected via `set_prop`. Empty strings\nare rejected by `Config::validate()`.",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "description": "Provider-local embedding model identifier to use with that provider profile\n`#[serde(default)]` is required for `Default` + `create_map_key` construction.\nEmpty strings are rejected by `Config::validate()`.",
+          "type": "string"
+        },
+        "model_provider": {
+          "default": "",
+          "description": "Dotted embedding-capable provider profile ref\n`#[serde(default)]` is required for `Default` + `create_map_key` construction.\nEmpty strings are rejected by `Config::validate()`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "Embedding-routing rules — route `hint:<name>` to specific\nmodel_provider + model combos for embedding requests.",
+  "items": {
+    "$ref": "#/$defs/EmbeddingRouteConfig"
+  },
+  "type": "array"
+}

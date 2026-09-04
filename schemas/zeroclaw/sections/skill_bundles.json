@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "SkillBundleConfig": {
+      "description": "Named skill bundle (`[skill_bundles.<alias>]`).\n\nA reusable group of skills that can be attached to an agent or channel\nby alias, controlling which skills are loaded and from where.",
+      "properties": {
+        "directory": {
+          "default": null,
+          "description": "Directory path (relative to workspace root) to load skills from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exclude": {
+          "default": [],
+          "description": "Skill names to exclude from this bundle.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include": {
+          "default": [],
+          "description": "Skill names to include. Empty means include all skills in `directory`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/SkillBundleConfig"
+  },
+  "description": "Named skill bundles (`[skill_bundles.<alias>]`).",
+  "type": "object"
+}

@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "AgentAlias": {
+      "description": "Reference to a configured `[agents.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "ChannelRef": {
+      "description": "Reference to a configured `[channels.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    },
+    "OutputModality": {
+      "description": "Preferred output modality for a peer group.",
+      "oneOf": [
+        {
+          "const": "mirror",
+          "description": "Always reply in kind — voice note if user sent voice, text otherwise.",
+          "type": "string"
+        },
+        {
+          "const": "voice",
+          "description": "Always deliver via TTS as a voice note, regardless of input modality.\nApplies to proactive messages (cron, announces) as well as replies.",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "Always deliver as text, even if user sent a voice note.",
+          "type": "string"
+        }
+      ]
+    },
+    "PeerGroupConfig": {
+      "description": "`[peer_groups.<name>]` — mutual-opt-in peer group on a channel type.",
+      "properties": {
+        "admin_for_agent_scope": {
+          "default": false,
+          "description": "When `true`, members of this peer group are authorized to issue\n`/model --agent <model>` on the agent this group is bound to.\nDefault `false` (deny-by-default). The runtime resolves this live\nfrom `Config::peer_groups` at command-dispatch time via\n`Config::channel_agent_scope_admins`; no cache, no per-channel\nduplicate sender list.",
+          "type": "boolean"
+        },
+        "agents": {
+          "default": [],
+          "description": "Member agents by alias.",
+          "items": {
+            "$ref": "#/$defs/AgentAlias"
+          },
+          "type": "array"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef",
+          "default": "",
+          "description": "Either a channel type (`\"telegram\"`) or a dotted channel alias\n(`\"telegram.work\"`). A bare type applies to every alias of that\ntype; a dotted form scopes the group to that single instance."
+        },
+        "external_peers": {
+          "default": [],
+          "description": "Non-agent members by channel-native username.",
+          "items": {
+            "$ref": "#/$defs/PeerUsername"
+          },
+          "type": "array"
+        },
+        "ignore": {
+          "default": [],
+          "description": "Per-group blocklist; subtracts from the resolved peer set.",
+          "items": {
+            "$ref": "#/$defs/PeerUsername"
+          },
+          "type": "array"
+        },
+        "output_modality": {
+          "$ref": "#/$defs/OutputModality",
+          "default": "mirror",
+          "description": "Preferred output modality for all peers in this group.\nDefaults to `mirror` (input-driven). Set to `voice` to have the\nagent always reply and deliver proactive messages (cron, announces)\nas TTS voice notes on channels that support audio output."
+        }
+      },
+      "type": "object"
+    },
+    "PeerUsername": {
+      "description": "Reference to a configured `[channels.peers.<type>.<alias>]` entry.\nEmpty value means \"no preference\" (opt-out). Non-empty values must\nresolve to a configured alias; `Config::validate()` enforces this.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/PeerGroupConfig"
+  },
+  "description": "Named peer groups (`[peer_groups.<name>]`). Each entry binds a\nchannel, a list of member agents, and optional non-agent\n(external) members and a per-group blocklist. Mutual opt-in:\ntwo agents become peers only when both appear in the same\ngroup's `agents`. Empty by default for single-agent installs.\nSee `crate::multi_agent::PeerGroupConfig`.",
+  "type": "object"
+}

@@ -1,0 +1,29 @@
+{
+  "$defs": {
+    "OnboardStateConfig": {
+      "description": "Multi-client workspace isolation configuration.\n\nWhen enabled, each client engagement gets an isolated workspace with\nseparate memory, audit, secrets, and tool restrictions.\nOpaque state the Quickstart flow writes so it can tell, on a\nre-run, which sections the user has already walked through at least\nonce — which lets it offer \"Reconfigure? [y/N]\" skip gates instead of\nforcing users through every field again.\n\nThis is meta-state about the Quickstart flow, not user-facing config.",
+      "properties": {
+        "completed_sections": {
+          "default": [],
+          "description": "Section keys the user has completed at least once.\nValues are the lowercased Section variant names\n(`\"workspace\"`, `\"model_providers\"`, …).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "quickstart_completed": {
+          "default": false,
+          "description": "`true` once the Quickstart has applied a `BuilderSubmission`\nsuccessfully on this install. Web gateway and TUI auto-launch\nthe Quickstart on startup iff this is `false` **and** no\n`agents.*` entries exist (the implicit-completion rule covers\nupgrades). The flag is flipped in the same atomic write that\nlands the Quickstart submission; re-entering the Quickstart\nlater to add another agent does not flip it back to `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/OnboardStateConfig",
+  "default": {
+    "completed_sections": [],
+    "quickstart_completed": false
+  },
+  "description": "Meta-state for the Quickstart flow (which sections the user has\nalready walked through). Not user-facing config (`[onboard_state]`)."
+}

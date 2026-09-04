@@ -22,7 +22,7 @@ pub fn dispatch_config_method(
 /// Minimal mirror of upstream resolution for now: explicit
 /// `TCHED_ROUTER_CONFIG_PATH` / `ZEROCLAW_CONFIG_PATH` override, else the
 /// default `~/.zeroclaw/config.toml`. Upstream's full resolution (workspace
-/// marker, env dirs) should replace this once exposed by the `zeroclaw` crate.
+/// marker, env dirs) should be mirrored here if the binary ever exposes it.
 fn config_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("TCHED_ROUTER_CONFIG_PATH") {
         return p.into();
@@ -36,20 +36,51 @@ fn config_path() -> std::path::PathBuf {
         .join("config.toml")
 }
 
-/// Read the config file and parse it through the REAL upstream type — an
-/// invalid file is an error here, never a silent partial read.
+/// The official binary's full config schema, compiled once.
+///
+/// This is the same document `zeroclaw config schema` prints, captured at
+/// `schemas/zeroclaw/config.schema.json`. It is the authority for what a valid
+/// config looks like — there is no linked upstream type to defer to.
+fn official_config_validator() -> &'static jsonschema::Validator {
+    static VALIDATOR: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    VALIDATOR.get_or_init(|| {
+        let document: JsonValue = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../schemas/zeroclaw/sections/_full.json"
+        )))
+        .expect("embedded zeroclaw config schema is valid JSON");
+        jsonschema::validator_for(&document).expect("embedded zeroclaw config schema compiles")
+    })
+}
+
+/// Validate a whole config document against the official binary's schema.
+fn validate_against_official_schema(
+    value: &JsonValue,
+    what: &str,
+) -> std::result::Result<(), TchedRouterError> {
+    official_config_validator()
+        .validate(value)
+        .map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("{what} fails official zeroclaw schema validation: {e}"),
+        })
+}
+
+/// Read the config file and validate it against the OFFICIAL binary's schema —
+/// an invalid file is an error here, never a silent partial read.
 fn load_upstream_value() -> std::result::Result<JsonValue, TchedRouterError> {
     let path = config_path();
     let text = std::fs::read_to_string(&path).map_err(|e| TchedRouterError::ExecutionDenied {
         reason: format!("read {}: {e}", path.display()),
     })?;
-    let config: zeroclaw::Config =
+    let parsed: toml::Value =
         toml::from_str(&text).map_err(|e| TchedRouterError::ExecutionDenied {
             reason: format!("parse {}: {e}", path.display()),
         })?;
-    serde_json::to_value(&config).map_err(|e| TchedRouterError::ExecutionDenied {
+    let value = serde_json::to_value(&parsed).map_err(|e| TchedRouterError::ExecutionDenied {
         reason: format!("serialize config: {e}"),
-    })
+    })?;
+    validate_against_official_schema(&value, &path.display().to_string())?;
+    Ok(value)
 }
 
 fn read_section(
@@ -143,11 +174,16 @@ fn patch_config(json_args: &str) -> std::result::Result<DispatchOutcome, TchedRo
     let serialized = toml::to_string(&doc).map_err(|e| TchedRouterError::ExecutionDenied {
         reason: format!("serialize config: {e}"),
     })?;
-    // Validate against the REAL upstream type before writing.
-    let _: zeroclaw::Config =
+    // Validate against the OFFICIAL binary's schema before writing.
+    let candidate: toml::Value =
         toml::from_str(&serialized).map_err(|e| TchedRouterError::ExecutionDenied {
-            reason: format!("patched config fails upstream validation: {e}"),
+            reason: format!("patched config is not valid TOML: {e}"),
         })?;
+    let candidate_json =
+        serde_json::to_value(&candidate).map_err(|e| TchedRouterError::ExecutionDenied {
+            reason: format!("serialize patched config: {e}"),
+        })?;
+    validate_against_official_schema(&candidate_json, "patched config")?;
     write_config_atomically(&path, &serialized)?;
     Ok(DispatchOutcome::plain(serde_json::json!({
         "section": args.section,

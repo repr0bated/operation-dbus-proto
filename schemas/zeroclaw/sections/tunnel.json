@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "CloudflareTunnelConfig": {
+      "properties": {
+        "token": {
+          "default": "",
+          "description": "Cloudflare Tunnel token (from Zero Trust dashboard)",
+          "type": "string",
+          "x-secret": true
+        }
+      },
+      "type": "object"
+    },
+    "CustomTunnelConfig": {
+      "properties": {
+        "health_url": {
+          "default": null,
+          "description": "Optional URL to check tunnel health",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_command": {
+          "default": "",
+          "description": "Command template to start the tunnel. Use {port} and {host} placeholders.\nExample: \"bore local {port} --to bore.pub\"",
+          "type": "string"
+        },
+        "url_pattern": {
+          "default": null,
+          "description": "Optional regex to extract public URL from command stdout",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "NgrokTunnelConfig": {
+      "properties": {
+        "auth_token": {
+          "default": "",
+          "description": "ngrok auth token",
+          "type": "string",
+          "x-secret": true
+        },
+        "domain": {
+          "default": null,
+          "description": "Optional custom domain",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "OpenVpnTunnelConfig": {
+      "description": "OpenVPN tunnel configuration (`[tunnel.openvpn]`).\n\nRequired when `tunnel.tunnel_provider = \"openvpn\"`. Omitting this section entirely\npreserves previous behavior. Setting `tunnel.tunnel_provider = \"none\"` (or removing\nthe `[tunnel.openvpn]` block) cleanly reverts to no-tunnel mode.\n\nDefaults: `connect_timeout_secs = 30`.",
+      "properties": {
+        "advertise_address": {
+          "default": null,
+          "description": "Advertised address once VPN is connected (e.g., `\"10.8.0.2:42617\"`).\nWhen omitted the tunnel falls back to `http://{local_host}:{local_port}`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auth_file": {
+          "default": null,
+          "description": "Optional path to auth credentials file (`--auth-user-pass`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config_file": {
+          "description": "Path to `.ovpn` configuration file (must not be empty).",
+          "type": "string"
+        },
+        "connect_timeout_secs": {
+          "default": 30,
+          "description": "Connection timeout in seconds (default: 30, must be > 0).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "extra_args": {
+          "default": [],
+          "description": "Extra openvpn CLI arguments forwarded verbatim.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "config_file"
+      ],
+      "type": "object"
+    },
+    "PinggyTunnelConfig": {
+      "properties": {
+        "region": {
+          "default": null,
+          "description": "Server region: `\"us\"` (USA), `\"eu\"` (Europe), `\"ap\"` (Asia), `\"br\"` (South America), `\"au\"` (Australia), or omit for auto.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "token": {
+          "default": null,
+          "description": "Pinggy access token (optional — free tier works without one).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        }
+      },
+      "type": "object"
+    },
+    "TailscaleTunnelConfig": {
+      "properties": {
+        "funnel": {
+          "default": false,
+          "description": "Use Tailscale Funnel (public internet) vs Serve (tailnet only)",
+          "type": "boolean"
+        },
+        "hostname": {
+          "default": null,
+          "description": "Optional hostname override",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TunnelConfig": {
+      "description": "Tunnel configuration for exposing the gateway publicly (`[tunnel]` section).\n\nSupported model_providers: `\"none\"` (default), `\"cloudflare\"`, `\"tailscale\"`, `\"ngrok\"`, `\"openvpn\"`, `\"pinggy\"`, `\"custom\"`.",
+      "properties": {
+        "cloudflare": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudflareTunnelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Cloudflare Tunnel configuration (used when `tunnel_provider = \"cloudflare\"`)."
+        },
+        "custom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CustomTunnelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Custom tunnel command configuration (used when `tunnel_provider = \"custom\"`)."
+        },
+        "ngrok": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NgrokTunnelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ngrok tunnel configuration (used when `tunnel_provider = \"ngrok\"`)."
+        },
+        "openvpn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenVpnTunnelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OpenVPN tunnel configuration (used when `tunnel_provider = \"openvpn\"`)."
+        },
+        "pinggy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PinggyTunnelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pinggy tunnel configuration (used when `tunnel_provider = \"pinggy\"`)."
+        },
+        "tailscale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TailscaleTunnelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tailscale Funnel/Serve configuration (used when `tunnel_provider = \"tailscale\"`)."
+        },
+        "tunnel_provider": {
+          "default": "none",
+          "description": "How the gateway gets exposed to the public internet so webhooks (Telegram, Slack, etc.) can reach it. `none` = keep it local, no tunnel; `cloudflare` = Cloudflare Tunnel via cloudflared (needs a Zero Trust account and token); `tailscale` = Tailscale Funnel/Serve (tailnet-only or public, no account beyond tailscale); `ngrok` = ngrok agent with auth token; `openvpn` = bring-your-own OpenVPN egress; `pinggy` = Pinggy SSH tunnels (quick one-shot URLs); `custom` = run an arbitrary command you define under `[tunnel.custom]`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/TunnelConfig",
+  "default": {
+    "cloudflare": null,
+    "custom": null,
+    "ngrok": null,
+    "openvpn": null,
+    "pinggy": null,
+    "tailscale": null,
+    "tunnel_provider": "none"
+  },
+  "description": "Tunnel configuration for exposing the gateway publicly (`[tunnel]`)."
+}

@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "ProjectIntelConfig": {
+      "description": "Project delivery intelligence configuration (`[project_intel]` section).",
+      "properties": {
+        "default_language": {
+          "default": "en",
+          "description": "Default report language (en, de, fr, it). Default: \"en\".",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the project_intel tool. Default: false.",
+          "type": "boolean"
+        },
+        "include_git_data": {
+          "default": true,
+          "description": "Include git log data in reports. Default: true.",
+          "type": "boolean"
+        },
+        "include_jira_data": {
+          "default": false,
+          "description": "Include Jira data in reports. Default: false.",
+          "type": "boolean"
+        },
+        "jira_base_url": {
+          "default": null,
+          "description": "Jira instance base URL (required if include_jira_data is true).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report_output_dir": {
+          "default": "/home/jeremy/.zeroclaw/project-reports",
+          "description": "Output directory for generated reports.",
+          "type": "string"
+        },
+        "risk_sensitivity": {
+          "default": "medium",
+          "description": "Risk detection sensitivity: low, medium, high. Default: \"medium\".",
+          "type": "string"
+        },
+        "templates_dir": {
+          "default": null,
+          "description": "Optional custom templates directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ProjectIntelConfig",
+  "default": {
+    "default_language": "en",
+    "enabled": false,
+    "include_git_data": true,
+    "include_jira_data": false,
+    "jira_base_url": null,
+    "report_output_dir": "/home/jeremy/.zeroclaw/project-reports",
+    "risk_sensitivity": "medium",
+    "templates_dir": null
+  },
+  "description": "Project delivery intelligence configuration (`[project_intel]`)."
+}

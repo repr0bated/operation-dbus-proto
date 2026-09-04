@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "OpenCodeCliConfig": {
+      "description": "OpenCode CLI tool configuration (`[opencode_cli]` section).\n\nDelegates coding tasks to the `opencode run` CLI. Authentication uses the\nbinary's own session by default — no API key needed unless\n`env_passthrough` includes provider-specific keys.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the `opencode_cli` tool",
+          "type": "boolean"
+        },
+        "env_passthrough": {
+          "default": [],
+          "description": "Extra env vars passed to the opencode subprocess",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_output_bytes": {
+          "default": 2097152,
+          "description": "Maximum output size in bytes (2MB default)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 600,
+          "description": "Maximum execution time in seconds (coding tasks can be long)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/OpenCodeCliConfig",
+  "default": {
+    "enabled": false,
+    "env_passthrough": [],
+    "max_output_bytes": 2097152,
+    "timeout_secs": 600
+  },
+  "description": "OpenCode CLI tool configuration (`[opencode_cli]`)."
+}

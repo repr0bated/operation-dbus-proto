@@ -1,0 +1,30 @@
+{
+  "$defs": {
+    "DelegateToolConfig": {
+      "description": "Global delegate tool configuration for default timeout values.",
+      "properties": {
+        "agentic_timeout_secs": {
+          "default": 300,
+          "description": "Default timeout in seconds for agentic sub-agent runs.\nCan be overridden per-agent in `[agents.<name>]` config.\nDefault: 300 seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 120,
+          "description": "Default timeout in seconds for non-agentic sub-agent model_provider calls.\nCan be overridden per-agent in `[agents.<name>]` config.\nDefault: 120 seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/DelegateToolConfig",
+  "default": {
+    "agentic_timeout_secs": 300,
+    "timeout_secs": 120
+  },
+  "description": "Delegate tool global default configuration (`[delegate]`)."
+}

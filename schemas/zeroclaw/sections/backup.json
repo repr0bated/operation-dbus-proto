@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "BackupConfig": {
+      "description": "Backup tool configuration (`[backup]` section).",
+      "properties": {
+        "compress": {
+          "default": true,
+          "description": "Compress backup archives.",
+          "type": "boolean"
+        },
+        "destination_dir": {
+          "default": "state/backups",
+          "description": "Output directory for backup archives (relative to workspace root).",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable the `backup` tool.",
+          "type": "boolean"
+        },
+        "encrypt": {
+          "default": false,
+          "description": "Encrypt backup archives (requires a configured secret store key).",
+          "type": "boolean"
+        },
+        "include_dirs": {
+          "default": [
+            "config",
+            "memory",
+            "audit",
+            "knowledge"
+          ],
+          "description": "Workspace subdirectories to include in backups.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_keep": {
+          "default": 10,
+          "description": "Maximum number of backups to keep (oldest are pruned).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schedule_cron": {
+          "default": null,
+          "description": "Optional cron expression for scheduled automatic backups.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schedule_timezone": {
+          "default": null,
+          "description": "IANA timezone for `schedule_cron`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/BackupConfig",
+  "default": {
+    "compress": true,
+    "destination_dir": "state/backups",
+    "enabled": true,
+    "encrypt": false,
+    "include_dirs": [
+      "config",
+      "memory",
+      "audit",
+      "knowledge"
+    ],
+    "max_keep": 10,
+    "schedule_cron": null,
+    "schedule_timezone": null
+  },
+  "description": "Backup tool configuration (`[backup]`)."
+}

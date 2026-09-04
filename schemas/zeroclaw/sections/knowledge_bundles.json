@@ -1,0 +1,31 @@
+{
+  "$defs": {
+    "KnowledgeBundleConfig": {
+      "description": "Named knowledge bundle (`[knowledge_bundles.<alias>]`).\n\nA reusable set of knowledge sources (documents, URLs, or RAG corpus paths)\nthat can be attached to an agent by alias.",
+      "properties": {
+        "sources": {
+          "default": [],
+          "description": "Paths or URLs to include in this knowledge bundle.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "default": [],
+          "description": "Tags for filtering or categorising sources within the bundle.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/KnowledgeBundleConfig"
+  },
+  "description": "Named knowledge bundles (`[knowledge_bundles.<alias>]`).",
+  "type": "object"
+}

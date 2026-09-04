@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "LinkEnricherConfig": {
+      "description": "Automatic link understanding for inbound channel messages (`[link_enricher]`).\n\nWhen enabled, URLs in incoming messages are automatically fetched and\nsummarised. The summary is prepended to the message before the agent\nprocesses it, giving the LLM context about linked pages without an\nexplicit tool call.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the link enricher pipeline stage (default: false)",
+          "type": "boolean"
+        },
+        "max_links": {
+          "default": 3,
+          "description": "Maximum number of links to fetch per message (default: 3)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 10,
+          "description": "Per-link fetch timeout in seconds (default: 10)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/LinkEnricherConfig",
+  "default": {
+    "enabled": false,
+    "max_links": 3,
+    "timeout_secs": 10
+  },
+  "description": "Link enricher configuration (`[link_enricher]`)."
+}
