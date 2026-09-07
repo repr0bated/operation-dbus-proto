@@ -47,6 +47,128 @@ pub enum MemoryPolicy {
     Default,
 }
 
+/// Default maximum number of entries in the in-memory fast path.
+const DEFAULT_MEMORY_MAX_ENTRIES: usize = 1000;
+/// Default maximum memory usage for the in-memory fast path (100 MB).
+const DEFAULT_MEMORY_MAX_BYTES: usize = 100 * 1024 * 1024;
+
+/// A single entry in the in-memory fast path.
+struct CacheEntry {
+    data: Vec<u8>,
+    accessed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// In-memory fast path for recently accessed cache entries.
+///
+/// Bounded by `max_entries` (default 1000) and `max_memory_bytes` (default 100 MB).
+/// Eviction is LRU: entries with the oldest `accessed_at` are removed first.
+struct MemoryCache {
+    entries: Mutex<HashMap<String, CacheEntry>>,
+    max_entries: usize,
+    max_memory_bytes: usize,
+    current_memory: AtomicUsize,
+}
+
+impl MemoryCache {
+    fn new(max_entries: usize, max_memory_bytes: usize) -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            max_entries,
+            max_memory_bytes,
+            current_memory: AtomicUsize::new(0),
+        }
+    }
+
+    /// Return a copy of the cached bytes for `key`, updating `accessed_at` on hit.
+    fn get(&self, key: &str) -> Option<Vec<u8>> {
+        let mut entries = self.entries.lock().ok()?;
+        if let Some(entry) = entries.get_mut(key) {
+            entry.accessed_at = chrono::Utc::now();
+            Some(entry.data.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Insert or replace `key` with `data`, then evict if over limits.
+    fn put(&self, key: String, data: Vec<u8>) {
+        let data_len = data.len();
+        let mut entries = match self.entries.lock() {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        // Subtract the old entry's size if the key already exists.
+        if let Some(old) = entries.get(&key) {
+            self.current_memory
+                .fetch_sub(old.data.len(), Ordering::Relaxed);
+        }
+
+        entries.insert(
+            key,
+            CacheEntry {
+                data,
+                accessed_at: chrono::Utc::now(),
+            },
+        );
+        self.current_memory.fetch_add(data_len, Ordering::Relaxed);
+
+        // Release the lock before evicting (evict re-acquires it).
+        drop(entries);
+        self.evict();
+    }
+
+    /// Remove `key` from the fast path, returning whether it was present.
+    fn remove(&self, key: &str) -> bool {
+        let mut entries = match self.entries.lock() {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        if let Some(entry) = entries.remove(key) {
+            self.current_memory
+                .fetch_sub(entry.data.len(), Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Drop entries with the oldest `accessed_at` until both size limits are satisfied.
+    fn evict(&self) {
+        let mut entries = match self.entries.lock() {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        while entries.len() > self.max_entries
+            || self.current_memory.load(Ordering::Relaxed) > self.max_memory_bytes
+        {
+            let lru_key = entries
+                .iter()
+                .min_by_key(|(_, e)| e.accessed_at)
+                .map(|(k, _)| k.clone());
+
+            match lru_key {
+                Some(key) => {
+                    if let Some(entry) = entries.remove(&key) {
+                        self.current_memory
+                            .fetch_sub(entry.data.len(), Ordering::Relaxed);
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Drop all entries and reset the memory counter.
+    fn clear(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+            self.current_memory.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 pub struct BtrfsCache {
     cache_dir: PathBuf,
     /// In-memory CozoDB index for the embedding cache.
@@ -61,6 +183,8 @@ pub struct BtrfsCache {
     current_node_index: AtomicUsize,
     #[allow(dead_code)]
     numa_stats: Mutex<NumaStats>,
+    /// In-memory LRU fast path for recently accessed entries (embeddings + KV).
+    memory_cache: MemoryCache,
 }
 
 #[allow(dead_code)]
@@ -151,6 +275,7 @@ impl BtrfsCache {
         Self::create_btrfs_subvolume(&cache_dir.join("blocks")).await?;
         Self::create_btrfs_subvolume(&cache_dir.join("queries")).await?;
         Self::create_btrfs_subvolume(&cache_dir.join("diffs")).await?;
+        Self::create_btrfs_subvolume(&cache_dir.join("kv")).await?;
 
         // Create regular directories within subvolumes
         tokio::fs::create_dir_all(cache_dir.join("embeddings/vectors")).await?;
@@ -174,6 +299,21 @@ impl BtrfsCache {
                 accessed_at: String default "",
                 access_count: Int default 1,
                 vector_size: Int default 0
+            }"#,
+            None,
+        );
+
+        // Create the kv_cache relation for the generic key-value API.
+        let _ = index.run_query(
+            r#":create kv_cache {
+                key_hash: String
+                =>
+                key: String default "",
+                file_path: String default "",
+                created_at: String default "",
+                accessed_at: String default "",
+                access_count: Int default 1,
+                data_size: Int default 0
             }"#,
             None,
         );
@@ -207,6 +347,17 @@ impl BtrfsCache {
             (0..(num_cpus::get().min(4) as u32)).collect()
         };
 
+        // Initialize the in-memory fast path with configurable limits.
+        let max_entries = std::env::var("OPDBUS_CACHE_MEMORY_MAX_ENTRIES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MEMORY_MAX_ENTRIES);
+        let max_bytes = std::env::var("OPDBUS_CACHE_MEMORY_MAX_BYTES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MEMORY_MAX_BYTES);
+        let memory_cache = MemoryCache::new(max_entries, max_bytes);
+
         Ok(Self {
             cache_dir,
             index,
@@ -217,6 +368,7 @@ impl BtrfsCache {
             cpu_affinity,
             current_node_index: AtomicUsize::new(0),
             numa_stats: Mutex::new(NumaStats::new()),
+            memory_cache,
         })
     }
 
@@ -395,7 +547,22 @@ impl BtrfsCache {
     /// Get embedding if cached (without computing)
     pub fn get_embedding(&self, text: &str) -> Result<Option<Vec<f32>>> {
         let text_hash = self.hash_text(text);
+        let mem_key = format!("emb:{}", text_hash);
+
+        // In-memory fast path
+        if let Some(bytes) = self.memory_cache.get(&mem_key) {
+            let vector: Vec<f32> = bincode::deserialize(&bytes)
+                .context("Failed to deserialize embedding from memory cache")?;
+            let _ = self.update_access(&text_hash);
+            return Ok(Some(vector));
+        }
+
+        // CozoDB + disk
         if let Some(vector) = self.load_embedding(&text_hash)? {
+            // Populate the fast path with the serialized form
+            if let Ok(bytes) = bincode::serialize(&vector) {
+                self.memory_cache.put(mem_key, bytes);
+            }
             self.update_access(&text_hash)?;
             return Ok(Some(vector));
         }
@@ -405,7 +572,15 @@ impl BtrfsCache {
     /// Store embedding directly
     pub fn put_embedding(&self, text: &str, vector: &[f32]) -> Result<()> {
         let text_hash = self.hash_text(text);
-        self.save_embedding(text, &text_hash, vector)
+        self.save_embedding(text, &text_hash, vector)?;
+
+        // Populate the in-memory fast path
+        if let Ok(bytes) = bincode::serialize(&vector) {
+            let mem_key = format!("emb:{}", text_hash);
+            self.memory_cache.put(mem_key, bytes);
+        }
+
+        Ok(())
     }
 
     fn hash_text(&self, text: &str) -> String {
@@ -419,7 +594,7 @@ impl BtrfsCache {
         let result = self
             .index
             .run_query(
-                "?[vector_file] := *embedding_cache[text_hash, vector_file], text_hash = $hash",
+                "?[vector_file] := *embedding_cache[text_hash, _, vector_file, _, _, _, _], text_hash = $hash",
                 Some(serde_json::json!({"hash": text_hash})),
             )
             .map_err(|e| anyhow::anyhow!("CozoDB query failed: {e}"))?;
@@ -464,7 +639,7 @@ impl BtrfsCache {
         let existing = self
             .index
             .run_query(
-                "?[access_count] := *embedding_cache[text_hash, access_count], text_hash = $hash",
+                "?[access_count] := *embedding_cache[text_hash, _, _, _, _, access_count, _], text_hash = $hash",
                 Some(serde_json::json!({"hash": text_hash})),
             )
             .map_err(|e| anyhow::anyhow!("CozoDB query failed: {e}"))?;
@@ -507,7 +682,7 @@ impl BtrfsCache {
         let existing = self
             .index
             .run_query(
-                "?[access_count] := *embedding_cache[text_hash, access_count], text_hash = $hash",
+                "?[access_count] := *embedding_cache[text_hash, _, _, _, _, access_count, _], text_hash = $hash",
                 Some(serde_json::json!({"hash": text_hash})),
             )
             .map_err(|e| anyhow::anyhow!("CozoDB query failed: {e}"))?;
@@ -537,13 +712,217 @@ impl BtrfsCache {
         Ok(())
     }
 
+    // ── Generic key-value cache API ─────────────────────────────────────
+
+    /// Generic key-value cache backed by CozoDB + filesystem.
+    ///
+    /// Lookup order: in-memory fast path → CozoDB index → disk file.
+    pub async fn get_raw(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let key_hash = self.hash_key(key);
+        let mem_key = format!("kv:{}", key);
+
+        // 1. In-memory fast path
+        if let Some(data) = self.memory_cache.get(&mem_key) {
+            // Best-effort access-stat update (don't fail the read).
+            let _ = self.update_kv_access(&key_hash);
+            return Ok(Some(data));
+        }
+
+        // 2. CozoDB index → disk file
+        let file_path = self
+            .index
+            .run_query(
+                "?[file_path] := *kv_cache[key_hash, _, file_path, _, _, _, _], key_hash = $hash",
+                Some(serde_json::json!({"hash": key_hash})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB kv_cache query failed: {e}"))?
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("file_path"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        if let Some(file) = file_path {
+            let path = self.cache_dir.join(&file);
+            let data = tokio::fs::read(&path)
+                .await
+                .with_context(|| format!("Failed to read cached KV file: {:?}", path))?;
+
+            // Populate the fast path
+            self.memory_cache.put(mem_key, data.clone());
+            let _ = self.update_kv_access(&key_hash);
+
+            return Ok(Some(data));
+        }
+
+        Ok(None)
+    }
+
+    /// Store arbitrary bytes under `key` (CozoDB index + disk file + memory).
+    pub async fn put_raw(&self, key: &str, data: &[u8]) -> Result<()> {
+        let key_hash = self.hash_key(key);
+        let kv_dir = self.cache_dir.join("kv");
+        tokio::fs::create_dir_all(&kv_dir)
+            .await
+            .context("Failed to create kv cache directory")?;
+
+        let file_name = format!("{}.dat", key_hash);
+        let file_rel = format!("kv/{}", file_name);
+        let path = self.cache_dir.join(&file_rel);
+
+        // Write to disk (Btrfs transparent compression handles the rest)
+        tokio::fs::write(&path, data)
+            .await
+            .with_context(|| format!("Failed to write KV cache file: {:?}", path))?;
+
+        // Upsert into CozoDB index
+        let existing = self
+            .index
+            .run_query(
+                "?[access_count] := *kv_cache[key_hash, _, _, _, _, access_count, _], key_hash = $hash",
+                Some(serde_json::json!({"hash": key_hash})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB kv_cache query failed: {e}"))?;
+
+        let old_count = existing
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("access_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let now = chrono::Utc::now().to_rfc3339();
+        self.index
+            .run_query(
+                r#"?[key_hash, key, file_path, created_at, accessed_at, access_count, data_size]
+                    <- [[$hash, $key, $fpath, $now, $now, $count, $dsize]]
+                :put kv_cache {
+                    key_hash => key, file_path, created_at, accessed_at, access_count, data_size
+                }"#,
+                Some(serde_json::json!({
+                    "hash": key_hash,
+                    "key": key,
+                    "fpath": file_rel,
+                    "now": now,
+                    "count": old_count + 1,
+                    "dsize": data.len() as i64,
+                })),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB kv_cache put failed: {e}"))?;
+
+        // Populate the in-memory fast path
+        let mem_key = format!("kv:{}", key);
+        self.memory_cache.put(mem_key, data.to_vec());
+
+        debug!(key = %key, size = data.len(), "KV cache entry stored");
+        Ok(())
+    }
+
+    /// Delete a key from all cache layers. Returns `true` if the key existed.
+    pub async fn delete(&self, key: &str) -> Result<bool> {
+        let key_hash = self.hash_key(key);
+        let mem_key = format!("kv:{}", key);
+
+        // Evict from memory
+        self.memory_cache.remove(&mem_key);
+
+        // Look up the file path before removing the index row
+        let file_path = self
+            .index
+            .run_query(
+                "?[file_path] := *kv_cache[key_hash, _, file_path, _, _, _, _], key_hash = $hash",
+                Some(serde_json::json!({"hash": key_hash})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB kv_cache query failed: {e}"))?
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("file_path"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let existed = file_path.is_some();
+
+        // Remove the backing file
+        if let Some(ref file) = file_path {
+            let path = self.cache_dir.join(file);
+            let _ = tokio::fs::remove_file(path).await;
+        }
+
+        // Remove from CozoDB index
+        let _ = self.index.run_query(
+            "?[key_hash] <- [[$hash]] :rm kv_cache { key_hash }",
+            Some(serde_json::json!({"hash": key_hash})),
+        );
+
+        if existed {
+            debug!(key = %key, "KV cache entry deleted");
+        }
+        Ok(existed)
+    }
+
+    /// Return the cached value for `key`, or compute, store, and return it.
+    pub async fn get_or_compute<F, Fut>(&self, key: &str, compute: F) -> Result<Vec<u8>>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: std::future::Future<Output = Result<Vec<u8>>> + Send,
+    {
+        if let Some(data) = self.get_raw(key).await? {
+            return Ok(data);
+        }
+        let data = compute().await?;
+        self.put_raw(key, &data).await?;
+        Ok(data)
+    }
+
+    /// SHA-256 hash of an arbitrary cache key (hex-encoded).
+    fn hash_key(&self, key: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(key.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// Bump `accessed_at` and increment `access_count` for a KV cache entry.
+    fn update_kv_access(&self, key_hash: &str) -> Result<()> {
+        let existing = self
+            .index
+            .run_query(
+                "?[access_count] := *kv_cache[key_hash, _, _, _, _, access_count, _], key_hash = $hash",
+                Some(serde_json::json!({"hash": key_hash})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB kv_cache access query failed: {e}"))?;
+
+        let old_count = existing
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("access_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let now = chrono::Utc::now().to_rfc3339();
+        self.index
+            .run_query(
+                "?[key_hash, accessed_at, access_count] <- [[$hash, $now, $count]]
+                 :update kv_cache { key_hash => accessed_at, access_count }",
+                Some(serde_json::json!({
+                    "hash": key_hash,
+                    "now": now,
+                    "count": old_count + 1,
+                })),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB kv_cache access update failed: {e}"))?;
+
+        Ok(())
+    }
+
+    // ── Statistics & maintenance ────────────────────────────────────────
+
     /// Get cache statistics
     pub fn stats(&self) -> Result<CacheStats> {
         // Total entry count
         let total_result = self
             .index
             .run_query(
-                "?[total] := total = count(*embedding_cache[text_hash, _])",
+                "?[total] := total = count(*embedding_cache[text_hash, _, _, _, _, _, _])",
                 None,
             )
             .map_err(|e| anyhow::anyhow!("CozoDB stats query failed: {e}"))?;
@@ -561,7 +940,7 @@ impl BtrfsCache {
         let hot_result = self
             .index
             .run_query(
-                "?[hot] := hot = count(*embedding_cache[text_hash, accessed_at]), accessed_at > $threshold",
+                "?[hot] := hot = count(*embedding_cache[text_hash, _, _, _, accessed_at, _, _]), accessed_at > $threshold",
                 Some(serde_json::json!({"threshold": hot_threshold})),
             )
             .map_err(|e| anyhow::anyhow!("CozoDB hot stats query failed: {e}"))?;
@@ -578,7 +957,7 @@ impl BtrfsCache {
         let accesses_result = self
             .index
             .run_query(
-                "?[access_count] := *embedding_cache[text_hash, access_count]",
+                "?[access_count] := *embedding_cache[text_hash, _, _, _, _, access_count, _]",
                 None,
             )
             .map_err(|e| anyhow::anyhow!("CozoDB accesses query failed: {e}"))?;
@@ -637,7 +1016,7 @@ impl BtrfsCache {
         let result = self
             .index
             .run_query(
-                "?[text_hash, vector_file] := *embedding_cache[text_hash, vector_file, accessed_at], accessed_at < $cutoff",
+                "?[text_hash, vector_file] := *embedding_cache[text_hash, _, vector_file, _, accessed_at, _, _], accessed_at < $cutoff",
                 Some(serde_json::json!({"cutoff": cutoff})),
             )
             .map_err(|e| anyhow::anyhow!("CozoDB cleanup query failed: {e}"))?;
@@ -675,7 +1054,7 @@ impl BtrfsCache {
         if count > 0 {
             self.index
                 .run_query(
-                    "matched[text_hash] := *embedding_cache[text_hash, accessed_at], accessed_at < $cutoff
+                    "matched[text_hash] := *embedding_cache[text_hash, _, _, _, accessed_at, _, _], accessed_at < $cutoff
                      ?[text_hash] := matched[text_hash]
                      :rm embedding_cache { text_hash }",
                     Some(serde_json::json!({"cutoff": cutoff})),
@@ -695,6 +1074,9 @@ impl BtrfsCache {
     pub fn clear(&self) -> Result<()> {
         log::warn!("Clearing all cache data");
 
+        // Drop all in-memory fast-path entries
+        self.memory_cache.clear();
+
         // Clear embeddings
         let vectors_dir = self.cache_dir.join("embeddings/vectors");
         if vectors_dir.exists() {
@@ -710,9 +1092,20 @@ impl BtrfsCache {
             std::fs::create_dir_all(blocks_dir.join("by-hash"))?;
         }
 
-        // Clear CozoDB index: delete all rows from the relation
+        // Clear KV store
+        let kv_dir = self.cache_dir.join("kv");
+        if kv_dir.exists() {
+            std::fs::remove_dir_all(&kv_dir)?;
+            std::fs::create_dir_all(&kv_dir)?;
+        }
+
+        // Clear CozoDB indices
         let _ = self.index.run_query(
-            "?[text_hash] := *embedding_cache[text_hash] :rm embedding_cache { text_hash }",
+            "?[text_hash] := *embedding_cache[text_hash, _, _, _, _, _, _] :rm embedding_cache { text_hash }",
+            None,
+        );
+        let _ = self.index.run_query(
+            "?[key_hash] := *kv_cache[key_hash, _, _, _, _, _, _] :rm kv_cache { key_hash }",
             None,
         );
 
@@ -725,6 +1118,10 @@ impl BtrfsCache {
     pub fn clear_embeddings(&self) -> Result<()> {
         log::warn!("Clearing embeddings cache");
 
+        // Drop in-memory fast-path entries (includes embeddings; KV entries
+        // will be re-populated from disk on next access).
+        self.memory_cache.clear();
+
         // Clear embeddings vectors
         let vectors_dir = self.cache_dir.join("embeddings/vectors");
         if vectors_dir.exists() {
@@ -734,7 +1131,7 @@ impl BtrfsCache {
 
         // Clear CozoDB index
         let _ = self.index.run_query(
-            "?[text_hash] := *embedding_cache[text_hash] :rm embedding_cache { text_hash }",
+            "?[text_hash] := *embedding_cache[text_hash, _, _, _, _, _, _] :rm embedding_cache { text_hash }",
             None,
         );
 
@@ -1009,5 +1406,145 @@ mod tests {
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
         assert_eq!(hash1.len(), 64); // SHA256 hex length
+    }
+
+    #[test]
+    fn memory_cache_put_and_get() {
+        let mc = MemoryCache::new(10, 1024);
+        mc.put("a".into(), vec![1, 2, 3]);
+        assert_eq!(mc.get("a"), Some(vec![1, 2, 3]));
+        assert_eq!(mc.get("b"), None);
+    }
+
+    #[test]
+    fn memory_cache_remove() {
+        let mc = MemoryCache::new(10, 1024);
+        mc.put("x".into(), vec![9]);
+        assert!(mc.remove("x"));
+        assert!(!mc.remove("x"));
+        assert_eq!(mc.get("x"), None);
+    }
+
+    #[test]
+    fn memory_cache_evicts_lru_on_entry_limit() {
+        let mc = MemoryCache::new(2, 1024 * 1024);
+        mc.put("a".into(), vec![1]);
+        mc.put("b".into(), vec![2]);
+        // Access "a" so it becomes most-recently used
+        let _ = mc.get("a");
+        // Insert "c" — should evict "b" (oldest access)
+        mc.put("c".into(), vec![3]);
+        assert!(mc.get("a").is_some());
+        assert_eq!(mc.get("b"), None);
+        assert!(mc.get("c").is_some());
+    }
+
+    #[test]
+    fn memory_cache_evicts_on_memory_limit() {
+        // 10-byte memory cap forces eviction after a couple of entries
+        let mc = MemoryCache::new(1000, 10);
+        mc.put("a".into(), vec![0u8; 6]);
+        mc.put("b".into(), vec![0u8; 6]);
+        // "a" should have been evicted to stay under 10 bytes
+        assert_eq!(mc.get("a"), None);
+        assert!(mc.get("b").is_some());
+    }
+
+    #[test]
+    fn memory_cache_clear() {
+        let mc = MemoryCache::new(10, 1024);
+        mc.put("a".into(), vec![1]);
+        mc.put("b".into(), vec![2]);
+        mc.clear();
+        assert_eq!(mc.get("a"), None);
+        assert_eq!(mc.get("b"), None);
+        assert_eq!(mc.current_memory.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn embedding_put_get() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = BtrfsCache::new(parent.path().join("cache")).await.unwrap();
+
+        cache.put_embedding("test text", &[1.0, 2.0, 3.0]).unwrap();
+        let result = cache.get_embedding("test text").unwrap();
+        assert_eq!(result, Some(vec![1.0, 2.0, 3.0]));
+    }
+
+    #[tokio::test]
+    async fn kv_put_get_delete_round_trip() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = BtrfsCache::new(parent.path().join("cache")).await.unwrap();
+
+        // put + get
+        cache.put_raw("hello", b"world").await.unwrap();
+        let val = cache.get_raw("hello").await.unwrap();
+        assert_eq!(val, Some(b"world".to_vec()));
+
+        // delete
+        let existed = cache.delete("hello").await.unwrap();
+        assert!(existed);
+        let val = cache.get_raw("hello").await.unwrap();
+        assert_eq!(val, None);
+
+        // delete again — not found
+        let existed = cache.delete("hello").await.unwrap();
+        assert!(!existed);
+    }
+
+    #[tokio::test]
+    async fn kv_get_or_compute() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = BtrfsCache::new(parent.path().join("cache")).await.unwrap();
+
+        let computed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let computed_clone = computed.clone();
+
+        // First call should compute
+        let val = cache
+            .get_or_compute("key1", move || {
+                computed_clone.fetch_add(1, Ordering::Relaxed);
+                async { Ok(b"computed-value".to_vec()) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(val, b"computed-value".to_vec());
+        assert_eq!(computed.load(Ordering::Relaxed), 1);
+
+        // Second call should use the cache (compute not called again)
+        let val = cache
+            .get_or_compute("key1", || async { Ok(b"should-not-be-used".to_vec()) })
+            .await
+            .unwrap();
+        assert_eq!(val, b"computed-value".to_vec());
+        assert_eq!(computed.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn kv_overwrite_replaces_value() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = BtrfsCache::new(parent.path().join("cache")).await.unwrap();
+
+        cache.put_raw("k", b"v1").await.unwrap();
+        cache.put_raw("k", b"v2").await.unwrap();
+
+        let val = cache.get_raw("k").await.unwrap();
+        assert_eq!(val, Some(b"v2".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn kv_memory_cache_serves_fast_path() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = BtrfsCache::new(parent.path().join("cache")).await.unwrap();
+
+        cache.put_raw("fast", b"data").await.unwrap();
+
+        // The in-memory fast path should be populated
+        let mem_key = "kv:fast";
+        assert!(cache.memory_cache.get(mem_key).is_some());
+
+        // get_raw should return from memory
+        let val = cache.get_raw("fast").await.unwrap();
+        assert_eq!(val, Some(b"data".to_vec()));
     }
 }
