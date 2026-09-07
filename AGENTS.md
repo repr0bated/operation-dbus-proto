@@ -58,18 +58,25 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 **Build gotchas**:
 - **Release builds need `CXXFLAGS="-include cstdint"`** — vendored RocksDB in `cozorocks` fails on modern GCC without it.
-- **`op-web` release builds panic** unless `crates/op-web/ui/dist/index.html` exists (RustEmbed). Build the embedded UI first with `npx vite build` in `crates/op-web/ui`. Dev builds compile with empty assets.
 
-**Frontend — two Vite apps, do not confuse them**:
-1. `crates/` (source in `crates/src/`) — dev dashboard with full npm scripts (`dev`/`build`/`lint`/`typecheck`/`test`).
-2. `crates/op-web/ui/` (`zeroclaw-gui-repo`) — the app op-web **actually embeds** (RustEmbed of `ui/dist/`). Its `package.json` has no `build` script; rebuild with `npx vite build` from that directory. Building `crates/` does NOT update what op-web serves.
+**Frontend — single Vite app, external repo**:
+
+The active UI lives in **`/srv/git/vercel-json-render-ui`** (not in this repo). It is a Vite + React app that op-web serves as static files from `/usr/local/share/op-dbus/dashboard/vercel-json-render/` at `http://10.0.0.1:8080/vercel-json-render/`.
 
 ```bash
-cd crates && npm run dev / build / lint / typecheck
-cd crates && npm test                              # vitest
-cd crates && npx vitest run src/test/<file>        # single test
-cd crates/op-web/ui && npx vite build              # rebuild embedded UI
+# Build and deploy (from the UI repo)
+cd /srv/git/vercel-json-render-ui && ./scripts/deploy-op-web.sh
+
+# Dev server
+cd /srv/git/vercel-json-render-ui && npm run dev
 ```
+
+The script runs `npm run build -- --base /vercel-json-render/`, then rsyncs `dist/` into the static directory. op-web does **not** embed the UI via RustEmbed — it serves the deployed static files.
+
+**Deprecated** (do not use for new work):
+- `crates/op-web/ui/` (`zeroclaw-gui-repo`) — old RustEmbed path, no longer the active UI.
+- `/srv/git/operation-dashboard-ui-07` — old operator console, superseded by `vercel-json-render-ui`.
+- `crates/` dev dashboard (`crates/src/`) — legacy dev tooling.
 
 **CI does NOT gate `cargo test` or `cargo clippy`** — never assume "CI green" means tests pass. The only CI code review is the Codex full-repo-review action (best-effort LLM pass, not a deterministic check).
 
@@ -100,6 +107,7 @@ Run `/verify` before reporting work complete. CI won't catch fmt drift, clippy w
 - Many older deploy scripts and HANDOFF docs still reference s6 — treat them as archival; runit/`sv` is current.
 - Anything mentioning `/dev/shm/plugin_schema.dat`, `live-schema.json`, or `/dev/shm/opdbus/schemas` is describing a retired design.
 - Anything mentioning `OIB1`, `oib1:`, `blob_ref`, `SessionIdentityBlob`, or `x-opdbus-identity-blob-bin` is pre-2026-09-01 and stale; the session-identity envelope is now `SID1` / `SealedId`.
+- Anything referencing `crates/op-web/ui/` as the active UI, or `operation-dashboard-ui-07` as the operator console — the active UI is `/srv/git/vercel-json-render-ui`, deployed via its `scripts/deploy-op-web.sh`.
 
 ## Subagent and model selection
 
