@@ -12,6 +12,7 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = { workspace = true }
 log = "0.4"
 num_cpus = "1.16"
+op-cozo-store = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled"] }

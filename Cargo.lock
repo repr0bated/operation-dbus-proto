@@ -3786,6 +3786,7 @@ dependencies = [
  "futures",
  "log",
  "num_cpus",
+ "op-cozo-store",
  "prost 0.13.5",
  "prost-types 0.13.5",
  "rusqlite",

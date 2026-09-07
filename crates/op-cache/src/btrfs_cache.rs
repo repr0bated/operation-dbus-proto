@@ -1,14 +1,14 @@
-//! BTRFS-backed cache with SQLite index, compression, and NUMA optimization
+//! BTRFS-backed cache with CozoDB index, compression, and NUMA optimization
 //!
 //! Provides unlimited disk-based caching with:
 //! - BTRFS transparent compression (zstd)
-//! - SQLite index for O(1) lookups
+//! - CozoDB in-memory index for O(1) lookups (via `op-cozo-store`)
 //! - Linux page cache for hot data
 //! - Automatic snapshot management
 //! - NUMA-aware memory allocation and CPU affinity
 
 use anyhow::{Context, Result};
-use rusqlite::OptionalExtension;
+use op_cozo_store::CozoGraphShuttle;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +49,10 @@ pub enum MemoryPolicy {
 
 pub struct BtrfsCache {
     cache_dir: PathBuf,
-    index: Mutex<rusqlite::Connection>,
+    /// In-memory CozoDB index for the embedding cache.
+    /// `CozoGraphShuttle` wraps an `Arc<DbInstance>` so it is cheaply
+    /// cloneable and safe to share without an external `Mutex`.
+    index: CozoGraphShuttle,
     snapshot_manager: SnapshotManager,
     numa_topology: NumaTopology,
     placement_strategy: CachePlacementStrategy,
@@ -154,37 +157,26 @@ impl BtrfsCache {
         tokio::fs::create_dir_all(cache_dir.join("blocks/by-number")).await?;
         tokio::fs::create_dir_all(cache_dir.join("blocks/by-hash")).await?;
 
-        // Create SQLite index for embeddings
-        let index_path = cache_dir.join("embeddings/index.db");
-        let index =
-            rusqlite::Connection::open(&index_path).context("Failed to open SQLite index")?;
+        // Create CozoDB in-memory index for embeddings (replaces SQLite)
+        let index = CozoGraphShuttle::new_in_memory()
+            .map_err(|e| anyhow::anyhow!("Failed to create CozoDB index: {e}"))?;
 
-        // Create embeddings table
-        index.execute(
-            "CREATE TABLE IF NOT EXISTS embeddings (
-                text_hash TEXT PRIMARY KEY,
-                text TEXT NOT NULL,
-                vector_file TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                accessed_at INTEGER NOT NULL,
-                access_count INTEGER NOT NULL DEFAULT 1,
-                vector_size INTEGER NOT NULL
-            )",
-            [],
-        )?;
-
-        // Create index for hot/cold data analysis
-        index.execute(
-            "CREATE INDEX IF NOT EXISTS idx_accessed
-             ON embeddings(accessed_at DESC)",
-            [],
-        )?;
-
-        index.execute(
-            "CREATE INDEX IF NOT EXISTS idx_created
-             ON embeddings(created_at DESC)",
-            [],
-        )?;
+        // Create the embedding_cache relation.
+        // :create errors if the relation already exists — safe to ignore
+        // since each BtrfsCache gets its own fresh in-memory store.
+        let _ = index.run_query(
+            r#":create embedding_cache {
+                text_hash: String
+                =>
+                text: String default "",
+                vector_file: String default "",
+                created_at: String default "",
+                accessed_at: String default "",
+                access_count: Int default 1,
+                vector_size: Int default 0
+            }"#,
+            None,
+        );
 
         // Initialize snapshot manager
         let snapshot_config = SnapshotConfig {
@@ -217,7 +209,7 @@ impl BtrfsCache {
 
         Ok(Self {
             cache_dir,
-            index: Mutex::new(index),
+            index,
             snapshot_manager,
             numa_topology,
             placement_strategy,
@@ -423,18 +415,21 @@ impl BtrfsCache {
     }
 
     fn load_embedding(&self, text_hash: &str) -> Result<Option<Vec<f32>>> {
-        let index = self.index.lock().unwrap();
-
-        // Lookup in SQLite index
-        let vector_file: Option<String> = index
-            .query_row(
-                "SELECT vector_file FROM embeddings WHERE text_hash = ?1",
-                [text_hash],
-                |row| row.get(0),
+        // Look up the vector file path in the CozoDB index
+        let result = self
+            .index
+            .run_query(
+                "?[vector_file] := *embedding_cache[text_hash, vector_file], text_hash = $hash",
+                Some(serde_json::json!({"hash": text_hash})),
             )
-            .optional()?;
+            .map_err(|e| anyhow::anyhow!("CozoDB query failed: {e}"))?;
 
-        drop(index); // Release lock before file I/O
+        let vector_file = result
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("vector_file"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         if let Some(file) = vector_file {
             let path = self.cache_dir.join("embeddings/vectors").join(&file);
@@ -463,53 +458,139 @@ impl BtrfsCache {
         let data = bincode::serialize(vector)?;
         std::fs::write(&path, data)?;
 
-        // Add to SQLite index
-        let index = self.index.lock().unwrap();
-        let now = chrono::Utc::now().timestamp();
-        index.execute(
-            "INSERT INTO embeddings (text_hash, text, vector_file, created_at, accessed_at, vector_size)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(text_hash) DO UPDATE SET
-                accessed_at = ?5,
-                access_count = access_count + 1",
-            rusqlite::params![text_hash, text, vector_file, now, now, vector.len()],
-        )?;
+        // Upsert into CozoDB index: read existing access_count, then :put
+        // the row with the incremented count. CozoDB's :put overwrites the
+        // entire row, so we carry forward the old access_count + 1.
+        let existing = self
+            .index
+            .run_query(
+                "?[access_count] := *embedding_cache[text_hash, access_count], text_hash = $hash",
+                Some(serde_json::json!({"hash": text_hash})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB query failed: {e}"))?;
+
+        let old_count = existing
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("access_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let now = chrono::Utc::now().to_rfc3339();
+        self.index
+            .run_query(
+                r#"?[text_hash, text, vector_file, created_at, accessed_at, access_count, vector_size]
+                    <- [[$hash, $text, $vfile, $now, $now, $count, $vsize]]
+                :put embedding_cache {
+                    text_hash => text, vector_file, created_at, accessed_at, access_count, vector_size
+                }"#,
+                Some(serde_json::json!({
+                    "hash": text_hash,
+                    "text": text,
+                    "vfile": vector_file,
+                    "now": now,
+                    "count": old_count + 1,
+                    "vsize": vector.len() as i64,
+                })),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB put failed: {e}"))?;
 
         Ok(())
     }
 
+    /// Bump `accessed_at` and increment `access_count` for a cached entry.
+    ///
+    /// CozoDB does not have an atomic `increment` operation, so this reads
+    /// the current `access_count` and writes back `count + 1` via `:update`
+    /// (partial-column update that fails silently if the row does not exist).
     fn update_access(&self, text_hash: &str) -> Result<()> {
-        let index = self.index.lock().unwrap();
-        let now = chrono::Utc::now().timestamp();
-        index.execute(
-            "UPDATE embeddings
-             SET accessed_at = ?1, access_count = access_count + 1
-             WHERE text_hash = ?2",
-            rusqlite::params![now, text_hash],
-        )?;
+        let existing = self
+            .index
+            .run_query(
+                "?[access_count] := *embedding_cache[text_hash, access_count], text_hash = $hash",
+                Some(serde_json::json!({"hash": text_hash})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB query failed: {e}"))?;
+
+        let old_count = existing
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("access_count"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let now = chrono::Utc::now().to_rfc3339();
+        // :update is a partial-column write — only touches accessed_at and
+        // access_count. It is a no-op if the row does not exist.
+        self.index
+            .run_query(
+                "?[text_hash, accessed_at, access_count] <- [[$hash, $now, $count]]
+                 :update embedding_cache { text_hash => accessed_at, access_count }",
+                Some(serde_json::json!({
+                    "hash": text_hash,
+                    "now": now,
+                    "count": old_count + 1,
+                })),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB update failed: {e}"))?;
+
         Ok(())
     }
 
     /// Get cache statistics
     pub fn stats(&self) -> Result<CacheStats> {
-        let index = self.index.lock().unwrap();
+        // Total entry count
+        let total_result = self
+            .index
+            .run_query(
+                "?[total] := total = count(*embedding_cache[text_hash, _])",
+                None,
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB stats query failed: {e}"))?;
 
-        let total: i64 =
-            index.query_row("SELECT COUNT(*) FROM embeddings", [], |row| row.get(0))?;
+        let total = total_result
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("total"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
 
-        let hot_threshold = chrono::Utc::now().timestamp() - 3600; // 1 hour
-        let hot: i64 = index.query_row(
-            "SELECT COUNT(*) FROM embeddings WHERE accessed_at > ?1",
-            [hot_threshold],
-            |row| row.get(0),
-        )?;
+        // Hot entries: accessed within the last hour.
+        // Timestamps are RFC3339 strings, so lexicographic comparison is valid.
+        let hot_threshold = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let hot_result = self
+            .index
+            .run_query(
+                "?[hot] := hot = count(*embedding_cache[text_hash, accessed_at]), accessed_at > $threshold",
+                Some(serde_json::json!({"threshold": hot_threshold})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB hot stats query failed: {e}"))?;
 
-        let total_accesses: i64 =
-            index.query_row("SELECT SUM(access_count) FROM embeddings", [], |row| {
-                row.get(0)
-            })?;
+        let hot = hot_result
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|row| row.get("hot"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
 
-        drop(index); // Release lock before file I/O
+        // Total accesses: sum of all access_count values.
+        // Fetched as individual rows to avoid CozoDB sum-over-null edge cases.
+        let accesses_result = self
+            .index
+            .run_query(
+                "?[access_count] := *embedding_cache[text_hash, access_count]",
+                None,
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB accesses query failed: {e}"))?;
+
+        let total_accesses: i64 = accesses_result
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|row| row.get("access_count").and_then(|v| v.as_i64()))
+                    .sum()
+            })
+            .unwrap_or(0);
 
         // Calculate disk usage
         let embeddings_size = self.dir_size(&self.cache_dir.join("embeddings/vectors"))?;
@@ -545,41 +626,66 @@ impl BtrfsCache {
         Ok(size)
     }
 
-    /// Clean old entries (accessed before cutoff)
+    /// Clean old entries (accessed before cutoff).
+    ///
+    /// Queries the CozoDB index for stale rows, deletes their backing vector
+    /// files from disk, then removes the index rows.
     pub fn cleanup_old(&self, days: i64) -> Result<usize> {
-        let cutoff = chrono::Utc::now().timestamp() - (days * 86400);
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
 
-        let index = self.index.lock().unwrap();
+        // Find old entries (need vector_file paths for disk cleanup)
+        let result = self
+            .index
+            .run_query(
+                "?[text_hash, vector_file] := *embedding_cache[text_hash, vector_file, accessed_at], accessed_at < $cutoff",
+                Some(serde_json::json!({"cutoff": cutoff})),
+            )
+            .map_err(|e| anyhow::anyhow!("CozoDB cleanup query failed: {e}"))?;
 
-        // Find old entries
-        let mut stmt = index.prepare(
-            "SELECT text_hash, vector_file FROM embeddings
-             WHERE accessed_at < ?1",
-        )?;
-
-        let old_entries: Vec<(String, String)> = stmt
-            .query_map([cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let old_entries: Vec<(String, String)> = result
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|row| {
+                        let hash = row
+                            .get("text_hash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let file = row
+                            .get("vector_file")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        Some((hash, file))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let count = old_entries.len();
 
-        drop(stmt); // Release statement
-        drop(index); // Release lock before file I/O
-
-        // Delete files
+        // Delete vector files from disk
         for (_hash, file) in &old_entries {
             let path = self.cache_dir.join("embeddings/vectors").join(file);
             let _ = std::fs::remove_file(path); // Ignore errors
         }
 
-        // Delete from index
-        let index = self.index.lock().unwrap();
-        index.execute("DELETE FROM embeddings WHERE accessed_at < ?1", [cutoff])?;
+        // Delete from CozoDB index
+        if count > 0 {
+            self.index
+                .run_query(
+                    "matched[text_hash] := *embedding_cache[text_hash, accessed_at], accessed_at < $cutoff
+                     ?[text_hash] := matched[text_hash]
+                     :rm embedding_cache { text_hash }",
+                    Some(serde_json::json!({"cutoff": cutoff})),
+                )
+                .map_err(|e| anyhow::anyhow!("CozoDB cleanup delete failed: {e}"))?;
+        }
 
-        log::info!(
+        info!(
             "Cleaned up {} old cache entries (>{} days old)",
-            count,
-            days
+            count, days
         );
 
         Ok(count)
@@ -604,9 +710,11 @@ impl BtrfsCache {
             std::fs::create_dir_all(blocks_dir.join("by-hash"))?;
         }
 
-        // Clear index
-        let index = self.index.lock().unwrap();
-        index.execute("DELETE FROM embeddings", [])?;
+        // Clear CozoDB index: delete all rows from the relation
+        let _ = self.index.run_query(
+            "?[text_hash] := *embedding_cache[text_hash] :rm embedding_cache { text_hash }",
+            None,
+        );
 
         log::info!("Cache cleared");
 
@@ -624,9 +732,11 @@ impl BtrfsCache {
             std::fs::create_dir_all(&vectors_dir)?;
         }
 
-        // Clear index
-        let index = self.index.lock().unwrap();
-        index.execute("DELETE FROM embeddings", [])?;
+        // Clear CozoDB index
+        let _ = self.index.run_query(
+            "?[text_hash] := *embedding_cache[text_hash] :rm embedding_cache { text_hash }",
+            None,
+        );
 
         log::info!("Embeddings cache cleared");
 
