@@ -3784,6 +3784,7 @@ dependencies = [
  "bincode",
  "chrono",
  "futures",
+ "libc",
  "log",
  "num_cpus",
  "op-cozo-store",

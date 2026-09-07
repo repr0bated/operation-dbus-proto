@@ -18,7 +18,7 @@ use std::sync::{
 };
 use tracing::{debug, info, warn};
 
-use super::numa::{NumaNode, NumaStats, NumaTopology};
+use super::numa::{NumaMemoryPolicy, NumaNode, NumaOptimizer, NumaStats, NumaTopology};
 use super::snapshot_manager::{SnapshotConfig, SnapshotManager};
 
 /// NUMA-aware cache placement strategy
@@ -1273,84 +1273,46 @@ impl BtrfsCache {
         // Apply CPU affinity first
         self.apply_cpu_affinity(operation).await?;
 
-        // Apply memory policy
-        match &self.memory_policy {
-            MemoryPolicy::Default => {
-                debug!("Using default memory policy for {}", operation);
-            }
-            MemoryPolicy::Bind(nodes) if !nodes.is_empty() => {
-                debug!("Memory bound to nodes {:?} for {}", nodes, operation);
-            }
-            MemoryPolicy::Preferred(Some(node)) => {
-                debug!("Memory preferred on node {} for {}", node, operation);
-            }
-            MemoryPolicy::Interleave(nodes) if !nodes.is_empty() => {
-                debug!(
-                    "Memory interleaved across nodes {:?} for {}",
-                    nodes, operation
-                );
-            }
-            _ => {
-                debug!("Memory policy not applied for {}", operation);
-            }
+        // Convert our local MemoryPolicy to NumaMemoryPolicy and apply it
+        let numa_policy = match &self.memory_policy {
+            MemoryPolicy::Bind(nodes) => NumaMemoryPolicy::Bind(nodes.clone()),
+            MemoryPolicy::Preferred(Some(node)) => NumaMemoryPolicy::Preferred(*node),
+            MemoryPolicy::Preferred(None) => NumaMemoryPolicy::Default,
+            MemoryPolicy::Interleave(nodes) => NumaMemoryPolicy::Interleave(nodes.clone()),
+            MemoryPolicy::Default => NumaMemoryPolicy::Default,
+        };
+
+        if let Err(e) = NumaOptimizer::apply_memory_policy(&numa_policy) {
+            warn!(
+                "Failed to apply memory policy {:?} for {}: {}",
+                numa_policy, operation, e
+            );
         }
 
         Ok(())
     }
 
-    /// Apply CPU affinity using taskset
+    /// Apply CPU affinity by selecting the optimal NUMA node and binding
+    /// the current thread to its CPUs via `sched_setaffinity(2)`.
     async fn apply_cpu_affinity(
         &self,
         operation: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let candidate_cpus = self
+        let optimal_node = self
             .select_numa_node(operation)
-            .and_then(|node| {
-                if node.cpu_list.is_empty() {
-                    None
-                } else {
-                    Some(node.cpu_list.clone())
-                }
-            })
-            .unwrap_or_else(|| self.cpu_affinity.clone());
+            .map(|node| node.node_id)
+            .unwrap_or_else(|| self.numa_topology.optimal_node());
 
-        if candidate_cpus.is_empty() {
-            debug!("No CPU affinity configured for {}", operation);
-            return Ok(());
-        }
-
-        if candidate_cpus == self.cpu_affinity {
-            debug!(
-                "Using default CPU affinity {:?} for {}",
-                candidate_cpus, operation
+        // Create a temporary NumaOptimizer to access the libc-based affinity call.
+        let optimizer = NumaOptimizer::from_env();
+        if let Err(e) = optimizer.apply_cpu_affinity(optimal_node) {
+            warn!(
+                "Failed to set CPU affinity for node {} ({}): {}",
+                optimal_node, operation, e
             );
         }
 
-        let cpu_list = candidate_cpus
-            .iter()
-            .map(|cpu| cpu.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let output = tokio::process::Command::new("taskset")
-            .args(["-c", &cpu_list])
-            .arg("echo")
-            .arg(format!("CPU affinity test for {}", operation))
-            .output()
-            .await
-            .map_err(|e| format!("taskset command failed: {}", e))?;
-
-        if output.status.success() {
-            debug!(
-                "Applied CPU affinity to cores: {} for {}",
-                cpu_list, operation
-            );
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("taskset failed for {}: {}", operation, stderr);
-            Ok(()) // Don't fail, just continue without affinity
-        }
+        Ok(())
     }
 }
 

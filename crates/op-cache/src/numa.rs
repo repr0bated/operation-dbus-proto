@@ -471,7 +471,7 @@ impl Default for NumaStrategy {
     }
 }
 
-/// Memory policy for NUMA allocation
+/// Memory policy for NUMA allocation (lightweight, no node data)
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
 pub enum MemoryPolicy {
     /// Bind to specific node
@@ -482,6 +482,22 @@ pub enum MemoryPolicy {
     Interleaved,
     /// Use system default
     #[default]
+    Default,
+}
+
+/// Memory policy with node information for actual syscall application.
+///
+/// Unlike [`MemoryPolicy`], this enum carries the specific NUMA node IDs
+/// needed to build the nodemask for `set_mempolicy(2)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NumaMemoryPolicy {
+    /// Bind allocations to specific NUMA node(s) — `MPOL_BIND`
+    Bind(Vec<u32>),
+    /// Prefer allocations from a specific NUMA node — `MPOL_PREFERRED`
+    Preferred(u32),
+    /// Interleave allocations across NUMA nodes — `MPOL_INTERLEAVE`
+    Interleave(Vec<u32>),
+    /// Use the system default memory policy — `MPOL_DEFAULT`
     Default,
 }
 
@@ -561,19 +577,173 @@ impl NumaOptimizer {
         }
     }
 
-    /// Set CPU affinity for current thread (log-only; does not call sched_setaffinity)
-    pub fn set_cpu_affinity(&self, node_id: u32) -> Result<()> {
-        if let Some(ref topology) = self.topology {
-            if let Some(node) = topology.get_node(node_id) {
-                if !node.cpu_list.is_empty() {
-                    debug!(
-                        "CPU affinity would be set to node {} CPUs: {:?}",
-                        node_id, node.cpu_list
-                    );
-                }
-            }
+    /// Set CPU affinity for a given NUMA node using `sched_setaffinity(2)`.
+    ///
+    /// On Linux, this builds a CPU mask from the node's `cpu_list` (read from
+    /// `/sys/devices/system/node/nodeN/cpulist`) and calls
+    /// `libc::sched_setaffinity` to bind the calling thread to those CPUs.
+    ///
+    /// On non-Linux platforms this logs and returns `Ok(())`.
+    pub fn apply_cpu_affinity(&self, node_id: u32) -> Result<()> {
+        let cpu_list = if let Some(ref topology) = self.topology {
+            topology
+                .get_node(node_id)
+                .map(|n| n.cpu_list.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        if cpu_list.is_empty() {
+            warn!(
+                "No CPUs found for NUMA node {}; skipping CPU affinity",
+                node_id
+            );
+            return Ok(());
         }
+
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: cpu_set_t is a POD type; zeroing produces a valid empty set.
+            let mut cpuset: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+            for &cpu in &cpu_list {
+                unsafe { libc::CPU_SET(cpu as usize, &mut cpuset) };
+            }
+
+            let ret = unsafe {
+                libc::sched_setaffinity(
+                    0, // 0 = calling thread
+                    std::mem::size_of::<libc::cpu_set_t>(),
+                    &cpuset,
+                )
+            };
+            if ret != 0 {
+                let err = std::io::Error::last_os_error();
+                anyhow::bail!(
+                    "sched_setaffinity failed for NUMA node {} (CPUs {:?}): {}",
+                    node_id,
+                    cpu_list,
+                    err
+                );
+            }
+
+            // Verify by reading back the affinity mask.
+            let mut verify_set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+            let ret = unsafe {
+                libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut verify_set)
+            };
+            if ret != 0 {
+                let err = std::io::Error::last_os_error();
+                warn!(
+                    "sched_getaffinity verification failed after setting affinity: {}",
+                    err
+                );
+            }
+
+            info!(
+                "CPU affinity set to NUMA node {} ({} CPUs: {:?})",
+                node_id,
+                cpu_list.len(),
+                cpu_list
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            info!(
+                "CPU affinity for NUMA node {} is a no-op on non-Linux (CPUs: {:?})",
+                node_id, cpu_list
+            );
+        }
+
         Ok(())
+    }
+
+    /// Apply a NUMA memory policy using `set_mempolicy(2)`.
+    ///
+    /// On Linux, translates the [`NumaMemoryPolicy`] into the corresponding
+    /// `MPOL_*` mode and nodemask, then calls `libc::set_mempolicy`.
+    ///
+    /// On non-Linux platforms this logs and returns `Ok(())`.
+    pub fn apply_memory_policy(policy: &NumaMemoryPolicy) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            // MPOL_* constants from <linux/mempolicy.h>
+            const MPOL_DEFAULT: libc::c_int = 0;
+            const MPOL_PREFERRED: libc::c_int = 1;
+            const MPOL_BIND: libc::c_int = 2;
+            const MPOL_INTERLEAVE: libc::c_int = 3;
+
+            let (mode, nodemask, maxnode): (libc::c_int, usize, usize) = match policy {
+                NumaMemoryPolicy::Default => (MPOL_DEFAULT, 0, 0),
+                NumaMemoryPolicy::Preferred(node) => {
+                    let node = *node as usize;
+                    let mask = 1usize << node;
+                    (MPOL_PREFERRED, mask, node + 2)
+                }
+                NumaMemoryPolicy::Bind(nodes) => {
+                    let mut mask = 0usize;
+                    let mut max = 0usize;
+                    for &node in nodes {
+                        mask |= 1usize << node;
+                        if (node as usize) + 1 > max {
+                            max = node as usize + 1;
+                        }
+                    }
+                    (MPOL_BIND, mask, max)
+                }
+                NumaMemoryPolicy::Interleave(nodes) => {
+                    let mut mask = 0usize;
+                    let mut max = 0usize;
+                    for &node in nodes {
+                        mask |= 1usize << node;
+                        if (node as usize) + 1 > max {
+                            max = node as usize + 1;
+                        }
+                    }
+                    (MPOL_INTERLEAVE, mask, max)
+                }
+            };
+
+            // MPOL_DEFAULT requires a NULL nodemask pointer; the kernel
+            // rejects a non-NULL pointer with EINVAL.
+            let nodemask_ptr: libc::c_long = if mode == MPOL_DEFAULT {
+                0 // NULL
+            } else {
+                &nodemask as *const usize as libc::c_long
+            };
+
+            let ret = unsafe {
+                libc::syscall(
+                    libc::SYS_set_mempolicy,
+                    mode as libc::c_long,
+                    nodemask_ptr,
+                    maxnode as libc::c_long,
+                )
+            };
+            if ret != 0 {
+                let err = std::io::Error::last_os_error();
+                anyhow::bail!("set_mempolicy failed for policy {:?}: {}", policy, err);
+            }
+
+            info!("Memory policy set: {:?}", policy);
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            info!(
+                "Memory policy {:?} is a no-op on non-Linux platforms",
+                policy
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Legacy wrapper — logs the intent without applying affinity.
+    /// Prefer [`apply_cpu_affinity`](Self::apply_cpu_affinity) for real pinning.
+    pub fn set_cpu_affinity(&self, node_id: u32) -> Result<()> {
+        self.apply_cpu_affinity(node_id)
     }
 
     /// Get statistics
@@ -669,5 +839,65 @@ mod tests {
             NumaStrategy::MostMemory
         );
         assert_eq!(NumaStrategy::from_str("unknown"), NumaStrategy::Disabled);
+    }
+
+    #[test]
+    fn test_apply_cpu_affinity_single_node() {
+        // On a single-node system, applying affinity to node 0 should set the
+        // mask to all CPUs — effectively a no-op, but it must not error.
+        let optimizer = NumaOptimizer::from_env();
+        let result = optimizer.apply_cpu_affinity(0);
+        assert!(
+            result.is_ok(),
+            "apply_cpu_affinity(0) should succeed on single-node: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_apply_memory_policy_default() {
+        // Setting MPOL_DEFAULT should always succeed (it restores the kernel
+        // default policy regardless of NUMA topology).
+        let result = NumaOptimizer::apply_memory_policy(&NumaMemoryPolicy::Default);
+        assert!(
+            result.is_ok(),
+            "apply_memory_policy(Default) should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires multi-node NUMA hardware to test meaningfully"]
+    fn test_apply_cpu_affinity_multi_node() {
+        let optimizer = NumaOptimizer::from_env();
+        // On a multi-node system, node 1 should exist and have CPUs.
+        let result = optimizer.apply_cpu_affinity(1);
+        assert!(
+            result.is_ok(),
+            "apply_cpu_affinity(1) failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires multi-node NUMA hardware to test meaningfully"]
+    fn test_apply_memory_policy_bind() {
+        let result = NumaOptimizer::apply_memory_policy(&NumaMemoryPolicy::Bind(vec![0]));
+        assert!(
+            result.is_ok(),
+            "apply_memory_policy(Bind [0]) failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires multi-node NUMA hardware to test meaningfully"]
+    fn test_apply_memory_policy_interleave() {
+        let result = NumaOptimizer::apply_memory_policy(&NumaMemoryPolicy::Interleave(vec![0, 1]));
+        assert!(
+            result.is_ok(),
+            "apply_memory_policy(Interleave [0,1]) failed: {:?}",
+            result.err()
+        );
     }
 }

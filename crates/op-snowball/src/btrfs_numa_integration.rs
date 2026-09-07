@@ -14,7 +14,7 @@
 use crate::snowball::StreamingSnowball;
 use crate::PluginFootprint;
 use anyhow::{Context, Result};
-use op_cache::{BtrfsCache, NumaTopology};
+use op_cache::{BtrfsCache, NumaMemoryPolicy, NumaOptimizer, NumaTopology};
 use simd_json::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -217,10 +217,24 @@ impl OptimizedSnowball {
                     node.memory_free_kb / 1024,
                     operation
                 );
+            }
 
-                // Use cache's NUMA methods (which use taskset/numactl)
-                // The cache already has NUMA-aware operations
-                // We just need to ensure we're using the right node
+            // Apply real CPU affinity via sched_setaffinity
+            let optimizer = NumaOptimizer::from_env();
+            if let Err(e) = optimizer.apply_cpu_affinity(optimal_node) {
+                warn!(
+                    "Failed to set CPU affinity for node {} ({}): {}",
+                    optimal_node, operation, e
+                );
+            }
+
+            // Apply default memory policy (preferred on the optimal node)
+            let mem_policy = NumaMemoryPolicy::Preferred(optimal_node);
+            if let Err(e) = NumaOptimizer::apply_memory_policy(&mem_policy) {
+                warn!(
+                    "Failed to set memory policy {:?} for {}: {}",
+                    mem_policy, operation, e
+                );
             }
         }
         Ok(())

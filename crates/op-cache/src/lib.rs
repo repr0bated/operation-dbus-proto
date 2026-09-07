@@ -26,7 +26,7 @@ pub mod grpc;
 
 pub use agent::{Agent, AgentRegistry, Capability, Priority};
 pub use btrfs_cache::BtrfsCache;
-pub use numa::{NumaNode, NumaTopology};
+pub use numa::{NumaMemoryPolicy, NumaNode, NumaOptimizer, NumaTopology};
 pub use orchestrator::Orchestrator;
 pub use pattern_tracker::PatternTracker;
 pub use snapshot_manager::SnapshotManager;
@@ -43,7 +43,7 @@ pub mod proto {
 pub mod prelude {
     pub use super::agent::{Agent, AgentRegistry, Capability, Priority};
     pub use super::btrfs_cache::BtrfsCache;
-    pub use super::numa::{NumaNode, NumaTopology};
+    pub use super::numa::{NumaMemoryPolicy, NumaNode, NumaOptimizer, NumaTopology};
     pub use super::orchestrator::Orchestrator;
     pub use super::pattern_tracker::PatternTracker;
     pub use super::snapshot_manager::SnapshotManager;
