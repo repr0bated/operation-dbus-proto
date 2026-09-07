@@ -12,6 +12,7 @@ const LEGACY_PROJECTION_PATH: &str = "/dev/shm/opdbus/projections/identity_sled.
 
 /// A single sled entry from the identity projection
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // schema_version, last_seen_at, session_started_at kept for deserialization fidelity
 pub struct SledEntry {
     pub active: bool,
     pub hashed_footprint: String,

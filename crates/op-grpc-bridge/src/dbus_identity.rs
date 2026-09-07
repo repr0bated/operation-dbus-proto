@@ -37,6 +37,7 @@ struct DbusPeerCredentials {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // registered_at is stored for auditing but not yet read
 struct DbusBinding {
     unique_name: String,
     peer: DbusPeerCredentials,

@@ -5,14 +5,11 @@
 
 use anyhow::{Context, Result};
 use op_core::types::{
-    ArgDirection, ArgInfo, BusType, InterfaceInfo, MethodInfo, PropertyAccess, PropertyInfo,
-    SignalInfo,
+    ArgDirection, ArgInfo, InterfaceInfo, MethodInfo, PropertyAccess, PropertyInfo, SignalInfo,
 };
-use op_introspection::IntrospectionService;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -207,7 +204,7 @@ impl PluginTreeAdapter {
         let detail_interfaces: Vec<InterfaceDetail> = interfaces
             .iter()
             .filter(|iface| !SKIP_INTERFACES.contains(&iface.name.as_str()))
-            .map(|iface| convert_interface(iface))
+            .map(convert_interface)
             .collect();
 
         Ok(PluginIntrospection {

@@ -433,7 +433,9 @@ fn main() {
     s.push_str("pub enum SectionSource {\n    /// The zeroclaw config file, as described by the official binary's schema.\n    Upstream,\n    /// Local 3tched Router state (a plain configuration).\n    Local,\n}\n\n");
 
     s.push_str("/// Every method owned by this surface (for dispatch membership checks).\n");
-    s.push_str("pub const CONFIG_METHODS: &[&str] = &[\n    \"GetConfig\",\n    \"PatchConfig\",\n");
+    s.push_str(
+        "pub const CONFIG_METHODS: &[&str] = &[\n    \"GetConfig\",\n    \"PatchConfig\",\n",
+    );
     for (key, _local) in &all {
         let _ = writeln!(s, "    \"{}\",", method_name(key));
     }

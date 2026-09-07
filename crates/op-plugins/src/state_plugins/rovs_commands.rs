@@ -377,6 +377,7 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simd_json::prelude::*;
 
     #[test]
     fn internal_port_method_is_typed_and_oscal_authorized() {
@@ -392,7 +393,7 @@ mod tests {
             method
                 .args
                 .get("required")
-                .and_then(serde_json::Value::as_array)
+                .and_then(|v| v.as_array())
                 .map(Vec::len),
             Some(2)
         );

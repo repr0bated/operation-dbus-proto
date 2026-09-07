@@ -948,6 +948,7 @@ impl From<SchemaRouterError> for tonic::Status {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // test_registry_guard holds Mutex across await to serialize tests
 mod tests {
     use super::*;
     use crate::human_principal_dispatch::tests::test_registry_guard;

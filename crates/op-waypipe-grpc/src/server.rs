@@ -77,6 +77,7 @@ pub struct WaypipeTunnelService {
 impl WaypipeTunnel for WaypipeTunnelService {
     type TunnelStream = Pin<Box<dyn Stream<Item = Result<ServerMsg, Status>> + Send + 'static>>;
 
+    #[allow(clippy::result_large_err)]
     async fn tunnel(
         &self,
         request: Request<Streaming<ClientMsg>>,

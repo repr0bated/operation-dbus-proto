@@ -59,6 +59,7 @@ pub const MCP_VERSION_HEADER: &str = "mcp-protocol-version";
 pub const MCP_SESSION_HEADER: &str = "mcp-session-id";
 pub const MCP_METHOD_HEADER: &str = "mcp-method";
 pub const MCP_NAME_HEADER: &str = "mcp-name";
+
 /// Raw HTTP uses the same canonical header name as gRPC metadata. Its value is
 /// the OIA1 wire envelope encoded as unpadded canonical base64url.
 pub const HTTP_ASSERTION_HEADER: &str = "x-oracle-identity-assertion-bin";
@@ -1686,6 +1687,7 @@ fn descriptor_authority<'a>(
     Ok((capability, subid))
 }
 
+#[allow(dead_code)] // infrastructure for capability-gated tool filtering
 fn filter_authorized_tools(tools: Vec<Value>, grants: &HashSet<String>) -> Vec<Value> {
     tools
         .into_iter()

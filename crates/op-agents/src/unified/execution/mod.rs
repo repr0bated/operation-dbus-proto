@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// All available execution agents
+#[allow(clippy::type_complexity)]
 pub static EXECUTION_AGENTS: LazyLock<HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>>> =
     LazyLock::new(|| {
         let mut m: HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>> = HashMap::new();

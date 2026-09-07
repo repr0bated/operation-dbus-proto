@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use simd_json::json;
 use simd_json::prelude::*;
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::super::agent_trait::{
@@ -127,7 +126,7 @@ impl UnifiedAgent for RustExecutor {
             }
         };
 
-        let args_str: Vec<&str> = args.iter().map(|s| *s).collect();
+        let args_str: Vec<&str> = args.to_vec();
         match self
             .base
             .execute_command(cmd, &args_str, Some(path), timeout)

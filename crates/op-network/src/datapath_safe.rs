@@ -131,7 +131,7 @@ pub async fn ensure_fallback_normal(bridge: &str) -> Result<()> {
 
 pub async fn fallback_present(bridge: &str) -> Result<bool> {
     let dump = run_ok("ovs-ofctl", &["dump-flows", bridge]).await?;
-    let cookie_hex = format!("{FALLBACK_COOKIE:x}");
+    let _cookie_hex = format!("{FALLBACK_COOKIE:x}");
     Ok(dump.lines().any(|l| {
         let lower = l.to_ascii_lowercase();
         lower.contains("priority=0") && lower.contains("actions=normal")
@@ -167,7 +167,7 @@ pub async fn ensure_controller_in_band(bridge: &str) -> Result<()> {
             "--no-wait",
             "set",
             "Controller",
-            &format!("{bridge}"), // may fail if name form unsupported
+            bridge, // may fail if name form unsupported
             "connection_mode=in-band",
         ],
     )
@@ -180,7 +180,7 @@ pub async fn ensure_controller_in_band(bridge: &str) -> Result<()> {
             "--columns=_uuid",
             "find",
             "Controller",
-            &format!("target!=\"\""),
+            "target!=\"\"",
         ],
     )
     .await

@@ -13,9 +13,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
-use op_identity::oracle_assertion::{
-    verify_signature, OracleIdentityAssertion, SignedAssertion, MAX_LIFETIME_SECS,
-};
+use op_identity::oracle_assertion::{verify_signature, SignedAssertion, MAX_LIFETIME_SECS};
 use op_identity::session::derive_principal_id;
 use thiserror::Error;
 
@@ -812,7 +810,7 @@ pub mod tests {
     use std::time::Duration;
 
     use base64::Engine as _;
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+    use ed25519_dalek::{Signer, SigningKey};
     use op_identity::oracle_assertion::{DecoyIssuer, OracleIdentityAssertion, SignedAssertion};
     use op_identity::session::{derive_principal_id, derive_session_id};
     use tonic::Code;

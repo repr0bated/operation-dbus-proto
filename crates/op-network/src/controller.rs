@@ -138,6 +138,7 @@ fn build_flow_mod_delete_managed(xid: u32) -> Vec<u8> {
 }
 
 /// Legacy wipe of all tables (avoid on live host bridges).
+#[allow(dead_code)] // kept for unit-test coverage of wire encoding
 fn build_flow_mod_delete_all(xid: u32) -> Vec<u8> {
     let flow = Flow::delete();
     let msg = flow.to_message(OF_VERSION, xid);
@@ -559,7 +560,7 @@ async fn push_flow_add(
     let flow = json_flow_to_add(flow_json, port_map, port_macs)?;
     let msg = flow.to_message(OF_VERSION, *xid);
     *xid += 1;
-    send_msg(stream, &msg.encode().to_vec()).await?;
+    send_msg(stream, &msg.encode()).await?;
     Ok(serde_json::json!({"ok": true, "action": "add"}).to_string())
 }
 
@@ -574,7 +575,7 @@ async fn push_flow_delete(
     let flow = json_flow_to_delete(flow_json, port_map, port_macs)?;
     let msg = flow.to_message(OF_VERSION, *xid);
     *xid += 1;
-    send_msg(stream, &msg.encode().to_vec()).await?;
+    send_msg(stream, &msg.encode()).await?;
     Ok(serde_json::json!({"ok": true, "action": "delete"}).to_string())
 }
 

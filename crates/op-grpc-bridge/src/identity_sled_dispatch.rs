@@ -256,7 +256,7 @@ async fn ensure_hydrated(engine: &MutationEngine) {
                 Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
             })
             .await;
-            let (mut rows, genesis_rows) = match rows {
+            let (rows, genesis_rows) = match rows {
                 Ok(Ok(rows)) => rows,
                 Ok(Err(e)) => {
                     tracing::warn!(error = %e, "identity sled hydration read failed");
@@ -345,6 +345,7 @@ async fn persist_sled(sled: &ContainerIdentitySled) {
 ///
 /// One read of the authoritative store (the in-process state cache behind the
 /// SHM projection) — no hashing, no Cozo query, no second store consulted.
+#[allow(dead_code)] // infrastructure for identity-gated dispatch
 pub(crate) async fn stored_genesis(engine: &MutationEngine, session_id: &str) -> Option<String> {
     ensure_hydrated(engine).await;
     read_cache(engine)
@@ -1426,6 +1427,7 @@ pub(crate) mod tests {
 
     /// Simulate the §5.2 crash window: the record survives but its anchor
     /// never reached Cozo, so hydration produced `genesis: None`.
+    #[allow(dead_code)] // test helper for §5.2 crash-window simulation
     pub(crate) async fn clear_genesis(engine: &MutationEngine, session_id: &str) {
         let mut cache = read_cache(engine).await;
         if let Some(sled) = cache

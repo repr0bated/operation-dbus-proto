@@ -1131,7 +1131,7 @@ async fn rejects_over_long_ttl() {
     verify_signature(
         &signed.assertion,
         &signed.signature,
-        &env.issuer.verifying_key(),
+        env.issuer.verifying_key(),
     )
     .expect("sig ok");
     let out = call_method(

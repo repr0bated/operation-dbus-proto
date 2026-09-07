@@ -5,13 +5,12 @@
 //
 // Operated by A.N.N.A. Scribe. No payload enters the system without a cryptographic
 // "Snowball" session. No process-wide, last-writer-wins identity is consulted.
+#![allow(clippy::items_after_test_module)]
 
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
-use tonic::metadata::MetadataValue;
-use tonic::service::Interceptor;
 use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 use tonic::{Request, Status};
 
@@ -146,6 +145,7 @@ fn peer_socket_addr(req: &Request<()>) -> Option<SocketAddr> {
     connect_info_peer_addr(req)
 }
 
+#[allow(clippy::result_large_err)]
 fn read_assertion_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
     let values: Vec<_> = req
         .metadata()
@@ -164,6 +164,7 @@ fn read_assertion_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
     Ok(Some(wire.to_vec()))
 }
 
+#[allow(clippy::result_large_err)]
 fn ghostbridge_interceptor_with_validator(
     validator: &AssertionValidator,
     mut req: Request<()>,
@@ -209,6 +210,7 @@ pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> 
 /// WireGuard identity of its own - e.g. Lovable). Returns `None` when
 /// there's no engine registered yet, no identifying header, or no matching
 /// record, so the caller can fall back to the shared host legacy sled.
+#[allow(clippy::result_large_err)]
 fn resolve_active_principal_id(human_pubkey: &str) -> Result<String, Status> {
     if human_pubkey.is_empty() {
         return Err(Status::unauthenticated(
@@ -266,10 +268,7 @@ fn verify_per_identity(
         .get("genesis")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let stored = match stored {
-        Some(s) => s,
-        None => return None,
-    };
+    let stored = stored?;
     let expires_at = identity.get("expires_at").and_then(|v| v.as_i64());
 
     if let Some(expires_at) = expires_at {
@@ -414,6 +413,7 @@ pub(crate) mod tests {
     use crate::oracle_assertion::AssertionValidator;
     use op_identity::session::derive_principal_id;
     use tonic::metadata::MetadataValue;
+    use tonic::service::Interceptor;
     use tonic::Code;
 
     fn install_grants(document: serde_json::Value) -> tempfile::TempDir {

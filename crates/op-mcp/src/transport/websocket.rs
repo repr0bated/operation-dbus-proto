@@ -91,7 +91,7 @@ async fn handle_ws_connection<H: McpHandler>(socket: WebSocket, state: Arc<WsSta
         "protocol": crate::PROTOCOL_VERSION
     });
 
-    if let Err(e) = sender.send(Message::Text(welcome.to_string().into())).await {
+    if let Err(e) = sender.send(Message::Text(welcome.to_string())).await {
         error!(error = %e, "Failed to send welcome");
         return;
     }
@@ -116,7 +116,7 @@ async fn handle_ws_connection<H: McpHandler>(socket: WebSocket, state: Arc<WsSta
 
                 let response_json = simd_json::to_string(&response).unwrap_or_default();
 
-                if let Err(e) = sender.send(Message::Text(response_json.into())).await {
+                if let Err(e) = sender.send(Message::Text(response_json)).await {
                     error!(error = %e, "Failed to send response");
                     break;
                 }
