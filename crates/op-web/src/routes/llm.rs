@@ -76,7 +76,7 @@ pub async fn get_llm_status(Extension(state): Extension<Arc<AppState>>) -> impl 
 /// The tched_router plugin is the single source of truth: its live state
 /// is projected verbatim at `/org/opdbus/v1/plugins/tched_router`. We read it from
 /// the SHM state tree and surface each route as a selectable model.
-async fn models_from_tched_router(state: &AppState) -> Option<Vec<ModelInfo>> {
+async fn models_from_tched_router(_state: &AppState) -> Option<Vec<ModelInfo>> {
     let routes = crate::tched_router_routes::routes()?;
 
     let models: Vec<ModelInfo> = routes

@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 
 use crate::state::AppState;
 
+#[allow(clippy::result_large_err)]
 fn identity_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, Response> {
     headers
         .get(name)
@@ -33,6 +34,7 @@ fn identity_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
         .transpose()
 }
 
+#[allow(clippy::result_large_err)]
 fn ghostbridge_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, Response> {
     let session_genesis = identity_header(headers, "x-ghostbridge-genesis")?.ok_or_else(|| {
         json_error_response(StatusCode::UNAUTHORIZED, "missing x-ghostbridge-genesis")
