@@ -601,6 +601,34 @@ impl OvsdbDbusClient {
         Ok(())
     }
 
+    /// Ensure an OVS internal Port/Interface pair exists on `bridge_name`.
+    ///
+    /// Existing ports are repaired to `type=internal`; new rows and their
+    /// Bridge attachment are created in one RFC 7047 transaction.
+    pub async fn ensure_internal_port(&self, bridge_name: &str, port_name: &str) -> Result<bool> {
+        if !self.bridge_exists(bridge_name).await? {
+            return Err(anyhow::anyhow!("Bridge '{}' not found", bridge_name));
+        }
+        if self
+            .list_bridge_ports(bridge_name)
+            .await?
+            .iter()
+            .any(|existing| existing == port_name)
+        {
+            self.set_interface_type(port_name, "internal").await?;
+            log::info!(
+                "Internal port {} already attached to bridge {}; type reconciled",
+                port_name,
+                bridge_name
+            );
+            return Ok(false);
+        }
+
+        self.add_port_with_type(bridge_name, port_name, Some("internal"))
+            .await?;
+        Ok(true)
+    }
+
     /// Dump the contents of an OVSDB database as JSON.
     /// Returns a JSON object with database contents.
     pub async fn dump_db(&self, database: &str) -> Result<serde_json::Value> {

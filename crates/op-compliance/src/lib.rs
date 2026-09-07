@@ -91,7 +91,6 @@ pub mod attorneys {
     }
 }
 
-
 pub struct LawFirm;
 
 impl LawFirm {

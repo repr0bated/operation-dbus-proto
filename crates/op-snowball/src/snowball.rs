@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
@@ -216,8 +217,31 @@ impl StreamingSnowball {
     /// Create a BTRFS subvolume
     async fn create_subvolume(path: &Path) -> Result<()> {
         if path.exists() {
-            debug!("Subvolume already exists: {:?}", path);
-            return Ok(());
+            let output = Command::new("btrfs")
+                .args(["subvolume", "show"])
+                .arg(path)
+                .output()
+                .await
+                .context("Failed to execute btrfs command")?;
+            if output.status.success() {
+                Self::enable_compression(path).await?;
+                debug!("Subvolume already exists: {:?}", path);
+                return Ok(());
+            }
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr
+                .to_ascii_lowercase()
+                .contains("not a btrfs filesystem")
+            {
+                debug!("Btrfs unavailable; using regular directory: {:?}", path);
+                return Ok(());
+            }
+            anyhow::bail!(
+                "existing timing path is not a usable Btrfs subvolume ({}): {}",
+                path.display(),
+                stderr.trim()
+            );
         }
 
         let output = Command::new("btrfs")
@@ -240,9 +264,28 @@ impl StreamingSnowball {
                 anyhow::bail!("btrfs subvolume create failed: {}", stderr);
             }
         } else {
+            Self::enable_compression(path).await?;
             info!("Created BTRFS subvolume: {:?}", path);
         }
 
+        Ok(())
+    }
+
+    async fn enable_compression(path: &Path) -> Result<()> {
+        let output = Command::new("btrfs")
+            .args(["property", "set"])
+            .arg(path)
+            .args(["compression", "zstd"])
+            .output()
+            .await
+            .context("Failed to execute btrfs property command")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "failed to enable Btrfs zstd compression for {}: {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
         Ok(())
     }
 
@@ -267,7 +310,45 @@ impl StreamingSnowball {
             .timing_subvol
             .join(format!("block-{:012}.json", block_num));
         let timing_data = simd_json::to_string_pretty(&event)?;
-        tokio::fs::write(&timing_file, &timing_data).await?;
+        let write_nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .context("system clock is before the Unix epoch")?
+            .as_nanos();
+        let timing_tmp = self.timing_subvol.join(format!(
+            ".block-{:012}-{}-{}.tmp",
+            block_num,
+            std::process::id(),
+            write_nonce
+        ));
+
+        let write_result: Result<()> = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&timing_tmp)
+                .await
+                .with_context(|| format!("failed to create {}", timing_tmp.display()))?;
+            file.write_all(timing_data.as_bytes()).await?;
+            file.sync_all().await?;
+            tokio::fs::rename(&timing_tmp, &timing_file)
+                .await
+                .with_context(|| {
+                    format!("failed to commit timing record {}", timing_file.display())
+                })?;
+
+            // Persist the rename itself. A synced file without a synced parent
+            // directory is not enough to guarantee its name survives a crash.
+            tokio::fs::File::open(&self.timing_subvol)
+                .await?
+                .sync_all()
+                .await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = write_result {
+            let _ = tokio::fs::remove_file(&timing_tmp).await;
+            return Err(error);
+        }
 
         // VECTORS ARE PROJECTIONS: Write vector data if present (sync but optional)
         // Vectors can be recomputed from timing if lost, but timing cannot be regenerated

@@ -65,7 +65,29 @@ impl BtrfsCache {
     /// Create BTRFS subvolume at specified path
     async fn create_btrfs_subvolume(path: &Path) -> Result<()> {
         if path.exists() {
-            return Ok(());
+            let output = tokio::process::Command::new("btrfs")
+                .args(["subvolume", "show"])
+                .arg(path)
+                .output()
+                .await
+                .context("Failed to execute btrfs command")?;
+            if output.status.success() {
+                Self::enable_compression(path).await?;
+                return Ok(());
+            }
+
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr
+                .to_ascii_lowercase()
+                .contains("not a btrfs filesystem")
+            {
+                return Ok(());
+            }
+            anyhow::bail!(
+                "existing cache path is not a usable Btrfs subvolume ({}): {}",
+                path.display(),
+                stderr.trim()
+            );
         }
 
         let output = tokio::process::Command::new("btrfs")
@@ -88,8 +110,28 @@ impl BtrfsCache {
             } else {
                 anyhow::bail!("btrfs subvolume create failed: {}", stderr);
             }
+        } else {
+            Self::enable_compression(path).await?;
         }
 
+        Ok(())
+    }
+
+    async fn enable_compression(path: &Path) -> Result<()> {
+        let output = tokio::process::Command::new("btrfs")
+            .args(["property", "set"])
+            .arg(path)
+            .args(["compression", "zstd"])
+            .output()
+            .await
+            .context("Failed to execute btrfs property command")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "failed to enable Btrfs zstd compression for {}: {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
         Ok(())
     }
 
@@ -847,9 +889,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_hashing() {
-        let cache = BtrfsCache::new(PathBuf::from("/tmp/test-cache"))
-            .await
-            .unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let cache_path = parent.path().join("cache");
+        let cache = BtrfsCache::new(cache_path).await.unwrap();
         let hash1 = cache.hash_text("test");
         let hash2 = cache.hash_text("test");
         let hash3 = cache.hash_text("different");

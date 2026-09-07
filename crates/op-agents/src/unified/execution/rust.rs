@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use simd_json::json;
 use simd_json::prelude::*;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use super::super::agent_trait::{
     AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,
@@ -34,6 +35,17 @@ impl RustExecutor {
             "format".to_string(),
             "run".to_string(),
         ];
+        // OP-DBUS source checkouts and the session-close Rust Pro trigger live
+        // under /srv/git. Keep this scoped to the Rust executor rather than
+        // widening every code-execution agent profile.
+        base.security_profile
+            .config
+            .allowed_read_paths
+            .push(PathBuf::from("/srv/git"));
+        base.security_profile
+            .config
+            .allowed_write_paths
+            .push(PathBuf::from("/srv/git"));
         Self { base }
     }
 }
