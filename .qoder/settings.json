@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r 'if .tool_response.filePath then .tool_response.filePath else .tool_input.file_path end' | { read -r f; [[ $f == *.rs ]] || exit 0; cargo fmt -- \"$f\"; } 2>/dev/null || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

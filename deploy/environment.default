@@ -8,6 +8,15 @@ OP_DBUS_STATE_DIR=/var/lib/op-dbus
 # default below is what the host already uses.
 #OPDBUS_SNOWBALL_PATH=/var/lib/opdbus/snowball
 
+# The bridge initializes this as a Btrfs cache beside the authoritative timing
+# trail. The runit service applies the NUMA policy to the bridge process before
+# it starts. These explicit values are release-owned so the integration cannot
+# disappear merely because the process environment was rebuilt.
+OP_DBUS_CACHE_DIR=/var/lib/opdbus/cache
+OPDBUS_CACHE_PLACEMENT=local
+OPDBUS_CACHE_MEMORY_POLICY=default
+OPDBUS_NUMA_POLICY=localalloc
+
 # gRPC — consolidated op-grpc-bridge (HTTP/gRPC-Web + native gRPC)
 # Prefer fabric-capable TCP endpoint first-class; loopback stays available via this env
 # override for local-only debug.

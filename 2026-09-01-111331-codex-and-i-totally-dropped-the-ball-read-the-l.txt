@@ -1,0 +1,2393 @@
+ ▐▛███▛█   Claude Code v2.1.251
+▝▜██████▀  Opus 5 · Claude Pro
+  ▝▝ ▝▝    /srv/git/odbus
+
+
+❯ codex and  i totally dropped the ball, read the last codex conversation that  
+  refactors identity, mcpss and adds emqx as broker for mcp. this is operation  
+  dbus.  should have been deployed as dbus and wansnt.                          
+
+  Searched for 8 patterns, read 6 files, listed 5 directories, ran 26 shell commands (ctrl+o to expand)
+
+● I read it. The thread is "Get identity pipeline working" — codex session
+  01a05a2a, Aug 31 23:32 → Sep 1 09:30, ~10 hours, 26 subagents, ending on your
+  line about dropping the ball. I also verified the claims against the live host
+  rather than taking the transcript's word.
+
+  What that conversation actually decided
+
+  - Repurpose the existing emqx plugin from Netmaker to a standalone local
+    broker, driven over D-Bus + generated gRPC, with ExHook kept as a separate
+    provider (not merged into the state plugin).
+  - Exactly one public MCP endpoint: https://10.0.0.3:8090/mcp. EMQX
+    MCP-over-MQTT stays an internal transport, never a second listener.
+  - Tool sets — 5 HOT bootstrap tools, drill down to a domain set — to fix
+    Grok's context blowup. compact-mcp stays singleton and chatbot-only, bound
+    to an exact registered footprint.
+  - Identity flows as metadata: OIA → principal_id → grants → MutationEngine.
+    PluginFootprint is reserved exclusively for the sled/Shuttle payload
+    envelope. That was your hash-of-a-hash correction, and it did get applied
+    across the specs.
+  - blockchain → snowball, on funding/compliance grounds.
+  - WG retired host-wide; wg.rs became a shim over depreciated-wg.rs.
+
+  Where it actually stands
+
+  The D-Bus part landed better than the closing message implied. Verified on the
+  live bus just now:
+
+  - identity_sled is a real plugin — 7 typed methods (write_identity,
+    get_identity, provision_container, attach_btrfs_device, touch_session,
+    record_session_event, get_session_history) with correct mut./obs. subids.
+  - emqx has 9 typed methods, and both plugins dispatch through MutationEngine
+    at mutation_engine.rs:1814 and :2046 — not the generic echo fallback.
+  - EMQX 6.2.2 is running standalone under runit, 1883 + 18083 on loopback,
+    ExHook target on 127.0.0.1:9000 listening.
+
+  Nothing downstream of the build shipped. That's the real gap:
+
+  - Installed /usr/local/bin/op-grpc-bridge is the 04:45 binary.
+    target/release/op-grpc-bridge is 09:10. The process serving the bus predates
+    the rename and the EMQX cleanup.
+  - Proof on the wire: zcall list returns both blockchain and snowball, and
+    zcall props emqx still reports container_name NetMaker, broker_socket
+    /run/ghostbridge/NetMaker/broker.sock, mqtt_ws ws://100.69.0.1:8090/mqtt — a
+    dead Netmaker subnet. None of that exists in source any more; emqx.rs:1030
+    has a test asserting the sealed blob contains no "netmaker". The Netmaker
+    EMQX only exists in the deployed binary.
+  - 597 uncommitted paths. main == origin/main == fa1d334d, which still carries
+    464 blockchain files.
+  - The sled is empty: zcall props identity_sled returns {"sleds":[]},
+    /dev/shm/opdbus/state/identity_sled.json is {"sleds":[]}, and
+    /dev/shm/opdbus/state/.credentials/ doesn't exist. So :8090/mcp 401s every
+    caller with "missing x-oracle-identity-assertion-bin" — I reproduced it.
+  - op-identity-headers, the per-request OIA helper meant to close that loop,
+    exists only as an untracked source file. Not installed, not referenced by
+    ~/.codex/config.toml (which has no MCP section at all), not wired into
+    .mcp.json.
+  - And the thing you're pointing at: /usr/local/bin/op-identity-sled,
+    op-identity-shuttle and op-sled-top are still installed on the host. Codex
+    said the standalone CLI was "absent from the current source and release
+    list" — true of source, false of the box. The file/CLI sled is still
+    physically there.
+
+  Two things worth knowing
+
+  Anna survived, but not where you'd expect. anna_scribe.rs was deleted in
+  fa1d334d (the previous commit, not this session). The persona was re-homed as
+  AnnaScribeServicePersona in wg_opdbus.rs — principal_id as the authority key,
+  anna.scribe@3tched.com as descriptive only, deny_unknown_fields so state input
+  can't rename her. Correct shape. But she now lives inside the WireGuard
+  plugin you just told codex to deprecate. She needs a non-WG home first.
+
+  The deadlock breaks over D-Bus, not MCP. /mcp needs an OIA, the OIA comes from
+  the sled, the sled is empty — but write_identity is reachable right now on
+  /run/opdbus/session-bus.sock. zcall identity_sled write_identity is the
+  bootstrap door, and it is exactly the first principle you're invoking.
+
+  Both of these are appended to SIGNALS.md as concerns.
+
+  Want me to start with the install-and-populate sequence (install the 09:10
+  bridge via build-golden.sh, write the first identity over D-Bus, then install
+  and wire op-identity-headers), or with getting the snowball rename committed
+  and pushed first so there's a checkpoint before anything touches the running
+  host?
+
+✻ Churned for 4m 42s · done 9:44 AM
+
+❯ so really an easy fix, flip the switch so  dbus methods are used  for         
+  identity, give anna back her original post, commit,,  pust build deploy?      
+
+● Mostly yes — but two of those four are not what they look like. Let me check
+  the one that decides it: whether a D-Bus write actually goes through right
+  now.
+
+  Searched for 3 patterns, ran 9 shell commands (ctrl+o to expand)
+
+● Three of the four are easy. The switch isn't a switch — and Anna turns out to
+  be the reason.
+
+  Correction to what I told you last turn: I said zcall identity_sled
+  write_identity was the bootstrap door. It isn't. I tested it — Access denied.
+  Every PluginV1.Call goes through a sender-identity resolver first
+  (schema_router.rs:826), so the write path is gated by the same thing it was
+  supposed to bootstrap.
+
+  Why identity won't just flip on
+
+  The D-Bus methods are already used for identity — that part is done and
+  correct, nothing to switch. What's missing is the first session, and there are
+  four independent empty preconditions, verified live:
+
+  - identity_sled: {"sleds":[]}
+  - human_principal: {"principals":[]} — needed to map a WG pubkey to a
+    principal_id
+  - cap.identity.dbus.bind@v1 is granted to nobody.
+    /etc/opdbus/capability-grants.json has exactly 2 principals, jeremy-laptop
+    (77 caps) and control-plane-chatbot (9), and neither has it
+  - registration needs a fresh OIA1 proof validated against the decoy trust
+    store before any of the above is even consulted
+
+  And dbus_identity.rs:494 says explicitly why you can't shortcut it:
+
+  ▎ D-Bus login activates an already provisioned/authored sled. Minting here 
+  ▎ would cache a SessionContext before nonce consumption and the final 
+  ▎ peer-credential check; provisioning/arrival owns that step.
+
+  So the code deliberately refuses to mint the first session at login. Arrival 
+  owns that step. Which is the whole point:
+
+  Anna's original post is the missing bootstrap
+
+  I pulled the deleted file. Her original post was THE GREETING (Genesis Call) —
+  notarize_arrival(wg_pubkey), fired when a connection arrives, minting the
+  genesis Snowball session as the first entry in the accountability loop. She
+  was the arrival notary. fa1d334d deleted her, and the very next session
+  couldn't bootstrap identity. That's not coincidence, that's the causal chain —
+  codex removed the component that creates the first session, then spent ten
+  hours unable to create the first session.
+
+  But restore the role, not the file. Her 2026-06 implementation is wrong on
+  three counts you yourself corrected since:
+
+  - it reads the raw /dev/shm/plugin_schema.dat mmap and
+    /dev/shm/live-schema.json — both retired, per SIGNALS.md's own header and
+    CLAUDE.md
+  - it triggers on WireGuard arrival, and WG is now retired host-wide
+  - its genesis_hash is blake3(wg_pubkey + catalog_hash + mutation_index) and
+    that hashed_footprint becomes the session identity — which is precisely the
+    footprint-as-authorization and hash-of-a-hash you struck down on Sep 1
+
+  Her persona survived correctly in wg_opdbus.rs as AnnaScribeServicePersona,
+  with principal_id as the authority key and the email demoted to descriptive.
+  That shape is right. What's gone is her method. Giving her back her post means
+  an arrival-notary method on a plugin — reachable over D-Bus like everything
+  else — that mints the genesis session on arrival at the fabric door, with
+  principal_id as the key and the footprint confined to the sled payload
+  envelope.
+
+  So the sequence
+
+  1. Commit and push first — the snowball rename is a clean checkpoint and
+     nothing on the host depends on it. 597 dirty paths need selective staging,
+     not git add -A; codex was right to refuse that part.
+  2. Restore Anna's arrival notary as a plugin method. This is the actual work,
+     and it's a day, not an afternoon — new genesis derivation, plus deciding
+     what "arrival" means now that WG is gone (the :8090 fabric door is the
+     honest answer, since you said 8090 is the fabric).
+  3. Grant cap.identity.dbus.bind@v1 to jeremy-laptop, and seed human_principal.
+  4. Then build and deploy — and note op-web release still panics unless
+     crates/op-web/ui/dist/index.html exists, so build that UI first.
+
+  Steps 1, 3 and 4 are the easy ones you're describing. Step 2 is the one that
+  was actually dropped.
+
+  Want me to start on 1, or scope Anna's notary method first so you can see the
+  shape before anything gets committed?
+✻ Churned for 1m 45s · done 9:52 AM
+
+❯ this is  still using the blobbed identity payload for injection?              
+
+  Searched for 3 patterns, ran 3 shell commands (ctrl+o to expand)
+
+● Yes — intact, and it's implemented almost exactly as you described it in that
+  session.
+
+  Minted at the mutation engine. sealed_identity_blob() at
+  mutation_engine.rs:459, with the comment "seal the immutable session metadata
+  once, in the same component that owns genesis minting."
+
+  Embedded into the sled. The envelope is stored inline in the session record's
+  blob_ref as oib1:&lt;unpadded base64url&gt;. Not a side file, not a separate
+  store — in the sled, as you said.
+
+  All the metadata sealed. OIB1 carries principal_id, principal_kind,
+  session_id, wireguard_pubkey, session_genesis, trace_id, schema_version,
+  issued_at, expires_at, arrival_timestamp, chain_head_at_arrival,
+  catalog_hash_at_arrival, head_timestamp_at_arrival, transport_scope — fixed
+  field order, SHA-256 trailer over MAGIC plus body, 16KB cap.
+
+  Read by a blob-aware client and injected. op-identity-headers pulls the
+  selected sled's inline blob, re-verifies every claim against the projection
+  before emitting it, and prints one header: x-opdbus-identity-blob-bin. The
+  bridge accepts either OIA1 or OIB1 and rejects both-at-once —
+  mcp_frontend.rs:98 — then exact-matches the sealed claims against the
+  authoritative sled before constructing request identity.
+
+  It also holds your footprint correction. The module header states it outright:
+  OIB1 is deliberately not an OPBLOB01 plugin-schema object and is never a
+  Snowball footprint; the SHA-256 trailer is an integrity seal for those bytes
+  only, not an identity, grant key, vector payload, or chain term. And blob_ref
+  is stripped from every generic state surface by redact_identity_credentials,
+  so the possession material never leaves through zcall props or the public
+  projection — it exists only in the authoritative cache and the private
+  credential projection. A caller can't supply their own either:
+  mutation_engine.rs:1985, "blob_ref is MutationEngine-authored and cannot be
+  supplied."
+
+  Three things worth knowing about it:
+
+  It's a different blob from the sealed plugin catalog. OIB1 is hand-rolled and
+  minted by the MutationEngine; op-blob's sealer never touches it. That's
+  deliberate and documented, but it means blob-aware here means OIB1-aware, not
+  opblob-aware — two separate seal formats that share a word.
+
+  The running server doesn't know about it. The live 401 reads "missing
+  x-oracle-identity-assertion-bin" — singular, no OIB1 alternative offered.
+  Source advertises both under identityHeaderAlternatives. The 04:45 binary
+  predates the entire OIB1 path, so today the fabric only accepts the older
+  Oracle assertion.
+
+  The blob is minted at arrival. sealed_identity_blob is called off the genesis
+  stamp path — no arrival, no genesis, no blob, nothing to inject. Which lands
+  back on the same missing piece: Anna's greeting is the thing that fires the
+  mint. The injection machinery is finished and waiting on the trigger that was
+  deleted.
+
+✻ Cooked for 1m 8s · done 9:56 AM
+
+❯ lets change the venacular so it is not confuswing then. how about sealedID or 
+  something                                                                     
+
+● Good moment for it — the sled is empty and nothing's deployed, so there's zero
+  migration cost. Changing the wire magic today costs nothing; after the first
+  arrival it costs a re-mint. Let me scope the blast radius.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Small blast radius — 9 source files, ~190 occurrences, 7 spec files. Maybe a
+  tenth of the snowball rename.
+
+  One thing before I pick names for you: sealed is also op-blob's word.
+  CLAUDE.md's vocabulary is "the sealed blob IS the plugin" and the
+  seal/freeze/hot pipeline; register = seal. So SealedID drops the colliding
+  noun but keeps the colliding adjective. That may be fine — "sealed blob" vs
+  "sealed ID" are distinguishable, and both things genuinely are sealed — but
+  you'd be de-confusing halfway.
+
+● User answered Claude's questions:
+  ⎿  · What should the identity envelope be called? → SealedID (Recommended)
+     · How far does the rename reach? → Everything incl. sled field 
+     (Recommended)
+
+● SealedID, full scope. Let me map every occurrence first so I don't clobber
+  op-blob's genuine blob vocabulary.
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+● Mapping is clean — op-blob's genuine vocabulary in identity_sled.rs (lines
+  208-211, 302) uses "sealed blob" prose and op_blob::catalog, which none of my
+  patterns touch. Running the rename:
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Those three are exactly the ones that should stay — they're the assertions
+  that SID1 is not an op-blob object. Now the other files:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Most remaining hits in mcp_frontend and mutation_engine are genuine op-blob
+  catalog code (blob:// URIs, BlobStore, blob_catalog_dir) — those stay.
+  Cleaning only the identity-side residue:
+
+  Searched for 1 pattern, ran 3 shell commands (ctrl+o to expand)
+
+● That grep hit an archived transcript, not live code — the only real reference
+  was the one I already renamed. The subid registry defines entry shape, not a
+  static table, so uniqueness stays CI-enforced. Now the specs:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Rename is clean across source and specs. Delegating the compile check to a
+  subagent, per your standing rule about builds:
+● Agent(Verify SealedID rename compiles)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+● While that runs, recording the vernacular change so the older OIB1 references
+  in transcripts and archived docs don't mislead the next model:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+❯ while that is happening check to see if                                       
+
+● Your message cut off at "check to see if" — what should I check?
+
+  Meanwhile, status: rename is applied and the compile check is still running in
+  the background.
+
+  Guessing at likely candidates so you can just say which — is it whether the
+  deployed bridge would reject a SID1 header, whether anything outside the
+  workspace still sends the old header name, whether Cozo has existing rows
+  under the old blob_ref column, or something else entirely?
+
+✻ Cooked for 4m 49s · done 10:03 AM
+
+❯ vbroker is  being  called by dbus                                             
+
+● Checking whether the broker is actually driven through D-Bus rather than
+  shelled out:
+
+  Searched for 4 patterns, ran 5 shell commands (ctrl+o to expand)
+
+● Confirmed — exit 1 on lowercase, works on CamelCase. Let me check how other
+  plugins call the same service, to confirm which side is wrong:
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● Found it, and it's systemic. The server side (op-s6-systemctl/src/dbus.rs)
+  declares async fn start/stop/restart/status — and zbus's interface macro
+  auto-converts snake_case to CamelCase on the wire, hence .Start/.Status. But
+  Proxy::call sends the literal string you give it, with no conversion. Every
+  other plugin in the tree gets this right ("StartUnit", "ListUnits", "GetUnit",
+  "Reload"); emqx.rs and netmaker.rs are the two outliers.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Fixed. Now the reverse direction — whether the broker calls in:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ see i get caught up in all u llms pattern foolowing sheep mentality           
+
+❯ i need to be a better cop                                                     
+
+● You just caught me proving your own point, so let me show you the receipt.
+
+  ExHook direction works. EMQX has the opdbus server registered, node_status
+  connected, all 19 hooks bound, and op-grpc-bridge owns 127.0.0.1:9000. But
+  metrics are succeed 0, failed 0, rate 0 — connected, never fired, because no
+  MQTT client has ever arrived. Also note the live plugin props claim exhook
+  servers_configured: false while EMQX's own API says it's connected — the 04:45
+  binary's declared state lying about reality again.
+
+  Now the thing you're actually talking about. The lowercase D-Bus bug wasn't a
+  typo. emqx.rs calls proxy.call("status"), ("start"), ("stop"). netmaker.rs
+  calls proxy.call("is_active"), ("enable"), ("start"). Identical wrong pattern.
+  Every other plugin in the tree — systemd.rs, systemd_networkd.rs,
+  packagekit.rs, full_system.rs — uses "StartUnit", "ListUnits", "GetUnit",
+  "Reload", correctly CamelCase.
+
+  So codex wrote the new standalone EMQX plugin by copying the shape of the one
+  existing broker plugin next to it, which happened to be the broken one. It
+  never introspected the live bus to check what the interface actually exports.
+  That is exactly sheep-following, and it produced a plugin that is beautifully
+  structured, correctly typed, properly capability-gated, dispatched through the
+  MutationEngine instead of the echo fallback — and could not have made a
+  single successful call.
+
+  But you shouldn't have to be the cop. That's the wrong fix and it doesn't
+  scale — you'd be manually diffing member names forever. This one was
+  mechanically detectable: every string literal passed to Proxy::call is
+  checkable against the introspection XML of the bus name it's paired with.
+  That's a test, not vigilance. Your own SIGNALS.md already reached this
+  conclusion in June, about a structurally identical bug:
+
+  ▎ Durable fix = a CHECK, not a convention: assert single owner per name, 
+  ▎ assert no consumer hardcodes a leaf, assert projection==present-state on 
+  ▎ read.
+
+  The 2026-06-24 entry called it, the 2026-08-22 unix_socket.bind entry was the
+  same class again ("MutationEngine::mutate only matched the legacy name
+  createunixsocket, so typed bind fell through to the generic echo"), and this
+  is the third instance. Three occurrences of one bug class, each caught by a
+  human noticing, none caught by a test.
+
+  Want me to write that check? It's a small integration test: walk every
+  Proxy::call site in op-plugins, pair each literal member name with its bus
+  name, introspect, and fail on any member the live interface doesn't export. It
+  would have caught all three, and it turns "be a better cop" into CI's job
+  instead of yours.
+
+  The compile check on the SealedID rename is still running; I'll fold this emqx
+  fix into whatever it reports.
+
+✻ Sautéed for 2m 30s · done 10:05 AM
+
+❯ yes, this is why the mcp os so imprt ant s o we have moemory!                 
+
+● Right — and there's a sharper version of that point sitting in your own repo.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Yes — and your repo has the proof, in an uncomfortable form.
+
+  That D-Bus member-name bug class was already written down three times in
+  SIGNALS.md before today. The 2026-06-24 entry that concluded "durable fix = a
+  CHECK, not a convention." The 2026-08-22 unix_socket.bind entry, same class.
+  And now emqx. The memory existed, in the repo, in the file whose header
+  literally says "any model working on this project is encouraged to append
+  here." Codex had read access the whole time.
+
+  It didn't fire, because reading a 71KB document is optional. That's the
+  failure mode of memory-as-document: it scales writing and doesn't scale
+  recall. What semantic memory changes is that the recall becomes automatic and
+  relevance-ranked at the moment you're writing the code — "you're about to emit
+  a Proxy::call literal, here are three prior incidents about member names" —
+  instead of depending on an agent electing to grep.
+
+  But here's the part you should see. Your memory layer has been half-dark:
+
+  - cozo: reachable, relations intact, sled engine at
+    /var/lib/opdbus/cognitive.db — the structured half works
+  - qdrant: containers RUNNING, but uds-qdrant-http and uds-qdrant-http-svc0
+    have been down for 669165 seconds — 7.7 days. Only the grpc relay is up.
+    Nothing answers on 6333 at either 127.0.0.1 or 10.200.0.2
+  - cognitive_mcp: auth_status "none", and the gateway in front of it 401s
+
+  So the semantic recall layer — the exact half that would surface "you've hit
+  this before" from a similarity query rather than a filename — has been
+  unreachable across the entire window in which codex did this work. An agent
+  re-derived a thrice-documented bug during a week when the thing that remembers
+  was switched off.
+
+  That's not an argument against your instinct, it's the strongest version of
+  it. Though the two fixes fail differently and you want both: memory scales
+  knowledge across sessions but still needs someone to ask; the check fires
+  whether or not anyone remembered to look.
+
+  Three things now on the board, all small:
+  - the Proxy::call introspection check (catches all three past instances)
+  - bringing uds-qdrant-http back up — it's a runit service that's been down a
+    week, probably a one-line diagnosis
+  - Anna's arrival notary, still the thing blocking identity
+
+  Want me to take the qdrant relay first? It's the cheapest, and it's the one
+  that makes the other two stick.
+✻ Churned for 49s · done 10:07 AM
+
+❯ ive had the cognative refactored 4 or five times but major issues and never   
+  is woerking this was supposed to be tho one                                   
+
+● Let me stop sympathizing and actually look at why it keeps not working.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● I was wrong two messages ago, and the way I was wrong is the actual answer to
+  your question.
+
+  Correction: qdrant is not broken. uds-qdrant-http is down deliberately. Its
+  own run script says so in the first line — "Retired: Qdrant HTTP is
+  container-local only. The published door is gRPC (uds-qdrant-grpc →
+  10.200.0.2:6334). Leave this service down." The gRPC door is listening, and
+  the collections are all there: blob_vectors, code_lsp, compliance_official,
+  compliance_general, the repos_lsp_* embeddings. Cozo is healthy too, relations
+  intact. I saw "down: uds-qdrant-http, 669165s" and told you semantic recall
+  had been dark for a week. It hasn't been dark at all.
+
+  And op-cognitive-mcp has no runit service and no live binary — not because it
+  failed to deploy, but because fa1d334d consolidated it into op-grpc-bridge on
+  purpose. Only .bak binaries remain. That's the design working.
+
+  So here's why it keeps getting refactored. I just did, in two minutes, the
+  exact thing that has probably happened across all five attempts: read a
+  healthy subsystem as broken and propose to go fix it. If you'd said yes, I'd
+  have re-enabled a deliberately-retired relay and rebound 10.200.0.2:6333
+  against the current design.
+
+  The root cause isn't cognitive's architecture. It's that intentional state and
+  broken state are indistinguishable from outside this system. Right now, on
+  this box:
+
+  - down means "retired on purpose" for uds-qdrant-http and "genuinely dead" for
+    something else, with no way to tell which
+  - a missing binary means "consolidated into the bridge" for cognitive and
+    "never deployed" for op-identity-headers
+  - a stale blob means "pre-rename" for emqx and "never sealed" for something
+    else
+  - an empty projection means "correctly empty, no arrival yet" for
+    identity_sled and "write path broken" for anything else
+
+  The only thing that disambiguated qdrant for me was a prose comment someone
+  happened to leave at the top of a shell script. That's not a system property,
+  that's luck.
+
+  Which means every refactor starts by mis-triaging, spends its budget re-fixing
+  things that were fine, and leaves the real fault untouched. Five times.
+
+  What's actually wrong with cognitive right now: nothing, below the auth line.
+  Qdrant serves. Cozo serves. The plugin is on the bus with its schema. The MCP
+  frontend accepts either credential form. It 401s because the sled is empty,
+  and the sled is empty because nothing mints a genesis session at arrival, and
+  nothing does that because Anna's notary was deleted. Cognitive has been
+  refactored five times chasing a fault that lives upstream of it.
+
+  You don't need to be a better cop. You need the system to state its intent in
+  a machine-readable way — a retired service should say retired where a tool can
+  read it, not in a comment. That plus the Proxy::call check is maybe a day of
+  work, and it's the difference between a sixth refactor and a last one.
+
+  The compile check on the rename is still running. When it lands I'd suggest we
+  go straight at Anna rather than anything else — everything else on the board
+  is downstream of her.
+
+✻ Churned for 1m 1s · done 10:08 AM
+
+❯ cognative mcp  does not have runit any more or it steals coso lock. the       
+  bridge owns that and  cognative is  accesed throght  hte broker now           
+
+● That's the piece I was missing — and it's the reason, not just the fact. Cozo
+  is single-writer; a standalone cognitive service would contend with the bridge
+  for the lock. Let me check the broker path is actually wired:
+
+  Searched for 1 pattern, read 1 file, ran 2 shell commands, searched memories (ctrl+o to expand)
+
+❯ broker also is supposed to make memory hot  5 hot agens warm and lazy load    
+  for chatmot conrol plane                                                      
+
+  Searched for 2 patterns, listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+● That's all built, and more completely than anything else we've looked at.
+  Verified:
+
+  The five HOT are exactly what you said, and they're enforced. mcp_policy.rs:24
+  declares HOT_TOOL_NAMES as memory_recall, memory_store, workflow_query,
+  workflow_run, toolsets. Two of the five are memory. It's not a default —
+  parse_toolset_manifest rejects any manifest whose hot list differs, and
+  there's a test proving that swapping in invoke_tool is refused. So the hot
+  surface can't drift.
+
+  Warm and lazy-load are installed and live. /etc/opdbus/mcp-toolsets.json,
+  generation 3, installed 04:58, byte-identical to the repo copy. Seven warm
+  sets: context_code, context_knowledge, emqx_ops (9 tools), notebooklm_auth,
+  notebooklm_research, mongodb_knowledge, mongodb_data (11 tools). Lazy load is
+  toolsets.select narrowing discovery to the HOT core plus exactly one set.
+
+  The singleton chatbot is real and bound. /etc/opdbus/mcp-audience-policy.json
+  pins singleton_chatbot_principal_id 87b0decc-8464-5abf-05d8-b52ec88ff9f1 — and
+  that's the same principal the durable grants file calls control-plane-chatbot
+  with 9 capabilities. The bridge run script exports both config paths. So
+  compact MCP stays bound to one exact principal, as you specified.
+
+  Two things I have to flag rather than nod at.
+
+  First — the broker's async role is specced but I can't find it built.
+  design.md §10.3 gives EMQX exactly the job you're describing: distribute
+  provider health, catalog invalidation, hook events, and WARM/COLD activation
+  coordination, identity-checked with monotonic catalog generation, best-effort,
+  never the synchronous path. But op-grpc-bridge has no MQTT client dependency
+  — no rumqttc, no paho, nothing in its Cargo.toml. The EMQX→bridge direction is
+  live (ExHook, connected, 19 hooks). The bridge→MQTT direction I cannot
+  locate. So the broker can currently receive, not publish.
+
+  Second — the installed manifest routes cognitive through the bridge, not the
+  broker. context_code and context_knowledge both list provider
+  "op-grpc-bridge". Only emqx_ops lists provider "emqx". Which is consistent
+  with the design's rule that HOT calls do no MQTT, and with the bridge owning
+  the Cozo lock — but it doesn't match "cognitive is accessed through the
+  broker" as a data path. Either the broker's role is the coordination layer
+  above it (which the spec supports and isn't built yet), or the manifest is
+  wrong. You'd know which; I'd rather ask than assume.
+
+  And all of it is behind the same door. The five HOT tools are constructed
+  before the listener reports ready, and they're unreachable, because /mcp 401s
+  on an empty sled.
+
+  I've updated my memory on cognitive with the Cozo single-writer reason —
+  that's the kind of thing that reads as breakage to the next agent and gets
+  "fixed" into a sixth refactor.
+
+  Still no word from the compile check.
+
+✻ Brewed for 2m 18s · done 10:13 AM
+
+❯ this also  fixes too many tools for cli with limits.   eventually would like  
+  user coniguration for preferneces.                                            
+
+● Let me quantify what that actually buys you:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 515 methods across 66 plugins. That's your raw catalog — and it's why the
+  projection matters more than it looks:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Numbers make the case better than the argument does:
+
+  515 methods across 66 plugins, 68 sealed blobs live. That's the raw catalog a
+  client would otherwise enumerate. The projection takes it to 5 at first 
+  contact, and at most 16 after selecting a set — the biggest warm set is
+  mongodb_data at 11, then emqx_ops at 9, notebooklm_research at 6. So roughly a
+  32x cut at discovery, and a realistic working surface of 10–16.
+
+  That matters even where there's no hard cap, because every tool definition is
+  re-sent as context on every single request. 515 of them is untenable on cost
+  alone, before any CLI refuses. And it's why the single-endpoint decision and
+  the tool-set decision are really one decision — .mcp.json has one entry,
+  op-dbus-unified, and the tiering happens server-side where the grants already
+  live. A client that could only filter locally would still pay for the full
+  list.
+
+  Recorded the preferences idea as OD-33 under Future, with the one constraint
+  I'd want nailed to it before anyone builds it:
+
+  A preference may only narrow, never grant. The design's admission rule is
+  visible = exact grants ∩ audience ∩ selected set ∩ provider health. A user
+  preference has to be one more ∩ term, never a ∪. Otherwise "let me pin my
+  preferred tools" quietly becomes a capability path, and the whole point of the
+  projection is that selection can restrict what you see but can never widen
+  what you may do.
+
+  Two supporting notes on it: §10.2 says promotion between HOT/WARM/COLD stays a
+  reviewed manifest change with a generation bump, never automatic
+  frequency-based mutation — so preferences must not silently re-tier anything.
+  And the storage should be principal-keyed server-side, same shape as
+  mcp-audience-policy.json, since clientInfo.name isn't authentication and a
+  client-asserted preference is a client-asserted identity in disguise.
+
+  Compile check still hasn't reported back.
+
+✻ Baked for 54s · done 10:16 AM
+
+❯ notebooklm used to have 40+                                                   
+
+● That's worth checking — the manifest only lists 8 notebooklm tools across two
+  sets, but the plugin declares 53:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Found something. Your 40+ are still there — they're just not projected.
+
+  Ran 1 shell command (ctrl+o to expand)
+● notebooklm still declares 53 methods on the live bus. The manifest projects 8
+  of them:
+
+  - notebooklm_auth: get_health, setup_auth
+  - notebooklm_research: list_notebooks, get_notebook, search_notebooks,
+    query_notebook, select_notebook, list_sessions
+
+  The other 45 are orphaned — and they're the entire creation and ingestion
+  surface: create_audio, create_video, create_slides, create_mindmap,
+  create_report, create_flashcards, create_quiz, create_infographic,
+  add_source_url / file / text / drive, run_pipeline, start_research,
+  import_research, cross_notebook_query, plus all the share, tag and label
+  operations.
+
+  The reason that matters more than "they're hidden": admission is visible =
+  grants ∩ audience ∩ selected set ∩ health. A method in no set can never be in
+  a selected set, so it's not merely undiscoverable — it's uncallable over MCP
+  regardless of what grants you hold. Those 45 remain fully live over D-Bus and
+  gRPC. So right now, through the MCP door, you cannot make an audio overview or
+  add a source, even as yourself.
+
+  And it's not just notebooklm. The whole manifest references 41 tools out of 
+  515 — 5 hot plus 36 warm. The tool-set layer isn't only a discovery filter,
+  it's an allowlist, and 92% of the catalog is currently outside it.
+
+  The question I can't answer from the tree: deliberate or unfinished? §10.2
+  makes promotion a reviewed manifest change with a generation bump, so a
+  deliberately small manifest is legitimate by design — starting minimal and
+  promoting on purpose is exactly what it prescribes. But 45 orphans that happen
+  to be every create_* verb reads more like a starter manifest nobody came back
+  to.
+
+  Which is the same disease as the qdrant relay, one layer up: nothing
+  distinguishes "deliberately not projected" from "forgotten." I've logged it as
+  a concern against OD-33 and suggested the manifest carry an explicit
+  cold/unprojected declaration, so an orphan is a recorded decision instead of
+  an absence.
+
+  If the 45 should be reachable, that's a manifest edit and a generation bump —
+  genuinely small, and it doesn't need the identity work to land first. Want me
+  to draft the promoted sets?
+
+✻ Worked for 1m 2s · done 10:17 AM
+
+❯ thats is future. we are sticking to static for now                            
+
+● Understood — deliberate, not unfinished. Let me close that question in the
+  record so it doesn't get re-litigated:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Static it is. Recorded as a decision rather than an open question, with a "do
+  not fix the omission" note so the next agent doesn't helpfully promote 45
+  tools you didn't ask for. Promotion stays parked under OD-33.
+
+  Where things stand:
+
+  Landed this session
+  - OIB1 → SID1 / SealedID rename, full scope: 9 source files, 10 spec files,
+    wire magic, inline prefix, HTTP header, sled field, subid. op-blob's own
+    vocabulary left intact.
+  - emqx D-Bus member-name fix — proxy.call("status"/"start"/"stop"/"restart") →
+    CamelCase, which is what the live interface actually exports. Those calls
+    could never have succeeded before.
+
+  Verified, no action needed
+  - qdrant healthy (gRPC door published, collections present); the down HTTP
+    relay is retired on purpose
+  - cognitive correctly has no runit service — the bridge owns the Cozo lock
+  - HOT five, warm sets, singleton chatbot policy all built and installed
+
+  Open, in the order I'd take them
+  1. Compile check on the rename — still out, will fold in the emqx fix when it
+     reports
+  2. Anna's arrival notary — still the single blocker under identity, MCP, and
+     cognitive alike
+  3. The Proxy::call introspection check — turns "be a better cop" into CI's job
+  4. Commit and push, then build and deploy
+
+  Nothing needs a decision from you until the compile check lands. I'll report
+  it as soon as it does.
+
+✻ Churned for 34s · done 10:18 AM
+
+❯ thas a great thing to see a   short list! explain 3                           
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Good — and I need to correct something I said about it two messages ago.
+
+  I claimed the check "would have caught all three past instances." That's
+  wrong. Let me be accurate, because the correction is the interesting part.
+
+  What actually breaks
+
+  zbus has two sides with an asymmetry. The server side, #[zbus::interface],
+  takes your Rust async fn status(...) and converts the name to Status on the
+  wire — snake_case to CamelCase, automatically. The client side,
+  Proxy::call("status"), does no conversion at all. It sends the literal bytes
+  you hand it. So the server quietly renames and the client quietly doesn't, and
+  nothing in the type system connects them. You get a runtime UnknownMethod,
+  and if the caller logs poorly, silence.
+
+  Tier 1 — the check
+
+  For each Proxy::call site, the surrounding Proxy::new already supplies bus
+  name, object path, and interface. So you have a complete quad: (bus, path,
+  interface, member). D-Bus can answer whether that quad is real —
+  org.freedesktop.DBus.Introspectable.Introspect returns XML listing every
+  method the interface exports. The test walks the call sites, introspects each
+  interface, and fails on any member the interface doesn't export.
+
+  There are 21 raw call sites in op-plugins. Today the check would flag exactly
+  3 — start, is_active, enable, all in netmaker.rs — and before I touched emqx
+  it would have flagged 4 more. Every other site is already correct CamelCase.
+
+  Tier 2 — the durable fix
+
+  The bug is only possible because Proxy::call is the stringly-typed escape
+  hatch. zbus ships #[zbus::proxy], which generates a client from a trait and
+  applies the same snake_case→CamelCase conversion the server side uses. Both
+  ends derive the name from one rule, so a mismatch stops being expressible. No
+  precedent for it in this workspace yet — op-chat uses zbus::proxy::Builder,
+  which is the dynamic constructor, still stringly. Converting 21 call sites
+  plus a lint forbidding new raw Proxy::call in op-plugins is the version that
+  ends the class rather than detecting it.
+
+  Now the correction. The three incidents are the same disease but live on three
+  different surfaces:
+
+  - emqx — caller literal vs D-Bus introspected member. Tier 1 catches this.
+  - zbusctl (2026-06-24) — hardcoded a stale bus name, path and interface
+    (org.opdbus.CognitiveMcp after the .v1.plugins rename). Tier 1 catches it
+    too, but only because it validates the whole quad, not just the member.
+  - unix_socket.bind (2026-08-22) — schema declared bind, but
+    MutationEngine::mutate only matched the legacy createunixsocket, so typed
+    calls fell through to the generic echo and returned success: true. That 
+    never touches D-Bus introspection. It's the schema's declared methods versus
+    the engine's internal dispatch arms. Tier 1 is blind to it.
+
+  So it's two assertions, not one: every name a component uses to reach another 
+  must be checked against whichever authority defines that name. For D-Bus that
+  authority is introspection. For plugin dispatch it's PluginSchema.methods —
+  assert every declared method resolves to a real dispatch arm and never
+  silently lands in the echo fallback. Same harness, same afternoon, different
+  oracle.
+
+  The unix_socket one is arguably the worse bug of the two classes, because it
+  returned success.
+
+✻ Brewed for 55s · done 10:20 AM
+
+❯ there shouldnt be any  proxys i dont think                                    
+
+● "Proxy" is overloaded here — let me check what they're actually reaching
+  before I answer, because it may settle it:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● You're more right than I was. Look what they're actually pointed at:
+
+  ┌───────────────────────────────┬───────────────────┬─────────────────────┐
+  │           Bus name            │  Status on this   │       Used by       │
+  │                               │       host        │                     │
+  ├───────────────────────────────┼───────────────────┼─────────────────────┤
+  │ org.freedesktop.systemd1      │ ABSENT, not even  │ systemd.rs (10      │
+  │                               │ activatable       │ refs)               │
+  ├───────────────────────────────┼───────────────────┼─────────────────────┤
+  │ org.freedesktop.network1      │ ABSENT, not       │ systemd_networkd.rs │
+  │                               │ activatable       │                     │
+  ├───────────────────────────────┼───────────────────┼─────────────────────┤
+  │ org.freedesktop.PackageKit    │ ABSENT, not       │ packagekit.rs (8    │
+  │                               │ activatable       │ refs)               │
+  ├───────────────────────────────┼───────────────────┼─────────────────────┤
+  │ org.freedesktop.login1        │ LIVE — elogind,   │ login1.rs           │
+  │                               │ pid 1284          │                     │
+  ├───────────────────────────────┼───────────────────┼─────────────────────┤
+  │                               │ LIVE —            │ emqx.rs,            │
+  │ org.opdbus.v1.Runit.Systemctl │ op-s6-systemctl,  │ netmaker.rs         │
+  │                               │ pid 31556         │                     │
+  └───────────────────────────────┴───────────────────┴─────────────────────┘
+
+  Three of the five targets don't exist here. systemd.rs, systemd_networkd.rs
+  and packagekit.rs proxy to bus names that aren't owned and aren't activatable
+  — an entire outbound surface that fails at runtime on every call. That's
+  systemd-era residue, and CLAUDE.md already forbids the direction ("runit, not
+  systemd"; "do not use systemctl or other foreign service-manager CLIs").
+  op-network does rtnetlink natively, so systemd_networkd is redundant even in
+  principle.
+
+  So a large majority of the proxies aren't a design question at all — they're
+  dead code from the s6/systemd era that nobody removed.
+
+  That leaves two, and they're different from each other:
+
+  org.opdbus.v1.Runit.Systemctl — this is the one I think you mean. It's an
+  internal opdbus service, and emqx.rs holds a Proxy to call it directly. That
+  means a plugin is calling sideways to another opdbus D-Bus service, going
+  around the MutationEngine — no capability gate, no event chain entry, no
+  audit. Everything else in the system funnels through PluginService.CallMethod.
+  This doesn't. If that's the objection, then the fix I just made is a band-aid
+  on code that should be deleted rather than corrected, and lifecycle should
+  route through the engine like every other mutation.
+
+  org.freedesktop.login1 (elogind) — the one defensible case. It's a real
+  external OS service that owns state nothing else has, and reaching it over its
+  native D-Bus interface is the same category as driving OVS over OVSDB
+  JSON-RPC, which CLAUDE.md explicitly sanctions. Same argument as the EMQX
+  management API.
+
+  So my read of "there shouldn't be any proxies": correct for the internal ones
+  on principle, correct for the three dead ones on the plain fact that they
+  don't work, and arguable only for external OS services that have no other
+  native door.
+
+  Which did you mean — kill all outbound proxies from plugins including elogind,
+  or specifically stop plugins calling other opdbus services sideways past the
+  MutationEngine? The answer changes whether emqx's lifecycle path gets
+  rewritten or just deleted, and it shrinks item 3 considerably either way.
+
+✻ Cogitated for 56s · done 10:21 AM
+
+❯ we do not have to use  zbus, that is actuall foir the end user to see options 
+  with comopletion, that was the intent. we shou use zbusctl                    
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ zcall                                                                         
+
+● Two things, and let me separate them.
+
+  For my own diagnostics — taken, and I slipped. I used sudo busctl directly
+  several times this turn (introspect, and the Status call). Your standing rule
+  is zcall: it gives the exact methods and args off the live tree. I'll use
+  zcall and only fall back to busctl when I need something zcall doesn't expose,
+  like raw introspection of a non-plugin interface.
+
+  For the code question, here's my read — tell me if it's wrong. You're
+  rejecting my Tier 2 suggestion. I proposed migrating call sites to zbus typed
+  proxies, and you're saying don't build zbus client plumbing: the
+  introspectable D-Bus surface exists so an operator gets discoverability and
+  completion through zcall, not so plugins can wire themselves to each other
+  with generated Rust clients.
+
+  If that's it, then there's a constraint worth naming, because it forecloses
+  the obvious middle option: plugins can't shell out to zcall either. That's
+  Command::new, which CLAUDE.md bans in plugin code. So if a plugin may not hold
+  a zbus Proxy and may not invoke zcall, the only consistent conclusion is that
+  plugins don't make outbound calls at all — they're leaves. Anything
+  cross-service is the MutationEngine's job, which is where the capability gate
+  and the event chain already live.
+
+  Which lands exactly where you were pointing two messages ago about emqx: its
+  lifecycle path shouldn't be fixed, it should move. The plugin declares
+  start/stop/restart in its schema; the engine is what talks to the runit
+  service.
+
+  Confirming before I touch anything: plugins become leaves with no outbound
+  D-Bus, engine owns cross-service calls, zcall stays the human/agent door?
+
+✻ Worked for 31s · done 10:22 AM
+
+❯ why is command new banned, i dont remember that. seems to kneecap  the        
+  plugin. should be abule to call zbus or zbusctll, maybe not zcall becuse lie  
+  you seaid split backenjd/frontend...                                          
+
+● Fair challenge — let me find out whether you ever actually said that, or
+  whether an agent wrote it into CLAUDE.md and everyone's been obeying it since.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Agent "Verify SealedID rename compiles" finished · 22m 20s
+
+❯ of all thing to obeey while all other rules arew ignored                      
+  ⎿  Resuming agent a48f43e
+
+● That's the punchline, and it's better than you think: the rule isn't even 
+  obeyed in the code.
+
+  op-plugins has 11 Command::new call sites right now — service_def.rs,
+  host_runtime.rs, service.rs, xray.rs, full_system.rs, tched_router.rs. What
+  they shell to:
+
+  - sv — 4 times. The runit CLI. Plugins are already driving service lifecycle
+    by subprocess.
+  - hostnamectl — twice, on a host with no systemd
+  - zeroclaw, docker, op-example, and a bare binary path
+
+  So the ban is obeyed rhetorically. Agents quote it in conversation and let it
+  shape designs, while the tree does whatever it wants. Meanwhile the rules that
+  actually carry weight — D-Bus is the only control plane, runit not systemd,
+  deploy through build-golden — get violated in the same files by the same code.
+
+  Provenance: it entered in a86ed246, "Add zcall tooling and deployment
+  handoffs," Jul 4. A tooling commit, not an architecture decision. Committed
+  under your name, but everything here commits under your name, so that settles
+  nothing about who wrote the sentence.
+
+  Why something like it exists — the defensible core. CLAUDE.md:96 states the
+  real version for op-network: native OVSDB, OpenFlow, rtnetlink, no CLI
+  subprocesses. That has actual reasons — CLI output is unstable text you have
+  to parse, a subprocess gives you an exit code instead of a typed error, and it
+  drags PATH, env and permissions into runtime. Where a native protocol exists,
+  using the CLI instead is strictly worse. That's a real principle with a real
+  scope.
+
+  The overreach is generalizing it to "no Command::new anywhere in plugin code,"
+  which removes the escape hatch for tools that have no protocol at all. That's
+  the kneecapping you're describing, and it's why nobody actually complied.
+
+  One mechanical correction on your proposal, since it changes the shape: zbus
+  and zbusctl aren't the same category. zbus is an in-process Rust library — no
+  subprocess, no fork, typed errors. zbusctl and zcall are both CLIs, so calling
+  either from a plugin is Command::new by definition. Your instinct to exclude
+  zcall on backend/frontend grounds is right, but the same mechanical fact
+  applies to zbusctl — it's a subprocess too, just a differently-scoped one.
+
+  What I think the rule should actually be. The thing that genuinely matters in
+  this system isn't the fork. It's that a subprocess escapes the control plane —
+  no capability check, no event-chain entry, no audit. Shelling sv restart emqx
+  mutates live state with zero record, and that's the real violation, not the
+  fact that it spawned a process. Whereas a subprocess that reads something and
+  returns text bypasses nothing that matters.
+
+  So: no unaudited mutation rather than no Command::new. That keeps the property
+  you care about, permits the escape hatch where no protocol exists, and —
+  unlike the current rule — it's a rule the codebase could actually pass.
+
+  I've asked the compile-check agent to report what it has; it stopped while
+  op-grpc-bridge was still linking.
+✻ Cooked for 1m 32s · done 10:26 AM
+
+❯ so my no cli turened int o no command?"                                       
+
+● Let me check rather than agree — the history should show it.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Evidence says yes, with one honest caveat.
+
+  a86ed246 didn't edit CLAUDE.md — it created it. Every line in that diff is an
+  addition, including the project header. That's the signature of a wholesale
+  authoring pass (a /init-style "document the codebase" run), not an
+  architecture decision being recorded.
+
+  And both versions of your rule were written in that same commit, at two
+  different altitudes:
+
+  - Scoped and accurate, in the crate table: op-network | Native OVSDB, 
+    OpenFlow, rtnetlink (no CLI subprocesses) — a true, observable fact about
+    one crate that drives OVS over OVSDB JSON-RPC instead of shelling ovs-vsctl.
+  - Generalized, in the control-plane paragraph: "No Command::new(...)
+    subprocesses, no direct file reads for live state, no polling loops... in
+    plugin/service code."
+
+  Same commit, same author pass. The narrow observation about op-network sits in
+  the table where it belongs; the absolute prohibition got hoisted into the
+  paragraph that governs everything. So the transformation you're describing is
+  visible in the artifact.
+
+  The caveat: I can't prove what you originally said, only what the file did.
+  The commit is under your name, but everything here is. What I can say is that
+  the specific, checkable claim and the blanket rule were authored together, and
+  only the specific one is supported by the code.
+
+  And that commit has form. The same pass also wrote "s6 supervision, NOT
+  systemd" and "op-s6-systemctl | s6d service-management CLI" — both since
+  overtaken, and CLAUDE.md still says op-s6-systemctl "is not the live control
+  path" while that exact binary owns org.opdbus.v1.Runit.Systemctl on the live
+  bus right now, pid 31556. So the file has a habit of freezing a moment into a
+  rule and then not aging.
+
+  Which is the same failure mode as the qdrant relay and the orphaned notebooklm
+  tools, one level up: a snapshot written as a law, with nothing recording
+  whether it was ever a decision.
+
+  Want me to fix the line — narrow it back to "no CLI where a native protocol
+  exists" plus "no unaudited mutation," and correct the stale op-s6-systemctl
+  claim while I'm in there? That's a CLAUDE.md edit, so I'd rather ask than just
+  do it.
+
+✻ Baked for 36s · done 10:27 AM
+
+❯ trying to encapsulant my no polling, searchuing, retriving, waiting...        
+
+● That's a much better rule, and it's already in CLAUDE.md in a different
+  paragraph — "Reactive, not polled. The system does not watch, poll, or index."
+  Let me check whether the new code honors that one:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Found it. This is your whole point in ten lines — in the newest code in the
+  tree:
+
+  async fn wait_for_runit_state(running: bool) -> Result<RunitStatus> {
+      let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+      loop {
+          let status = runit_status().await?;          // retrieving
+          if status.running() == running {              // searching
+              return Ok(status);
+          }
+          if tokio::time::Instant::now() >= deadline {  // waiting
+              anyhow::bail!("EMQX did not reach the requested runit state within
+  30 seconds");
+          }
+          tokio::time::sleep(Duration::from_millis(250)).await;   // polling
+      }
+  }
+
+  Polling, searching, retrieving, waiting. All four, in one function, up to 120
+  round trips. Written by an agent that was scrupulously obeying "no
+  Command::new" — it carefully used a D-Bus proxy instead of shelling sv, and
+  then spun on it.
+
+  The letter was obeyed. The thing the letter was standing in for was violated
+  in the same file.
+
+  And now the Command::new rule makes sense as a garbling. Shelling sv status is
+  retrieving — going to ask for state you should already have. That's what made
+  it feel wrong. But the transcription kept the mechanism (a fork) and dropped
+  the property (asking instead of having). So the rule banned the fork and
+  permitted the spin loop, which is exactly backwards: sv restart as a one-shot
+  mutation is fine, and asking anything 120 times is not, subprocess or no
+  subprocess.
+
+  The formulation you're reaching for, as best I can state it:
+
+  ▎ A component never goes looking for state. State is either already present — 
+  ▎ the sealed blob, SHM, the 1:1 zero-copy read — or it arrives, as an event. 
+  ▎ Anything shaped like ask repeatedly until true is the violation, regardless 
+  ▎ of whether it's a subprocess, a D-Bus call, an HTTP request, or a file read.
+
+  That covers all four verbs, it's mechanism-agnostic, and unlike the current
+  rule it's testable: fail any loop whose exit condition is a re-read of remote 
+  state. That's a lint, and it would flag this function and the 8 sleep sites in
+  op-plugins today.
+
+  It also explains the asymmetry you already believe: a mutation is a push and
+  it's fine. An observation should be a read of present state, once. A wait
+  should be an arrival, not a spin.
+
+  Two things I'd like to do, both of which I'll hold for your yes:
+
+  1. Rewrite that CLAUDE.md line to say what you actually meant — no
+     polling/searching/retrieving/waiting, plus "no CLI where a native protocol
+     exists" — instead of the Command::new absolute. And fix the stale
+     op-s6-systemctl claim in the same pass.
+  2. Fix wait_for_runit_state, which is mine to answer for now that I've touched
+     that file.
+
+✻ Churned for 47s · done 10:29 AM
+
+❯ even, ie mutation. if not desired state trigger a mutation to achieve desired 
+  state.                                                                        
+
+● Right — and that closes it. Read present state once; if it diverges from
+  desired, emit a mutation; the mutation is itself the event that produces the
+  next arrival. Convergence through the chain, never a spin. "The mutation IS
+  the event, the value IS the state," as your own SIGNALS entry put it.
+
+  Let me check whether the interface can even support that today:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The interface can't support it. org.opdbus.v1.Runit.Systemctl declares no 
+  signals — the source has no #[zbus(signal)] and no emit anywhere. The only
+  signal on the object is the standard PropertiesChanged, inherited from the
+  Properties interface, and the service exposes no custom properties for it to
+  fire on. It's call-only.
+
+  So there is no arrival to react to. An agent asked to learn "did emqx come up"
+  has exactly one option available: ask again, and again. The poll loop wasn't
+  laziness — the interface compelled it.
+
+  That's the structural version of what you've been circling all afternoon. The
+  rule says reactive; the interface offers nothing but interrogation; so every
+  consumer polls, and the rule is unenforceable against the one service that
+  most needs it. And because the rule as written only banned Command::new, the
+  poll loop sailed through while the harmless fork got prohibited.
+
+  Under your model the correct shape is:
+
+  start:  read status once
+          if already running -> return present state
+          else emit the Start mutation -> return
+          (the service's state change arrives as an event and re-enters)
+
+  No deadline, no sleep, no 120 round trips. But that requires the runit service
+  to emit on state change, which is a real change to op-s6-systemctl, not a
+  tweak to emqx.
+
+  So the board grew by one, and it's the load-bearing one:
+
+  1. Emit state-change signals from org.opdbus.v1.Runit.Systemctl — without
+     this, "no polling" is unenforceable for every service consumer, not just
+     emqx
+  2. Fix wait_for_runit_state — depends on 1; mine to answer for since I touched
+     that file
+  3. Rewrite the CLAUDE.md rule to what you actually meant: never go looking for
+     state — it's present or it arrives; if present state ≠ desired state, emit
+     a mutation. Plus "no CLI where a native protocol exists," and fix the
+     stale op-s6-systemctl line
+  4. The lint that falls out of it: fail any loop whose exit condition is a 
+     re-read of remote state — flags the emqx loop and the 8 sleep sites in
+     op-plugins today
+
+  That's a coherent unit of work and it's small. Three of the four are in one
+  crate.
+
+  Still holding for your go-ahead on any of it — I haven't touched CLAUDE.md or
+  the wait loop. The compile agent hasn't reported since I asked it for
+  partials.
+
+✻ Crunched for 42s · done 10:32 AM
+
+❯ cant belive this is still cvoming up  !op-s6-systemctl no s6                  
+
+  Searched for 1 pattern, listed 1 directory (ctrl+o to expand)
+
+● It's tiny. 7 references, 5 files — smaller than the SealedID rename:
+
+  - crates/op-s6-systemctl/Cargo.toml — package name and [[bin]] name
+  - Cargo.toml — workspace member entry and path dep
+  - deploy/runit/op-runit-systemctl/run — the exec line
+
+  Plus three bits of residue:
+  - a second binary literally named s6d at src/bin/s6d.rs
+  - LEGACY_BUS_NAME = "org.opdbus.v1.S6.Systemctl", still claimed alongside the
+    real name — its own comment says "one release only," and that was the runit
+    migration six weeks ago
+  - installed: /usr/local/bin/op-s6-systemctl and /usr/local/bin/s6d
+
+  The runit service directory is already correctly named op-runit-systemctl, and
+  the primary bus name is already org.opdbus.v1.Runit.Systemctl. So the rename
+  was done at the service and bus layer and simply never reached the crate.
+
+  And CLAUDE.md is actively wrong about it — the crate table says
+  op-s6-systemctl is "legacy, s6-era... not the live control path." That binary
+  is pid 31556, owns the live runit bus name, and emqx's entire lifecycle path
+  depends on it. It is the control path. That line is probably why it keeps
+  getting treated as vestigial instead of getting renamed.
+
+  One question before I move, because it changes the target:
+
+  op-runit-systemctl — matches the existing service dir and bus name, ~10
+  minutes, no bus-name change, nothing else to coordinate.
+
+  Or drop "systemctl" too — it's foreign vernacular from the same family you've
+  been purging, and something like op-runit-svc / op-sv would be honest about
+  what it is. But the bus name org.opdbus.v1.Runit.Systemctl is live and
+  consumed, so that version means a coordinated bus-name change as well. Still
+  small — only emqx.rs and netmaker.rs consume it — but it's a live rename
+  rather than a source-only one.
+
+  Say which and I'll do it, along with correcting the CLAUDE.md line and
+  dropping the dead S6 alias. I've still got the CLAUDE.md rewrite and the
+  wait-loop fix queued behind your go-ahead too — happy to bundle all of it into
+  one pass.
+
+✻ Sautéed for 47s · done 10:34 AM
+
+❯ we ar e and havve been for a long time runit                                  
+
+● Then let's make it stop coming up. Going with op-runit-systemctl — matches the
+  service dir and bus name that are already runit-named.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● #[proxy] typed traits already exist in this crate — so the pattern that would
+  have prevented the emqx casing bug was sitting one directory away. Let me
+  check what references the s6d binary before I move anything:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The rename was already decided and deferred — let me honor the prior decision
+  rather than invent a new name:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Decision was already made and recorded as spec FR-7 — op-s6-systemctl →
+  op-runit-systemctl, s6d → svd — deferred on 2026-08-01 because it touches
+  workspace members and the running service. Executing it as specified:
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+❯ nix is still in workspace whis is over a yar gone                             
+
+● Two fixes — my sed left the dep key half-renamed. Let me finish that and look
+  at nix:
+
+  Searched for 2 patterns, ran 1 shell command (ctrl+o to expand)
+
+● No .nix files at all — you mean the nix crate. And look:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Careful — I have to push back on this one. My first grep was wrong (it's used
+  fully-qualified, not via use). nix is live, not residue:
+
+  - op-core: 3 uses — nix::unistd::chown, Gid
+  - op-plugins: 10 uses
+  - op-grpc-bridge: 8 uses — chown, Group::from_name, signal::kill(SIGHUP),
+    Pid::from_raw for the xray reload path
+  - op-xray-daemon: 4 uses
+
+  That's real syscall work with no std equivalent. Removing it would break the
+  credential-projection chown and the xray SIGHUP path.
+
+  But there is something wrong here:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Four versions of nix compile into every build — 0.26.4, 0.27.1, 0.28.0,
+  0.29.0. Your four crates pin 0.28.0; the others come in transitively: 0.26.4
+  and 0.29.0 from zbus (two different zbus copies in the graph — worth its own
+  look, given zbus is [patch]ed to that local checkout), 0.27.1 from rtnetlink.
+  That's four copies of a syscall wrapper being compiled and linked, which is
+  real build time on a workspace you already said takes hours.
+
+  So on nix specifically: it isn't dead residue, it's live in 25 call sites.
+  Unless you meant something else by it — a nix-era config, or a specific crate
+  — in which case point me at it, because I searched for .nix files, flake.nix,
+  flake.lock and workspace members and found none.
+
+  Meanwhile the s6 rename is done in source:
+
+  - crates/op-s6-systemctl → crates/op-runit-systemctl (git mv, history
+    preserved)
+  - binary op-s6-systemctl → op-runit-systemctl; s6d → svd (src/bin/s6d.rs →
+    svd.rs)
+  - workspace member + dep key updated
+  - deploy/runit/op-runit-systemctl/run now execs the new binary name
+  - types: S6SystemctlService → RunitSystemctlService, S6SystemctlProxy →
+    RunitSystemctlProxy, trait S6Systemctl → RunitSystemctl
+
+  That's spec FR-7, which was written down on 2026-08-01 and deferred. Still
+  outstanding on it, and I want your call before touching either:
+
+  1. Drop LEGACY_BUS_NAME = "org.opdbus.v1.S6.Systemctl". Its own comment says
+     "one release only," and that release was the runit migration six weeks ago.
+     It's currently claimed as a second bus name and used as a fallback
+     destination in svd. Nothing in the tree calls it. Dropping it is safe in 
+     source, but the live daemon claims it today.
+  2. 3tched-artix-runit-install.sh still installs s6d op-s6-systemctl at line
+     362 and lists s6d in its binary set at 1421. That file installs the host —
+     I'd rather not edit an installer without you looking.
+
+  And note the live service is untouched: /etc/runit/sv/op-runit-systemctl/run
+  still execs /usr/local/bin/op-s6-systemctl, which is correct until the new
+  binary is actually built and installed. Deploying the repo run script before
+  the rename ships would break the service.
+
+✻ Worked for 2m 14s · done 10:37 AM
+
+● Agent "Verify SealedID rename compiles" finished · 34m 28s
+
+● Report's in. One thing in it is mine: I missed server.rs. It referenced
+  HTTP_IDENTITY_BLOB_HEADER in the CORS allow_headers list; the agent caught and
+  fixed it. Let me check whether the deploy-side references it flagged are
+  prose or functional:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ that is probably why it takes an howr to build teh b ridge                    
+
+● Let me measure that rather than assume — nix is small, so four copies of it
+  shouldn't cost an hour. Checking what actually dominates:
+
+  Searched for 2 patterns, ran 1 shell command (ctrl+o to expand)
+
+❯ i meant the versions yo umentioned take an hour                               
+
+● You're right, and the data backs it — 123 duplicated packages out of 990. But
+  two of them are the real story, and one contradicts CLAUDE.md:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● All three sources of the duplication are named, and one of them is a lie in
+  CLAUDE.md:
+
+  1. zeroclaw-gui is still a workspace member (Cargo.toml:43). It pulls eframe,
+  egui, egui_extras, egui_glow, egui-winit, winit, glutin and three glutin_*_sys
+  crates — a full OpenGL windowing stack, compiled on every workspace build, on
+  a headless server. The codex session "retired zeroclaw-gui from release
+  binaries," but retiring it from the binary list doesn't stop cargo building it
+  as a member. You told me today to deprecate it. Removing that one line
+  deletes an entire graphics stack from your build.
+
+  2. op-xray-daemon pins zbus = "4" while the workspace is on zbus 5. One
+  first-party crate, one line, and it forces a second full copy of zbus,
+  zvariant, zvariant_derive, zvariant_utils, zbus_macros and zbus_names. The
+  third copy is zbus 3.15.2, dragged in by keyring 2 → secret-service. keyring
+  has 4 uses in op-identity.
+
+  So the entire D-Bus stack — the thing this project is built on — compiles
+  three times, and two of the three are avoidable.
+
+  3. CLAUDE.md:55 is false. It says:
+
+  ▎ [patch.crates-io] pins zbus to a local checkout at /home/admin/git/zbus — 
+  ▎ the workspace does not build without it.
+
+  The actual [patch.crates-io] section contains only rovs-openflow. There is no
+  zbus patch, no reference to /home/admin/git/zbus anywhere in the manifests.
+  That line has been telling every agent — including me at the start of this
+  session — that the build depends on a path that isn't used. Same failure mode
+  as "op-s6-systemctl is not the live control path": a snapshot frozen into a
+  law, never aged.
+
+  On the hour, honestly: duplicates are a real cost and you've got 123 of them,
+  but I'd be overclaiming if I said they're the whole hour. cozorocks is
+  RocksDB's C++ tree, aws-lc-sys is a large C build, and bindgen/clang-sys are
+  slow by nature — those are probably the floor no matter what you do. What's
+  removable is the GUI stack and two-thirds of the zbus family, and that's a
+  real dent rather than a rounding error.
+
+  Three one-line changes, and none of them touch running code:
+
+  - delete "crates/zeroclaw-gui" from workspace members
+  - bump op-xray-daemon to zbus = "5" (may need small API fixes — 4→5 had
+    breaking changes)
+  - correct CLAUDE.md:55
+
+  I've got a queue of things waiting on your word now — these three, the S6
+  legacy bus alias, the installer, the CLAUDE.md polling rewrite, and the
+  wait_for_runit_state fix. Say which and I'll batch them; the s6 rename itself
+  is done in source but unverified, so it needs a compile pass regardless.
+
+✻ Cooked for 40m 46s · done 10:39 AM
+
+● Agent "Verify SealedID rename compiles" finished · 37m 17s
+
+● Interim update from the compile agent, and it sharpens the build-time answer:
+
+  The rename is confirmed compiling. op-grpc-bridge's lib and lib-tests both
+  build cleanly with SealedID in place — 25 warnings, zero errors. The earlier
+  "did not finish" was the agent's own logging artifact, not a failure. Only
+  test execution is outstanding.
+
+  And here's the useful part for what you just asked: it's been in the link 
+  phase for ~20 minutes, with three concurrent rust-lld processes. That's not
+  compiling duplicates — that's linking a 130MB binary.
+
+  Which reframes the hour. You've got at least three separable costs:
+
+  - compile — 990 packages, 123 duplicated, plus cozorocks/aws-lc-sys/bindgen as
+    the irreducible native floor
+  - link — 20+ minutes on one binary, and rust-lld is already the fast linker;
+    mold is typically several times faster again
+  - debuginfo — I noticed earlier there's no [profile.release] section in 
+    Cargo.toml at all, so you're on cargo defaults. A 130MB binary suggests full
+    debug symbols are going in. debug = 1 or split-debuginfo = "packed" would
+    cut link time and binary size substantially without losing backtraces.
+
+  So the honest split: dropping zeroclaw-gui and the extra zbus copies helps the
+  compile half; a linker and profile change helps the link half. The link half
+  looks like the cheaper win — it's config, not dependency surgery.
+
+  Nothing acted on. Still holding your call on the queue.
+
+✻ Brewed for 17s · done 10:40 AM
+
+❯ lets  do versioning and renaming an dedup so  ti  saves the ime in            
+  comppikling look ad build cache is 700GB?                                     
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 777G apparent, on a 639G filesystem that reports 280G used — so those numbers
+  need reconciling before you act on them:
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two things in there that aren't what they look like:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Stop — before any cleanup, two things you need to know:
+
+  1. Your build disk is 94% full. target is its own btrfs subvolume on /dev/sdb1
+  with zstd:3 compression: 500G total, 469G used, 31G free. The 777G figure is
+  apparent size; compression is hiding how close to the wall you are. Builds
+  will start failing.
+
+  2. There is a 141GB backup living inside target/.
+
+  target/downloads/vps-6aff90ab.vps.ovh.ca-snapshot
+    QEMU QCOW2 image, 200GB virtual disk, 141GB on disk, dated Aug 21
+
+  That's a full disk image of the OVH VPS, sitting in a directory named target,
+  alongside OVH invoices and .eml files. Every cargo clean, every build-cleanup
+  script, and every agent ever told to "clear the build cache" would destroy it.
+  I am not touching it. But it should not live there — if it matters, move it
+  off the build subvolume before anything else happens.
+
+  The actual reclaimable cargo bloat, once you set those 141G aside:
+
+  ┌──────────────────────────┬──────────┐
+  │                          │ apparent │
+  ├──────────────────────────┼──────────┤
+  │ target/debug/incremental │ 286G     │
+  ├──────────────────────────┼──────────┤
+  │ target/debug/deps        │ 280G     │
+  ├──────────────────────────┼──────────┤
+  │ target/release           │ 32G      │
+  └──────────────────────────┴──────────┘
+
+  incremental is pure rebuild-speed cache — deleting it costs one slower build
+  and reclaims the single biggest chunk. It's the safe first move.
+
+  Now, the source-side dedup you asked for. Checking one thing before I edit:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+❯ part of it is subvolumes too                                                  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● That changes the picture materially. /dev/sdb1 is not a build disk — it's 
+  shared with your container pool and your identity sleds:
+
+  @build                          ← cargo target
+  @bun-cache
+  3tched-storage/                 ← the entire Incus pool
+    containers/qdrant, assistant, cozo, mail-3tched, xray
+    containers/bea37ecb-…, f036f8d8-…
+    images/, custom/default_cozo-opdbus
+  @identity-jeremy                ← identity sled
+  @identity-chatbot               ← identity sled
+
+  Real btrfs numbers: 474.02 GiB allocated of 500, 467.75 GiB used, 30.36 GiB 
+  free.
+
+  So a runaway cargo build doesn't just slow you down — it can exhaust the disk
+  holding every container and both identity sleds. The sled schema says
+  persistence is "an immutable sealed btrfs image... attached via btrfs device
+  add," and those two @identity-* subvolumes are it. Cleaning
+  target/debug/incremental stops being a speed optimization and becomes a safety
+  measure.
+
+  Meanwhile the source-side dedup checks came back clean, so I've done the two
+  safe ones:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two CLAUDE.md lines still name the crate I renamed — fixing those as part of
+  the same change:
+
+  Searched for 1 pattern (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ i meant dedup as in the build                                                 
+
+● Misread you — I did dependency dedup. You meant btrfs dedup on the build data.
+  Let me check what's available:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● None installed; all three are in Artix extra — bees 0.11, duperemove 0.15.2,
+  compsize 1.5.
+
+  But the order matters, and dedup should not go first. Your data block groups
+  are at 468.01 GiB allocated / 463.77 GiB used — about 4 GiB of slack, with
+  25.97 GiB unallocated. Deduplication temporarily grows metadata while it
+  rewrites extent references, and doing that on a 94%-full btrfs that also holds
+  your live container pool and both identity sleds is how you wedge a
+  filesystem. Metadata is DUP at 3 GiB total, 2.07 used, so there isn't much
+  headroom there either.
+
+  Safer sequence:
+
+  1. Delete target/debug/incremental first — 286G apparent, pure rebuild cache,
+     regenerates itself. Costs one slow build, needs no new packages, and it's
+     the one step with essentially no failure mode. It also creates the room
+     dedup needs.
+  2. Install compsize and measure — you're on zstd:3, so you don't actually know
+     your current ratio yet. That tells you whether dedup has anything to find
+     or whether compression already ate most of it.
+  3. Then dedup, if the numbers justify it — duperemove -dr as a controllable
+     one-shot rather than bees. bees is a continuously-running daemon; on a disk
+     that's simultaneously serving qdrant, cozo, mail-3tched and xray, that's
+     sustained background I/O on the same device.
+
+  One expectation to set: cargo target trees usually dedup worse than people
+  hope — rustc output differs per compilation unit, so there's less
+  identical-extent content than the size suggests. Your container subvolumes
+  under 3tched-storage are the likely jackpot, since containers sharing a base
+  image duplicate heavily. If you're going to spend the I/O, point it at the
+  whole subvolume set, not just @build.
+
+  Nothing done on any of that — installing packages and deleting 286G both want
+  your explicit yes.
+
+  For the record, the three edits I made under the wrong reading are still worth
+  keeping, just on a different axis (compile time, not disk):
+
+  - zeroclaw-gui dropped from workspace members — nothing depends on it, it was
+    already in deploy/runit/retired-binaries and already out of the release set;
+    only the member entry kept the egui/glutin/winit stack compiling
+  - op-xray-daemon zbus = "4" → zbus.workspace = true — it had only 2 zbus::
+    call sites, and the pin was forcing a second full zbus/zvariant family
+  - CLAUDE.md:55's false zbus-patch claim corrected
+
+  Say the word on step 1 and I'll run it.
+
+✻ Brewed for 43s · done 10:44 AM
+
+❯ 123 duplicates                                                                
+
+● Right — let me get the real list, because a lot of those 123 never compile on
+  Linux:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 101 actually compile on Linux — the other 22 are Windows/wasm/macOS,
+  target-gated and never built here. And they're not 101 independent problems;
+  they're five clusters, each traceable to one holdout:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+❯ - compile — 990 packages, 123 duplicated, plus cozorocks/aws-lc-sys/bindgen   
+  as the irreducible native floor                                               
+  - link — 20+ minutes on one binary, and rust-lld is already the fast linker;  
+  mold is typically several times faster again                                  
+  - debuginfo — I noticed earlier there's no [profile.release] section in       
+  Cargo.toml at all, so you're on cargo defaults. A 130MB binary suggests full  
+  debug symbols are going in. debug = 1 or split-debuginfo = "packed" would cut 
+  link time and binary size substantially without losing backtraces.- compile   
+  — 990 packages, 123 duplicated, plus cozorocks/aws-lc-sys/bindgen as the      
+  irreducible native floor                                                      
+  - link — 20+ minutes on one binary, and rust-lld is already the fast linker;  
+  mold is typically several times faster again                                  
+  - debuginfo — I noticed earlier there's no [profile.release] section in       
+  Cargo.toml at all, so you're on cargo defaults. A 130MB binary suggests full  
+  debug symbols are going in. debug = 1 or split-debuginfo = "packed" would cut 
+  link time and binary size substantially without losing backtraces.            
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Correction to what I told you earlier: release is already debug=false — that's
+  cargo's default, and I was wrong to suggest otherwise. The 130MB release
+  binary is just a large statically-linked Rust binary. The debuginfo problem is
+  entirely in the dev profile:
+
+  target/debug/op-grpc-bridge    1,370,187,360 bytes   (1.37 GB)
+  target/release/op-grpc-bridge    129,965,104 bytes   (130 MB)
+
+  One debug binary is 1.37 GB. That's what's filling 605G of target/debug, and
+  it's what those three rust-lld processes have been chewing on for 20 minutes.
+  So the fix goes on [profile.dev], not release. Applying it:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ and zbus is core  funedemental i t has to be upraded                          
+● zbus is already at 5 in the workspace, and I moved op-xray-daemon onto it. The
+  remaining copy — zbus 3.15.2 — comes from keyring. Let me check whether that
+  dependency is even functional here:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● That's the whole remaining zbus problem, and it's dead code:
+
+  crates/op-identity/src/token.rs — 91 lines, 9 keyring calls, unused.
+
+  - lib.rs:16 declares it with the comment // Keeping for now if needed 
+    internally
+  - Re-exported at lib.rs:39, and no other crate imports it. The CachedToken
+    hits in op-llm are that crate's own separate struct definitions in
+    headless_oauth.rs and gemini.rs, not imports from op-identity
+  - What it does: caches a gcloud/ADC token into the system keyring
+  - keyring::Entry::new("mcp-identity", "gcloud-token") needs
+    org.freedesktop.secrets on the bus. It is not present — not on the system
+    bus, and there's no user session bus. gnome-keyring-daemon and kwalletd6 are
+    installed as packages but nothing is serving that interface. So every call
+    fails and falls through the if let Ok(...) guard silently.
+
+  And for those 91 unreachable lines you compile: keyring 2 → secret-service → 
+  zbus 3.15.2, plus the entire async-std-era stack it drags — async-broadcast
+  0.5, async-channel 1.9, async-fs 1.6, async-io 1.13, async-lock 2.8,
+  async-process 1.8, event-listener 2.5, futures-lite 1.13, polling 2.8,
+  fastrand 1.9, memoffset 0.7, nix 0.26.4, and a third copy of zvariant /
+  zvariant_derive / zvariant_utils / zbus_macros / zbus_names. Roughly 18 
+  crates.
+
+  So zbus unification is two changes, and one is already done:
+
+  ┌────────┬───────────────────────────────┬────────────────────────────────┐
+  │  copy  │            source             │             status             │
+  ├────────┼───────────────────────────────┼────────────────────────────────┤
+  │ 5.18.0 │ workspace zbus = "5"          │ correct, keep                  │
+  ├────────┼───────────────────────────────┼────────────────────────────────┤
+  │ 4.4.0  │ op-xray-daemon pinned zbus =  │ fixed — now zbus.workspace =   │
+  │        │ "4"                           │ true                           │
+  ├────────┼───────────────────────────────┼────────────────────────────────┤
+  │ 3.15.2 │ keyring 2 → secret-service    │ needs your yes                 │
+  └────────┴───────────────────────────────┴────────────────────────────────┘
+
+  Delete token.rs, drop its pub mod/pub use, and remove keyring = "2" from
+  op-identity, and you're down to one zbus — which is what you're asking for,
+  given zbus is the foundation the whole control plane sits on.
+
+  Also from the same sweep, for when you want them: the workspace pins reqwest =
+  "0.11" (Cargo.toml:113) while something transitive pulls 0.12 — that one
+  holdout is the ~16-crate cluster of hyper 0.14 / http 0.2 / h2 0.3 / rustls
+  0.21 / tower 0.4. And more concerning than build time: op-plugins and op-blob 
+  are on schemars = "1" while the workspace pins 0.8, so op-grpc-bridge consumes
+  the schema pipeline on 0.8 while op-plugins produces it on 1. That's a split
+  down the middle of PluginSchema and probably deserves its own look.
+
+  Say go on the keyring removal and I'll do it.
+
+✻ Sautéed for 2m 30s · done 10:47 AM
+
+❯ do keyring, fix schemars  ... just fix all mentionned sopt if causing major   
+  issue wll go from there                                                       
+
+● Green light taken. Working lowest-risk first so progress banks before anything
+  hard. 1 — keyring:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● 2 — schemars. Checking the blast radius before touching the workspace pin,
+  since 0.8→1 is a breaking API change:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both of those crates declare schemars but barely use it — op-grpc-bridge has a
+  single mention in a doc comment, op-gallery-gen has zero. Let me confirm
+  which section it's in:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Good news — my earlier worry about a split PluginSchema pipeline was wrong.
+  schemars is simply an unused dependency in both: zero API references in any
+  .rs, build.rs or test. The 0.8 pin exists to satisfy nobody.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 3 — reqwest 0.11 → 0.12, the ~16-crate cluster. Surveying the API surface
+  first, since this one can actually break:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Surface is entirely basic — Client, builder, RequestBuilder, HeaderMap,
+  StatusCode, Method — all unchanged in 0.12. The "multipart" hits are OpenFlow
+  multipart messages, false positives. But one thing needs checking first:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Stopping on reqwest — this is the "major issue" case.
+  op-web/src/handlers/privacy.rs:754 calls oauth2::reqwest::async_http_client,
+  and oauth2 4.4 is hard-coupled to reqwest 0.11. oauth2 5.x is what moved to
+  0.12, and it removed that API entirely. So the reqwest bump isn't a version
+  line — it's a coupled oauth2 4→5 migration through an OAuth flow.
+
+  Worth noting: that's the same OAuth you've asked about twice today. Your call
+  whether to migrate oauth2 or delete the flow; I'm not guessing on that one.
+
+  Finishing the remaining safe items from the batch:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ ad  do we  compare to json official spec or schema official spec?             
+
+● Good question, and directly relevant to what I just changed. Let me check:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Official JSON Schema spec, draft 2020-12 — that's what's emitted:
+
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+
+  That comes from schemars 1.x (0.8 emitted draft-07, which is another reason
+  the pin I just unified mattered — a crate on 0.8 would have produced a
+  different dialect than op-plugins).
+
+  But validation is split, and nothing pins a draft explicitly:
+
+  ┌─────────────────┬───────────────────────────────────────────────────────┐
+  │   jsonschema    │                        used by                        │
+  ├─────────────────┼───────────────────────────────────────────────────────┤
+  │ 0.29            │ op-grpc-bridge, op-state-store, op-agents,            │
+  │ (workspace)     │ op-gallery-gen                                        │
+  ├─────────────────┼───────────────────────────────────────────────────────┤
+  │ 0.18            │ op-compliance, op-tools                               │
+  └─────────────────┴───────────────────────────────────────────────────────┘
+
+  There is no Draft:: or .draft(...) call anywhere in the workspace — both
+  versions auto-detect the dialect from $schema. The load-bearing path is fine:
+  op-grpc-bridge validates plugin method inputs on 0.29, the current major. But
+  op-compliance and op-tools are two majors behind, validating the same 2020-12
+  documents through an older implementation whose 2020-12 support was still
+  maturing.
+
+  Let me see whether those two can just move up:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+❯ \and is the zeroclaw using shared crates?                                     
+
+● Two answers.
+
+  jsonschema: the 0.18 crates use the old JSONSchema type; 0.29 uses Validator /
+  validator_for. So it's a real but small API migration — one import and the
+  compile call in each of two files. Not free, but not coupled to anything else
+  the way reqwest was.
+
+  On zeroclaw:
+
+  Listed 1 directory (ctrl+o to expand)
+● zeroclaw-gui uses one shared crate — op-identity, by path. But it has zero
+  workspace = true entries, so pulling it out of the members list doesn't break
+  it: every dep is explicitly versioned, and it still builds on demand via
+  --manifest-path. It just stops compiling on every workspace build. Clean
+  outcome.
+
+  One caveat I should flag: since it's now unmembered, cargo check --workspace
+  won't catch breakage in it — and I just removed TokenManager/CachedToken from
+  op-identity. Let me verify it didn't use those, plus look at the other
+  zeroclaw:
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Both accounted for: zeroclaw-gui doesn't touch what I removed from
+  op-identity, and the other zeroclaw — vendored zeroclawlabs — is a real
+  dependency of op-plugins, so it stays in every build.
+
+  Handing the whole batch to the verifier, since none of it is compile-checked
+  yet:
+  ⎿  Resuming agent a48f43e
+
+● Batch is with the verifier. Where it landed:
+
+  Done, pending compile check
+  - zbus → one copy. op-xray-daemon off its zbus = "4" pin; keyring removed,
+    which kills zbus 3.15.2 and ~18 async-std-era crates behind it
+  - keyring gone — token.rs was 91 lines of unreachable code (// Keeping for now
+    if needed internally, no external importer) caching a gcloud token into a
+    secret-service that isn't on the bus
+  - schemars unified at 1 — and it was simply an unused dep in both 0.8
+    consumers, so my "split PluginSchema pipeline" worry was wrong. Real
+    benefit: schemars 0.8 emits draft-07, 1.x emits 2020-12, so the pin split
+    was a dialect split waiting to happen
+  - zeroclaw-gui out of workspace members — drops
+    egui/eframe/winit/glutin/wayland; still builds standalone
+  - build profiles added — dev debuginfo was the 1.37 GB binary and the 605G
+    tree
+  - s6 rename complete (spec FR-7) plus the CLAUDE.md corrections
+
+  Stopped, your call
+  - reqwest 0.11 → 0.12 — coupled to an oauth2 4→5 migration through the OAuth
+    flow you've now questioned twice. Migrate oauth2, or delete the flow?
+  - jsonschema 0.18 → 0.29 in op-compliance and op-tools — small mechanical
+    migration, JSONSchema::compile → validator_for, two files. Your validation
+    of plugin inputs is already on 0.29 in op-grpc-bridge, so this is tidiness
+    rather than risk
+
+  On your spec question: official JSON Schema, draft 2020-12, emitted by
+  schemars 1.x and auto-detected by the jsonschema crate — no explicit Draft::
+  pin anywhere in the workspace.
+
+  Still untouched from earlier, awaiting you: the 286G target/debug/incremental
+  delete (your build disk is at 94% and shares a device with the container pool
+  and both identity sleds), mold, the S6 legacy bus alias, the installer's s6d
+  references, the CLAUDE.md polling rewrite, and wait_for_runit_state.
+
+  And the 141GB OVH qcow2 in target/downloads still wants moving off the build
+  subvolume before anything runs a cleanup there.
+
+✻ Baked for 3m 25s · done 10:52 AM
+
+● Agent "Verify SealedID rename compiles" finished · 51m 37s
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ we have no uses  for oauth do  jsonschema  draft good idea? if so clone repo  
+  in the /srv/git/  delete incremental keep ovh cow for now i want to maount    
+  and see if home is there                                                      
+
+● Disk is at 95%, 29G free, with a full debug rebuild running — the profile
+  change invalidated the whole cache. Deleting incremental now, since that's
+  both approved and the urgent one:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 23 rustc processes are mid-build, so this will likely fail their in-flight
+  units — but 287G against 29G free, on a device also holding your container
+  pool and both identity sleds, makes freeing space the higher priority. Cargo
+  regenerates what it needs.
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ stop build is going to fail  ans tart after we make the rest oof changesw     
+
+● You're right — sequencing was wrong. Stopping the build first.
+
+● Stop Task
+  ⎿  Verify SealedID rename compiles · stopped
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Agent stopped but its build children are still running — 19 rustc, 1 cargo.
+  Terminating them so the tree is quiet before I edit:
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● All zombies — parents gone, init will reap them. Build tree is quiet, and
+  terminating freed 21G on its own (450G used, 50G free).
+
+  Now the remaining changes. OAuth first, since it unblocks the reqwest cluster:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● This is bigger than a dependency cleanup — it's a Google OAuth login flow with
+  two handlers and ~280 lines in privacy.rs, plus GoogleOAuthConfig in
+  state.rs. Let me check whether it's actually reachable before I delete a login
+  path:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Routed at /privacy/google/auth and /privacy/google/callback, but
+  GOOGLE_OAUTH_CLIENT_ID/SECRET aren't set — not in the live run script, not in
+  the running process env (only unrelated GOOGLE_CLOUD_* for gcloud). So
+  from_env() returns None and both handlers already answer "Google OAuth not
+  configured". Dead in practice, matching what you said.
+
+  Let me get exact boundaries before cutting — google_callback calls
+  provision_verified_user, which the verify flow also uses and must survive:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ i just realized that  we do use it. adc                                       
+● Good catch — and I need to check something I already did. token.rs was
+  described as "Thin wrapper around gcloud/ADC" and I deleted it. Let me see
+  what ADC actually runs on:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+❯ and openclaw uses too                                                         
+
+❯ i was thinking for opdbus wg auth                                             
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+❯ model routeer  uses it heavily                                                
+
+● Now the picture's complete, and the distinction matters:
+
+  Only op-web depends on the oauth2 crate. No file outside op-web contains a
+  single oauth2:: reference. So the model router's heavy OAuth use — gemini.rs,
+  anthropic.rs, antigravity.rs, headless_oauth.rs loading Antigravity's Google
+  tokens captured over VNC — is all hand-rolled token handling: reqwest calls,
+  jsonwebtoken, file reads. None of it goes through the oauth2 crate, and none 
+  of it is affected by anything I've done.
+
+  Three separate things that share a word:
+
+  ┌──────────┬────────────────────────────────────────┬────────────────────┐
+  │          │               what it is               │       status       │
+  ├──────────┼────────────────────────────────────────┼────────────────────┤
+  │ OAuth    │ model router provider auth,            │ live, heavily      │
+  │ tokens   │ Antigravity VNC tokens, ADC            │ used, untouched    │
+  ├──────────┼────────────────────────────────────────┼────────────────────┤
+  │ oauth2   │ op-web only, one Google login flow in  │ the only thing     │
+  │ crate    │ privacy.rs, GOOGLE_OAUTH_CLIENT_ID     │ pinning reqwest    │
+  │          │ unset so it answers "not configured"   │ 0.11               │
+  ├──────────┼────────────────────────────────────────┼────────────────────┤
+  │          │ "OAuth token acquisition &             │ I deleted it;      │
+  │ token.rs │ org.freedesktop.secrets cache" —       │ nothing imported   │
+  │          │ wrapped gcloud/ADC                     │ it; recoverable    │
+  │          │                                        │ from git           │
+  └──────────┴────────────────────────────────────────┴────────────────────┘
+
+  ADC itself is fine and I didn't touch it: gcloud_adc.rs reads
+  ~/.config/gcloud/application_default_credentials.json directly (type
+  authorized_user, refresh_token present). No oauth2 crate involved.
+
+  My recommendation: leave all of it alone. The reqwest 0.12 win is ~16
+  duplicate crates, and it isn't worth touching a login flow while you're
+  uncertain about the blast radius. Keep reqwest at 0.11. We already got the two
+  clean wins — zbus down to one copy and the egui/glutin stack gone — without
+  going near any of this.
+
+  On token.rs: say the word and I'll restore it. But note the tradeoff — it's
+  the only thing that pulled keyring, and keyring is what dragged zbus 3.15.2
+  plus ~18 async-std-era crates back in. So restoring it undoes the zbus
+  unification you asked for. If you want ADC token caching, caching it somewhere
+  other than the freedesktop secret-service would get you both (there's no
+  secrets daemon on this host anyway, so that code path never worked here).
+
+  And on OAuth for opdbus WG auth — I'd push back on that one. Your identity
+  model is WG pubkey → principal_id → sled session → SID1 sealed envelope, and
+  mcp_frontend deliberately accepts exactly one credential form, rejecting
+  requests that present both OIA1 and SID1. OAuth would be a third credential
+  door into the same endpoint, which is the thing that design is specifically
+  built to prevent.
+
+  Nothing further changed. What's still queued: jsonschema 0.18→0.29 (two files,
+  mechanical), then delete incremental, then one clean build.
+
+✻ Baked for 11m 6s · done 11:00 AM
+
+❯ probably handled by zeroclaw binary                                           
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Confirmed, and it exposes something:
+
+  /srv/git/zeroclaw has the real auth module — src/auth/openai_oauth.rs,
+  gemini_oauth.rs, oauth_common.rs, profiles.rs. That's where model-router OAuth
+  lives, exactly as you said.
+
+  But vendor/zeroclawlabs is a stub — just Cargo.toml and a single src/lib.rs:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● That's a real problem. The stub is 193 lines of empty structs — pub struct 
+  Config {}, AgentConfig {}, AutonomyConfig {}, all with no fields — while the
+  real /srv/git/zeroclaw has 290 .rs files. And the manifest comment says "On
+  the host, override to /srv/git/zeroclaw."
+
+  This is the host, and there's no override. No .cargo/config.toml exists, and
+  Cargo.toml points at vendor/zeroclawlabs. Let me check what that costs:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Found a live booby trap:
+
+  crates/op-plugins/src/state_plugins/tched_router_config_surface.rs
+  //! GENERATED by `cargo run -p op-plugins --bin
+  gen_tched_router_config_surface`.
+  //! DO NOT EDIT — regenerate after bumping the `zeroclaw` dependency.
+
+  2321 lines, 65 methods — the largest plugin surface in the system. It's
+  generated by schemars::schema_for!(zeroclaw::Config). And zeroclaw::Config, as
+  this workspace currently resolves it, is the stub's pub struct Config {} —
+  empty.
+
+  So that file was generated when the dependency pointed at the real
+  /srv/git/zeroclaw. Today it points at the stub. Anyone who follows the file's 
+  own instruction and regenerates silently replaces 65 methods with nothing —
+  and the file says DO NOT EDIT, so they'd be doing exactly as told.
+
+  It's worse right now than it was this morning: I just moved schemars 0.8→1, so
+  a regeneration would also flip the dialect from draft-07 to 2020-12 at the
+  same time.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Recorded so it doesn't evaporate. Two ways to fix it, and they're different in
+  kind:
+
+  Host-local override — create .cargo/config.toml pointing zeroclaw at
+  /srv/git/zeroclaw. Keeps the repo portable (the stub stays the committed
+  default), and it's the same file a mold linker setting would live in, so it
+  does double duty. Downside: it adds 290 .rs files to your build, which cuts
+  against everything we just did for build time.
+
+  A guard in the generator — make gen_tched_router_config_surface refuse to emit
+  when schema_for!(zeroclaw::Config) yields zero properties. That's three
+  lines, costs no build time, and it's the durable one: it makes the trap
+  impossible rather than documented. Same shape as the Proxy::call check and the
+  no-polling lint — the pattern this whole session keeps landing on.
+
+  I'd do the guard now and treat the override as a separate decision about
+  whether the real zeroclaw belongs in this workspace's build at all — given
+  it's a separate binary you already run, it may not.
+
+  Current state of play, since a lot has moved:
+
+  Done, uncompiled — s6→runit rename (FR-7), SealedID rename, emqx CamelCase
+  fix, zbus unified to one copy, keyring + dead token.rs removed, schemars
+  unified at 1, zeroclaw-gui unmembered, build profiles added, four CLAUDE.md
+  corrections.
+
+  Stopped on your word — reqwest/oauth2 (leave it; the model router's OAuth is
+  in the zeroclaw binary, and the oauth2 crate only serves op-web's unconfigured
+  Google login).
+
+  Queued, nothing running — jsonschema 0.18→0.29 in op-compliance and op-tools,
+  then delete incremental, then one clean build. Build tree is quiet and the
+  disk recovered to 50G free when I killed the build.
+
+  Want the generator guard plus jsonschema, then clean and build?
+
+✻ Worked for 1m 30s · done 11:02 AM
+
+❯ i think it is working at the maoment with running binary. we can come back to 
+  that                                                                          
+
+● Agreed — it's working as deployed, and it's recorded. Moving on to the queue.
+  jsonschema migration:
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Old API returns an error iterator from validate; 0.29 returns a single error
+  and moves the iterator to iter_errors. Applying both migrations:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● One thing to clean up — Validator as _ is pointless for a struct and will
+  warn, since the code calls jsonschema::validator_for fully qualified:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● jsonschema unified at 0.29 across the workspace. Now the disk step you
+  approved — build tree should be quiet:
+  Ran 2 shell commands (ctrl+o to expand)
+
+● 165G reclaimed — 441G → 276G used, free went 58G → 222G, and you're down from
+  89% to 56%. With the 21G from stopping the build, that's ~186G back on the
+  device your container pool and identity sleds share.
+
+  Now one clean build over the whole batch:
+
+● Agent(Verify full dedup batch builds)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+● Build's running cold in the background. It'll take a while — the profile
+  change invalidated the dev cache, so this is close to a from-scratch workspace
+  check.
+
+  What went in this round
+
+  ┌────────────┬─────────────────────────────────────────────────────────────┐
+  │            │                                                             │
+  ├────────────┼─────────────────────────────────────────────────────────────┤
+  │            │ 0.18 + 0.29 → one copy; migrated JSONSchema::compile →      │
+  │ jsonschema │ validator_for and validate → iter_errors in op-tools and    │
+  │            │ op-compliance                                               │
+  ├────────────┼─────────────────────────────────────────────────────────────┤
+  │ disk       │ 165G reclaimed — 89% → 56%, free 58G → 222G                 │
+  └────────────┴─────────────────────────────────────────────────────────────┘
+
+  The full batch now under test: s6→runit rename (FR-7), SealedID/SID1 rename,
+  emqx D-Bus CamelCase fix, zbus 3→1 copy, keyring + dead token.rs gone,
+  schemars unified at 1, jsonschema unified at 0.29, zeroclaw-gui unmembered,
+  build profiles added, four CLAUDE.md corrections.
+
+  Deliberately left alone: reqwest/oauth2 — the model router's OAuth lives in
+  the zeroclaw binary, and the oauth2 crate only serves op-web's unconfigured
+  Google login. Not worth the blast radius.
+
+  Parked with a signal written: the tched_router_config_surface generator. It's
+  working from the running binary, as you said, and the trap is recorded so the
+  next person doesn't regenerate 65 methods into nothing.
+
+  Still yours to call, nothing running: mold (the .cargo/config.toml would
+  double as the zeroclaw path override), the S6 legacy bus alias, the
+  installer's s6d references, the CLAUDE.md polling rewrite,
+  wait_for_runit_state, the runit state-change signals — and underneath all of
+  it, Anna's arrival notary, which is still the thing blocking identity.
+
+  The 141GB OVH qcow2 is untouched in target/downloads for you to mount.
+
+✻ Baked for 2m 32s · done 11:04 AM
+
+❯ before w continue i  want you to look at the zen-review audit and look for    
+  anything glaring that is derand   but not seen as  dead in live system, or    
+  elvated w2hen deprciiatede ...etc. ti is a thourough audit                    
+
+  Listed 2 directories, ran 1 shell command (ctrl+o to expand)
+
+● Let me cross-check the audit's claims against live reality, starting with the
+  one that looks most suspicious — Spec 07 is marked PASS (100% Compliant) and
+  its validation depends on netmaker:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ audit was done before i removed netmaker                                      
+
+● Understood — so the doc is just stale. But that makes the code the finding,
+  not the audit:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The gate is conditional on source_binding == ExactPeerIp. Whether that's live
+  is the whole question:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Err(_) => Self::ExactPeerIp — ExactPeerIp is the default when the env var is 
+  unset. So this only stays dormant if something explicitly sets it:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Confirmed live: OP_ORACLE_ASSERTION_SOURCE_BINDING=trusted-decoy-signature. So
+  the netmaker peer-IP check is dormant, not firing — I'm not going to call it
+  a live blocker.
+
+  But it's a real latent one of exactly the class you asked about: ExactPeerIp 
+  is the default when that env var is unset, and it validates against a network
+  that no longer exists. Safety here rests entirely on one export in a shell
+  script. Any container, test harness, or new host that runs the bridge without
+  that run script silently gets source-binding against a dead overlay.
+
+  Let me sweep the rest rather than stop at one:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now I've got several. Verifying the ones that look glaring:
+
+  Listed 1 directory, ran 2 shell commands (ctrl+o to expand)
+
+● Six of the audit's PASS-evidence paths no longer exist. Let me separate
+  "renamed" from "capability actually gone":
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● Found the glaring one. Recording it before I write it up, because it's a live
+  policy inversion:
+
+  Ran 1 shell command (ctrl+o to expand)
+● Swept it. Findings, sorted by how much they'd bite you.
+
+  1. The glaring one — deprecated, then given a working implementation
+
+  /usr/local/bin/systemctl exists. 8088 bytes, installed 04:58 today.
+  build-golden.sh:670 does it on purpose:
+
+  run install -Dm755 "$SCRIPT_DIR/systemctl-shim" "$INSTALL_BIN/systemctl"
+
+  …alongside systemd-unit-to-runit and op-convert-systemd-units at line 282.
+
+  AGENTS.md and CLAUDE.md both say "Do not use systemctl or other foreign 
+  service-manager CLIs." org.freedesktop.systemd1 isn't on the bus at all. So
+  the guardrail — the command not existing — was replaced by a shim that makes
+  the forbidden call succeed and answer plausibly. Every agent that reaches for
+  systemctl status foo gets a real answer and never discovers it should have
+  used sv.
+
+  That's your "elevated when deprecated," exactly.
+
+  2. Dead network still the default identity binding
+
+  AssertionSourceBinding::from_env() → Err(_) => Self::ExactPeerIp. The default
+  binds every OIA to assertion.netmaker_inner_ip, on an overlay that no longer
+  exists — no wg interface, no 100.69.x.x, netclient not enabled. Live is saved
+  only because the run script exports trusted-decoy-signature. Any container,
+  test, or new host that runs the bridge without that shell line silently
+  source-binds identity to a dead network.
+
+  3. Three plugins pointed at absent bus names
+
+  From earlier in the session, same class: systemd.rs, systemd_networkd.rs,
+  packagekit.rs proxy to org.freedesktop.systemd1, network1, PackageKit — none
+  owned, none activatable here. Whole outbound surfaces that fail on every call.
+
+  4. The audit's PASS evidence — six paths, and the split matters
+
+  ┌─────────────────────────────────────┬────────────────────────────────────┐
+  │             cited path              │              reality               │
+  ├─────────────────────────────────────┼────────────────────────────────────┤
+  │ op-blob/src/blob_writer.rs          │ renamed → blob.rs / catalog.rs     │
+  ├─────────────────────────────────────┼────────────────────────────────────┤
+  │ op-grpc-bridge/src/descriptor.rs    │ renamed → plugin_grpc_gen.rs       │
+  ├─────────────────────────────────────┼────────────────────────────────────┤
+  │ deploy/sbin/systemctl-shim          │ moved → deploy/runit/              │
+  ├─────────────────────────────────────┼────────────────────────────────────┤
+  │ op-cognitive-mcp/src/main.rs        │ gone — lib-only now, deliberate    │
+  ├─────────────────────────────────────┼────────────────────────────────────┤
+  │ op-plugins/…/systemd_autocreator.rs │ gone — capability landed in        │
+  │                                     │ op-core/src/runit.rs               │
+  ├─────────────────────────────────────┼────────────────────────────────────┤
+  │ op-identity/src/anna_scribe.rs      │ gone — deleted in fa1d334d         │
+  └─────────────────────────────────────┴────────────────────────────────────┘
+
+  Three renames, three removals. The removals are fine individually — but note
+  what they do to Spec 09, session-genesis-identity, marked PASS (100% 
+  Compliant). Its two pieces of evidence are anna_scribe.rs:1-90 (deleted) and
+  /dev/shm/opdbus/identity_sled.dat with the 152-byte mmap guard (not present,
+  and SIGNALS.md's own header calls that file a retired compatibility artifact).
+
+  So the one subsystem the audit certifies most confidently is the one that is
+  currently non-functional — empty sled, no arrival notary, /mcp 401ing every
+  caller. Not because the audit lied; because it was measuring a design that has
+  since been removed out from under it.
+
+  5. Smaller flag
+
+  Spec 09 also certifies snowball "syncing every 15 minutes," and
+  op-snowball/src/snapshot.rs offers interval options including "snapshot every
+  minute." Timers, in a system whose stated invariant is "the system does not 
+  watch, poll, or index." Worth a look, but I didn't chase whether those
+  intervals are actually wired.
+
+  ---
+
+  The through-line is the same one you named this morning: nothing in this 
+  system distinguishes "deliberately retired" from "accidentally broken." The
+  systemctl shim is that failure taken one step further — the deprecated thing
+  was given a working implementation under the canonical name, so deprecation
+  became undetectable at the call site.
+
+  Recorded #1 in SIGNALS with a concrete decision to make: drop the shim so it
+  fails loudly, or keep it for third-party software that hardcodes systemctl but
+  make it warn and name sv on every call. Silently succeeding is the only
+  option that shouldn't stand.
+
+  Build agent's still running the verification batch.
+
+✻ Worked for 2m 56s · done 11:08 AM
+
+❯ i forgot aqbout that one the blobs never comminicate with bridge              
+
+● That's OD-32 on your board — "blobs sealed in SHM but unread at runtime." Let
+  me verify whether that's still true:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The wiring exists — hydrate_reflection_from_shm() is called at server.rs:535
+  and grpc_server.rs:924, and schema_loader.rs reads
+  read_plugin_state_store_schema. So OD-32 may have been closed since. Let me
+  check whether it actually works at runtime:
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Two things here. First, your question:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Nothing found — but the log may have rotated. Note what's flooding it:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● That's a real find, and it's masking your question:
+
+  The entire current log — all 1786 lines — is cognitive_mcp invoke_tool and 
+  nothing else. 10:29:18 → 11:06:29, so ~48 calls/minute sustained for 37
+  minutes, in bursts (12 calls in 1.3s at one point). No errors, no other
+  messages, no startup lines. The storm rotated away the hydration log, which is
+  why I couldn't answer your blob question from it.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The caller isn't in the workspace — it's an external D-Bus client hitting
+  PluginV1.Call. Let me find it:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Only the bridge itself is on that bus right now — so the callers connect,
+  fire, and disconnect. Let me see if it's still happening:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+❯ identity                                                                      
+
+❯ trying to lookup the sled                                                     
+
+● That fits, and it closes the loop on everything today. The storm stopped at 
+  11:06:29 — zero new lines in the last 20 seconds — after running 10:29:18 →
+  11:06:29, 37 minutes, 1786 calls.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● That rules out my theory — the identity dispatch never calls cognitive_mcp. So
+  that storm was a client retrying invoke_tool to find the sled, not an
+  internal loop. Yours, then, and it stopped.
+
+  Still worth one note: 1786 identical calls from one client filled the log and
+  erased the bridge's own startup record, including the hydration line I needed.
+  svlogd rotates by size, so any client retry loop can destroy the system's
+  boot evidence.
+
+  Let me answer your actual question empirically instead of from logs:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Clean answer: the blobs do reach the bridge. 68 blobs, 67 served on D-Bus,
+  every served plugin has a matching blob, no orphans. That's 1:1 — OD-32's
+  "sealed but unread at runtime" looks closed.
+
+  One blob isn't served: compact_mcp. Checking whether that's deliberate, since
+  hydration filters on a retired list:
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+❯ anna?                                                                         
+
+● Anna's not in it — RETIRED_PLUGIN_IDS = &["compact_mcp", "netmaker"]. So
+  nothing has formally retired her; she was just deleted.
+
+  But that list turns up another contradiction of exactly the kind you asked me
+  to hunt:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● On Anna: she isn't retired, just deleted. What survives is her identity, in
+  wg_opdbus.rs — ANNA_SCRIBE_PRINCIPAL_ID = "did:op:service:anna-scribe", with
+  plugin_ref pointing at wg_opdbus as her home. So she has a stable DID and a
+  declared plugin home, and that home is the WireGuard plugin you're
+  deprecating. Her method — notarize_arrival, the genesis call — is what's gone,
+  and it's still the thing blocking identity.
+
+  And the retired list turned up another one. RETIRED_PLUGIN_IDS = 
+  &["compact_mcp", "netmaker"], yet compact MCP is load-bearing right now:
+
+  - mcp_policy.rs:17 defines COMPACT_TOOL_NAMES — list_tools, search_tools,
+    get_tool_schema, execute_tool
+  - mcp_policy.rs:210 actively gates on them, plus invoke_tool / respond /
+    register_tool
+  - /etc/opdbus/mcp-audience-policy.json pins singleton_chatbot_principal_id — a
+    live principal whose whole purpose is seeing compact MCP
+  - CLAUDE.md calls compact-mcp the loopback chatbot surface, settled, "do not
+    redesign"
+
+  So compact_mcp is filtered out of reflection as retired while the policy layer
+  treats it as the chatbot's entire tool surface. That's the inverse of the
+  systemctl shim: there, a deprecated thing was given a working implementation;
+  here, a load-bearing thing is flagged retired. Both make the live status
+  unreadable from the code.
+
+  That also fully explains the 68-vs-67 gap — one blob withheld by
+  is_retired_plugin, deliberately. So your original question resolves cleanly:
+
+  The blobs do communicate with the bridge. 68 sealed, 67 served, exact name
+  match, zero orphans, and the single exception is the deliberate retired-list
+  filter. OD-32's "sealed but unread at runtime" is closed — I'd mark it DONE on
+  the wishlist.
+
+  Two things I'd flag from this whole sweep as needing a decision rather than a
+  fix:
+
+  1. systemctl shim installed under the canonical name on a host that forbids it
+     — the guardrail replaced by a working implementation
+  2. compact_mcp retired-but-load-bearing — either it's the chatbot surface or
+     it's retired; right now the code says both
+
+  Both are recorded in SIGNALS. And the build agent is still running the dedup
+  verification.
+✻ Cogitated for 3m 23s · done 11:12 AM
+
+❯ why is reflecton retired?                                                     
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me read that policy function properly, because I may have inverted it:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  You've hit your session limit · resets 1:50pm (UTC)
+     /upgrade to increase your usage limit.
+
+✻ Sautéed for 19s · done 11:12 AM
