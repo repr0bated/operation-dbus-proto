@@ -730,6 +730,51 @@ impl StreamingSnowball {
         Ok(())
     }
 
+    /// Write state data with validation against declared restorable_state_keys.
+    ///
+    /// Checks whether `key` is declared in any plugin's `restorable_state_keys`.
+    /// Supports prefix matching: a declared key ending with `/*` matches any key
+    /// sharing that prefix (e.g. `"plugin/foo/*"` matches `"plugin/foo/bar"`).
+    ///
+    /// In strict mode (`OPDBUS_STRICT_STATE_KEYS=1`), undeclared keys are
+    /// rejected with an error. Otherwise a warning is logged and the write
+    /// proceeds.
+    pub async fn write_state_validated(
+        &self,
+        key: &str,
+        value: &simd_json::OwnedValue,
+        declared_keys: &[String],
+    ) -> Result<()> {
+        let key_declared = declared_keys.iter().any(|dk| {
+            if dk.ends_with("/*") {
+                key.starts_with(&dk[..dk.len() - 2])
+            } else {
+                dk == key
+            }
+        });
+
+        if !key_declared {
+            let msg = format!(
+                "State key '{}' is not declared in any plugin's restorable_state_keys. \
+                This state may not be restored during disaster recovery!",
+                key
+            );
+
+            let strict = std::env::var("OPDBUS_STRICT_STATE_KEYS")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+
+            if strict {
+                tracing::error!("{}", msg);
+                anyhow::bail!("{}", msg);
+            } else {
+                tracing::warn!("{}", msg);
+            }
+        }
+
+        self.write_state(key, value).await
+    }
+
     /// Read state from the state subvolume
     pub async fn read_state(&self, key: &str) -> Result<simd_json::OwnedValue> {
         let state_file = self.state_subvol.join(format!("{}.json", key));
@@ -1680,5 +1725,79 @@ mod tests {
         assert!(validate_btrfs_path(Path::new("/tmp/foo bar")).is_err());
         assert!(validate_btrfs_path(Path::new("/tmp/foo\nbar")).is_err());
         assert!(validate_btrfs_path(Path::new("/tmp/`whoami`")).is_err());
+    }
+
+    #[tokio::test]
+    async fn write_state_validated_allows_declared_keys() {
+        let dir =
+            std::env::temp_dir().join(format!("op-snowball-wsv-test-{}", uuid::Uuid::new_v4()));
+        let snowball = StreamingSnowball::new(&dir).await.unwrap();
+
+        let declared = vec!["plugin_foo".to_string(), "plugin_bar/*".to_string()];
+        let value = simd_json::OwnedValue::Static(simd_json::StaticNode::Bool(true));
+
+        // Exact match
+        assert!(snowball
+            .write_state_validated("plugin_foo", &value, &declared)
+            .await
+            .is_ok());
+
+        // Prefix match: "plugin_bar_baz" starts with "plugin_bar" (from "plugin_bar/*")
+        assert!(snowball
+            .write_state_validated("plugin_bar_baz", &value, &declared)
+            .await
+            .is_ok());
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn write_state_validated_warns_but_allows_undeclared_in_non_strict() {
+        let dir = std::env::temp_dir().join(format!(
+            "op-snowball-wsv-nonstrict-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let snowball = StreamingSnowball::new(&dir).await.unwrap();
+
+        let declared = vec!["plugin_foo".to_string()];
+        let value = simd_json::OwnedValue::Static(simd_json::StaticNode::Bool(true));
+
+        // Ensure strict mode is off
+        std::env::remove_var("OPDBUS_STRICT_STATE_KEYS");
+
+        // Undeclared key should succeed (warn, not block)
+        assert!(snowball
+            .write_state_validated("undeclared_key", &value, &declared)
+            .await
+            .is_ok());
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn write_state_validated_rejects_undeclared_in_strict_mode() {
+        let dir =
+            std::env::temp_dir().join(format!("op-snowball-wsv-strict-{}", uuid::Uuid::new_v4()));
+        let snowball = StreamingSnowball::new(&dir).await.unwrap();
+
+        let declared = vec!["plugin_foo".to_string()];
+        let value = simd_json::OwnedValue::Static(simd_json::StaticNode::Bool(true));
+
+        std::env::set_var("OPDBUS_STRICT_STATE_KEYS", "1");
+
+        // Undeclared key should fail in strict mode
+        let result = snowball
+            .write_state_validated("undeclared_key", &value, &declared)
+            .await;
+        assert!(result.is_err());
+
+        // Declared key should still succeed
+        assert!(snowball
+            .write_state_validated("plugin_foo", &value, &declared)
+            .await
+            .is_ok());
+
+        std::env::remove_var("OPDBUS_STRICT_STATE_KEYS");
+        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }

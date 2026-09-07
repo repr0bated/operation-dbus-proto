@@ -23,7 +23,7 @@ Btrfs snapshot triple -> send/receive -> vector ingestion
 ```
 
 `PluginFootprint` is deliberately an envelope, despite its historical name. Hashing
-belongs to `EventChain`; identity sealing belongs to the MutationEngine/OIB1 path;
+belongs to `EventChain`; identity sealing belongs to the MutationEngine/SID1 path;
 authorization belongs to exact principal grants.
 
 ## Data structures
@@ -69,7 +69,7 @@ digest. The embedding vector is not an authority input.
 
 ## Security boundary
 
-Footprints are audit/vector delivery records, not credentials. The sealed OIB1 value
+Footprints are audit/vector delivery records, not credentials. The sealed SID1 value
 lives in the identity sled, is protected by local file permissions, and exact-matches
 the authoritative active session during MCP authentication. Snowball data cannot be
 used as a principal, grant selector, or identity header.

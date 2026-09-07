@@ -4,7 +4,7 @@
       "type": "http",
       "url": "https://10.0.0.3:8090/mcp",
       "timeout": 120000,
-      "description": "Unified :8090 fabric endpoint; use the client's native per-request header helper to forward the selected sled's sealed OIB1 identity"
+      "description": "Unified :8090 fabric endpoint; use the client's native per-request header helper to forward the selected sled's sealed SID1 identity"
     }
   }
 }

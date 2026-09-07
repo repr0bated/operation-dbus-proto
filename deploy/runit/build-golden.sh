@@ -874,7 +874,7 @@ EOF
         /var/log/runit/notebooklm-mcp \
         /var/log/runit/mongodb-mcp-server
     run install -d -m 0750 -o root -g secrets /etc/opdbus/secrets
-    # OIB1 is durable inside the identity Cozo relations. Keep that database
+    # SID1 is durable inside the identity Cozo relations. Keep that database
     # root-only; blob-aware clients read only the private tmpfs projection.
     run install -d -m 0700 -o root -g root /var/lib/op-dbus/identity-cozo
     run find /var/lib/op-dbus/identity-cozo -xdev -type d -exec chmod 0700 {} +

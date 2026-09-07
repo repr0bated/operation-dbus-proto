@@ -13,13 +13,14 @@
 //! - Graceful degradation for non-NUMA systems
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 /// NUMA node information with complete topology
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NumaNode {
     pub node_id: u32,
     pub cpu_list: Vec<u32>,
@@ -389,7 +390,7 @@ impl NumaTopology {
 }
 
 /// NUMA statistics for monitoring
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NumaStats {
     pub local_accesses: u64,
     pub remote_accesses: u64,
@@ -436,6 +437,179 @@ impl NumaStats {
     }
 }
 
+// ============================================================================
+// NUMA STRATEGY / CONFIG / OPTIMIZER
+// ============================================================================
+
+/// NUMA placement strategy
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum NumaStrategy {
+    /// Use local node for all operations
+    LocalNode,
+    /// Round-robin across nodes
+    RoundRobin,
+    /// Use node with most memory
+    MostMemory,
+    /// NUMA disabled or not available
+    Disabled,
+}
+
+impl NumaStrategy {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "local" | "local_node" => NumaStrategy::LocalNode,
+            "round_robin" | "roundrobin" => NumaStrategy::RoundRobin,
+            "most_memory" | "mostmemory" => NumaStrategy::MostMemory,
+            _ => NumaStrategy::Disabled,
+        }
+    }
+}
+
+impl Default for NumaStrategy {
+    fn default() -> Self {
+        NumaStrategy::LocalNode
+    }
+}
+
+/// Memory policy for NUMA allocation
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+pub enum MemoryPolicy {
+    /// Bind to specific node
+    Bind,
+    /// Prefer node but allow others
+    Preferred,
+    /// Interleave across nodes
+    Interleaved,
+    /// Use system default
+    #[default]
+    Default,
+}
+
+/// NUMA optimizer configuration
+#[derive(Debug, Clone)]
+pub struct NumaConfig {
+    pub strategy: NumaStrategy,
+    pub node_preference: Option<u32>,
+    pub memory_policy: MemoryPolicy,
+}
+
+impl Default for NumaConfig {
+    fn default() -> Self {
+        Self {
+            strategy: NumaStrategy::from_str(
+                &std::env::var("OPDBUS_NUMA_STRATEGY").unwrap_or_default(),
+            ),
+            node_preference: std::env::var("OPDBUS_NUMA_NODE_PREFERENCE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            memory_policy: MemoryPolicy::Default,
+        }
+    }
+}
+
+/// NUMA optimizer (compatibility wrapper around NumaTopology)
+pub struct NumaOptimizer {
+    config: NumaConfig,
+    topology: Option<NumaTopology>,
+    current_node: u32,
+    stats: NumaStats,
+}
+
+impl NumaOptimizer {
+    /// Create a new NUMA optimizer
+    pub fn new(config: NumaConfig) -> Self {
+        let topology = match NumaTopology::detect() {
+            Ok(t) => {
+                info!("NUMA topology detected: {} nodes", t.node_count());
+                Some(t)
+            }
+            Err(e) => {
+                info!("NUMA not available: {}", e);
+                None
+            }
+        };
+
+        Self {
+            config,
+            topology,
+            current_node: 0,
+            stats: NumaStats::new(),
+        }
+    }
+
+    /// Create from environment
+    pub fn from_env() -> Self {
+        Self::new(NumaConfig::default())
+    }
+
+    /// Get the optimal NUMA node for a cache operation
+    pub fn get_optimal_node(&mut self) -> Option<u32> {
+        let topology = self.topology.as_ref()?;
+
+        match self.config.strategy {
+            NumaStrategy::Disabled => None,
+            NumaStrategy::LocalNode => self
+                .config
+                .node_preference
+                .or(Some(topology.optimal_node())),
+            NumaStrategy::RoundRobin => {
+                let node = self.current_node;
+                self.current_node = (self.current_node + 1) % topology.node_count() as u32;
+                Some(node)
+            }
+            NumaStrategy::MostMemory => topology.node_with_most_memory(),
+        }
+    }
+
+    /// Set CPU affinity for current thread (log-only; does not call sched_setaffinity)
+    pub fn set_cpu_affinity(&self, node_id: u32) -> Result<()> {
+        if let Some(ref topology) = self.topology {
+            if let Some(node) = topology.get_node(node_id) {
+                if !node.cpu_list.is_empty() {
+                    debug!(
+                        "CPU affinity would be set to node {} CPUs: {:?}",
+                        node_id, node.cpu_list
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get statistics
+    pub fn get_stats(&self) -> &NumaStats {
+        &self.stats
+    }
+
+    /// Record a local access
+    pub fn record_local_access(&mut self, latency_ns: u64) {
+        self.stats.record_local_access(latency_ns);
+    }
+
+    /// Record a remote access
+    pub fn record_remote_access(&mut self, latency_ns: u64) {
+        self.stats.record_remote_access(latency_ns);
+    }
+
+    /// Check if NUMA is available
+    pub fn is_available(&self) -> bool {
+        self.topology.is_some() && self.config.strategy != NumaStrategy::Disabled
+    }
+
+    /// Get topology
+    pub fn topology(&self) -> Option<&NumaTopology> {
+        self.topology.as_ref()
+    }
+
+    /// Refresh memory statistics
+    pub fn refresh(&mut self) -> Result<()> {
+        if let Some(ref mut topology) = self.topology {
+            topology.refresh()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,5 +648,26 @@ mod tests {
         assert_eq!(stats.local_accesses, 2);
         assert_eq!(stats.remote_accesses, 1);
         assert_eq!(stats.avg_latency_ns(), (50 + 60 + 120) / 3);
+    }
+
+    #[test]
+    fn test_numa_optimizer() {
+        let optimizer = NumaOptimizer::from_env();
+        // Should not panic
+        assert!(optimizer.topology().is_some() || !optimizer.is_available());
+    }
+
+    #[test]
+    fn test_numa_strategy_from_str() {
+        assert_eq!(NumaStrategy::from_str("local"), NumaStrategy::LocalNode);
+        assert_eq!(
+            NumaStrategy::from_str("round_robin"),
+            NumaStrategy::RoundRobin
+        );
+        assert_eq!(
+            NumaStrategy::from_str("most_memory"),
+            NumaStrategy::MostMemory
+        );
+        assert_eq!(NumaStrategy::from_str("unknown"), NumaStrategy::Disabled);
     }
 }

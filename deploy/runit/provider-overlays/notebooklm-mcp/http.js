@@ -20,7 +20,7 @@ import { log } from "../utils/logger.js";
 const SESSION_HEADER = "mcp-session-id";
 // Coordination guard only, not a credential: the provider is confined to
 // loopback and the bridge is the sole configured consumer.  The authenticated
-// security boundary remains the bridge's external OIB1-gated :8090 endpoint.
+// security boundary remains the bridge's external SID1-gated :8090 endpoint.
 const OWNER_CLIENT_NAME = process.env.OPDBUS_MCP_OWNER_NAME ?? "op-dbus-mcp-aggregator";
 
 export async function startHttpTransport(opts) {

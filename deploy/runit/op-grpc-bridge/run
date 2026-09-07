@@ -108,7 +108,7 @@ export OP_MCP_TOOLSETS_PATH="${OP_MCP_TOOLSETS_PATH:-/etc/opdbus/mcp-toolsets.js
 export OP_IDENTITY_PROJECTION_GROUP="${OP_IDENTITY_PROJECTION_GROUP:-secrets}"
 # Protected local MCP client identity.  These are public selectors, not
 # credentials: the MutationEngine re-derives and exact-checks both IDs before
-# sealing the identity into the chatbot sled.  The OIB1 blob in that sled is
+# sealing the identity into the chatbot sled.  The SID1 blob in that sled is
 # the only value the short-lived native HTTP header helper forwards.
 export OP_MCP_IDENTITY_WIREGUARD_PUBKEY="${OP_MCP_IDENTITY_WIREGUARD_PUBKEY:-VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=}"
 export OP_MCP_IDENTITY_SESSION_ID="${OP_MCP_IDENTITY_SESSION_ID:-bea37ecb-92be-197c-660f-09e806f1a34f}"
