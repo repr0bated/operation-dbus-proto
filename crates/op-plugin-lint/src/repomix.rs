@@ -870,7 +870,7 @@ fn push_fields(out: &mut Vec<String>, prefix: &str, type_name: &str, fields: &Fi
 }
 
 fn sanitize_path(p: &str) -> String {
-    p.replace('/', ".").replace('\\', ".")
+    p.replace(['/', '\\'], ".")
 }
 
 pub fn read_and_introspect(path: &Path) -> Result<RepomixSurface> {

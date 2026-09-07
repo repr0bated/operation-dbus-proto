@@ -87,30 +87,27 @@ fn walk_field_schema(field: &Value, prefix: &str, out: &mut BTreeSet<String>) {
     let Some(ft) = field.get("field_type") else {
         return;
     };
-    match ft {
-        Value::Object(m) => {
-            if let Some(obj) = m.get("object").and_then(|v| v.as_object()) {
-                for (k, child) in obj {
-                    let path = format!("{prefix}.{k}");
-                    out.insert(path.clone());
-                    walk_field_schema(child, &path, out);
-                }
-            } else if let Some(inner) = m.get("array") {
-                let path = format!("{prefix}[*]");
+    if let Value::Object(m) = ft {
+        if let Some(obj) = m.get("object").and_then(|v| v.as_object()) {
+            for (k, child) in obj {
+                let path = format!("{prefix}.{k}");
                 out.insert(path.clone());
-                // array item may be `{ "object": {...} }` or a nested FieldType
-                if let Some(obj) = inner.get("object").and_then(|v| v.as_object()) {
-                    for (k, child) in obj {
-                        let p = format!("{path}.{k}");
-                        out.insert(p.clone());
-                        walk_field_schema(child, &p, out);
-                    }
-                } else if inner.get("field_type").is_some() {
-                    walk_field_schema(inner, &path, out);
+                walk_field_schema(child, &path, out);
+            }
+        } else if let Some(inner) = m.get("array") {
+            let path = format!("{prefix}[*]");
+            out.insert(path.clone());
+            // array item may be `{ "object": {...} }` or a nested FieldType
+            if let Some(obj) = inner.get("object").and_then(|v| v.as_object()) {
+                for (k, child) in obj {
+                    let p = format!("{path}.{k}");
+                    out.insert(p.clone());
+                    walk_field_schema(child, &p, out);
                 }
+            } else if inner.get("field_type").is_some() {
+                walk_field_schema(inner, &path, out);
             }
         }
-        _ => {}
     }
 }
 
@@ -136,7 +133,7 @@ pub fn declared_field_paths_multi(sources: &[&str]) -> Result<BTreeSet<String>> 
             let Item::Struct(st) = item else { continue };
             if !st.attrs.iter().any(|a| {
                 a.path().is_ident("derive")
-                    && format!("{}", a.meta.to_token_stream_display()).contains("JsonSchema")
+                    && a.meta.to_token_stream_display().to_string().contains("JsonSchema")
             }) {
                 continue;
             }
@@ -147,7 +144,7 @@ pub fn declared_field_paths_multi(sources: &[&str]) -> Result<BTreeSet<String>> 
             for f in &fields.named {
                 let Some(ident) = &f.ident else { continue };
                 let flat = f.attrs.iter().any(|a| {
-                    let s = format!("{}", a.meta.to_token_stream_display());
+                    let s = a.meta.to_token_stream_display().to_string();
                     a.path().is_ident("serde") && s.contains("flatten")
                 });
                 entries.push((ident.to_string(), type_name(&f.ty), flat));

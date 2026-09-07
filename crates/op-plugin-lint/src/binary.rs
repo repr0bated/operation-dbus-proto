@@ -291,7 +291,7 @@ fn section_names(help: &str, headers: &[&str]) -> Vec<String> {
 
     for line in help.lines() {
         let trimmed = line.trim();
-        if headers.iter().any(|h| trimmed == *h) {
+        if headers.contains(&trimmed) {
             in_section = true;
             continue;
         }
