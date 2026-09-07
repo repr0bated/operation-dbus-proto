@@ -133,7 +133,10 @@ pub fn declared_field_paths_multi(sources: &[&str]) -> Result<BTreeSet<String>> 
             let Item::Struct(st) = item else { continue };
             if !st.attrs.iter().any(|a| {
                 a.path().is_ident("derive")
-                    && a.meta.to_token_stream_display().to_string().contains("JsonSchema")
+                    && a.meta
+                        .to_token_stream_display()
+                        .to_string()
+                        .contains("JsonSchema")
             }) {
                 continue;
             }

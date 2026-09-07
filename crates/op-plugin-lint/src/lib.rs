@@ -21,12 +21,12 @@ pub use binary::{
 pub use emit::{
     complete_to_json, complete_to_markdown, emit_complete_plugin, CompletePluginDocument,
 };
+#[cfg(feature = "inspector-gadget")]
+pub use gadget::introspect_with_live_gadget;
 pub use gadget::{
     declared_field_paths, declared_field_paths_multi, diff_coverage, introspect_json_paths,
     introspect_json_text, paths_from_sealed_schema, CoverageDiff,
 };
-#[cfg(feature = "inspector-gadget")]
-pub use gadget::introspect_with_live_gadget;
 pub use gaps::{gaps_from_surface_json, gaps_from_surface_json_for_plugin, IntrospectGaps};
 pub use introspect::{
     resolve_introspect_target, resolve_introspect_target_for_plugin,
