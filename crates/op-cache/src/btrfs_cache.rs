@@ -1025,7 +1025,7 @@ impl BtrfsCache {
             .as_array()
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|row| {
+                    .map(|row| {
                         let hash = row
                             .get("text_hash")
                             .and_then(|v| v.as_str())
@@ -1036,7 +1036,7 @@ impl BtrfsCache {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        Some((hash, file))
+                        (hash, file)
                     })
                     .collect()
             })

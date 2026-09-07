@@ -442,9 +442,10 @@ impl NumaStats {
 // ============================================================================
 
 /// NUMA placement strategy
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
 pub enum NumaStrategy {
     /// Use local node for all operations
+    #[default]
     LocalNode,
     /// Round-robin across nodes
     RoundRobin,
@@ -455,19 +456,13 @@ pub enum NumaStrategy {
 }
 
 impl NumaStrategy {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "local" | "local_node" => NumaStrategy::LocalNode,
             "round_robin" | "roundrobin" => NumaStrategy::RoundRobin,
             "most_memory" | "mostmemory" => NumaStrategy::MostMemory,
             _ => NumaStrategy::Disabled,
         }
-    }
-}
-
-impl Default for NumaStrategy {
-    fn default() -> Self {
-        NumaStrategy::LocalNode
     }
 }
 
@@ -512,7 +507,7 @@ pub struct NumaConfig {
 impl Default for NumaConfig {
     fn default() -> Self {
         Self {
-            strategy: NumaStrategy::from_str(
+            strategy: NumaStrategy::parse(
                 &std::env::var("OPDBUS_NUMA_STRATEGY").unwrap_or_default(),
             ),
             node_preference: std::env::var("OPDBUS_NUMA_NODE_PREFERENCE")
@@ -829,16 +824,10 @@ mod tests {
 
     #[test]
     fn test_numa_strategy_from_str() {
-        assert_eq!(NumaStrategy::from_str("local"), NumaStrategy::LocalNode);
-        assert_eq!(
-            NumaStrategy::from_str("round_robin"),
-            NumaStrategy::RoundRobin
-        );
-        assert_eq!(
-            NumaStrategy::from_str("most_memory"),
-            NumaStrategy::MostMemory
-        );
-        assert_eq!(NumaStrategy::from_str("unknown"), NumaStrategy::Disabled);
+        assert_eq!(NumaStrategy::parse("local"), NumaStrategy::LocalNode);
+        assert_eq!(NumaStrategy::parse("round_robin"), NumaStrategy::RoundRobin);
+        assert_eq!(NumaStrategy::parse("most_memory"), NumaStrategy::MostMemory);
+        assert_eq!(NumaStrategy::parse("unknown"), NumaStrategy::Disabled);
     }
 
     #[test]
