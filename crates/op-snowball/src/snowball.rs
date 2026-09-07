@@ -1,9 +1,9 @@
-//! Streaming snowball with dual BTRFS subvolumes
+//! Streaming snowball with data directories for timing, vectors, and state
 //!
 //! Architecture:
-//! - timing_subvol: Immutable audit trail (append-only)
-//! - vector_subvol: ML embeddings for semantic search
-//! - state_subvol: Current system state for DR/reinstall
+//! - timing: Immutable audit trail (append-only)
+//! - vectors: ML embeddings for semantic search
+//! - state: Current system state for DR/reinstall
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Utc};
@@ -23,8 +23,8 @@ use crate::footprint::{BlockEvent, PluginFootprint};
 use crate::retention::RetentionPolicy;
 use crate::snapshot::SnapshotInterval;
 
-/// The three subvolumes that make up a chain, snapshotted and replicated as a
-/// set. Order is stable: it decides the aligned-counter scan order only.
+/// The three data directories that make up a chain, snapshotted and replicated
+/// as a set. Order is stable: it decides the aligned-counter scan order only.
 pub const SNAPSHOT_LABELS: [&str; 3] = ["timing", "vectors", "state"];
 
 /// Cap on a single flattened field's length in embedding text, so one large
@@ -151,7 +151,7 @@ pub struct ReplicationReport {
     pub hook_error: Option<String>,
 }
 
-/// Streaming snowball with BTRFS subvolumes
+/// Streaming snowball with data directories for timing, vectors, and state
 pub struct StreamingSnowball {
     base_path: PathBuf,
     timing_subvol: PathBuf,
@@ -182,10 +182,10 @@ impl StreamingSnowball {
         // Create directories
         tokio::fs::create_dir_all(&base_path).await?;
 
-        // Create BTRFS subvolumes
-        Self::create_subvolume(&timing_subvol).await?;
-        Self::create_subvolume(&vector_subvol).await?;
-        Self::create_subvolume(&state_subvol).await?;
+        // Ensure data directories exist
+        Self::ensure_data_dir(&timing_subvol).await?;
+        Self::ensure_data_dir(&vector_subvol).await?;
+        Self::ensure_data_dir(&state_subvol).await?;
 
         // Create snapshots directory
         let snapshots_dir = base_path.join("snapshots");
@@ -214,9 +214,14 @@ impl StreamingSnowball {
         })
     }
 
-    /// Create a BTRFS subvolume
-    async fn create_subvolume(path: &Path) -> Result<()> {
+    /// Ensure a data directory exists.
+    ///
+    /// If the path already exists and is a btrfs subvolume, that is accepted
+    /// for backwards compatibility (compression is enabled if possible).
+    /// If it does not exist, it is created as a plain directory.
+    async fn ensure_data_dir(path: &Path) -> Result<()> {
         if path.exists() {
+            // Check if it's a btrfs subvolume (backwards compat)
             let output = Command::new("btrfs")
                 .args(["subvolume", "show"])
                 .arg(path)
@@ -225,7 +230,7 @@ impl StreamingSnowball {
                 .context("Failed to execute btrfs command")?;
             if output.status.success() {
                 Self::enable_compression(path).await?;
-                debug!("Subvolume already exists: {:?}", path);
+                debug!("Existing btrfs subvolume (backwards compat): {:?}", path);
                 return Ok(());
             }
 
@@ -234,40 +239,18 @@ impl StreamingSnowball {
                 .to_ascii_lowercase()
                 .contains("not a btrfs filesystem")
             {
-                debug!("Btrfs unavailable; using regular directory: {:?}", path);
+                debug!("Path exists as a regular directory: {:?}", path);
                 return Ok(());
             }
             anyhow::bail!(
-                "existing timing path is not a usable Btrfs subvolume ({}): {}",
+                "existing data path is not a usable btrfs subvolume or directory ({}): {}",
                 path.display(),
                 stderr.trim()
             );
         }
 
-        let output = Command::new("btrfs")
-            .args(["subvolume", "create"])
-            .arg(path)
-            .output()
-            .await
-            .context("Failed to execute btrfs command")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // If btrfs is not available, fall back to regular directory
-            if stderr.contains("command not found") || stderr.contains("not a btrfs filesystem") {
-                warn!(
-                    "BTRFS not available, creating regular directory: {:?}",
-                    path
-                );
-                tokio::fs::create_dir_all(path).await?;
-            } else {
-                anyhow::bail!("btrfs subvolume create failed: {}", stderr);
-            }
-        } else {
-            Self::enable_compression(path).await?;
-            info!("Created BTRFS subvolume: {:?}", path);
-        }
-
+        tokio::fs::create_dir_all(path).await?;
+        debug!("Created data directory: {:?}", path);
         Ok(())
     }
 
@@ -374,7 +357,7 @@ impl StreamingSnowball {
     // ── Vector projections ───────────────────────────────────────────────
     //
     // Vectors live in the chain, not only in the index. Because the vector
-    // subvolume is snapshotted and sent alongside timing, a received replica
+    // directory is snapshotted and sent alongside timing, a received replica
     // can rebuild an entire vector index from the stream alone — no
     // re-embedding, no embedding-provider dependency on the restore path.
     //
@@ -442,7 +425,7 @@ impl StreamingSnowball {
             .await
             .with_context(|| {
                 format!(
-                    "failed to read timing subvolume {}",
+                    "failed to read timing directory {}",
                     self.timing_subvol.display()
                 )
             })?;
@@ -481,22 +464,22 @@ impl StreamingSnowball {
         self.timing_subvol.join(timing_file_name(block_num))
     }
 
-    /// Path of the timing subvolume (authoritative audit trail).
+    /// Path of the timing data directory (authoritative audit trail).
     pub fn timing_subvolume_path(&self) -> &Path {
         &self.timing_subvol
     }
 
-    /// Path of the vector subvolume (embedding projections).
+    /// Path of the vector data directory (embedding projections).
     pub fn vector_subvolume_path(&self) -> &Path {
         &self.vector_subvol
     }
 
-    /// Path of the state subvolume (disaster-recovery state).
+    /// Path of the state data directory (disaster-recovery state).
     pub fn state_subvolume_path(&self) -> &Path {
         &self.state_subvol
     }
 
-    /// Snapshot all three subvolumes under one aligned counter.
+    /// Snapshot all three data directories under one aligned counter.
     ///
     /// Timing, vectors and state are snapshotted together (`SNP-timing-000007`,
     /// `SNP-vectors-000007`, `SNP-state-000007`) because a replica that
@@ -505,7 +488,7 @@ impl StreamingSnowball {
     /// its own read-only snapshot rather than a directory holding three.
     ///
     /// Returns the aligned counter; use [`Self::snapshot_name`] to address an
-    /// individual subvolume's snapshot.
+    /// individual directory's snapshot.
     pub async fn create_snapshot(&self) -> Result<String> {
         let counter = self.create_snapshot_aligned().await?;
         Ok(Self::snapshot_name("state", counter))
@@ -518,7 +501,7 @@ impl StreamingSnowball {
         let counter = self.next_aligned_snapshot_counter(&snapshot_dir).await?;
 
         for label in SNAPSHOT_LABELS {
-            let source = self.subvolume_for_label(label);
+            let source = self.data_dir_for_label(label);
             let name = Self::snapshot_name(label, counter);
             let snapshot_path = snapshot_dir.join(&name);
             self.snapshot_one(source, &snapshot_path, &name).await;
@@ -546,7 +529,7 @@ impl StreamingSnowball {
     ///
     /// `on_receive` is an absolute program path on the remote, invoked as
     /// `<program> <counter>` once the whole triple has landed. That arrival is
-    /// the trigger for the remote to re-point its working subvolumes and index
+    /// the trigger for the remote to re-point its working directories and index
     /// the new vectors — no watcher, no polling loop on the replica.
     pub async fn replicate(
         &self,
@@ -582,7 +565,7 @@ impl StreamingSnowball {
 
         // Only advance the parent pointer when the whole triple landed;
         // otherwise the next incremental send would assume a parent the remote
-        // is missing for at least one subvolume.
+        // is missing for at least one directory.
         let mut hook_error = None;
         if failed.is_empty() {
             self.write_replicated_counter(counter).await?;
@@ -701,7 +684,7 @@ impl StreamingSnowball {
         format!("{}-{:06}", Self::snapshot_prefix(label), counter)
     }
 
-    fn subvolume_for_label(&self, label: &str) -> &Path {
+    fn data_dir_for_label(&self, label: &str) -> &Path {
         match label {
             "timing" => &self.timing_subvol,
             "vectors" => &self.vector_subvol,
@@ -709,8 +692,8 @@ impl StreamingSnowball {
         }
     }
 
-    /// One counter shared by all three subvolumes, so a snapshot triple is
-    /// always addressable by a single number even if one member failed.
+    /// One counter shared by all three data directories, so a snapshot triple
+    /// is always addressable by a single number even if one member failed.
     async fn next_aligned_snapshot_counter(&self, snapshot_dir: &Path) -> Result<u64> {
         let mut next = 1u64;
         for label in SNAPSHOT_LABELS {
@@ -722,7 +705,7 @@ impl StreamingSnowball {
         Ok(next)
     }
 
-    /// Write current state to the state subvolume
+    /// Write current state to the state data directory
     pub async fn write_state(&self, key: &str, value: &simd_json::OwnedValue) -> Result<()> {
         let state_file = self.state_subvol.join(format!("{}.json", key));
         let data = simd_json::to_string_pretty(value)?;
@@ -775,7 +758,7 @@ impl StreamingSnowball {
         self.write_state(key, value).await
     }
 
-    /// Read state from the state subvolume
+    /// Read state from the state data directory
     pub async fn read_state(&self, key: &str) -> Result<simd_json::OwnedValue> {
         let state_file = self.state_subvol.join(format!("{}.json", key));
         let mut data = tokio::fs::read_to_string(&state_file).await?;
@@ -965,7 +948,7 @@ impl StreamingSnowball {
 
     /// Prune old snapshots according to retention policy.
     ///
-    /// Each subvolume family is pruned independently under the same policy, so
+    /// Each directory family is pruned independently under the same policy, so
     /// the aligned triple ages out together.
     async fn prune_snapshots(&self) -> Result<()> {
         for label in SNAPSHOT_LABELS {
@@ -1068,8 +1051,9 @@ impl StreamingSnowball {
         std::env::var("OPDBUS_STATE_SNAPSHOT_PREFIX").unwrap_or_else(|_| "SNP-state".to_string())
     }
 
-    /// Snapshot name prefix per subvolume. `state` keeps its own env override
-    /// for backwards compatibility with existing `SNP-state-*` snapshots.
+    /// Snapshot name prefix per data directory. `state` keeps its own env
+    /// override for backwards compatibility with existing `SNP-state-*`
+    /// snapshots.
     fn snapshot_prefix(label: &str) -> String {
         if label == "state" {
             Self::state_snapshot_prefix()
@@ -1303,7 +1287,7 @@ fn vector_file_name(block_num: u64) -> String {
 }
 
 /// Block number from a timing file name, or `None` for anything else in the
-/// subvolume.
+/// directory.
 pub fn parse_block_number(file_name: &str) -> Option<u64> {
     file_name
         .strip_prefix("block-")?
@@ -1346,13 +1330,13 @@ pub fn encode_vector(vector: &[f32]) -> Vec<u8> {
 
 /// Highest block number already written, so a restart appends instead of
 /// renumbering over existing records.
-async fn highest_block_number(timing_subvol: &Path) -> Result<u64> {
-    let mut entries = match tokio::fs::read_dir(timing_subvol).await {
+async fn highest_block_number(timing_dir: &Path) -> Result<u64> {
+    let mut entries = match tokio::fs::read_dir(timing_dir).await {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(err) => {
             return Err(anyhow::Error::from(err)
-                .context(format!("failed to read {}", timing_subvol.display())))
+                .context(format!("failed to read {}", timing_dir.display())))
         }
     };
 
