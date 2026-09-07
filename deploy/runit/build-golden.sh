@@ -58,6 +58,7 @@ RELEASE_DIR="$PROJECT_ROOT/target/release"
 GRANTS_SOURCE="$SCRIPT_DIR/../security/capability-grants.json"
 MCP_AUDIENCE_POLICY_SOURCE="$SCRIPT_DIR/../config/mcp-audience-policy.json"
 MCP_TOOLSETS_SOURCE="$SCRIPT_DIR/../config/mcp-toolsets.json"
+HOST_RUNTIME_PACKAGES_SOURCE="$SCRIPT_DIR/../config/host-runtime-packages.txt"
 RETIRED_SERVICES_FILE="$SCRIPT_DIR/retired-services"
 RETIRED_BINARIES_FILE="$SCRIPT_DIR/retired-binaries"
 MANAGED_SERVICES_FILE="$SCRIPT_DIR/managed-services"
@@ -229,6 +230,14 @@ fi
     die "MCP audience policy is invalid"
 "$RELEASE_DIR/op-grants-materializer" validate-toolsets "$MCP_TOOLSETS_SOURCE" >/dev/null ||
     die "MCP tool-set manifest is invalid"
+[ -r "$HOST_RUNTIME_PACKAGES_SOURCE" ] ||
+    die "missing host runtime package manifest: $HOST_RUNTIME_PACKAGES_SOURCE"
+HOST_RUNTIME_PACKAGES=$(grep -Ev '^[[:space:]]*(#|$)' "$HOST_RUNTIME_PACKAGES_SOURCE")
+[ -n "$HOST_RUNTIME_PACKAGES" ] || die "host runtime package manifest is empty"
+command -v pacman >/dev/null 2>&1 || die "pacman is required to verify host runtime packages"
+missing_host_packages=$(pacman -T $HOST_RUNTIME_PACKAGES 2>/dev/null || true)
+[ -z "$missing_host_packages" ] ||
+    die "missing host runtime packages: $(printf '%s' "$missing_host_packages" | tr '\n' ' ')"
 BIN_COUNT=$(printf '%s\n' "$BINARIES" | wc -l)
 log "$BIN_COUNT release binaries in $RELEASE_DIR"
 
@@ -436,6 +445,8 @@ build_golden() {
         "$GOLDEN_DIR/etc/opdbus/mcp-audience-policy.json"
     run install -Dm600 "$MCP_TOOLSETS_SOURCE" \
         "$GOLDEN_DIR/etc/opdbus/mcp-toolsets.json"
+    run install -Dm644 "$HOST_RUNTIME_PACKAGES_SOURCE" \
+        "$GOLDEN_DIR/etc/opdbus/host-runtime-packages.txt"
 
     # Network configuration shipped by this release. These paths mirror the
     # live locations below so golden and the running host remain one artifact.
@@ -446,6 +457,7 @@ build_golden() {
         "openflow-static-flows.json:op-dbus/openflow-static-flows.json" \
         "sshd/sshd_config:ssh/sshd_config" \
         "sshd/10-loopback-only.conf:ssh/sshd_config.d/10-loopback-only.conf" \
+        "sshd/15-ghostbridge-vip.conf:ssh/sshd_config.d/15-ghostbridge-vip.conf" \
         "sshd/90-password-public.conf:ssh/sshd_config.d/90-singleuser-password.conf"
     do
         src=${mapping%%:*}
@@ -917,6 +929,7 @@ EOF
         "openflow-static-flows.json:/etc/op-dbus/openflow-static-flows.json" \
         "sshd/sshd_config:/etc/ssh/sshd_config" \
         "sshd/10-loopback-only.conf:/etc/ssh/sshd_config.d/10-loopback-only.conf" \
+        "sshd/15-ghostbridge-vip.conf:/etc/ssh/sshd_config.d/15-ghostbridge-vip.conf" \
         "sshd/90-password-public.conf:/etc/ssh/sshd_config.d/90-singleuser-password.conf"
     do
         src=${mapping%%:*}
@@ -977,6 +990,16 @@ EOF
             esac
         fi
     done
+
+    # Keep the host requirements beside the release policies. This is an
+    # auditable package contract, not a service secret.
+    host_packages_dest=/etc/opdbus/host-runtime-packages.txt
+    if [ -f "$host_packages_dest" ] &&
+       ! cmp -s "$HOST_RUNTIME_PACKAGES_SOURCE" "$host_packages_dest"; then
+        run mkdir -p "$config_backup$(dirname "$host_packages_dest")"
+        run install -Dm644 "$host_packages_dest" "$config_backup$host_packages_dest"
+    fi
+    run install -Dm644 "$HOST_RUNTIME_PACKAGES_SOURCE" "$host_packages_dest"
 
     # Service definitions normally preserve a hand-tuned host copy. Services
     # listed in managed-services are deliberately release-owned and replaced
