@@ -12,7 +12,7 @@
 //! - **packages**: installed packages and versions
 //! - **users**: user accounts and groups
 //! - **storage**: mounts, fstab entries
-//! - **containers**: LXC/Docker containers
+//! - **containers**: Incus instances (read from SHM present state)
 //! - **security**: firewall rules, SELinux/AppArmor policies
 //!
 //! This plugin is special: it queries OTHER plugins to build the full state.
@@ -62,7 +62,7 @@ pub struct FullSystemState {
     /// Storage mounts
     pub storage: StorageState,
 
-    /// Container state (LXC/Docker)
+    /// Container state (Incus instances)
     pub containers: ContainerState,
 
     /// Plugin-specific state (aggregated from all plugins)
@@ -159,23 +159,43 @@ pub struct BlockDeviceInfo {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ContainerState {
-    pub lxc: Vec<LxcContainerInfo>,
-    pub docker: Vec<DockerContainerInfo>,
+    /// Incus instances, read from the incus plugin's present state.
+    pub instances: Vec<ContainerInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct LxcContainerInfo {
+pub struct ContainerInfo {
     pub name: String,
+    /// "Running", "Stopped", "Frozen" -- as Incus reports it.
     pub status: String,
-    pub config: serde_json::Value,
+    /// "container" or "virtual-machine".
+    #[serde(default, rename = "type")]
+    pub instance_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct DockerContainerInfo {
-    pub id: String,
-    pub name: String,
-    pub image: String,
-    pub status: String,
+/// Set the hostname natively: the running kernel value via `sethostname(2)`,
+/// and `/etc/hostname` so it survives a boot.
+///
+/// Deliberately not `hostnamectl`: that is systemd tooling, it is not installed
+/// on this host, and neither `org.freedesktop.hostname1` nor
+/// `org.freedesktop.systemd1` is on this bus -- so the previous subprocess call
+/// could only ever fail. `host_runtime` already reads the hostname from
+/// `/etc/hostname`, so this is the write side of the same contract.
+async fn set_hostname_native(hostname: &str) -> Result<()> {
+    let trimmed = hostname.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 253
+        || !trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+    {
+        anyhow::bail!("invalid hostname: {hostname:?}");
+    }
+    nix::unistd::sethostname(trimmed).with_context(|| format!("sethostname({trimmed})"))?;
+    tokio::fs::write("/etc/hostname", format!("{trimmed}\n"))
+        .await
+        .context("write /etc/hostname")?;
+    Ok(())
 }
 
 /// The Full System State Plugin
@@ -653,68 +673,48 @@ impl FullSystemPlugin {
         None
     }
 
+    /// Containers are Incus instances, and their present state already lives in
+    /// `/dev/shm/opdbus/state/incus.json`. There is nothing to "capture": SHM is
+    /// the present state, so this reads it rather than collecting it again.
+    ///
+    /// The previous implementation scanned `/var/lib/lxc` (the wrong tree --
+    /// Incus stores under `/var/lib/incus`) and then shelled out to `docker ps`.
+    /// Docker is not installed on this host and never was; the subprocess failure
+    /// was swallowed by `if let Ok(..)`, so this reported an empty container list
+    /// on a machine running seven Incus instances and looked like it worked.
     async fn capture_containers(&self) -> Result<ContainerState> {
-        let mut state = ContainerState::default();
-
-        // LXC containers - read /var/lib/lxc/ directly (AGENTS.md §4: no subprocess bypasses)
-        let lxc_dir = std::path::Path::new("/var/lib/lxc");
-        if lxc_dir.exists() {
-            let mut entries = match tokio::fs::read_dir(lxc_dir).await {
-                Ok(e) => e,
-                Err(_) => {
-                    // fall through to docker check
-                    return Ok(state);
-                }
-            };
-
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                // Skip files, only directories are containers
-                if !entry
-                    .file_type()
-                    .await
-                    .ok()
-                    .map(|t| t.is_dir())
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                state.lxc.push(LxcContainerInfo {
-                    name,
-                    status: "unknown".to_string(),
-                    config: serde_json::json!({}),
-                });
-            }
+        #[derive(Deserialize)]
+        struct IncusPresentState {
+            #[serde(default)]
+            instances: Vec<IncusInstanceView>,
+        }
+        #[derive(Deserialize)]
+        struct IncusInstanceView {
+            #[serde(default)]
+            name: String,
+            #[serde(default)]
+            status: String,
+            #[serde(default, rename = "type")]
+            instance_type: String,
         }
 
-        // TODO: Docker containers should be queried via D-Bus or API, not CLI.
-        // Keeping as a fallback until Docker D-Bus interface is implemented.
-        if let Ok(output) = Command::new("docker")
-            .args([
-                "ps",
-                "-a",
-                "--format",
-                "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}",
-            ])
-            .output()
-            .await
-        {
-            if output.status.success() {
-                for line in String::from_utf8_lossy(&output.stdout).lines() {
-                    let parts: Vec<&str> = line.split('\t').collect();
-                    if parts.len() >= 4 {
-                        state.docker.push(DockerContainerInfo {
-                            id: parts[0].to_string(),
-                            name: parts[1].to_string(),
-                            image: parts[2].to_string(),
-                            status: parts[3].to_string(),
-                        });
-                    }
-                }
-            }
-        }
+        let Some(bytes) = op_core::projection_shm::read_projection_bytes("incus") else {
+            return Ok(ContainerState::default());
+        };
+        let present: IncusPresentState = serde_json::from_slice(&bytes)
+            .context("incus present state in SHM is not valid JSON")?;
 
-        Ok(state)
+        Ok(ContainerState {
+            instances: present
+                .instances
+                .into_iter()
+                .map(|i| ContainerInfo {
+                    name: i.name,
+                    status: i.status,
+                    instance_type: i.instance_type,
+                })
+                .collect(),
+        })
     }
 }
 
@@ -846,23 +846,12 @@ impl StatePlugin for FullSystemPlugin {
             match action {
                 StateAction::Modify { resource, changes } if resource == "hostname" => {
                     if let Some(hostname) = changes.get("to").and_then(|v| v.as_str()) {
-                        let result = Command::new("hostnamectl")
-                            .args(["set-hostname", hostname])
-                            .output()
-                            .await;
-
-                        match result {
-                            Ok(output) if output.status.success() => {
+                        match set_hostname_native(hostname).await {
+                            Ok(()) => {
                                 changes_applied.push(format!("Set hostname to {}", hostname));
                             }
-                            Ok(output) => {
-                                errors.push(format!(
-                                    "Failed to set hostname: {}",
-                                    String::from_utf8_lossy(&output.stderr)
-                                ));
-                            }
                             Err(e) => {
-                                errors.push(format!("Failed to run hostnamectl: {}", e));
+                                errors.push(format!("Failed to set hostname: {e}"));
                             }
                         }
                     }
@@ -929,17 +918,7 @@ pub async fn dispatch_full_system_method(
                 .get("hostname")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("hostname is required"))?;
-            let output = Command::new("hostnamectl")
-                .args(["set-hostname", hostname])
-                .output()
-                .await
-                .context("running hostnamectl")?;
-            if !output.status.success() {
-                anyhow::bail!(
-                    "hostnamectl set-hostname failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
+            set_hostname_native(hostname).await?;
             Ok(serde_json::json!({ "success": true }))
         }
         other => Err(anyhow::anyhow!("unknown full_system method: {}", other)),
