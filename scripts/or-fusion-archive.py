@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Archive one or-fusion turn into ~/.notebooklm-sources/openrouter-fusion/."""
+"""Archive one or-fusion turn into /home/jeremy/.notebooklm-sources/openrouter-fusion/."""
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +23,7 @@ def main() -> int:
     if not content.strip():
         return 0
 
-    root = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", Path.home() / ".notebooklm-sources"))
+    root = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", "/home/jeremy/.notebooklm-sources"))
     folder = root / "openrouter-fusion"
     folder.mkdir(parents=True, exist_ok=True)
 

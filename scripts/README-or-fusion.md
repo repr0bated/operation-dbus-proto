@@ -13,8 +13,8 @@ A panel of models analyzes your prompt in parallel (with web search + fetch), a 
 On each successful completion, `or-fusion` writes:
 
 ```text
-~/.notebooklm-sources/openrouter-fusion/or-fusion_<timestamp>_<id>.md
-~/.notebooklm-sources/openrouter-fusion/or-fusion_<timestamp>_<id>.json
+/home/jeremy/.notebooklm-sources/openrouter-fusion/or-fusion_<timestamp>_<id>.md
+/home/jeremy/.notebooklm-sources/openrouter-fusion/or-fusion_<timestamp>_<id>.json
 ```
 
 Disable with `--no-export` or `OR_FUSION_NO_EXPORT=1`.

@@ -1,4 +1,4 @@
-# LLM session export → `~/.notebooklm-sources`
+# LLM session export → `/home/jeremy/.notebooklm-sources`
 
 Collect conversations **and tool calls** from all agent CLIs into model-sorted folders for NotebookLM MCP (`add_source_file` / source sync).
 
@@ -37,7 +37,7 @@ OP_NOTEBOOK_ID=... llm-session-backfill --sync
 Output:
 
 ```text
-~/.notebooklm-sources/
+/home/jeremy/.notebooklm-sources/
   <model-slug>/
     opencode_<id>.md|.json
     factory_<id>.md|.json
@@ -58,7 +58,7 @@ Persistent CLIs: exit ≠ end of conversation. The watermark in `.export-state.j
 ## NotebookLM
 
 Plugin methods: `add_source_file`, `list_sources`, `sync_drive_sources`.  
-Point sync at `~/.notebooklm-sources` (or per-file paths from `MANIFEST.json`).
+Point sync at `/home/jeremy/.notebooklm-sources` (or per-file paths from `MANIFEST.json`). Override with `NOTEBOOKLM_SOURCES_DIR`.
 
 ## Keep sources ≤300 (cleanup agent)
 
@@ -76,7 +76,7 @@ notebook-sources-cleanup --dry-run -v
 ```
 
 - New conversations are **cat'd to the end** of the latest `_bundle_NNN.md` in each model folder.
-- State: `~/.notebooklm-sources/.cleanup-state.json` (per-file content hashes — no dupes).
+- State: `/home/jeremy/.notebooklm-sources/.cleanup-state.json` (per-file content hashes — no dupes).
 - Rolled files move to `<folder>/_archived_sessions/` when `--archive-sessions`.
 - Cap: `--max-sources 300` (default), rotate bundles at **195 MiB** (`--max-bundle-bytes`, env `NLM_MAX_BUNDLE_BYTES`).
 - **OpenCode** + **Kilo** use the same path as factory/codex: export sessions → append into that model’s `_bundle_*.md` → archive loose files.

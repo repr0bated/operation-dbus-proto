@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full backfill of all LLM CLI sessions (including long-lived factory/opencode DBs)
-# into ~/.notebooklm-sources. Forces rewrite; refreshes watermark state.
+# into /home/jeremy/.notebooklm-sources. Forces rewrite; refreshes watermark state.
 #
 # Usage:
 #   llm-session-backfill.sh              # all CLIs

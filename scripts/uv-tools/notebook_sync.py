@@ -44,7 +44,7 @@ ADD_SOURCE_TEXT_TOOL = "add_source_text"
 MAX_SOURCE_CHARS = 180_000
 
 HOME = Path.home()
-SOURCES = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", HOME / ".notebooklm-sources"))
+SOURCES = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", "/home/jeremy/.notebooklm-sources"))
 DEFAULT_TITLE = os.environ.get(
     "NOTEBOOK_TITLE", "3tched LLM Sessions / Control Plane"
 )

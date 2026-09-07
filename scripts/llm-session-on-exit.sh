@@ -34,6 +34,6 @@ python3 "$EXPORTER" "${ONLY_ARGS[@]}" "$@" || true
 # Roll new session files into ≤300 _bundle_*.md sources (append-only)
 if command -v notebook-sources-cleanup >/dev/null 2>&1; then
   notebook-sources-cleanup --archive-sessions >/dev/null 2>&1 || true
-elif [[ -f "${ROOT:-/home/admin/git/odbus}/scripts/notebook-sources-cleanup.py" ]]; then
-  python3 "${ROOT:-/home/admin/git/odbus}/scripts/notebook-sources-cleanup.py" --archive-sessions >/dev/null 2>&1 || true
+elif [[ -f "${ROOT:-/srv/git/odbus}/scripts/notebook-sources-cleanup.py" ]]; then
+  python3 "${ROOT:-/srv/git/odbus}/scripts/notebook-sources-cleanup.py" --archive-sessions >/dev/null 2>&1 || true
 fi

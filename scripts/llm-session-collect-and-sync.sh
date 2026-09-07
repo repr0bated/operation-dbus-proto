@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Collect all LLM CLI sessions (DB + JSONL) into ~/.notebooklm-sources
+# Collect all LLM CLI sessions (DB + JSONL) into /home/jeremy/.notebooklm-sources
 # then optionally sync into NotebookLM (add_source_file / nlm).
 #
 # Usage:
