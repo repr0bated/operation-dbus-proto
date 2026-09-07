@@ -26,13 +26,14 @@ use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::snowball_plugin::{
     AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
 };
-use op_snowball::{PluginFootprint, StreamingSnowball};
+use op_snowball::{OptimizedSnowball, PluginFootprint, StreamingSnowball};
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
 /// Default on-disk location of the streaming snowball that backs the durable
 /// audit trail, when `$OPDBUS_SNOWBALL_PATH` is unset. Matches
 /// `snowball_plugin::DEFAULT_BASE_PATH` so both read the same chain.
 const DEFAULT_SNOWBALL_PATH: &str = "/var/lib/opdbus/snowball";
+const DEFAULT_CACHE_PATH: &str = "/var/lib/opdbus/cache";
 const DEFAULT_NOTEBOOKLM_MCP_URL: &str = "http://127.0.0.1:3101/mcp";
 const DEFAULT_MONGODB_MCP_URL: &str = "http://127.0.0.1:3102/mcp";
 const NOTEBOOKLM_AUTH_READY: &str = "/run/opdbus/runit-ready/notebooklm-mcp-authenticated";
@@ -237,10 +238,12 @@ pub struct MutationEngine {
     dbus_call_limiter: Arc<Semaphore>,
 
     /// Durable audit sink: the streaming snowball's `timing_subvol` holds one
-    /// JSON record per event chain event, so the trail survives a restart.
+    /// JSON record per event chain event, so the trail survives a restart. The
+    /// optimized form also mirrors footprints into the NUMA-aware Btrfs cache;
+    /// cache initialization is best-effort and never gates the timing trail.
     /// Empty until [`MutationEngine::init_audit_durability`] runs; a missing
     /// sink degrades to RAM-only recording rather than failing dispatches.
-    audit_sink: Arc<OnceCell<Arc<StreamingSnowball>>>,
+    audit_sink: Arc<OnceCell<AuditSink>>,
 
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbDbusClient>,
@@ -259,6 +262,20 @@ pub struct MutationEngine {
     /// Verified session identities, keyed by session_id. Projection of the
     /// session records for the mutation path — not a second store.
     sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
+}
+
+enum AuditSink {
+    Optimized(Arc<OptimizedSnowball>),
+    TimingOnly(Arc<StreamingSnowball>),
+}
+
+impl AuditSink {
+    async fn add_footprint(&self, footprint: PluginFootprint) -> anyhow::Result<String> {
+        match self {
+            Self::Optimized(sink) => sink.add_footprint(footprint).await,
+            Self::TimingOnly(sink) => sink.add_footprint(footprint).await,
+        }
+    }
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -905,26 +922,71 @@ impl MutationEngine {
     pub async fn init_audit_durability(&self) -> usize {
         let base_path = std::env::var("OPDBUS_SNOWBALL_PATH")
             .unwrap_or_else(|_| DEFAULT_SNOWBALL_PATH.to_string());
-        self.init_audit_durability_at(&base_path).await
+        let cache_path =
+            std::env::var("OP_DBUS_CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE_PATH.to_string());
+        self.init_audit_durability_with_cache_at(&base_path, &cache_path)
+            .await
     }
 
     /// [`init_audit_durability`](Self::init_audit_durability) against an explicit
     /// chain path, bypassing `$OPDBUS_SNOWBALL_PATH`.
     pub async fn init_audit_durability_at(&self, base_path: &str) -> usize {
+        let base = std::path::Path::new(base_path);
+        let cache_name = format!(
+            "{}-cache",
+            base.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("snowball")
+        );
+        let cache_path = base
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(cache_name);
+        self.init_audit_durability_with_cache_at(base_path, &cache_path.to_string_lossy())
+            .await
+    }
+
+    async fn init_audit_durability_with_cache_at(
+        &self,
+        base_path: &str,
+        cache_path: &str,
+    ) -> usize {
         if self.audit_sink.get().is_some() {
             return 0;
         }
 
-        let chain_store = match StreamingSnowball::new(base_path).await {
-            Ok(chain) => Arc::new(chain),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
+        let chain_store = match OptimizedSnowball::new(base_path, cache_path).await {
+            Ok(chain) => {
+                tracing::info!(
                     path = %base_path,
-                    "durable audit sink unavailable; event chain stays in memory only"
+                    cache_path = %cache_path,
+                    "durable audit timing, Btrfs cache, and NUMA topology initialized"
                 );
-                return 0;
+                AuditSink::Optimized(Arc::new(chain))
             }
+            Err(cache_error) => match StreamingSnowball::new(base_path).await {
+                Ok(chain) => {
+                    tracing::warn!(
+                        error = %cache_error,
+                        path = %base_path,
+                        cache_path = %cache_path,
+                        "NUMA-aware Btrfs cache unavailable; durable timing remains active"
+                    );
+                    AuditSink::TimingOnly(Arc::new(chain))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        path = %base_path,
+                        "durable audit sink unavailable; event chain stays in memory only"
+                    );
+                    // A previously persisted trail is still replayable even
+                    // when the current host cannot reopen its Btrfs sink.
+                    return self
+                        .rebuild_chain_from_disk(&std::path::Path::new(base_path).join("timing"))
+                        .await;
+                }
+            },
         };
 
         let timing_dir = std::path::Path::new(base_path).join("timing");
@@ -1016,21 +1078,27 @@ impl MutationEngine {
                     continue;
                 }
             };
-            // Only records carrying an embedded ChainEvent are replayable;
-            // other footprints in the timing directory are ignored.
+            // Audit footprints store the lossless ChainEvent in `data.payload`.
+            // Accept the older metadata envelope too, so trails written before
+            // the optimized sink remain restart-compatible.
             let Some(event) = value
                 .get("data")
                 .and_then(|d| d.get("metadata"))
                 .and_then(|m| m.get("audit_event"))
+                .or_else(|| value.get("data").and_then(|d| d.get("payload")))
             else {
                 continue;
             };
-            let Some(event_id) = event.get("event_id").and_then(|v| v.as_u64()) else {
-                tracing::warn!(path = %path.display(), "audit record has no event_id");
+            // Replay the validated event itself.  The state-store accepts a
+            // bare ChainEvent and this avoids coupling recovery to the outer
+            // Snowball envelope shape.
+            let event_value = event.clone();
+            let Ok(event_record) = serde_json::from_value::<ChainEvent>(event_value.clone()) else {
+                tracing::warn!(path = %path.display(), "audit record is not a complete ChainEvent");
                 skipped += 1;
                 continue;
             };
-            records.push((event_id, value));
+            records.push((event_record.event_id, event_value));
         }
 
         records.sort_by_key(|(event_id, _)| *event_id);
@@ -2847,8 +2915,35 @@ async fn dispatch_rovs_commands_method(
                 .get("port_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb.add_port(bridge_name, port_name).await?;
-            Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
+            let interface_type = args
+                .get("interface_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("internal");
+            ovsdb
+                .add_port_with_type(bridge_name, port_name, Some(interface_type))
+                .await?;
+            Ok(serde_json::json!({
+                "added": port_name,
+                "to": bridge_name,
+                "interface_type": interface_type
+            }))
+        }
+        "ensure_internal_port" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let port_name = args
+                .get("port_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            let created = ovsdb.ensure_internal_port(bridge_name, port_name).await?;
+            Ok(serde_json::json!({
+                "bridge_name": bridge_name,
+                "port_name": port_name,
+                "interface_type": "internal",
+                "created": created
+            }))
         }
         "remove_port" => {
             let bridge_name = args
@@ -3045,6 +3140,47 @@ impl MutationEngine {
             return Ok(serde_json::json!({ "tools": descriptors }));
         }
 
+        if method == "schema_read" {
+            let plugin_id = args
+                .get("plugin_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("schema_read requires plugin_id"))?
+                .to_string();
+            let dir = crate::sealed_schema_reader::blob_catalog_dir_from_env();
+            return tokio::task::spawn_blocking(move || {
+                crate::sealed_schema_reader::read_sealed_schema_result(&dir, &plugin_id)
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("sealed schema task failed: {error}"))?;
+        }
+
+        if method == "oscal_subids" {
+            let plugin_id = args
+                .get("plugin_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let prefix = args
+                .get("prefix")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let dir = crate::sealed_schema_reader::blob_catalog_dir_from_env();
+            return tokio::task::spawn_blocking(move || {
+                crate::sealed_schema_reader::read_oscal_subids_result(
+                    &dir,
+                    plugin_id.as_deref(),
+                    prefix.as_deref(),
+                )
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("OSCAL subid task failed: {error}"))?;
+        }
+
         // `toolsets` is admitted and audited here exactly once. The bridge
         // computes the principal/grant-specific projection after this common
         // MutationEngine boundary; the policy result is never authority.
@@ -3157,6 +3293,27 @@ fn map_schema_method_to_tool(
         "code_search" => Ok(("code_search".into(), base)),
         "code_index" => Ok(("code_index".into(), base)),
         "code_context" => Ok(("code_context".into(), base)),
+        "rust_pro" => {
+            let operation = args
+                .get("operation")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("rust_pro: missing required field 'operation'"))?;
+            if !matches!(
+                operation,
+                "check" | "build" | "test" | "clippy" | "format" | "run"
+            ) {
+                anyhow::bail!("rust_pro: unsupported operation '{operation}'");
+            }
+            let mut tool_args = serde_json::json!({
+                "config": {
+                    "release": args.get("release").and_then(|value| value.as_bool()).unwrap_or(false)
+                }
+            });
+            if let Some(path) = args.get("path").and_then(|value| value.as_str()) {
+                tool_args["path"] = serde_json::Value::String(path.to_string());
+            }
+            Ok((format!("agent_rust_pro_{operation}"), tool_args))
+        }
         // Gemini question answering: the tool names the field `question`.
         "gemini_query" => {
             let mut v = base.clone();
@@ -3237,6 +3394,28 @@ mod cognitive_dispatch_tests {
             assert_eq!(actual, expected);
             assert_eq!(forwarded, args);
         }
+    }
+
+    #[test]
+    fn rust_pro_routes_to_the_eager_agent_operation() {
+        let (tool, args) = map_schema_method_to_tool(
+            "rust_pro",
+            &serde_json::json!({
+                "operation": "check",
+                "path": "/srv/git/odbus",
+                "release": false
+            }),
+        )
+        .expect("Rust Pro mapping must exist");
+        assert_eq!(tool, "agent_rust_pro_check");
+        assert_eq!(args["path"], "/srv/git/odbus");
+        assert_eq!(args["config"]["release"], false);
+
+        assert!(map_schema_method_to_tool(
+            "rust_pro",
+            &serde_json::json!({"operation": "shell", "path": "/tmp"})
+        )
+        .is_err());
     }
 
     #[test]

@@ -5,31 +5,41 @@
 //! discovery and execution use the same `MutationEngine` and in-process
 //! cognitive tool registry as the generated plugin routes.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
 use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::{broadcast, RwLock};
 use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 
 use crate::grpc_server::DECLARED_CAPABILITY_HEADER;
 #[cfg(test)]
 use crate::interceptor::capabilities_for_principal;
 use crate::interceptor::load_capability_grants;
-use crate::mcp_policy::{McpProjectionPolicy, ToolsetDefinition, HOT_TOOL_NAMES};
+use crate::mcp_policy::{McpProjectionPolicy, ToolTemperature, ToolsetDefinition, HOT_TOOL_NAMES};
 use crate::mutation_engine::MutationEngine;
 use crate::oracle_assertion::AssertionValidator;
+use crate::sealed_schema_reader::{
+    blob_catalog_dir_from_env, manifest_plugins, read_manifest_pinned_plugin_schema,
+    valid_plugin_id,
+};
+#[cfg(test)]
+use crate::sealed_schema_reader::{read_oscal_subids_result, read_sealed_schema_result};
 
 pub const MCP_PATH: &str = "/mcp";
 pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
@@ -46,6 +56,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
 /// requests an unknown revision so stock SDKs can continue.
 const LATEST_OFFICIAL_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const MCP_VERSION_HEADER: &str = "mcp-protocol-version";
+pub const MCP_SESSION_HEADER: &str = "mcp-session-id";
 pub const MCP_METHOD_HEADER: &str = "mcp-method";
 pub const MCP_NAME_HEADER: &str = "mcp-name";
 /// Raw HTTP uses the same canonical header name as gRPC metadata. Its value is
@@ -62,7 +73,11 @@ const MAX_ASSERTION_BYTES: usize = 16 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 const DEFAULT_PAGE_SIZE: usize = 100;
 const MAX_PAGE_SIZE: usize = 500;
+const MAX_ACTIVE_MCP_SESSIONS: usize = 4096;
+const MCP_SESSION_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const ALLOWED_ORIGINS_ENV: &str = "OP_MCP_ALLOWED_ORIGINS";
+const RUST_PRO_CODEBASE_ENV: &str = "OP_MCP_RUST_PRO_CODEBASE";
+const DEFAULT_RUST_PRO_CODEBASE: &str = "/srv/git/odbus";
 
 #[derive(Clone, Debug)]
 struct AuthenticatedCaller {
@@ -79,6 +94,54 @@ struct McpAuthError(String);
 struct ToolsetSelection {
     id: String,
     generation: u64,
+}
+
+#[derive(Debug)]
+struct McpSession {
+    principal_id: String,
+    identity_session_id: String,
+    session_genesis: String,
+    selection: RwLock<Option<ToolsetSelection>>,
+    events: broadcast::Sender<String>,
+    event_stream_active: Arc<AtomicBool>,
+    created_at: Instant,
+}
+
+impl McpSession {
+    fn new(caller: &AuthenticatedCaller) -> Self {
+        let (events, _) = broadcast::channel(16);
+        Self {
+            principal_id: caller.principal_id.clone(),
+            identity_session_id: caller.session_id.clone(),
+            session_genesis: caller.session_genesis.clone(),
+            selection: RwLock::new(None),
+            events,
+            event_stream_active: Arc::new(AtomicBool::new(false)),
+            created_at: Instant::now(),
+        }
+    }
+
+    fn belongs_to(&self, caller: &AuthenticatedCaller) -> bool {
+        self.principal_id == caller.principal_id
+            && self.identity_session_id == caller.session_id
+            && self.session_genesis == caller.session_genesis
+    }
+
+    fn caller(&self) -> AuthenticatedCaller {
+        AuthenticatedCaller {
+            principal_id: self.principal_id.clone(),
+            session_id: self.identity_session_id.clone(),
+            session_genesis: self.session_genesis.clone(),
+        }
+    }
+}
+
+struct EventStreamLease(Arc<AtomicBool>);
+
+impl Drop for EventStreamLease {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 #[async_trait]
@@ -305,6 +368,10 @@ trait McpBackend: Send + Sync {
     async fn list_resources(&self, caller: &AuthenticatedCaller) -> anyhow::Result<Vec<Value>>;
     async fn read_resource(&self, caller: &AuthenticatedCaller, uri: &str)
         -> anyhow::Result<Value>;
+
+    async fn session_closed(&self, _caller: &AuthenticatedCaller) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -312,21 +379,17 @@ struct MutationEngineMcpBackend {
     engine: Arc<MutationEngine>,
     blob_catalog_dir: PathBuf,
     policy: Arc<McpProjectionPolicy>,
-    plugin_registry: Arc<op_plugins::DefaultPluginRegistry>,
+    close_check_active: Arc<AtomicBool>,
 }
 
 impl MutationEngineMcpBackend {
     fn new(engine: Arc<MutationEngine>, policy: McpProjectionPolicy) -> Self {
-        let blob_catalog_dir = std::env::var("OP_BLOB_CATALOG_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
-        let plugin_registry =
-            op_plugins::DefaultPluginRegistry::new(Arc::new(op_state_store::MemoryStore::new()));
+        let blob_catalog_dir = blob_catalog_dir_from_env();
         Self {
             engine,
             blob_catalog_dir,
             policy: Arc::new(policy),
-            plugin_registry: Arc::new(plugin_registry),
+            close_check_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -388,16 +451,13 @@ impl MutationEngineMcpBackend {
 
     async fn typed_tool_descriptor(&self, public_name: &str) -> anyhow::Result<Value> {
         let (plugin_id, method_name) = parse_typed_tool_name(public_name)?;
-        if !op_plugins::DefaultPluginRegistry::available_plugins()
-            .iter()
-            .any(|candidate| candidate == plugin_id)
-        {
-            anyhow::bail!("AccessDenied: tool '{public_name}' names an unknown plugin");
-        }
-        let plugin = self.plugin_registry.load_plugin(plugin_id).await?;
-        let schema = plugin
-            .schema()
-            .ok_or_else(|| anyhow::anyhow!("plugin '{plugin_id}' has no sealed schema"))?;
+        let dir = self.blob_catalog_dir.clone();
+        let plugin_id_owned = plugin_id.to_string();
+        let schema = tokio::task::spawn_blocking(move || {
+            read_manifest_pinned_plugin_schema(&dir, &plugin_id_owned)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("sealed schema task failed: {error}"))??;
         method_descriptor(&schema, method_name, public_name)
     }
 
@@ -406,7 +466,7 @@ impl MutationEngineMcpBackend {
         method_descriptor(&schema, public_name, public_name)
     }
 
-    async fn authorized_hot_catalog(&self, grants: &HashSet<String>) -> anyhow::Result<Vec<Value>> {
+    async fn authorized_hot_tools(&self, grants: &HashSet<String>) -> anyhow::Result<Vec<Value>> {
         let mut tools = Vec::with_capacity(HOT_TOOL_NAMES.len());
         for name in HOT_TOOL_NAMES {
             let descriptor = Self::hot_tool_descriptor(name)?;
@@ -419,7 +479,7 @@ impl MutationEngineMcpBackend {
         Ok(tools)
     }
 
-    async fn authorized_set_catalog(
+    async fn authorized_toolset_tools(
         &self,
         set: &ToolsetDefinition,
         grants: &HashSet<String>,
@@ -455,19 +515,56 @@ impl MutationEngineMcpBackend {
             .ok_or_else(|| anyhow::anyhow!("unknown toolset '{}'", selection.id))
     }
 
-    async fn external_catalog(
+    async fn selected_toolset_tools(
         &self,
         caller: &AuthenticatedCaller,
         selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Vec<Value>> {
         let grants = load_exact_capability_grants(&caller.principal_id);
         let mut by_name = BTreeMap::new();
-        for descriptor in self.authorized_hot_catalog(&grants).await? {
+        for descriptor in self.authorized_hot_tools(&grants).await? {
             by_name.insert(tool_name(&descriptor).to_string(), descriptor);
+        }
+        for set in self
+            .policy
+            .toolsets
+            .sets
+            .iter()
+            .filter(|set| set.temperature == ToolTemperature::Hot && Self::provider_ready(set))
+        {
+            for descriptor in self.authorized_toolset_tools(set, &grants).await? {
+                by_name.insert(tool_name(&descriptor).to_string(), descriptor);
+            }
         }
         if let Some(selection) = selection {
             let set = self.selected_set(selection)?;
-            for descriptor in self.authorized_set_catalog(set, &grants).await? {
+            for descriptor in self.authorized_toolset_tools(set, &grants).await? {
+                by_name.insert(tool_name(&descriptor).to_string(), descriptor);
+            }
+        }
+        Ok(by_name.into_values().collect())
+    }
+
+    /// Return the complete set of broker-curated toolset tools that this caller can
+    /// actually use. MCP clients cache the result of their startup
+    /// `tools/list`, and not every client re-lists after receiving
+    /// `notifications/tools/list_changed`. Keep the tools bounded by the
+    /// reviewed toolset manifest while exposing real typed methods up front;
+    /// `toolsets(select)` remains the execution-admission boundary.
+    async fn discoverable_toolset_tools(
+        &self,
+        caller: &AuthenticatedCaller,
+    ) -> anyhow::Result<Vec<Value>> {
+        let grants = load_exact_capability_grants(&caller.principal_id);
+        let mut by_name = BTreeMap::new();
+        for descriptor in self.authorized_hot_tools(&grants).await? {
+            by_name.insert(tool_name(&descriptor).to_string(), descriptor);
+        }
+        for set in &self.policy.toolsets.sets {
+            if !Self::provider_ready(set) {
+                continue;
+            }
+            for descriptor in self.authorized_toolset_tools(set, &grants).await? {
                 by_name.insert(tool_name(&descriptor).to_string(), descriptor);
             }
         }
@@ -487,7 +584,7 @@ impl MutationEngineMcpBackend {
         let mut projected = Vec::new();
         for set in &self.policy.toolsets.sets {
             let authorized_count = self
-                .authorized_set_catalog_without_health(set, &grants)
+                .authorized_toolset_tools_without_health(set, &grants)
                 .await?
                 .len();
             if authorized_count == 0 {
@@ -505,7 +602,7 @@ impl MutationEngineMcpBackend {
         match operation {
             "list" => Ok(json!({
                 "operation": "list",
-                "catalog_generation": self.policy.toolsets.generation,
+                "toolset_generation": self.policy.toolsets.generation,
                 "relist_required": false,
                 "result": {"sets": projected}
             })),
@@ -521,20 +618,21 @@ impl MutationEngineMcpBackend {
                 if !Self::provider_ready(set) {
                     anyhow::bail!("provider_unavailable: {}", set.provider);
                 }
-                let tools = self.authorized_set_catalog(set, &grants).await?;
+                let tools = self.authorized_toolset_tools(set, &grants).await?;
                 if tools.is_empty() {
                     anyhow::bail!("AccessDenied: no authorized tools in toolset '{id}'");
                 }
                 Ok(json!({
                     "operation": "select",
-                    "catalog_generation": self.policy.toolsets.generation,
-                    "relist_required": true,
+                    "toolset_generation": self.policy.toolsets.generation,
+                    "relist_required": false,
                     "result": {
                         "selector": {
                             "id": id,
                             "generation": self.policy.toolsets.generation
                         },
-                        "tools": tools.into_iter().map(normalize_tool_definition).collect::<Vec<_>>()
+                        "selected_set": id,
+                        "activated_tool_count": tools.len()
                     }
                 }))
             }
@@ -542,7 +640,7 @@ impl MutationEngineMcpBackend {
         }
     }
 
-    async fn authorized_set_catalog_without_health(
+    async fn authorized_toolset_tools_without_health(
         &self,
         set: &ToolsetDefinition,
         grants: &HashSet<String>,
@@ -596,21 +694,12 @@ impl McpBackend for MutationEngineMcpBackend {
     async fn list_tools(
         &self,
         caller: &AuthenticatedCaller,
-        selection: Option<&ToolsetSelection>,
+        _selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Vec<Value>> {
         self.cognitive_admission(caller, "list_tools", json!({}), "cognitive_mcp.read")
             .await?;
-        if selection.is_some() {
-            self.cognitive_admission(
-                caller,
-                "toolsets",
-                json!({"operation": "select"}),
-                "cognitive_mcp.read",
-            )
-            .await?;
-        }
         Ok(self
-            .external_catalog(caller, selection)
+            .discoverable_toolset_tools(caller)
             .await?
             .into_iter()
             .map(normalize_tool_definition)
@@ -624,8 +713,11 @@ impl McpBackend for MutationEngineMcpBackend {
         arguments: Value,
         selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Value> {
+        if !self.policy.is_hot_tool(name) && selection.is_none() {
+            anyhow::bail!("AccessDenied: select the toolset containing '{name}' before calling it");
+        }
         let descriptor = self
-            .external_catalog(caller, selection)
+            .selected_toolset_tools(caller, selection)
             .await?
             .into_iter()
             .find(|tool| tool_name(tool) == name)
@@ -659,6 +751,46 @@ impl McpBackend for MutationEngineMcpBackend {
             .await
             .map_err(|error| anyhow::anyhow!("blob resource task failed: {error}"))?
     }
+
+    async fn session_closed(&self, caller: &AuthenticatedCaller) -> anyhow::Result<()> {
+        if self
+            .close_check_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            tracing::debug!("Rust Pro close check already active; coalescing session trigger");
+            return Ok(());
+        }
+
+        let codebase = std::env::var(RUST_PRO_CODEBASE_ENV)
+            .unwrap_or_else(|_| DEFAULT_RUST_PRO_CODEBASE.to_string());
+        let result = self
+            .call_tool(
+                caller,
+                "rust_pro",
+                json!({"operation": "check", "path": codebase}),
+                None,
+            )
+            .await;
+        self.close_check_active.store(false, Ordering::Release);
+
+        match result {
+            Ok(_) => {
+                tracing::info!(codebase, "Rust Pro session-close check completed");
+                Ok(())
+            }
+            Err(error) => {
+                tracing::warn!(codebase, %error, "Rust Pro session-close check failed");
+                Err(error)
+            }
+        }
+    }
+}
+
+fn schedule_session_close(backend: Arc<dyn McpBackend>, caller: AuthenticatedCaller) {
+    tokio::spawn(async move {
+        let _ = backend.session_closed(&caller).await;
+    });
 }
 
 #[derive(Clone)]
@@ -666,6 +798,7 @@ struct McpFrontendState {
     authenticator: Arc<dyn McpAuthenticator>,
     backend: Arc<dyn McpBackend>,
     allowed_origins: Arc<HashSet<String>>,
+    sessions: Arc<RwLock<HashMap<String, Arc<McpSession>>>>,
 }
 
 /// Build the raw HTTP projection. The returned router owns no listener.
@@ -679,13 +812,19 @@ pub fn build_mcp_router(engine: Arc<MutationEngine>, validator: Arc<AssertionVal
         }),
         backend: Arc::new(MutationEngineMcpBackend::new(engine, policy)),
         allowed_origins: Arc::new(configured_allowed_origins()),
+        sessions: Arc::new(RwLock::new(HashMap::new())),
     };
     router_with_state(state)
 }
 
 fn router_with_state(state: McpFrontendState) -> Router {
     Router::new()
-        .route(MCP_PATH, post(handle_mcp))
+        .route(
+            MCP_PATH,
+            post(handle_mcp)
+                .get(handle_mcp_events)
+                .delete(handle_mcp_delete),
+        )
         .with_state(state)
 }
 
@@ -767,24 +906,257 @@ async fn handle_mcp(State(state): State<McpFrontendState>, request: Request<Body
         Err(error) => return jsonrpc_error(StatusCode::BAD_REQUEST, rpc.id, -32600, &error),
     }
 
+    let supplied_session_id = match one_optional_header(&headers, MCP_SESSION_HEADER) {
+        Ok(value) => value.map(str::to_string),
+        Err(error) => return jsonrpc_error(StatusCode::BAD_REQUEST, rpc.id, -32600, &error),
+    };
+    if rpc.method == "initialize" && supplied_session_id.is_some() {
+        return jsonrpc_error(
+            StatusCode::BAD_REQUEST,
+            rpc.id,
+            -32600,
+            "initialize must not carry an existing MCP session",
+        );
+    }
+    let session = match supplied_session_id.as_deref() {
+        Some(session_id) => {
+            let session = state.sessions.read().await.get(session_id).cloned();
+            match session {
+                Some(session) if session.belongs_to(&caller) => Some(session),
+                _ => {
+                    return jsonrpc_error(
+                        StatusCode::NOT_FOUND,
+                        rpc.id,
+                        -32001,
+                        "MCP session not found",
+                    )
+                }
+            }
+        }
+        None => None,
+    };
+    let session_selection = match &session {
+        Some(session) => session.selection.read().await.clone(),
+        None => None,
+    };
+
     let id = rpc.id.clone();
     let outcome = tokio::time::timeout(
         REQUEST_TIMEOUT,
-        dispatch_rpc(state.backend.as_ref(), &caller, &rpc.method, rpc.params),
+        dispatch_rpc(
+            state.backend.as_ref(),
+            &caller,
+            &rpc.method,
+            rpc.params,
+            session_selection.as_ref(),
+        ),
     )
     .await;
 
     match outcome {
-        Ok(Ok(result)) => match id {
-            Some(id) => (
-                StatusCode::OK,
-                axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})),
-            )
-                .into_response(),
-            None => StatusCode::ACCEPTED.into_response(),
-        },
+        Ok(Ok(result)) => {
+            if let (Some(session), Some(selection)) =
+                (session.as_ref(), selected_toolset_from_result(&result))
+            {
+                *session.selection.write().await = Some(selection);
+            }
+
+            match id {
+                Some(id) => {
+                    let mut response = (
+                        StatusCode::OK,
+                        axum::Json(json!({"jsonrpc": "2.0", "id": id.clone(), "result": result})),
+                    )
+                        .into_response();
+                    if rpc.method == "initialize" {
+                        let session_id = uuid::Uuid::new_v4().to_string();
+                        let mut sessions = state.sessions.write().await;
+                        let expired_callers = sessions
+                            .values()
+                            .filter(|session| session.created_at.elapsed() >= MCP_SESSION_MAX_AGE)
+                            .map(|session| session.caller())
+                            .collect::<Vec<_>>();
+                        sessions.retain(|_, session| {
+                            session.created_at.elapsed() < MCP_SESSION_MAX_AGE
+                        });
+                        if sessions.len() >= MAX_ACTIVE_MCP_SESSIONS {
+                            drop(sessions);
+                            for expired_caller in expired_callers {
+                                schedule_session_close(state.backend.clone(), expired_caller);
+                            }
+                            return jsonrpc_error(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Some(id),
+                                -32000,
+                                "MCP session capacity reached",
+                            );
+                        }
+                        sessions.insert(session_id.clone(), Arc::new(McpSession::new(&caller)));
+                        drop(sessions);
+                        for expired_caller in expired_callers {
+                            schedule_session_close(state.backend.clone(), expired_caller);
+                        }
+                        response.headers_mut().insert(
+                            MCP_SESSION_HEADER,
+                            session_id
+                                .parse()
+                                .expect("UUID is a valid HTTP header value"),
+                        );
+                    }
+                    response
+                }
+                None => StatusCode::ACCEPTED.into_response(),
+            }
+        }
         Ok(Err(error)) => jsonrpc_error(StatusCode::OK, id, error.code, &error.message),
         Err(_) => jsonrpc_error(StatusCode::REQUEST_TIMEOUT, id, -32000, "request timed out"),
+    }
+}
+
+async fn handle_mcp_events(
+    State(state): State<McpFrontendState>,
+    request: Request<Body>,
+) -> Response {
+    let peer = peer_addr(request.extensions());
+    let headers = request.headers().clone();
+    if let Err(error) = validate_origin(&headers, &state.allowed_origins) {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(json!({"error": "origin_rejected", "message": error})),
+        )
+            .into_response();
+    }
+    let caller = match state.authenticator.authenticate(&headers, peer).await {
+        Ok(caller) => caller,
+        Err(error) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                axum::Json(json!({"error": "unauthenticated", "message": error.0})),
+            )
+                .into_response()
+        }
+    };
+    if let Err(error) = validate_event_stream_headers(&headers) {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "invalid_request", "message": error})),
+        )
+            .into_response();
+    }
+    let session_id = match one_required_header(&headers, MCP_SESSION_HEADER) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error": "invalid_request", "message": error})),
+            )
+                .into_response()
+        }
+    };
+    let Some(session) = state.sessions.read().await.get(session_id).cloned() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !session.belongs_to(&caller) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if session
+        .event_stream_active
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(json!({
+                "error": "event_stream_exists",
+                "message": "this MCP session already has an active event stream"
+            })),
+        )
+            .into_response();
+    }
+
+    let mut events = session.events.subscribe();
+    let active = session.event_stream_active.clone();
+    let lease = EventStreamLease(active);
+    let stream = async_stream::stream! {
+        let _lease = lease;
+        loop {
+            match events.recv().await {
+                Ok(message) => yield Ok::<Event, Infallible>(Event::default().data(message)),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        )
+        .into_response()
+}
+
+async fn handle_mcp_delete(
+    State(state): State<McpFrontendState>,
+    request: Request<Body>,
+) -> Response {
+    let peer = peer_addr(request.extensions());
+    let headers = request.headers().clone();
+    if let Err(error) = validate_origin(&headers, &state.allowed_origins) {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(json!({"error": "origin_rejected", "message": error})),
+        )
+            .into_response();
+    }
+    match one_required_header(&headers, MCP_VERSION_HEADER) {
+        Ok(version) if protocol_version_supported(version) => {}
+        Ok(version) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({
+                    "error": "invalid_request",
+                    "message": format!("unsupported MCP protocol version: {version}")
+                })),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error": "invalid_request", "message": error})),
+            )
+                .into_response()
+        }
+    }
+    let caller = match state.authenticator.authenticate(&headers, peer).await {
+        Ok(caller) => caller,
+        Err(error) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                axum::Json(json!({"error": "unauthenticated", "message": error.0})),
+            )
+                .into_response()
+        }
+    };
+    let session_id = match one_required_header(&headers, MCP_SESSION_HEADER) {
+        Ok(value) => value.to_string(),
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error": "invalid_request", "message": error})),
+            )
+                .into_response()
+        }
+    };
+    let session = state.sessions.read().await.get(&session_id).cloned();
+    match session {
+        Some(session) if session.belongs_to(&caller) => {
+            state.sessions.write().await.remove(&session_id);
+            schedule_session_close(state.backend.clone(), caller);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -822,10 +1194,11 @@ async fn dispatch_rpc(
     caller: &AuthenticatedCaller,
     method: &str,
     params: Value,
+    session_selection: Option<&ToolsetSelection>,
 ) -> Result<Value, RpcDispatchError> {
     match method {
-        // Streamable HTTP remains stateless, but the standard MCP handshake is
-        // still required.  No shim or server-side session is introduced here.
+        // The handshake establishes a Streamable HTTP session used only for
+        // per-client tool projection and server notifications.
         "initialize" => {
             let requested = params
                 .get("protocolVersion")
@@ -837,7 +1210,7 @@ async fn dispatch_rpc(
         "ping" => Ok(json!({})),
         "server/discover" => Ok(discovery_result()),
         "tools/list" => {
-            let selection = selection_from_params(&params)?;
+            let selection = selection_from_params(&params)?.or_else(|| session_selection.cloned());
             let mut tools = backend
                 .list_tools(caller, selection.as_ref())
                 .await
@@ -851,7 +1224,8 @@ async fn dispatch_rpc(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let selection = merged_toolset_selection(&params, &mut arguments)?;
+            let selection = merged_toolset_selection(&params, &mut arguments)?
+                .or_else(|| session_selection.cloned());
             backend
                 .call_tool(caller, name, arguments, selection.as_ref())
                 .await
@@ -899,7 +1273,7 @@ fn initialize_result(protocol_version: &str) -> Value {
             "name": "op-grpc-bridge",
             "version": env!("CARGO_PKG_VERSION")
         },
-        "instructions": "Each request requires exactly one authenticated identity: a fresh OIA1 assertion or the exact active SID1 stored in the caller's identity sled."
+        "instructions": "Each request requires exactly one authenticated identity. tools/list returns the real typed tools declared by the broker-curated toolsets. HOT tools—including Rust Pro, memory/code context, and healthy NotebookLM providers—are immediately callable. Before calling a non-HOT tool, use toolsets to select the toolset containing it."
     })
 }
 
@@ -908,7 +1282,7 @@ fn discovery_result() -> Value {
         "protocolVersions": SUPPORTED_PROTOCOL_VERSIONS,
         "endpoint": MCP_PATH,
         "transport": "streamable-http",
-        "sessionMode": "stateless",
+        "sessionMode": "stateful-toolset-admission",
         "requiredHeaders": ["MCP-Protocol-Version"],
         "identityHeaderAlternatives": [HTTP_ASSERTION_HEADER, HTTP_SEALED_ID_HEADER],
         "optionalIntegrityHeaders": ["Mcp-Method", "Mcp-Name"],
@@ -957,6 +1331,22 @@ fn validate_protocol_headers(headers: &HeaderMap, rpc: &JsonRpcRequest) -> Resul
                 return Err("Mcp-Name is not valid for this method".into());
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_event_stream_headers(headers: &HeaderMap) -> Result<(), String> {
+    let version = one_required_header(headers, MCP_VERSION_HEADER)?;
+    if !protocol_version_supported(version) {
+        return Err(format!("unsupported MCP protocol version: {version}"));
+    }
+    let accept = one_required_header(headers, axum::http::header::ACCEPT.as_str())?;
+    if !accept
+        .split(',')
+        .map(str::trim)
+        .any(|value| value.eq_ignore_ascii_case("text/event-stream"))
+    {
+        return Err("MCP event stream requires Accept: text/event-stream".into());
     }
     Ok(())
 }
@@ -1100,6 +1490,14 @@ fn take_argument_toolset_selection(
     }
 }
 
+fn selected_toolset_from_result(result: &Value) -> Option<ToolsetSelection> {
+    let projected = result.get("structuredContent").unwrap_or(result);
+    if projected.get("operation").and_then(Value::as_str) != Some("select") {
+        return None;
+    }
+    serde_json::from_value(projected.get("result")?.get("selector")?.clone()).ok()
+}
+
 fn paginate(key: &str, values: Vec<Value>, params: &Value) -> Result<Value, RpcDispatchError> {
     let offset = match params.get("cursor").and_then(Value::as_str) {
         Some(cursor) => cursor
@@ -1115,7 +1513,7 @@ fn paginate(key: &str, values: Vec<Value>, params: &Value) -> Result<Value, RpcD
         .clamp(1, MAX_PAGE_SIZE);
     if offset > values.len() {
         return Err(RpcDispatchError::invalid_params(
-            "cursor is past the catalog",
+            "cursor is past the result set",
         ));
     }
     let end = offset.saturating_add(limit).min(values.len());
@@ -1180,10 +1578,11 @@ fn method_descriptor(
             required_capability
         );
     }
+    let input_schema = mcp_input_schema(serde_json::to_value(&method.args)?);
     let mut descriptor = json!({
         "name": public_name,
         "description": format!("{} — {}", schema.description, method.name),
-        "inputSchema": serde_json::to_value(&method.args)?,
+        "inputSchema": input_schema,
         "required_capability": required_capability,
         "subid": method.subid,
         "authority_method": method.name
@@ -1192,6 +1591,18 @@ fn method_descriptor(
         descriptor["outputSchema"] = serde_json::to_value(output)?;
     }
     Ok(descriptor)
+}
+
+fn mcp_input_schema(schema: Value) -> Value {
+    if schema.get("type").and_then(Value::as_str) == Some("null") {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    } else {
+        schema
+    }
 }
 
 fn normalize_tool_definition(mut tool: Value) -> Value {
@@ -1350,45 +1761,12 @@ fn read_blob_resource(dir: &Path, uri: &str) -> anyhow::Result<Value> {
     if op_plugins::default_registry::is_retired_plugin(plugin_id) {
         anyhow::bail!("resource not found: {uri}");
     }
-    let entries = manifest_plugins(dir)?;
-    let schema_hash = entries
-        .get(plugin_id)
-        .ok_or_else(|| anyhow::anyhow!("resource not found: {uri}"))?;
-    if schema_hash.len() < 16 {
-        anyhow::bail!("catalog hash for {plugin_id} is malformed");
-    }
-    let path = dir.join(format!("{plugin_id}.{}.blob", &schema_hash[..16]));
-    let bytes = std::fs::read(&path)?;
-    let blob = op_blob::BlobRef::new(&bytes)
-        .map_err(|error| anyhow::anyhow!("invalid sealed blob {}: {error}", path.display()))?;
-    if blob.schema_hash_hex() != *schema_hash {
-        anyhow::bail!("manifest/blob schema hash mismatch for {plugin_id}");
-    }
-    let mut schema: Value = serde_json::from_str(blob.schema_json())?;
+    let mut schema = serde_json::to_value(read_manifest_pinned_plugin_schema(dir, plugin_id)?)?;
     sanitize_schema(&mut schema);
     let text = serde_json::to_string(&schema)?;
     Ok(json!({
         "contents": [{"uri": uri, "mimeType": "application/json", "text": text}]
     }))
-}
-
-fn manifest_plugins(dir: &Path) -> anyhow::Result<BTreeMap<String, String>> {
-    let bytes = std::fs::read(dir.join(op_blob::catalog::MANIFEST_FILENAME))?;
-    let value: Value = serde_json::from_slice(&bytes)?;
-    serde_json::from_value(
-        value
-            .get("plugins")
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("blob catalog manifest has no plugins map"))?,
-    )
-    .map_err(Into::into)
-}
-
-fn valid_plugin_id(plugin_id: &str) -> bool {
-    !plugin_id.is_empty()
-        && plugin_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 fn sanitize_schema(value: &mut Value) {
@@ -1506,8 +1884,10 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct TestBackend;
+    #[derive(Clone, Default)]
+    struct TestBackend {
+        session_closed: Option<Arc<tokio::sync::Notify>>,
+    }
 
     #[async_trait]
     impl McpBackend for TestBackend {
@@ -1516,11 +1896,22 @@ mod tests {
             _caller: &AuthenticatedCaller,
             _selection: Option<&ToolsetSelection>,
         ) -> anyhow::Result<Vec<Value>> {
-            Ok(vec![json!({
-                "name": "echo",
-                "description": "Echo input",
-                "inputSchema": {"type": "object"}
-            })])
+            Ok(vec![
+                json!({
+                    "name": "echo",
+                    "description": "Echo input",
+                    "inputSchema": {"type": "object"}
+                }),
+                json!({
+                    "name": "plugin.cognitive_mcp.code_search",
+                    "description": "Search code",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"]
+                    }
+                }),
+            ])
         }
 
         async fn call_tool(
@@ -1528,11 +1919,34 @@ mod tests {
             _caller: &AuthenticatedCaller,
             name: &str,
             arguments: Value,
-            _selection: Option<&ToolsetSelection>,
+            selection: Option<&ToolsetSelection>,
         ) -> anyhow::Result<Value> {
+            if name == "toolsets"
+                && arguments.get("operation").and_then(Value::as_str) == Some("select")
+            {
+                let id = arguments
+                    .get("toolset_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("context_code");
+                let projected = json!({
+                    "operation": "select",
+                    "toolset_generation": 5,
+                    "relist_required": false,
+                    "result": {
+                        "selector": {"id": id, "generation": 5},
+                        "selected_set": id,
+                        "activated_tool_count": 1
+                    }
+                });
+                return Ok(normalize_tool_result(projected));
+            }
             Ok(json!({
                 "content": [{"type": "text", "text": arguments.to_string()}],
-                "structuredContent": {"tool": name, "arguments": arguments},
+                "structuredContent": {
+                    "tool": name,
+                    "arguments": arguments,
+                    "selection": selection.map(|selection| selection.id.as_str())
+                },
                 "isError": false
             }))
         }
@@ -1557,14 +1971,91 @@ mod tests {
                 "contents": [{"uri": uri, "mimeType": "application/json", "text": "{}"}]
             }))
         }
+
+        async fn session_closed(&self, _caller: &AuthenticatedCaller) -> anyhow::Result<()> {
+            if let Some(notify) = &self.session_closed {
+                notify.notify_one();
+            }
+            Ok(())
+        }
     }
 
     fn test_router() -> Router {
+        test_router_with_backend(TestBackend::default())
+    }
+
+    fn test_router_with_backend(backend: TestBackend) -> Router {
         router_with_state(McpFrontendState {
             authenticator: Arc::new(TestAuthenticator),
-            backend: Arc::new(TestBackend),
+            backend: Arc::new(backend),
             allowed_origins: Arc::new(HashSet::from(["https://dashboard.example".into()])),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    async fn initialize_session(router: &Router) -> String {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(MCP_PATH)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header("x-test-auth", "ok")
+                    .body(Body::from(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {"protocolVersion": MCP_PROTOCOL_VERSION}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response
+            .headers()
+            .get(MCP_SESSION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .expect("initialize response carries an MCP session")
+            .to_string()
+    }
+
+    async fn session_call(
+        router: &Router,
+        session_id: &str,
+        method: &str,
+        params: Value,
+        name: Option<&str>,
+    ) -> Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(MCP_PATH)
+            .header(CONTENT_TYPE, "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("x-test-auth", "ok")
+            .header(MCP_VERSION_HEADER, MCP_PROTOCOL_VERSION)
+            .header(MCP_SESSION_HEADER, session_id)
+            .header(MCP_METHOD_HEADER, method);
+        if let Some(name) = name {
+            builder = builder.header(MCP_NAME_HEADER, name);
+        }
+        router
+            .clone()
+            .oneshot(
+                builder
+                    .body(Body::from(
+                        json!({"jsonrpc": "2.0", "id": 2, "method": method, "params": params})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 
     async fn call(method: &str, params: Value, name: Option<&str>) -> Response {
@@ -1610,6 +2101,128 @@ mod tests {
         let body = response_json(response).await;
         assert_eq!(body["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
         assert_eq!(body["result"]["serverInfo"]["name"], "op-grpc-bridge");
+        assert_eq!(
+            body["result"]["capabilities"]["tools"]["listChanged"],
+            false
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_establishes_streamable_http_session() {
+        let router = test_router();
+        let session_id = initialize_session(&router).await;
+        assert!(uuid::Uuid::parse_str(&session_id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn deleting_session_triggers_background_close_work() {
+        let closed = Arc::new(tokio::sync::Notify::new());
+        let router = test_router_with_backend(TestBackend {
+            session_closed: Some(closed.clone()),
+        });
+        let session_id = initialize_session(&router).await;
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(MCP_PATH)
+                    .header("x-test-auth", "ok")
+                    .header(MCP_VERSION_HEADER, MCP_PROTOCOL_VERSION)
+                    .header(MCP_SESSION_HEADER, &session_id)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        tokio::time::timeout(Duration::from_secs(1), closed.notified())
+            .await
+            .expect("session-close work was scheduled");
+    }
+
+    #[tokio::test]
+    async fn typed_toolsets_are_listed_up_front_and_selection_admits_calls() {
+        let router = test_router();
+        let session_id = initialize_session(&router).await;
+
+        let initial =
+            response_json(session_call(&router, &session_id, "tools/list", json!({}), None).await)
+                .await;
+        let initial_names = initial["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            initial_names,
+            vec!["echo", "plugin.cognitive_mcp.code_search"]
+        );
+
+        let selected = response_json(
+            session_call(
+                &router,
+                &session_id,
+                "tools/call",
+                json!({
+                    "name": "toolsets",
+                    "arguments": {"operation": "select", "toolset_id": "context_code"}
+                }),
+                Some("toolsets"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            selected["result"]["structuredContent"]["result"]["selected_set"],
+            "context_code"
+        );
+        assert_eq!(
+            selected["result"]["structuredContent"]["toolset_generation"],
+            5
+        );
+        assert!(selected["result"]["structuredContent"]
+            .get("catalog_generation")
+            .is_none());
+        assert!(selected["result"]["structuredContent"]["result"]
+            .get("tools")
+            .is_none());
+        assert_eq!(
+            selected["result"]["structuredContent"]["relist_required"],
+            false
+        );
+
+        let refreshed =
+            response_json(session_call(&router, &session_id, "tools/list", json!({}), None).await)
+                .await;
+        let names = refreshed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["echo", "plugin.cognitive_mcp.code_search"]);
+
+        let called = response_json(
+            session_call(
+                &router,
+                &session_id,
+                "tools/call",
+                json!({
+                    "name": "plugin.cognitive_mcp.code_search",
+                    "arguments": {"query": "sealed schema"}
+                }),
+                Some("plugin.cognitive_mcp.code_search"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            called["result"]["structuredContent"]["selection"],
+            "context_code"
+        );
     }
 
     #[tokio::test]
@@ -1782,13 +2395,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_uses_shared_catalog_backend() {
+    async fn tools_list_uses_shared_toolset_backend() {
         let body = response_json(call("tools/list", json!({}), None).await).await;
         assert_eq!(body["result"]["tools"][0]["name"], "echo");
     }
 
     #[tokio::test]
-    async fn resources_list_survives_as_blob_catalog() {
+    async fn resources_list_exposes_blob_resources() {
         let body = response_json(call("resources/list", json!({}), None).await).await;
         assert_eq!(
             body["result"]["resources"][0]["uri"],
@@ -2150,5 +2763,93 @@ mod tests {
             schema["methods"]["read"]["args"]["properties"]["path"]["type"],
             "string"
         );
+    }
+
+    #[test]
+    fn typed_methods_are_loaded_from_manifest_pinned_sealed_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = op_plugins::cognitive_mcp_plugin_schema();
+        let blob = op_blob::blobify_plugin_schema("cognitive_mcp", expected.clone());
+        let mut store = op_blob::BlobStore::open(dir.path()).unwrap();
+        store.write(&blob).unwrap();
+
+        let restored = read_manifest_pinned_plugin_schema(dir.path(), "cognitive_mcp").unwrap();
+        assert_eq!(restored.name, "cognitive_mcp");
+        assert_eq!(
+            restored.methods["toolsets"].subid,
+            expected.methods["toolsets"].subid
+        );
+        let zero_arg = method_descriptor(
+            &restored,
+            "memory_list_namespaces",
+            "plugin.cognitive_mcp.memory_list_namespaces",
+        )
+        .unwrap();
+        assert_eq!(zero_arg["inputSchema"]["type"], "object");
+        validate_tool_arguments(&zero_arg, &json!({})).unwrap();
+        assert!(read_manifest_pinned_plugin_schema(dir.path(), "missing").is_err());
+    }
+
+    #[test]
+    fn sealed_schema_reader_returns_raw_schema_and_cross_blob_oscal_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = op_blob::BlobStore::open(dir.path()).unwrap();
+
+        let mut snowball = op_plugins::cognitive_mcp_plugin_schema();
+        snowball.name = "snowball".to_string();
+        snowball.description = "test snowball schema".to_string();
+        snowball.subids.clear();
+        snowball.subids.insert(
+            "archive_message".to_string(),
+            "evt.service.snowball.message.archive@v1".to_string(),
+        );
+        let expected_snowball = serde_json::to_value(&snowball).unwrap();
+        store
+            .write(&op_blob::blobify_plugin_schema("snowball", snowball))
+            .unwrap();
+
+        let mut registry = op_plugins::cognitive_mcp_plugin_schema();
+        registry.name = "oscal_subid_registry".to_string();
+        registry.description = "test OSCAL registry schema".to_string();
+        registry.subids.clear();
+        registry.subids.insert(
+            "route_message".to_string(),
+            "obs.standard.oscal-subid-registry.route.message@v1".to_string(),
+        );
+        store
+            .write(&op_blob::blobify_plugin_schema(
+                "oscal_subid_registry",
+                registry,
+            ))
+            .unwrap();
+
+        let result = read_sealed_schema_result(dir.path(), "snowball").unwrap();
+        assert_eq!(result["plugin_id"], "snowball");
+        assert_eq!(result["uri"], "blob://snowball");
+        assert_eq!(result["schema"], expected_snowball);
+        assert_eq!(result["schema_hash"].as_str().unwrap().len(), 64);
+        assert!(result["oscal_subids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "evt.service.snowball.message.archive@v1"));
+
+        let all = read_oscal_subids_result(dir.path(), None, None).unwrap();
+        assert_eq!(all["plugin_count"], 2);
+        assert!(all["subids"].as_array().unwrap().iter().any(|entry| {
+            entry["subid"] == "evt.service.snowball.message.archive@v1"
+                && entry["sources"][0]["plugin_id"] == "snowball"
+        }));
+        assert!(all["subids"].as_array().unwrap().iter().any(|entry| {
+            entry["subid"] == "obs.standard.oscal-subid-registry.route.message@v1"
+                && entry["sources"][0]["plugin_id"] == "oscal_subid_registry"
+        }));
+
+        let filtered =
+            read_oscal_subids_result(dir.path(), Some("snowball"), Some("evt.service.snowball"))
+                .unwrap();
+        assert_eq!(filtered["plugin_count"], 1);
+        assert_eq!(filtered["subid_count"], 1);
+        assert!(read_sealed_schema_result(dir.path(), "missing").is_err());
     }
 }

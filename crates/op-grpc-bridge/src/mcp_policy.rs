@@ -1,4 +1,4 @@
-//! Deterministic audience and tool-set policy for the single MCP ingress.
+//! Deterministic audience and toolset policy for the single MCP ingress.
 //!
 //! These documents contain projection policy only. They never contain grants,
 //! identity assertions, session anchors, or footprint/hash material.
@@ -21,9 +21,12 @@ pub const COMPACT_TOOL_NAMES: [&str; 4] = [
     "execute_tool",
 ];
 
-pub const HOT_TOOL_NAMES: [&str; 5] = [
+pub const HOT_TOOL_NAMES: [&str; 8] = [
     "memory_recall",
     "memory_store",
+    "oscal_subids",
+    "rust_pro",
+    "schema_read",
     "workflow_query",
     "workflow_run",
     "toolsets",
@@ -40,6 +43,7 @@ pub struct AudiencePolicy {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolTemperature {
+    Hot,
     Warm,
     Cold,
 }
@@ -94,6 +98,13 @@ impl McpProjectionPolicy {
     pub fn toolset(&self, id: &str) -> Option<&ToolsetDefinition> {
         self.toolsets.sets.iter().find(|set| set.id == id)
     }
+
+    pub fn is_hot_tool(&self, name: &str) -> bool {
+        HOT_TOOL_NAMES.contains(&name)
+            || self.toolsets.sets.iter().any(|set| {
+                set.temperature == ToolTemperature::Hot && set.tools.iter().any(|tool| tool == name)
+            })
+    }
 }
 
 pub fn parse_audience_policy(bytes: &[u8]) -> Result<AudiencePolicy> {
@@ -115,9 +126,9 @@ pub fn parse_audience_policy(bytes: &[u8]) -> Result<AudiencePolicy> {
 
 pub fn parse_toolset_manifest(bytes: &[u8]) -> Result<ToolsetManifest> {
     let manifest: ToolsetManifest =
-        serde_json::from_slice(bytes).context("MCP tool-set manifest is not valid JSON")?;
+        serde_json::from_slice(bytes).context("MCP toolset manifest is not valid JSON")?;
     if manifest.generation == 0 {
-        bail!("MCP tool-set generation must be positive");
+        bail!("MCP toolset generation must be positive");
     }
     if manifest.hot.as_slice() != HOT_TOOL_NAMES {
         bail!(
@@ -129,35 +140,31 @@ pub fn parse_toolset_manifest(bytes: &[u8]) -> Result<ToolsetManifest> {
     let mut set_ids = HashSet::new();
     for set in &manifest.sets {
         if !valid_identifier(&set.id) {
-            bail!("invalid MCP tool-set id '{}'", set.id);
+            bail!("invalid MCP toolset id '{}'", set.id);
         }
         if !set_ids.insert(set.id.as_str()) {
-            bail!("duplicate MCP tool-set id '{}'", set.id);
+            bail!("duplicate MCP toolset id '{}'", set.id);
         }
         if !valid_provider_id(&set.provider) {
-            bail!("invalid MCP tool-set provider '{}'", set.provider);
+            bail!("invalid MCP toolset provider '{}'", set.provider);
         }
         if set.tools.is_empty() {
-            bail!("MCP tool-set '{}' contains no typed tools", set.id);
+            bail!("MCP toolset '{}' contains no typed tools", set.id);
         }
         let mut tools = HashSet::new();
         for tool in &set.tools {
             if !valid_typed_tool_name(tool) {
-                bail!(
-                    "MCP tool-set '{}' has non-canonical tool '{}'",
-                    set.id,
-                    tool
-                );
+                bail!("MCP toolset '{}' has non-canonical tool '{}'", set.id, tool);
             }
             if prohibited_external_tool(tool) {
                 bail!(
-                    "MCP tool-set '{}' contains generic/compact tool '{}'",
+                    "MCP toolset '{}' contains generic/compact tool '{}'",
                     set.id,
                     tool
                 );
             }
             if !tools.insert(tool.as_str()) {
-                bail!("MCP tool-set '{}' repeats tool '{}'", set.id, tool);
+                bail!("MCP toolset '{}' repeats tool '{}'", set.id, tool);
             }
         }
     }
@@ -220,7 +227,7 @@ mod tests {
         let manifest = parse_toolset_manifest(
             br#"{
               "generation": 7,
-              "hot": ["memory_recall", "memory_store", "workflow_query", "workflow_run", "toolsets"],
+              "hot": ["memory_recall", "memory_store", "oscal_subids", "rust_pro", "schema_read", "workflow_query", "workflow_run", "toolsets"],
               "sets": [{
                 "id": "emqx_ops",
                 "temperature": "warm",
@@ -238,14 +245,14 @@ mod tests {
     fn frequency_or_generic_tools_cannot_change_the_surface() {
         let dynamic_hot = br#"{
           "generation": 1,
-          "hot": ["memory_recall", "memory_store", "workflow_query", "invoke_tool", "toolsets"],
+          "hot": ["memory_recall", "memory_store", "oscal_subids", "rust_pro", "schema_read", "workflow_query", "invoke_tool", "toolsets"],
           "sets": []
         }"#;
         assert!(parse_toolset_manifest(dynamic_hot).is_err());
 
         let generic_set = br#"{
           "generation": 1,
-          "hot": ["memory_recall", "memory_store", "workflow_query", "workflow_run", "toolsets"],
+          "hot": ["memory_recall", "memory_store", "oscal_subids", "rust_pro", "schema_read", "workflow_query", "workflow_run", "toolsets"],
           "sets": [{
             "id": "escape",
             "temperature": "cold",
@@ -280,28 +287,52 @@ mod tests {
     }
 
     #[test]
-    fn deployed_manifest_is_valid_and_keeps_provider_tools_warm() {
+    fn deployed_manifest_keeps_cognitive_and_notebooklm_toolsets_hot() {
         let manifest = parse_toolset_manifest(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../deploy/config/mcp-toolsets.json"
         )))
         .unwrap();
         assert_eq!(manifest.hot.as_slice(), HOT_TOOL_NAMES);
-        assert_eq!(manifest.generation, 3);
+        assert_eq!(manifest.generation, 5);
+        for id in [
+            "context_code",
+            "context_knowledge",
+            "notebooklm_auth",
+            "notebooklm_research",
+        ] {
+            assert!(manifest
+                .sets
+                .iter()
+                .any(|set| set.id == id && set.temperature == ToolTemperature::Hot));
+        }
         assert!(manifest
             .sets
             .iter()
             .any(|set| set.id == "notebooklm_research"
                 && set.provider == "notebooklm-mcp-authenticated"));
-        assert!(manifest
-            .sets
-            .iter()
-            .any(|set| set.id == "mongodb_data"
-                && set.provider == "mongodb-mcp-server-authenticated"));
+        assert!(manifest.sets.iter().any(|set| set.id == "mongodb_data"
+            && set.provider == "mongodb-mcp-server-authenticated"
+            && set.temperature == ToolTemperature::Warm));
         assert!(manifest.sets.iter().all(|set| {
             set.tools
                 .iter()
                 .all(|tool| !manifest.hot.iter().any(|hot| hot == tool))
         }));
+
+        let policy = McpProjectionPolicy {
+            audience: AudiencePolicy {
+                version: 1,
+                rotation_epoch: 1,
+                singleton_chatbot_principal_id: "87b0decc-8464-5abf-05d8-b52ec88ff9f1".to_string(),
+            },
+            toolsets: manifest,
+        };
+        assert!(policy.is_hot_tool("rust_pro"));
+        assert!(policy.is_hot_tool("schema_read"));
+        assert!(policy.is_hot_tool("oscal_subids"));
+        assert!(policy.is_hot_tool("plugin.cognitive_mcp.code_context"));
+        assert!(policy.is_hot_tool("plugin.notebooklm.query_notebook"));
+        assert!(!policy.is_hot_tool("plugin.mongodb_mcp.find"));
     }
 }

@@ -41,6 +41,7 @@ pub mod plugin_object_blob;
 pub mod proto_gen;
 pub mod schema_loader;
 pub mod schema_router;
+mod sealed_schema_reader;
 pub mod server;
 pub mod shared_socket;
 pub mod tracing;

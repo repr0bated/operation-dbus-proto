@@ -29,8 +29,8 @@ async fn record_calls(engine: &MutationEngine, count: usize) {
     for i in 0..count {
         engine
             .dispatch_method_call(
-                "cognitive_mcp",
-                "get_health",
+                "audit_fixture",
+                "record",
                 &format!("{{\"probe\":{i}}}"),
                 Some("cognitive.read"),
                 "test-actor",
@@ -74,8 +74,8 @@ async fn query_events_returns_real_audit_data_not_echo() {
 
     // Records carry the accountability surface, not just ids.
     let first = &events[0];
-    assert_eq!(first["plugin_id"], serde_json::json!("cognitive_mcp"));
-    assert_eq!(first["method_name"], serde_json::json!("get_health"));
+    assert_eq!(first["plugin_id"], serde_json::json!("audit_fixture"));
+    assert_eq!(first["method_name"], serde_json::json!("record"));
     assert_eq!(first["actor_id"], serde_json::json!("test-actor"));
     assert_eq!(first["capability_id"], serde_json::json!("cognitive.read"));
     assert_eq!(first["decision"], serde_json::json!("Allow"));
@@ -128,7 +128,7 @@ async fn query_events_filters_and_clamps_limit() {
         .dispatch_method_call(
             "snowball",
             "query_events",
-            "{\"plugin_id\":\"cognitive_mcp\",\"limit\":50}",
+            "{\"plugin_id\":\"audit_fixture\",\"limit\":50}",
             Some("snowball.read"),
             "test-actor",
         )
@@ -138,7 +138,7 @@ async fn query_events_filters_and_clamps_limit() {
     assert!(!rows.is_empty(), "plugin filter returned nothing");
     assert!(
         rows.iter()
-            .all(|e| e["plugin_id"] == serde_json::json!("cognitive_mcp")),
+            .all(|e| e["plugin_id"] == serde_json::json!("audit_fixture")),
         "plugin filter leaked other plugins"
     );
 
@@ -257,17 +257,21 @@ async fn audit_methods_are_declared_in_the_plugin_schema() {
     }
 }
 
-/// FR-6: events are written to the `timing_subvol` as they happen, and a fresh
-/// engine over the same path rebuilds the chain from disk — the "survives a
-/// restart" claim, exercised without touching a live service.
+/// FR-6: events are written to the `timing_subvol` and the NUMA-aware Btrfs
+/// cache as they happen, and a fresh engine over the same path rebuilds the
+/// chain from disk — the "survives a restart" claim, exercised without touching
+/// a live service.
 ///
 /// The chain path must be on Btrfs (`StreamingSnowball` creates subvolumes).
 /// If subvolume creation is unavailable the durability sink stays disabled by
 /// design (NFR-4), and this test says so rather than silently passing.
 #[tokio::test]
 async fn audit_trail_persists_and_survives_a_restart() {
-    let base = std::env::temp_dir().join(format!("opdbus-audit-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let test_root = tempfile::Builder::new()
+        .prefix("opdbus-audit-test-")
+        .tempdir()
+        .expect("unique audit test directory");
+    let base = test_root.path().join("snowball");
     let base_path = base.to_string_lossy().to_string();
 
     // ── First "process": record events with durability enabled ──────────────
@@ -320,6 +324,21 @@ async fn audit_trail_persists_and_survives_a_restart() {
         files.len()
     );
 
+    let cache = base.with_file_name(format!(
+        "{}-cache",
+        base.file_name().and_then(|name| name.to_str()).unwrap()
+    ));
+    let cached_blocks: Vec<_> = std::fs::read_dir(cache.join("blocks/by-hash"))
+        .expect("optimized audit cache must be initialized with the timing trail")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect();
+    assert_eq!(
+        cached_blocks.len(),
+        3,
+        "expected every timing footprint to be mirrored into the Btrfs cache"
+    );
+
     // ── Second "process": fresh empty chain, same path ──────────────────────
     let second = engine();
     let replayed = second.init_audit_durability_at(&base_path).await;
@@ -340,8 +359,8 @@ async fn audit_trail_persists_and_survives_a_restart() {
 
     // 3 replayed from disk + this query_events call.
     assert_eq!(events.len(), 4, "restored page: {restored}");
-    assert_eq!(events[0]["method_name"], serde_json::json!("get_health"));
-    assert_eq!(events[0]["plugin_id"], serde_json::json!("cognitive_mcp"));
+    assert_eq!(events[0]["method_name"], serde_json::json!("record"));
+    assert_eq!(events[0]["plugin_id"], serde_json::json!("audit_fixture"));
 
     // Hash linkage survived persistence, so the rebuilt chain verifies and the
     // new event continues the chain instead of restarting the ids.

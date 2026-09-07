@@ -440,8 +440,13 @@ fn build_axum_app_with_validator(
     let cors = CorsLayer::new()
         .allow_origin(crate::mcp_frontend::configured_allow_origin())
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::POST])
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::DELETE,
+        ])
         .allow_headers([
+            axum::http::header::ACCEPT,
             axum::http::header::CONTENT_TYPE,
             "x-grpc-web".parse().unwrap(),
             "x-user-agent".parse().unwrap(),
@@ -449,6 +454,7 @@ fn build_axum_app_with_validator(
             crate::mcp_frontend::HTTP_ASSERTION_HEADER.parse().unwrap(),
             crate::mcp_frontend::HTTP_SEALED_ID_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_VERSION_HEADER.parse().unwrap(),
+            crate::mcp_frontend::MCP_SESSION_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_METHOD_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_NAME_HEADER.parse().unwrap(),
             crate::grpc_server::DECLARED_CAPABILITY_HEADER
@@ -459,6 +465,7 @@ fn build_axum_app_with_validator(
             "grpc-status".parse().unwrap(),
             "grpc-message".parse().unwrap(),
             "grpc-status-details-bin".parse().unwrap(),
+            crate::mcp_frontend::MCP_SESSION_HEADER.parse().unwrap(),
         ]);
 
     let engine = server.mutation_engine();
@@ -718,6 +725,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let tls = ServerTlsConfig::new()
             .identity(Identity::from_pem(server_cert, server_key))
             .client_ca_root(Certificate::from_pem(client_ca));
+        let listener = tokio::net::TcpListener::bind(bind_addr)
+            .await
+            .map_err(|error| anyhow::anyhow!("cannot bind EMQX ExHook at {bind_addr}: {error}"))?;
         info!(
             addr = %bind_addr,
             client_cert = %exhook.client_cert_path.display(),
@@ -730,7 +740,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
                 .tls_config(tls)
                 .map_err(|error| anyhow::anyhow!("invalid EMQX ExHook TLS config: {error}"))?
                 .add_service(hook_provider)
-                .serve(bind_addr),
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
         )
     } else {
         info!("EMQX ExHook listener disabled");
@@ -804,6 +814,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
+        let listener = tokio::net::TcpListener::bind(bind_addr)
+            .await
+            .map_err(|error| anyhow::anyhow!("cannot bind TCP fabric at {bind_addr}: {error}"))?;
         info!(addr = %bind_addr, "zeroclaw TLS gRPC/gRPC-Web listening on TCP");
         let tls_config = ServerTlsConfig::new().identity(identity.clone());
         let ingress = build_axum_app_with_validator(
@@ -816,8 +829,19 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .tls_config(tls_config)
             .map_err(|e| anyhow::anyhow!("invalid TLS config for {bind_addr}: {e}"))?
             .add_routes(tonic::service::Routes::from(ingress))
-            .serve(bind_addr);
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
         tcp_tasks.push(tokio::spawn(async move { server.await }));
+    }
+
+    // The service, not its launcher, owns readiness. At this point every UDS
+    // and TCP listener has been bound successfully, so consumers cannot see a
+    // stale marker for a process that never opened its sockets.
+    if let Ok(ready_path) = std::env::var("OPDBUS_READY_PATH") {
+        let ready_path = std::path::Path::new(&ready_path);
+        if let Some(parent) = ready_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(ready_path, b"ready\n").await?;
     }
 
     // Drive all listeners concurrently.
