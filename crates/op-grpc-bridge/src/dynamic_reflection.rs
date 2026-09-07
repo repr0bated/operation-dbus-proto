@@ -472,7 +472,7 @@ mod tests {
             .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
 
         catalog
-            .upsert_blob(crate::zeroclaw_object_blob::from_plugin_schema())
+            .upsert_blob(crate::tched_router_object_blob::from_plugin_schema())
             .await;
         let after = catalog.list_services().await;
         // Legacy service (mounted via build.rs) is advertised.
@@ -502,7 +502,7 @@ mod tests {
 
         // External sealer (the op-blob binary's role): seals the blob and
         // commits the manifest — no call into the bridge.
-        let blob = crate::zeroclaw_object_blob::from_plugin_schema();
+        let blob = crate::tched_router_object_blob::from_plugin_schema();
         let expected_services = blob.manifest.grpc.services.clone();
         {
             let mut store = op_blob::BlobStore::open(&dir).unwrap();

@@ -1,7 +1,7 @@
-// Integration tests for the zeroclaw Axum HTTP/gRPC-Web host.
+// Integration tests for the tched_router Axum HTTP/gRPC-Web host.
 //
 // These tests spin up the TCP side of the server on an ephemeral port and
-// exercise the generated ZeroclawService through a native tonic client. The
+// exercise the generated TchedRouterService through a native tonic client. The
 // server is configured with `tonic_web::enable`, so the same listener also
 // accepts gRPC-Web/HTTP/1.1 clients.
 
@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use op_grpc_bridge::proto::zeroclaw::{
-    zeroclaw_service_client::ZeroclawServiceClient, GetSchemaRequest, WatchSchemaRequest,
+use op_grpc_bridge::proto::tched_router::{
+    tched_router_service_client::TchedRouterServiceClient, GetSchemaRequest, WatchSchemaRequest,
 };
 use op_grpc_bridge::schema_loader::SchemaLoader;
 use op_grpc_bridge::server::build_axum_app;
@@ -33,17 +33,17 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("live-schema.json");
     let schema = json!({
-        "name": "zeroclaw",
+        "name": "tched_router",
         "version": "1.0.0",
         "kind": "llm",
         "description": "test schema"
     });
-    write_schema(&path, &json!({ "zeroclaw": [schema] }));
+    write_schema(&path, &json!({ "tched_router": [schema] }));
 
     let loader = Arc::new(SchemaLoader::new(&path).unwrap());
 
-    // Build the intercepted plugin service exactly as `run_zeroclaw_server`
-    // does, so the Axum app mounts both the zeroclaw service and the plugin
+    // Build the intercepted plugin service exactly as `run_tched_router_server`
+    // does, so the Axum app mounts both the tched_router service and the plugin
     // service behind the Ghostbridge interceptor.
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
@@ -71,7 +71,7 @@ async fn should_serve_schema_over_grpc_web() {
     let (addr, _loader, _path) = start_test_server().await;
 
     let endpoint = format!("http://{}", addr);
-    let mut client = ZeroclawServiceClient::connect(endpoint).await.unwrap();
+    let mut client = TchedRouterServiceClient::connect(endpoint).await.unwrap();
 
     let mut request = tonic::Request::new(GetSchemaRequest {});
     request.metadata_mut().insert(
@@ -87,7 +87,7 @@ async fn should_serve_schema_over_grpc_web() {
     let inner = response.into_inner();
 
     let parsed: serde_json::Value = serde_json::from_str(&inner.schema_json).unwrap();
-    assert_eq!(parsed["name"], "zeroclaw");
+    assert_eq!(parsed["name"], "tched_router");
     assert_eq!(parsed["version"], "1.0.0");
     assert_eq!(inner.trace_id, "integration-test-trace");
     assert_eq!(inner.session_genesis, "integration-test-genesis");
@@ -98,7 +98,7 @@ async fn should_stream_reload_on_sighup() {
     let (addr, loader, path) = start_test_server().await;
 
     let endpoint = format!("http://{}", addr);
-    let mut client = ZeroclawServiceClient::connect(endpoint).await.unwrap();
+    let mut client = TchedRouterServiceClient::connect(endpoint).await.unwrap();
 
     let mut stream = client
         .watch_schema(tonic::Request::new(WatchSchemaRequest {}))
@@ -117,7 +117,7 @@ async fn should_stream_reload_on_sighup() {
     // the event through the loader's channel. Tests do not send real SIGHUP to
     // the process to avoid interfering with other tests.
     let updated = json!({
-        "name": "zeroclaw",
+        "name": "tched_router",
         "version": "2.0.0",
         "kind": "llm",
         "description": "reloaded schema"

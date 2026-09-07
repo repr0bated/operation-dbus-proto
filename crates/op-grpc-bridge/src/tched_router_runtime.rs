@@ -3,6 +3,7 @@
 //! ZeroClaw owns provider/model discovery, selection, persistence, reload, and
 //! chat execution. The bridge remains the capability and audit boundary; it
 //! does not implement another model provider.
+#![allow(dead_code)] // infrastructure for tched_router runtime; not yet fully dispatched
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -19,7 +20,7 @@ const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8084";
 const DEFAULT_AGENT_ALIAS: &str = "dashboard";
 
 #[derive(Clone, Debug)]
-pub(crate) struct ZeroclawRuntimeClient {
+pub(crate) struct TchedRouterRuntimeClient {
     http: reqwest::Client,
     endpoint: String,
     agent_alias: String,
@@ -69,13 +70,13 @@ struct ModelCatalogResponse {
     live: bool,
 }
 
-impl ZeroclawRuntimeClient {
+impl TchedRouterRuntimeClient {
     pub(crate) fn from_env() -> Self {
-        let endpoint = std::env::var("ZEROCLAW_RUNTIME_ENDPOINT")
+        let endpoint = std::env::var("TCHED_ROUTER_RUNTIME_ENDPOINT")
             .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
-        let agent_alias = std::env::var("ZEROCLAW_RUNTIME_AGENT")
+        let agent_alias = std::env::var("TCHED_ROUTER_RUNTIME_AGENT")
             .unwrap_or_else(|_| DEFAULT_AGENT_ALIAS.to_string());
-        let token = std::env::var("ZEROCLAW_RUNTIME_TOKEN")
+        let token = std::env::var("TCHED_ROUTER_RUNTIME_TOKEN")
             .ok()
             .filter(|value| !value.trim().is_empty());
         Self::new(endpoint, agent_alias, token)
@@ -241,7 +242,7 @@ impl ZeroclawRuntimeClient {
             providers.push(Provider {
                 id: provider.family.clone(),
                 route: provider.reference.clone(),
-                kind: "zeroclaw-runtime".to_string(),
+                kind: "tched-router-runtime".to_string(),
                 aliases: vec![provider.reference.clone()],
                 sdk: "zeroclaw".to_string(),
                 description: format!(
@@ -255,7 +256,7 @@ impl ZeroclawRuntimeClient {
                     hint: "runtime".to_string(),
                     provider: provider.family.clone(),
                     upstream_provider: provider.family.clone(),
-                    transport: "zeroclaw-loopback".to_string(),
+                    transport: "tched-router-loopback".to_string(),
                     model,
                     kind: "chat".to_string(),
                     status: if catalog.live {
@@ -284,7 +285,7 @@ impl ZeroclawRuntimeClient {
         state.catalog.router.provider = selected.family.clone();
         state.catalog.router.model = selected.selected_model.clone();
         state.catalog.router.endpoint = self.endpoint.clone();
-        state.catalog.router.role = "zeroclaw-runtime-authority".to_string();
+        state.catalog.router.role = "tched-router-runtime-authority".to_string();
         Ok(state)
     }
 
@@ -426,7 +427,7 @@ fn parse_configured_providers(entries: Vec<ConfigListEntry>) -> Vec<ConfiguredPr
 fn conversation_prompt(input: &ChatInput) -> anyhow::Result<String> {
     if input.messages.is_empty() {
         if input.message.trim().is_empty() {
-            return Err(anyhow!("zeroclaw.Chat requires message or messages"));
+            return Err(anyhow!("tched_router.Chat requires message or messages"));
         }
         return Ok(input.message.clone());
     }

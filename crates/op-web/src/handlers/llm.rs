@@ -49,7 +49,7 @@ pub async fn llm_status_handler(
     let mut provider = state.chat_manager.current_provider().await.to_string();
     let mut model = state.chat_manager.current_model().await;
     if let Some((selected_provider, selected_model)) =
-        crate::zeroclaw_routes::selected_provider_model()
+        crate::tched_router_routes::selected_provider_model()
     {
         if !selected_provider.is_empty() {
             provider = selected_provider;

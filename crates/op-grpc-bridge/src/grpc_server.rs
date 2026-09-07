@@ -779,7 +779,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 ///
 /// This is the SINGLE source of the backplane's service set. Every endpoint that
 /// serves the backplane — the op-dbus bridge (`run_grpc_server`, TCP `:50051`) and
-/// the zeroclaw bridge (`run_zeroclaw_server`, `:8090` + `container.sock`) — builds
+/// the tched_router bridge (`run_tched_router_server`, `:8090` + `container.sock`) — builds
 /// its routes from here, so reflection can never advertise a service that isn't
 /// actually mounted (the bug the gRPC-Web probe surfaced).
 ///
@@ -790,7 +790,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 ///
 /// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
 /// semantic shuttle already attached) and adds endpoint-specific extras
-/// afterward (e.g. the zeroclaw bridge adds `ZeroclawService`; `run_grpc_server`
+/// afterward (e.g. the tched_router bridge adds `TchedRouterService`; `run_grpc_server`
 /// adds the gRPC health service).
 ///
 /// Adding a new domain service: add one `.add_service(...)` here and it appears on

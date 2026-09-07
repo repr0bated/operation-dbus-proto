@@ -651,8 +651,8 @@ impl TchedRouterPlugin {
         let selected_provider = Self::env_or("LLM_PROVIDER", "opencode");
         let selected_model = Self::env_or("LLM_MODEL", Self::DEFAULT_CHAT_MODEL);
         let chat_model = selected_model.clone();
-        let router_endpoint = Self::env_or("ZEROCLAW_ROUTER_ENDPOINT", "http://localhost:11434");
-        let grpc_target = Self::env_or("ZEROCLAW_GRPC_TARGET", "http://10.200.0.2:50051");
+        let router_endpoint = Self::env_or("TCHED_ROUTER_ENDPOINT", "http://localhost:11434");
+        let grpc_target = Self::env_or("TCHED_ROUTER_GRPC_TARGET", "http://10.200.0.2:50051");
         let grpc_target_for_provider = grpc_target.clone();
 
         let co = Self::configurable_options();
@@ -673,7 +673,7 @@ impl TchedRouterPlugin {
                 incus_container: "host".to_string(),
                 browser_surface: "gRPC-Web through op-web".to_string(),
                 rest_aliases: vec![
-                    "/api/zeroclaw/chat".to_string(),
+                    "/api/tched-router/chat".to_string(),
                     "/api/llm/chat".to_string(),
                 ],
                 policy_source: Self::OSCAL_SUBID_REGISTRY_OBJECT.to_string(),
@@ -842,7 +842,7 @@ impl TchedRouterPlugin {
                         hint: "local".to_string(),
                         provider: "opencode".to_string(),
                         upstream_provider: "opencode".to_string(),
-                        transport: "zeroclaw-loopback".to_string(),
+                        transport: "tched-router-loopback".to_string(),
                         model: chat_model.clone(),
                         kind: "router".to_string(),
                         status: "declared".to_string(),
@@ -896,7 +896,7 @@ impl TchedRouterPlugin {
                         hint: "local".to_string(),
                         provider: "factory".to_string(),
                         upstream_provider: "opencode".to_string(),
-                        transport: "zeroclaw-loopback".to_string(),
+                        transport: "tched-router-loopback".to_string(),
                         model: chat_model.clone(),
                         kind: "router".to_string(),
                         status: "declared".to_string(),
@@ -1017,7 +1017,7 @@ impl TchedRouterPlugin {
                     UiSurface {
                         path: "/models".to_string(),
                         name: "Routable Models".to_string(),
-                        schema: "zeroclaw.providers".to_string(),
+                        schema: "tched_router.providers".to_string(),
                     },
                 ],
                 structured_output: StructuredOutput {
@@ -1589,7 +1589,7 @@ impl StatePlugin for TchedRouterPlugin {
 // PLUGIN EXIT: publish the single PluginSchema contract
 // =============================================================================
 
-/// Canonical `zeroclaw` schema derived from [`TchedRouterState`] via schemars.
+/// Canonical `tched_router` schema derived from [`TchedRouterState`] via schemars.
 pub(crate) fn tched_router_schema() -> PluginSchema {
     tched_router_schema_from_state(TchedRouterPlugin::current_state())
 }
@@ -1848,34 +1848,34 @@ fn register_cli_config_methods(schema: &mut PluginSchema) {
         (
             "config_list",
             "obs.software.tched-router.config-list@v1",
-            "List every zeroclaw config property.",
+            "List every 3tched-router config property.",
         ),
         (
             "config_get",
             "obs.software.tched-router.config-get@v1",
-            "Get one zeroclaw config property.",
+            "Get one 3tched-router config property.",
         ),
     ];
     let writes = [
         (
             "config_set",
             "mut.software.tched-router.config-set@v1",
-            "Set one zeroclaw config property.",
+            "Set one 3tched-router config property.",
         ),
         (
             "config_patch",
             "mut.software.tched-router.config-patch@v1",
-            "Apply a JSON Patch to zeroclaw config.",
+            "Apply a JSON Patch to 3tched-router config.",
         ),
         (
             "config_init",
             "mut.software.tched-router.config-init@v1",
-            "Initialize a zeroclaw config section.",
+            "Initialize a 3tched-router config section.",
         ),
         (
             "config_migrate",
             "mut.software.tched-router.config-migrate@v1",
-            "Migrate zeroclaw config.toml to the current schema.",
+            "Migrate 3tched-router config.toml to the current schema.",
         ),
     ];
     for (name, subid, description) in reads {
@@ -2082,8 +2082,8 @@ pub fn dispatch_tched_router_method(
         "SetVectorizationModel" => set_role_model_handler(json_args, state, "vectorization"),
         "SetQdrantRetrievalModel" => set_role_model_handler(json_args, state, "qdrant_retrieval"),
         "SetCozoRetrievalModel" => set_role_model_handler(json_args, state, "cozo_retrieval"),
-        config_method if zeroclaw_config_subcommand(config_method).is_some() => {
-            run_zeroclaw_config(config_method, json_args)
+        config_method if tched_router_config_subcommand(config_method).is_some() => {
+            run_tched_router_config(config_method, json_args)
         }
         other => {
             super::tched_router_config_surface::dispatch_config_method(other, json_args, state)
@@ -2096,7 +2096,7 @@ pub fn dispatch_tched_router_method(
     }
 }
 
-fn run_zeroclaw_config(
+fn run_tched_router_config(
     method: &str,
     json_args: &str,
 ) -> std::result::Result<DispatchOutcome, TchedRouterError> {
@@ -2116,10 +2116,11 @@ fn run_zeroclaw_config(
         Some(JsonValue::Null) | None => None,
         Some(other) => Some(other.to_string()),
     };
-    let sub =
-        zeroclaw_config_subcommand(method).ok_or_else(|| TchedRouterError::ExecutionDenied {
-            reason: format!("undeclared zeroclaw config method: {method}"),
-        })?;
+    let sub = tched_router_config_subcommand(method).ok_or_else(|| {
+        TchedRouterError::ExecutionDenied {
+            reason: format!("undeclared tched_router config method: {method}"),
+        }
+    })?;
     if matches!(sub, "set" | "get") && path.is_empty() {
         return Err(TchedRouterError::ExecutionDenied {
             reason: format!("{method} requires a nonempty string path"),
@@ -2216,7 +2217,7 @@ fn run_zeroclaw_config(
 /// Exact CLI method inventory shared by dispatch and hermetic dispatcher tests.
 /// Keeping this mapping pure avoids invoking or mutating a host-installed CLI
 /// merely to prove that a schema declaration has an implementation route.
-fn zeroclaw_config_subcommand(method: &str) -> Option<&'static str> {
+fn tched_router_config_subcommand(method: &str) -> Option<&'static str> {
     match method {
         "config_list" => Some("list"),
         "config_get" => Some("get"),
@@ -2532,7 +2533,7 @@ mod tests {
                 // never exercised by a dispatch test.
                 continue;
             }
-            if let Some(subcommand) = zeroclaw_config_subcommand(method) {
+            if let Some(subcommand) = tched_router_config_subcommand(method) {
                 assert_eq!(
                     subcommand,
                     method.trim_start_matches("config_"),

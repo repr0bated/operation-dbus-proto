@@ -1,4 +1,4 @@
-//! Zeroclaw D-Bus + gRPC object blob prototype.
+//! 3tched Router D-Bus + gRPC object blob prototype.
 //!
 //! This is the copy-forward shape for coupling D-Bus identity, plugin schema
 //! identity, and tonic reflection identity without making D-Bus passthrough part
@@ -29,7 +29,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zeroclaw_blob_couples_dbus_schema_and_grpc_identity() {
+    fn tched_router_blob_couples_dbus_schema_and_grpc_identity() {
         let blob = from_plugin_schema();
 
         assert_eq!(blob.manifest.plugin_id, "tched_router");

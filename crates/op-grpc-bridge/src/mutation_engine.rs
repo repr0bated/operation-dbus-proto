@@ -250,6 +250,7 @@ pub struct MutationEngine {
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
     /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
+    #[allow(dead_code)] // wired for chat dispatch; not yet called from dispatch loop
     chat_manager: Arc<ChatManager>,
     /// Lazily initialized cognitive runtime.  It is owned by the bridge and is
     /// reached only after a call has entered PluginService/MutationEngine; it
@@ -435,16 +436,16 @@ fn write_identity_projection_at(
     json: &[u8],
     group_gid: nix::unistd::Gid,
 ) -> anyhow::Result<()> {
-    std::fs::create_dir_all(&state_dir)?;
+    std::fs::create_dir_all(state_dir)?;
     let credential_dir =
-        op_core::projection_shm::credential_projection_dir_for_state_dir(&state_dir);
+        op_core::projection_shm::credential_projection_dir_for_state_dir(state_dir);
     std::fs::create_dir_all(&credential_dir)?;
     std::fs::set_permissions(&credential_dir, std::fs::Permissions::from_mode(0o750))?;
     nix::unistd::chown(std::path::Path::new(&credential_dir), None, Some(group_gid))
         .map_err(|error| anyhow::anyhow!("set identity credential directory group: {error}"))?;
 
     let credential_path =
-        op_core::projection_shm::credential_projection_file_path_in(&state_dir, "identity_sled");
+        op_core::projection_shm::credential_projection_file_path_in(state_dir, "identity_sled");
     op_core::projection_shm::atomic_write_shm_with_permissions(
         &credential_path,
         json,
@@ -456,7 +457,7 @@ fn write_identity_projection_at(
     let mut public = simd_json::to_owned_value(&mut parsed)?;
     redact_identity_credentials(&mut public);
     let public_json = simd_json::to_vec(&public)?;
-    let public_path = op_core::projection_shm::projection_file_path_in(&state_dir, "identity_sled");
+    let public_path = op_core::projection_shm::projection_file_path_in(state_dir, "identity_sled");
     op_core::projection_shm::atomic_write_shm_with_permissions(
         &public_path,
         &public_json,
@@ -466,7 +467,7 @@ fn write_identity_projection_at(
 
     // The public manifest is only a generation counter and contains no sled
     // data. Bump it after both files are installed as the commit point.
-    op_core::projection_shm::bump_manifest_generation_in(&state_dir)?;
+    op_core::projection_shm::bump_manifest_generation_in(state_dir)?;
     Ok(())
 }
 
@@ -544,7 +545,7 @@ impl MutationEngine {
                 // This is a release-owned singleton identity, so its first
                 // registration is itself a MutationEngine event. No direct
                 // Cozo bootstrap or unaudited startup write is permitted.
-                let args = simd_json::serde::to_owned_value(&serde_json::json!({
+                let args = simd_json::serde::to_owned_value(serde_json::json!({
                     "human_pubkey": wireguard_pubkey,
                     "display_alias": "control-plane-chatbot"
                 }))?;
@@ -2189,7 +2190,7 @@ impl MutationEngine {
                     // Selected model on tched-router (:8084). Tools are compact
                     // MCP on that agent — not deprecated op-llm.
                     serde_json::to_value(
-                        crate::zeroclaw_runtime::ZeroclawRuntimeClient::from_env()
+                        crate::tched_router_runtime::TchedRouterRuntimeClient::from_env()
                             .chat(&state, args)
                             .await?,
                     )?
@@ -2199,7 +2200,7 @@ impl MutationEngine {
                     ) {
                         Ok(outcome) => {
                             if method.starts_with("Set") {
-                                self.persist_zeroclaw_mutation(method, &outcome.result)
+                                self.persist_tched_router_mutation(method, &outcome.result)
                                     .await?;
                             }
                             if let Some(sig) = &outcome.signal {
@@ -2344,7 +2345,7 @@ impl MutationEngine {
         let _ = self.change_tx.send(signal);
     }
 
-    async fn persist_zeroclaw_mutation(
+    async fn persist_tched_router_mutation(
         &self,
         method: &str,
         result: &serde_json::Value,
@@ -2369,7 +2370,7 @@ impl MutationEngine {
     }
 
     /// Merge a flat JSON object of changed fields into the authoritative
-    /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
+    /// in-memory state cache for `plugin_id` (used to persist 3tched Router `Set*`
     /// selection changes so readers observe the new effective state).
     async fn merge_into_state_cache(&self, plugin_id: &str, changes: &serde_json::Value) {
         let changes_obj = match changes.as_object() {
@@ -3094,6 +3095,7 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
 impl MutationEngine {
     /// Resolve trusted per-tool authority metadata from the live in-process
     /// registry. MCP callers never provide or override this descriptor.
+    #[allow(dead_code)] // infrastructure for cognitive MCP tool dispatch
     pub(crate) async fn cognitive_tool_descriptor(
         &self,
         tool_name: &str,

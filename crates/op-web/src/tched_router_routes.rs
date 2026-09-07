@@ -1,6 +1,6 @@
 //! Router-plugin helpers backed by the SHM state tree.
 //!
-//! HTTP paths stay `/api/zeroclaw/*` and `/api/llm/*` (what the UI already
+//! HTTP paths stay `/api/tched-router/*` and `/api/llm/*` (what the UI already
 //! calls). The sealed plugin those handlers read is `tched_router`.
 
 use anyhow::{bail, Result};
@@ -16,7 +16,7 @@ pub const ROUTER_PLUGIN_ID: &str = "tched_router";
 pub const LEGACY_ROUTER_PLUGIN_ID: &str = "zeroclaw";
 
 #[derive(Debug, Clone)]
-pub struct ZeroclawRoute {
+pub struct TchedRouterRoute {
     pub provider: String,
     pub upstream_provider: String,
     pub transport: Option<String>,
@@ -29,7 +29,7 @@ pub struct ZeroclawRoute {
     pub source: Option<String>,
 }
 
-impl ZeroclawRoute {
+impl TchedRouterRoute {
     fn from_value(value: &Value) -> Option<Self> {
         let model = value.get("model")?.as_str()?.to_string();
         let provider = value
@@ -108,18 +108,18 @@ pub fn model_route_values(state: &Value) -> Option<&Vec<Value>> {
         })
 }
 
-pub fn routes() -> Option<Vec<ZeroclawRoute>> {
+pub fn routes() -> Option<Vec<TchedRouterRoute>> {
     let state = read_router_plugin()?;
     let route_values = model_route_values(&state)?;
     Some(
         route_values
             .iter()
-            .filter_map(ZeroclawRoute::from_value)
+            .filter_map(TchedRouterRoute::from_value)
             .collect(),
     )
 }
 
-pub fn route_for_model(model: &str) -> Option<ZeroclawRoute> {
+pub fn route_for_model(model: &str) -> Option<TchedRouterRoute> {
     routes()?.into_iter().find(|route| route.model == model)
 }
 

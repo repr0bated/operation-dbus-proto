@@ -4,7 +4,7 @@
 //! (`model_routes`, `tools`, `selector_policy`) handed to it. It performs no
 //! I/O, no env reads, no D-Bus calls, and contains **no `match` arm on provider
 //! or model name** — selection is entirely data-driven from schema state
-//! (REQ-03). Cost is compared via the Zeroclaw-native `cost_profile`
+//! (REQ-03). Cost is compared via the 3tched Router-native `cost_profile`
 //! budget-class string (ordinal rank), never `cost_per_token` or currency math.
 //!
 //! Determinism: given identical `state` and `input`, the selected route,

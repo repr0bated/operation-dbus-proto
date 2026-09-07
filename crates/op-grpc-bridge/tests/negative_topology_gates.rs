@@ -50,7 +50,7 @@ const PINNED_PROTO_FILES: &[&str] = &[
     "crates/op-grpc-bridge/proto/privacy_network.proto",
     "crates/op-grpc-bridge/proto/registration.proto",
     "crates/op-grpc-bridge/proto/registry.proto",
-    "crates/op-grpc-bridge/src/grpc/zeroclaw.proto",
+    "crates/op-grpc-bridge/src/grpc/tched_router.proto",
     "crates/op-mcp/proto/internal_agents.proto",
     "crates/op-mcp/proto/mcp.proto",
     "crates/op-services/proto/services.proto",
@@ -85,7 +85,7 @@ const PINNED_GRPC_PACKAGES: &[&str] = &[
     "xray.app.stats.command",
     "xray.common.net",
     "xray.common.serial",
-    "zeroclaw",
+    "tched_router",
 ];
 
 const PINNED_PYTHON_FILES: &[&str] = &[

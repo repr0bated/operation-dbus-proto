@@ -3,6 +3,7 @@
 //! Implements the `op_chat.chat.ChatService` trait from `chat.proto`.
 //! Served on the op-grpc-bridge alongside StateSync, PluginService, etc.
 //! so zeroclaw-gui discovers it via a single reflection endpoint.
+#![allow(dead_code)] // many items are infrastructure for upcoming chat features
 //!
 //! Architecture:
 //! - zeroclaw owns provider/model routing (OD-28) — SendRequest carries them.
@@ -38,6 +39,7 @@ use crate::proto::chat::{
 const ROUTER_PLUGIN_ID: &str = "tched_router";
 const ROUTER_CHAT_CAPABILITY: &str = "cap.software.3tched-router.chat@v1";
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct ResolvedExecutionRoute {
     provider: ProviderType,
@@ -253,7 +255,7 @@ async fn execute_chat(
     Ok((route, response))
 }
 
-/// Execute the schema-declared `zeroclaw.Chat` method after the mutation
+/// Execute the schema-declared `tched_router.Chat` method after the mutation
 /// engine has recorded the call. Provider/model selection remains owned by
 /// the projected ZeroClaw schema; `ChatManager` only performs the resolved
 /// upstream call.
@@ -264,7 +266,7 @@ pub(crate) async fn dispatch_schema_chat(
 ) -> anyhow::Result<ChatOutput> {
     let messages = if input.messages.is_empty() {
         if input.message.trim().is_empty() {
-            return Err(anyhow!("zeroclaw.Chat requires message or messages"));
+            return Err(anyhow!("tched_router.Chat requires message or messages"));
         }
         vec![op_llm::ChatMessage {
             role: "user".to_string(),
@@ -368,7 +370,6 @@ impl ChatService for ChatServiceImpl {
 
         let cancellations = self.cancellations.clone();
         let engine = self.engine.clone();
-        let identity = identity;
         let conv_id = conversation_id.clone();
 
         tokio::spawn(async move {

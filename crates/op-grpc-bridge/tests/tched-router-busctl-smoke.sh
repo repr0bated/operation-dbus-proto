@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Zeroclaw D-Bus smoke test (mission T-18).
+# 3tched Router D-Bus smoke test (mission T-18).
 #
 # Requires a running op-grpc-bridge that owns org.opdbus.v1.plugins — the only
 # legal tree. This is an integration check, not a unit test; it is not run by
@@ -12,10 +12,10 @@ set -eu
 
 BUS="${BUSCTL_ARGS:---address=unix:path=/run/opdbus/session-bus.sock}"
 DEST="org.opdbus.v1.plugins"
-PLUGIN_PATH="/org/opdbus/v1/plugins/zeroclaw"
+PLUGIN_PATH="/org/opdbus/v1/plugins/tched_router"
 IFACE="org.opdbus.v1.PluginV1"
 
-say() { printf '[zeroclaw-smoke] %s\n' "$1"; }
+say() { printf '[tched-router-smoke] %s\n' "$1"; }
 
 # 1. GetModelRoutes on the top-level plugin object returns a JSON array.
 say "calling GetModelRoutes"
