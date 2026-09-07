@@ -1,8 +1,11 @@
 {
-  "generation": 3,
+  "generation": 5,
   "hot": [
     "memory_recall",
     "memory_store",
+    "oscal_subids",
+    "rust_pro",
+    "schema_read",
     "workflow_query",
     "workflow_run",
     "toolsets"
@@ -10,7 +13,7 @@
   "sets": [
     {
       "id": "context_code",
-      "temperature": "warm",
+      "temperature": "hot",
       "provider": "op-grpc-bridge",
       "requires_provider_health": false,
       "tools": [
@@ -21,7 +24,7 @@
     },
     {
       "id": "context_knowledge",
-      "temperature": "warm",
+      "temperature": "hot",
       "provider": "op-grpc-bridge",
       "requires_provider_health": false,
       "tools": [
@@ -49,7 +52,7 @@
     },
     {
       "id": "notebooklm_auth",
-      "temperature": "warm",
+      "temperature": "hot",
       "provider": "notebooklm-mcp",
       "requires_provider_health": true,
       "tools": [
@@ -59,7 +62,7 @@
     },
     {
       "id": "notebooklm_research",
-      "temperature": "warm",
+      "temperature": "hot",
       "provider": "notebooklm-mcp-authenticated",
       "requires_provider_health": true,
       "tools": [
