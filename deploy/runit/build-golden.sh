@@ -69,8 +69,8 @@ EMQX_ARTIFACT_CACHE_DIR=${EMQX_ARTIFACT_CACHE_DIR:-/var/cache/op-dbus/source-art
 MCP_PROVIDER_ARTIFACT_CACHE_DIR=${MCP_PROVIDER_ARTIFACT_CACHE_DIR:-/var/cache/op-dbus/source-artifacts}
 NOTEBOOKLM_MCP_VERSION_FILE="$SCRIPT_DIR/../config/notebooklm-mcp.version"
 MONGODB_MCP_VERSION_FILE="$SCRIPT_DIR/../config/mongodb-mcp-server.version"
-NOTEBOOKLM_MCP_OVERLAY_SOURCE="$SCRIPT_DIR/provider-overlays/notebooklm-mcp/http.js"
-NOTEBOOKLM_MCP_OVERLAY_TARGET=node_modules/notebooklm-mcp/dist/transport/http.js
+NLM_CLI_BIN=/usr/local/bin/nlm
+NLM_CLI_ROOT=/opt/opdbus
 
 is_retired_service() {
     svc=$1
@@ -109,6 +109,54 @@ run() {
     fi
 }
 
+apply_provider_patch() {
+    patch_root=$1
+    patch_source=$2
+    if [ "$DRY_RUN" = 1 ]; then
+        printf '  would patch: %s with %s\n' "$patch_root" "$patch_source"
+    else
+        patch --batch --silent -d "$patch_root" -p1 < "$patch_source" ||
+            die "failed to apply provider patch: $patch_source"
+    fi
+}
+
+write_nlm_wrapper() {
+    dest=$1
+    venv_nlm=$2
+    if [ "$DRY_RUN" = 1 ]; then
+        printf '  would write nlm wrapper: %s -> %s\n' "$dest" "$venv_nlm"
+        return 0
+    fi
+    [ ! -e /usr/bin/nlm ] || [ "$(readlink -f "$dest" 2>/dev/null || true)" != /usr/bin/nlm ] ||
+        die "refusing to overwrite /usr/bin/nlm"
+    printf '#!/bin/sh\nexec %s "$@"\n' "$venv_nlm" > "$dest"
+    chmod 0755 "$dest"
+}
+
+install_nlm_cli() {
+    dest_root=$1
+    wrapper=$2
+    venv="$dest_root$NLM_CLI_ROOT/$NOTEBOOKLM_MCP_INSTALL_NAME"
+    marker="$venv/.opdbus-artifact-sha256"
+    if [ -f "$marker" ] && [ "$(sed -n '1p' "$marker")" = "$NOTEBOOKLM_MCP_SHA256" ] &&
+       [ -x "$venv/bin/nlm" ]; then
+        :
+    else
+        [ ! -e "$venv" ] || run rm -r -- "$venv"
+        if [ "$DRY_RUN" = 1 ]; then
+            printf '  would venv+pip: %s from %s\n' "$venv" "$NOTEBOOKLM_MCP_ARTIFACT_PATH"
+        else
+            python3 -m venv "$venv" || die "python3 -m venv failed for nlm"
+            "$venv/bin/pip" install --no-cache-dir --disable-pip-version-check \
+                "$NOTEBOOKLM_MCP_ARTIFACT_PATH" ||
+                die "pip install notebooklm-mcp-cli failed"
+            printf '%s\n' "$NOTEBOOKLM_MCP_SHA256" > "$marker"
+        fi
+    fi
+    run chmod 0755 "$venv"
+    write_nlm_wrapper "$wrapper" "$venv/bin/nlm"
+}
+
 [ -r "$EMQX_VERSION_FILE" ] || die "missing EMQX artifact declaration: $EMQX_VERSION_FILE"
 # shellcheck disable=SC1090 -- release-owned, fixed-key declaration validated below.
 . "$EMQX_VERSION_FILE"
@@ -120,7 +168,7 @@ EMQX_ARTIFACT_PATH="$EMQX_ARTIFACT_CACHE_DIR/$EMQX_ARTIFACT"
 EMQX_INSTALL_NAME="emqx-$EMQX_VERSION-$EMQX_SHA256"
 
 [ -r "$NOTEBOOKLM_MCP_VERSION_FILE" ] ||
-    die "missing NotebookLM MCP artifact declaration: $NOTEBOOKLM_MCP_VERSION_FILE"
+    die "missing NotebookLM nlm wheel declaration: $NOTEBOOKLM_MCP_VERSION_FILE"
 # shellcheck disable=SC1090 -- release-owned, fixed-key declaration validated below.
 . "$NOTEBOOKLM_MCP_VERSION_FILE"
 case "${NOTEBOOKLM_MCP_VERSION:-}" in *[!0-9.]*|'') die "invalid NOTEBOOKLM_MCP_VERSION" ;; esac
@@ -128,18 +176,8 @@ case "${NOTEBOOKLM_MCP_ARTIFACT:-}" in *[!A-Za-z0-9._-]*|'') die "invalid NOTEBO
 case "${NOTEBOOKLM_MCP_SHA256:-}" in *[!0-9a-f]*|'') die "invalid NOTEBOOKLM_MCP_SHA256" ;; esac
 [ "${#NOTEBOOKLM_MCP_SHA256}" -eq 64 ] ||
     die "NOTEBOOKLM_MCP_SHA256 must contain 64 lowercase hex characters"
-[ -f "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" ] ||
-    die "missing tracked NotebookLM MCP transport overlay: $NOTEBOOKLM_MCP_OVERLAY_SOURCE"
-NOTEBOOKLM_MCP_OVERLAY_SHA256=$(sha256sum "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" | cut -d' ' -f1)
-NOTEBOOKLM_MCP_DEPLOY_SHA256=$(
-    printf '%s\n' \
-        "$NOTEBOOKLM_MCP_SHA256" \
-        "$NOTEBOOKLM_MCP_OVERLAY_TARGET" \
-        "$NOTEBOOKLM_MCP_OVERLAY_SHA256" |
-        sha256sum | cut -d' ' -f1
-)
 NOTEBOOKLM_MCP_ARTIFACT_PATH="$MCP_PROVIDER_ARTIFACT_CACHE_DIR/$NOTEBOOKLM_MCP_ARTIFACT"
-NOTEBOOKLM_MCP_INSTALL_NAME="notebooklm-mcp-$NOTEBOOKLM_MCP_VERSION-$NOTEBOOKLM_MCP_DEPLOY_SHA256"
+NOTEBOOKLM_MCP_INSTALL_NAME="nlm-cli-$NOTEBOOKLM_MCP_VERSION-$NOTEBOOKLM_MCP_SHA256"
 
 [ -r "$MONGODB_MCP_VERSION_FILE" ] ||
     die "missing MongoDB MCP artifact declaration: $MONGODB_MCP_VERSION_FILE"
@@ -190,21 +228,22 @@ for required_config in emqx.conf base.hocon acl.conf; do
         die "missing tracked EMQX config: $EMQX_CONFIG_DIR/$required_config"
 done
 [ -f "$NOTEBOOKLM_MCP_ARTIFACT_PATH" ] ||
-    die "missing pinned NotebookLM MCP artifact: $NOTEBOOKLM_MCP_ARTIFACT_PATH"
+    die "missing pinned jacob-bd nlm wheel: $NOTEBOOKLM_MCP_ARTIFACT_PATH"
 [ "$(sha256sum "$NOTEBOOKLM_MCP_ARTIFACT_PATH" | cut -d' ' -f1)" = "$NOTEBOOKLM_MCP_SHA256" ] ||
-    die "NotebookLM MCP artifact digest does not match deploy/config/notebooklm-mcp.version"
-tar -tzf "$NOTEBOOKLM_MCP_ARTIFACT_PATH" | awk '
-    /^\// || /(^|\/)\.\.($|\/)/ { bad = 1 }
-    END { exit bad ? 1 : 0 }
-' || die "NotebookLM MCP artifact contains an unsafe path"
-tar -tzf "$NOTEBOOKLM_MCP_ARTIFACT_PATH" |
-    grep -qx 'node_modules/notebooklm-mcp/dist/index.js' ||
-    die "NotebookLM MCP artifact is missing its provider entry point"
-tar -tzf "$NOTEBOOKLM_MCP_ARTIFACT_PATH" |
-    grep -qx "$NOTEBOOKLM_MCP_OVERLAY_TARGET" ||
-    die "NotebookLM MCP artifact is missing its overlaid HTTP transport"
-/usr/bin/node --check "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" >/dev/null ||
-    die "NotebookLM MCP transport overlay is not valid JavaScript"
+    die "nlm wheel digest does not match deploy/config/notebooklm-mcp.version"
+python3 - "$NOTEBOOKLM_MCP_ARTIFACT_PATH" <<'PY' ||
+import sys, zipfile
+wheel = zipfile.ZipFile(sys.argv[1])
+names = wheel.namelist()
+if any(n.startswith("/") or "/../" in n or n.startswith("../") for n in names):
+    raise SystemExit("unsafe path in nlm wheel")
+if not any(n.endswith("entry_points.txt") for n in names):
+    raise SystemExit("nlm wheel is missing entry_points.txt")
+text = wheel.read(next(n for n in names if n.endswith("entry_points.txt"))).decode()
+if "nlm =" not in text and "nlm=" not in text:
+    raise SystemExit("nlm wheel does not declare the nlm console script")
+PY
+    die "pinned nlm wheel failed integrity checks"
 
 [ -f "$MONGODB_MCP_ARTIFACT_PATH" ] ||
     die "missing pinned MongoDB MCP artifact: $MONGODB_MCP_ARTIFACT_PATH"
@@ -350,6 +389,8 @@ build_golden() {
         provider_entry=$5
         provider_overlay_source=${6:-}
         provider_overlay_target=${7:-}
+        provider_patch_source=${8:-}
+        provider_patch_target=${9:-}
         provider_root="$GOLDEN_DIR/opt/op-mcp-providers/$provider_install_name"
         provider_marker="$provider_root/.opdbus-artifact-sha256"
         provider_current=0
@@ -360,6 +401,11 @@ build_golden() {
                ! cmp -s "$provider_overlay_source" "$provider_root/$provider_overlay_target"; then
                 die "$provider_alias content-addressed overlay does not match its digest marker"
             fi
+            if [ -n "$provider_patch_source" ] &&
+               ! patch --batch --silent --dry-run --reverse \
+                    -d "$provider_root" -p1 < "$provider_patch_source" >/dev/null; then
+                die "$provider_alias content-addressed auth patch does not match its digest marker"
+            fi
         fi
         if [ "$provider_current" != 1 ]; then
             [ ! -e "$provider_root" ] || run rm -r -- "$provider_root"
@@ -369,6 +415,9 @@ build_golden() {
                 run install -Dm644 "$provider_overlay_source" \
                     "$provider_root/$provider_overlay_target"
             fi
+            if [ -n "$provider_patch_source" ]; then
+                apply_provider_patch "$provider_root" "$provider_patch_source"
+            fi
             if [ "$DRY_RUN" != 1 ]; then
                 [ -f "$provider_root/$provider_entry" ] ||
                     die "$provider_alias staged tree is missing $provider_entry"
@@ -376,6 +425,13 @@ build_golden() {
                     cmp -s "$provider_overlay_source" \
                         "$provider_root/$provider_overlay_target" ||
                         die "$provider_alias staged overlay verification failed"
+                fi
+                if [ -n "$provider_patch_source" ]; then
+                    patch --batch --silent --dry-run --reverse \
+                        -d "$provider_root" -p1 < "$provider_patch_source" >/dev/null ||
+                        die "$provider_alias staged auth patch verification failed"
+                    /usr/bin/node --check "$provider_root/$provider_patch_target" >/dev/null ||
+                        die "$provider_alias patched auth manager is not valid JavaScript"
                 fi
                 printf '%s\n' "$provider_sha256" > "$provider_marker"
             fi
@@ -391,19 +447,14 @@ build_golden() {
         fi
     }
     run mkdir -p "$GOLDEN_DIR/opt/op-mcp-providers"
-    stage_golden_mcp_provider \
-        notebooklm-mcp "$NOTEBOOKLM_MCP_INSTALL_NAME" \
-        "$NOTEBOOKLM_MCP_ARTIFACT_PATH" "$NOTEBOOKLM_MCP_DEPLOY_SHA256" \
-        node_modules/notebooklm-mcp/dist/index.js \
-        "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" "$NOTEBOOKLM_MCP_OVERLAY_TARGET"
+    install_nlm_cli "$GOLDEN_DIR" "$GOLDEN_DIR/bin/nlm"
     stage_golden_mcp_provider \
         mongodb-mcp-server "$MONGODB_MCP_INSTALL_NAME" \
         "$MONGODB_MCP_ARTIFACT_PATH" "$MONGODB_MCP_SHA256" \
         node_modules/mongodb-mcp-server/dist/esm/index.js
     run mkdir -p \
-        "$GOLDEN_DIR/var/log/runit/notebooklm-mcp" \
         "$GOLDEN_DIR/var/log/runit/mongodb-mcp-server"
-    ok "staged pinned NotebookLM and MongoDB MCP providers into golden/opt"
+    ok "staged pinned nlm CLI and MongoDB MCP provider into golden/opt"
 
     # Runit service definitions tracked in the repo. Explicit retirement is
     # subtractive so a reused golden subvolume cannot resurrect an old unit.
@@ -477,10 +528,8 @@ build_golden() {
             printf 'binaries: %s\n' "$BIN_COUNT"
             printf 'emqx-artifact: %s\n' "$EMQX_ARTIFACT"
             printf 'emqx-sha256: %s\n' "$EMQX_SHA256"
-            printf 'notebooklm-mcp-artifact: %s\n' "$NOTEBOOKLM_MCP_ARTIFACT"
-            printf 'notebooklm-mcp-sha256: %s\n' "$NOTEBOOKLM_MCP_SHA256"
-            printf 'notebooklm-mcp-overlay-sha256: %s\n' "$NOTEBOOKLM_MCP_OVERLAY_SHA256"
-            printf 'notebooklm-mcp-deploy-sha256: %s\n' "$NOTEBOOKLM_MCP_DEPLOY_SHA256"
+            printf 'nlm-cli-artifact: %s\n' "$NOTEBOOKLM_MCP_ARTIFACT"
+            printf 'nlm-cli-sha256: %s\n' "$NOTEBOOKLM_MCP_SHA256"
             printf 'mongodb-mcp-artifact: %s\n' "$MONGODB_MCP_ARTIFACT"
             printf 'mongodb-mcp-sha256: %s\n' "$MONGODB_MCP_SHA256"
             printf '\n[sha256]\n'
@@ -574,13 +623,6 @@ emqx_ready() {
     listener_present 127.0.0.1:1883 || return 1
     listener_present 127.0.0.1:18083 || return 1
     ! listener_present 0.0.0.0:1883
-}
-
-notebooklm_mcp_ready() {
-    sv status notebooklm-mcp 2>/dev/null | grep -q '^run:' || return 1
-    curl -fsS --max-time 2 http://127.0.0.1:3101/healthz >/dev/null 2>&1 || return 1
-    listener_present 127.0.0.1:3101 || return 1
-    ! listener_present 0.0.0.0:3101
 }
 
 mongodb_mcp_ready() {
@@ -702,7 +744,7 @@ EOF
                 xray-config-mount-up) helper_services="xray-config-mount" ;;
                 emqx-prepare) helper_services="emqx" ;;
                 mcp-provider-probe)
-                    helper_services="notebooklm-mcp mongodb-mcp-server"
+                    helper_services="mongodb-mcp-server"
                     ;;
                 *) helper_services="" ;;
             esac
@@ -799,6 +841,8 @@ EOF
         provider_entry=$5
         provider_overlay_source=${6:-}
         provider_overlay_target=${7:-}
+        provider_patch_source=${8:-}
+        provider_patch_target=${9:-}
         provider_base=/opt/op-mcp-providers
         provider_root="$provider_base/$provider_install_name"
         provider_link="$provider_base/$provider_service"
@@ -809,6 +853,13 @@ EOF
            [ -n "$provider_overlay_source" ] &&
            ! cmp -s "$provider_overlay_source" "$provider_root/$provider_overlay_target"; then
             die "$provider_service content-addressed overlay does not match its digest marker"
+        fi
+        if [ -f "$provider_marker" ] &&
+           [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" = "$provider_sha256" ] &&
+           [ -n "$provider_patch_source" ] &&
+           ! patch --batch --silent --dry-run --reverse \
+                -d "$provider_root" -p1 < "$provider_patch_source" >/dev/null; then
+            die "$provider_service content-addressed auth patch does not match its digest marker"
         fi
         if [ ! -f "$provider_marker" ] ||
            [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" != "$provider_sha256" ]; then
@@ -828,6 +879,14 @@ EOF
                     cmp -s "$provider_overlay_source" \
                         "$provider_stage/$provider_overlay_target" ||
                         die "$provider_service staged overlay verification failed"
+                fi
+                if [ -n "$provider_patch_source" ]; then
+                    apply_provider_patch "$provider_stage" "$provider_patch_source"
+                    patch --batch --silent --dry-run --reverse \
+                        -d "$provider_stage" -p1 < "$provider_patch_source" >/dev/null ||
+                        die "$provider_service staged auth patch verification failed"
+                    /usr/bin/node --check "$provider_stage/$provider_patch_target" >/dev/null ||
+                        die "$provider_service patched auth manager is not valid JavaScript"
                 fi
                 printf '%s\n' "$provider_sha256" > "$provider_stage/.opdbus-artifact-sha256"
                 chmod 0755 "$provider_stage"
@@ -861,17 +920,14 @@ EOF
         fi
     }
     run install -d -m 0755 -o root -g root /opt/op-mcp-providers
-    install_live_mcp_provider \
-        notebooklm-mcp "$NOTEBOOKLM_MCP_INSTALL_NAME" \
-        "$NOTEBOOKLM_MCP_ARTIFACT_PATH" "$NOTEBOOKLM_MCP_DEPLOY_SHA256" \
-        node_modules/notebooklm-mcp/dist/index.js \
-        "$NOTEBOOKLM_MCP_OVERLAY_SOURCE" "$NOTEBOOKLM_MCP_OVERLAY_TARGET"
+    install_nlm_cli "" "$NLM_CLI_BIN"
+    [ -e /usr/bin/nlm ] && [ "$(readlink -f "$NLM_CLI_BIN")" = /usr/bin/nlm ] &&
+        die "nlm wrapper resolved to /usr/bin/nlm; jacob-bd must stay at $NLM_CLI_BIN"
     install_live_mcp_provider \
         mongodb-mcp-server "$MONGODB_MCP_INSTALL_NAME" \
         "$MONGODB_MCP_ARTIFACT_PATH" "$MONGODB_MCP_SHA256" \
         node_modules/mongodb-mcp-server/dist/esm/index.js
     run install -d -m 0755 \
-        /var/log/runit/notebooklm-mcp \
         /var/log/runit/mongodb-mcp-server
     run install -d -m 0750 -o root -g secrets /etc/opdbus/secrets
     # SID1 is durable inside the identity Cozo relations. Keep that database
@@ -1080,7 +1136,6 @@ EOF
         log "nothing changed; no restarts needed"
         if [ "$DRY_RUN" != 1 ]; then
             ensure_enabled_service_ready op-runit-systemctl runit_manager_ready
-            ensure_enabled_service_ready notebooklm-mcp notebooklm_mcp_ready
             ensure_enabled_service_ready mongodb-mcp-server mongodb_mcp_ready
             ensure_enabled_service_ready op-grpc-bridge bridge_ready
             ensure_enabled_service_ready emqx emqx_ready
@@ -1138,7 +1193,6 @@ EOF
     # rerun completes the cutover instead of merely reporting stale state.
     for readiness in \
         op-runit-systemctl:runit_manager_ready \
-        notebooklm-mcp:notebooklm_mcp_ready \
         mongodb-mcp-server:mongodb_mcp_ready \
         op-grpc-bridge:bridge_ready \
         emqx:emqx_ready
@@ -1162,7 +1216,7 @@ EOF
     # the bridge projects them, and EMQX registers after the bridge's ExHook
     # listener is ready.
     ordered_restart_list=""
-    for svc in op-runit-systemctl notebooklm-mcp mongodb-mcp-server op-grpc-bridge emqx $restart_list; do
+    for svc in op-runit-systemctl mongodb-mcp-server op-grpc-bridge emqx $restart_list; do
         case " $restart_list " in *" $svc "*) ;; *) continue ;; esac
         case " $ordered_restart_list " in
             *" $svc "*) ;;
@@ -1197,13 +1251,6 @@ EOF
             if [ "$DRY_RUN" != 1 ]; then
                 wait_service_ready emqx_ready || die "standalone EMQX failed loopback readiness"
                 ok "standalone EMQX ready on loopback MQTT and management listeners"
-            fi
-        elif [ "$svc" = notebooklm-mcp ]; then
-            run sv restart "$svc" || die "sv restart $svc failed"
-            if [ "$DRY_RUN" != 1 ]; then
-                wait_service_ready notebooklm_mcp_ready ||
-                    die "NotebookLM MCP provider failed loopback readiness"
-                ok "NotebookLM MCP provider ready on loopback :3101"
             fi
         elif [ "$svc" = mongodb-mcp-server ]; then
             run sv restart "$svc" || die "sv restart $svc failed"

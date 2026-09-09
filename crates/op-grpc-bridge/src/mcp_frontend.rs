@@ -72,6 +72,7 @@ pub const HTTP_SEALED_ID_HEADER: &str = op_identity::sealed_id::HTTP_HEADER_NAME
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_ASSERTION_BYTES: usize = 16 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
+const NOTEBOOKLM_AUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(660);
 const DEFAULT_PAGE_SIZE: usize = 100;
 const MAX_PAGE_SIZE: usize = 500;
 const MAX_ACTIVE_MCP_SESSIONS: usize = 4096;
@@ -942,8 +943,9 @@ async fn handle_mcp(State(state): State<McpFrontendState>, request: Request<Body
     };
 
     let id = rpc.id.clone();
+    let request_timeout = request_timeout_for(&rpc.method, &rpc.params);
     let outcome = tokio::time::timeout(
-        REQUEST_TIMEOUT,
+        request_timeout,
         dispatch_rpc(
             state.backend.as_ref(),
             &caller,
@@ -1011,6 +1013,16 @@ async fn handle_mcp(State(state): State<McpFrontendState>, request: Request<Body
         }
         Ok(Err(error)) => jsonrpc_error(StatusCode::OK, id, error.code, &error.message),
         Err(_) => jsonrpc_error(StatusCode::REQUEST_TIMEOUT, id, -32000, "request timed out"),
+    }
+}
+
+fn request_timeout_for(method: &str, params: &Value) -> Duration {
+    if method == "tools/call"
+        && params.get("name").and_then(Value::as_str) == Some("plugin.notebooklm.setup_auth")
+    {
+        NOTEBOOKLM_AUTH_REQUEST_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
     }
 }
 
@@ -1296,7 +1308,7 @@ fn validate_protocol_headers(headers: &HeaderMap, rpc: &JsonRpcRequest) -> Resul
     // therefore need not carry MCP-Protocol-Version yet. All later requests
     // must carry a negotiated value this frontend can speak.
     match one_optional_header(headers, MCP_VERSION_HEADER)? {
-        Some(version) if !protocol_version_supported(&version) => {
+        Some(version) if !protocol_version_supported(version) => {
             if rpc.method != "initialize" {
                 return Err(format!("unsupported MCP protocol version: {version}"));
             }
@@ -1860,6 +1872,28 @@ mod tests {
     use super::*;
     use axum::http::header::CONTENT_TYPE;
     use tower::ServiceExt;
+
+    #[test]
+    fn notebooklm_setup_auth_alone_gets_the_interactive_request_timeout() {
+        assert_eq!(
+            request_timeout_for(
+                "tools/call",
+                &json!({"name": "plugin.notebooklm.setup_auth", "arguments": {}})
+            ),
+            NOTEBOOKLM_AUTH_REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout_for(
+                "tools/call",
+                &json!({"name": "plugin.notebooklm.get_health", "arguments": {}})
+            ),
+            REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout_for("tools/list", &json!({})),
+            REQUEST_TIMEOUT
+        );
+    }
 
     #[derive(Clone)]
     struct TestAuthenticator;

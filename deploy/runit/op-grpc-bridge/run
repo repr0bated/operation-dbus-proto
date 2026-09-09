@@ -109,13 +109,29 @@ export OPDBUS_NUMA_POLICY="${OPDBUS_NUMA_POLICY:-localalloc}"
 export OP_MCP_AUDIENCE_POLICY_PATH="${OP_MCP_AUDIENCE_POLICY_PATH:-/etc/opdbus/mcp-audience-policy.json}"
 export OP_MCP_TOOLSETS_PATH="${OP_MCP_TOOLSETS_PATH:-/etc/opdbus/mcp-toolsets.json}"
 export OP_IDENTITY_PROJECTION_GROUP="${OP_IDENTITY_PROJECTION_GROUP:-secrets}"
-# Protected local MCP client identity.  These are public selectors, not
-# credentials: the MutationEngine re-derives and exact-checks both IDs before
-# sealing the identity into the chatbot sled.  The SID1 blob in that sled is
-# the only value the short-lived native HTTP header helper forwards.
-export OP_MCP_IDENTITY_WIREGUARD_PUBKEY="${OP_MCP_IDENTITY_WIREGUARD_PUBKEY:-VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=}"
-export OP_MCP_IDENTITY_SESSION_ID="${OP_MCP_IDENTITY_SESSION_ID:-bea37ecb-92be-197c-660f-09e806f1a34f}"
-export OP_MCP_IDENTITY_PRINCIPAL_ID="${OP_MCP_IDENTITY_PRINCIPAL_ID:-87b0decc-8464-5abf-05d8-b52ec88ff9f1}"
+# jacob-bd nlm lives at /usr/local/bin/nlm. Never put NOTEBOOKLM_COOKIES in this
+# environment — those vars freeze stale auth over the on-disk profile.
+unset NOTEBOOKLM_COOKIES NOTEBOOKLM_CSRF_TOKEN NOTEBOOKLM_SESSION_ID NOTEBOOKLM_COOKIE
+export OP_NLM_BIN="${OP_NLM_BIN:-/usr/local/bin/nlm}"
+NLM_READY_DIR=/run/opdbus/runit-ready
+install -d -m 0755 "$NLM_READY_DIR"
+if [ -x "$OP_NLM_BIN" ]; then
+    touch -- "$NLM_READY_DIR/notebooklm-mcp"
+else
+    rm -f -- "$NLM_READY_DIR/notebooklm-mcp"
+fi
+# The singleton control-plane chatbot's service identity. These are public
+# selectors, not credentials; this identity belongs only to that chatbot.
+export OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY="${OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY:-VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=}"
+export OP_CONTROL_PLANE_CHATBOT_SESSION_ID="${OP_CONTROL_PLANE_CHATBOT_SESSION_ID:-bea37ecb-92be-197c-660f-09e806f1a34f}"
+export OP_CONTROL_PLANE_CHATBOT_PRINCIPAL_ID="${OP_CONTROL_PLANE_CHATBOT_PRINCIPAL_ID:-87b0decc-8464-5abf-05d8-b52ec88ff9f1}"
+# Local interactive clients, including Codex, authenticate as the existing
+# human WireGuard principal. The MutationEngine mints SID1 into this same sled;
+# there is deliberately no Codex-specific service identity.
+export OP_LOCAL_HUMAN_WIREGUARD_PUBKEY="${OP_LOCAL_HUMAN_WIREGUARD_PUBKEY:-GEMLT/+I81zs5HDPsOF22ntqGf71OEy6eFKMm7P7Dzk=}"
+export OP_LOCAL_HUMAN_SESSION_ID="${OP_LOCAL_HUMAN_SESSION_ID:-f036f8d8-aabb-c5f2-49c9-18dac19f41ea}"
+export OP_LOCAL_HUMAN_PRINCIPAL_ID="${OP_LOCAL_HUMAN_PRINCIPAL_ID:-0b7933b7-c8d5-1c01-814e-0c3066d19bbd}"
+export OP_LOCAL_HUMAN_DISPLAY_ALIAS="${OP_LOCAL_HUMAN_DISPLAY_ALIAS:-jeremy-wg-f036}"
 # WARP + Xray necessarily replace the decoy's human-WG inner source address.
 # Bind OIA1 to the trusted decoy signature, short lifetime, one-time nonce, and
 # registered human key rather than the legacy Netmaker TCP-source equality.

@@ -1256,6 +1256,36 @@ mod tests {
         assert!(matches!(devices[0].device, Device::Proxy(_)));
         assert!(matches!(devices[1].device, Device::Nic(_)));
     }
+
+    #[test]
+    fn identity_overlay_instance_roundtrips_serde_and_simd_json() {
+        let raw = r#"{
+            "name": "bea37ecb-92be-197c-660f-09e806f1a34f",
+            "status": "Stopped",
+            "type": "container",
+            "profiles": ["identity"],
+            "storage_pool": "3tched-storage",
+            "config": {
+                "boot.autostart": "false",
+                "user.opdbus.role": "chatbot"
+            },
+            "devices": [
+                {"name": "ghostbridge-socket", "device": {"type": "disk", "path": "/opt/run-mounts/ghostbridge", "source": "/run/ghostbridge"}},
+                {"name": "identity", "device": {"type": "disk", "path": "/opt/run-mounts/identity", "source": "/var/lib/opdbus-runtime/identities/chatbot", "readonly": "true"}},
+                {"name": "persist", "device": {"type": "disk", "path": "/opt/run-mounts/persist", "source": "/var/lib/opdbus-runtime/identities/chatbot/persist"}},
+                {"name": "root", "device": {"type": "disk", "path": "/", "pool": "3tched-storage"}}
+            ]
+        }"#;
+        let parsed: IncusInstance =
+            serde_json::from_str(raw).expect("overlay instance JSON must parse as IncusInstance");
+        assert_eq!(parsed.devices.len(), 4);
+        let owned = simd_json::serde::to_owned_value(&parsed)
+            .expect("simd_json must serialize IncusInstance for identity_sled SHM");
+        let back: IncusInstance = simd_json::serde::from_owned_value(owned)
+            .expect("simd_json must roundtrip IncusInstance");
+        assert_eq!(back.name, parsed.name);
+        assert_eq!(back.devices.len(), 4);
+    }
 }
 
 // =============================================================================

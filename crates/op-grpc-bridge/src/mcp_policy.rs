@@ -294,7 +294,7 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(manifest.hot.as_slice(), HOT_TOOL_NAMES);
-        assert_eq!(manifest.generation, 5);
+        assert_eq!(manifest.generation, 6);
         for id in [
             "context_code",
             "context_knowledge",
@@ -332,7 +332,7 @@ mod tests {
         assert!(policy.is_hot_tool("schema_read"));
         assert!(policy.is_hot_tool("oscal_subids"));
         assert!(policy.is_hot_tool("plugin.cognitive_mcp.code_context"));
-        assert!(policy.is_hot_tool("plugin.notebooklm.query_notebook"));
+        assert!(policy.is_hot_tool("plugin.notebooklm.notebook_query"));
         assert!(!policy.is_hot_tool("plugin.mongodb_mcp.find"));
     }
 }

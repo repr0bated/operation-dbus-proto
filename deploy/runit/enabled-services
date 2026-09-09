@@ -7,5 +7,4 @@ op-grpc-bridge
 op-web
 op-runit-systemctl
 emqx
-notebooklm-mcp
 mongodb-mcp-server

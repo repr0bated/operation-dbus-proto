@@ -1,5 +1,5 @@
 {
-  "generation": 5,
+  "generation": 6,
   "hot": [
     "memory_recall",
     "memory_store",
@@ -57,7 +57,9 @@
       "requires_provider_health": true,
       "tools": [
         "plugin.notebooklm.get_health",
-        "plugin.notebooklm.setup_auth"
+        "plugin.notebooklm.setup_auth",
+        "plugin.notebooklm.server_info",
+        "plugin.notebooklm.refresh_auth"
       ]
     },
     {
@@ -66,12 +68,12 @@
       "provider": "notebooklm-mcp-authenticated",
       "requires_provider_health": true,
       "tools": [
-        "plugin.notebooklm.list_notebooks",
-        "plugin.notebooklm.get_notebook",
-        "plugin.notebooklm.search_notebooks",
-        "plugin.notebooklm.query_notebook",
+        "plugin.notebooklm.notebook_list",
+        "plugin.notebooklm.notebook_get",
+        "plugin.notebooklm.notebook_query",
         "plugin.notebooklm.select_notebook",
-        "plugin.notebooklm.list_sessions"
+        "plugin.notebooklm.chat_list",
+        "plugin.notebooklm.tag"
       ]
     },
     {

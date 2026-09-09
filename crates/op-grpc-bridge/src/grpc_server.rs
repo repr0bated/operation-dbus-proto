@@ -913,6 +913,7 @@ pub async fn run_grpc_server(
         Ok(count) => info!(count, "Plugin projections seeded"),
         Err(error) => warn!(%error, "Plugin projection seeding failed"),
     }
+    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(mutation_engine, provider)

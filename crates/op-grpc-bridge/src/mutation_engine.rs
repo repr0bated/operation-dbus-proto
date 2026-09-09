@@ -34,9 +34,7 @@ use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationTyp
 /// `snowball_plugin::DEFAULT_BASE_PATH` so both read the same chain.
 const DEFAULT_SNOWBALL_PATH: &str = "/var/lib/opdbus/snowball";
 const DEFAULT_CACHE_PATH: &str = "/var/lib/opdbus/cache";
-const DEFAULT_NOTEBOOKLM_MCP_URL: &str = "http://127.0.0.1:3101/mcp";
 const DEFAULT_MONGODB_MCP_URL: &str = "http://127.0.0.1:3102/mcp";
-const NOTEBOOKLM_AUTH_READY: &str = "/run/opdbus/runit-ready/notebooklm-mcp-authenticated";
 const DEFAULT_MCP_PROVIDER_CALL_TIMEOUT_SECS: u64 = 30;
 
 /// Reconnecting client for a runit-supervised loopback MCP provider.
@@ -72,7 +70,7 @@ impl SupervisedMcpProvider {
         })
     }
 
-    fn call_timeout(&self) -> std::time::Duration {
+    fn call_timeout(&self, _upstream_name: &str) -> std::time::Duration {
         let seconds = std::env::var("OP_MCP_PROVIDER_CALL_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -94,14 +92,6 @@ impl SupervisedMcpProvider {
                     provider = %self.name,
                     "timed out closing supervised MCP session"
                 ),
-            }
-        }
-        if self.name == "notebooklm" {
-            if let Err(error) = set_provider_ready_marker(NOTEBOOKLM_AUTH_READY, false) {
-                tracing::warn!(
-                    %error,
-                    "could not clear NotebookLM authentication readiness"
-                );
             }
         }
     }
@@ -150,7 +140,7 @@ impl SupervisedMcpProvider {
             .as_mut()
             .expect("provider client initialized")
             .call_tool(upstream_name, input);
-        let call_timeout = self.call_timeout();
+        let call_timeout = self.call_timeout(upstream_name);
         match tokio::time::timeout(call_timeout, call).await {
             Ok(Ok(value)) => serde_json::to_value(value).map_err(Into::into),
             Ok(Err(error)) => {
@@ -256,9 +246,8 @@ pub struct MutationEngine {
     /// reached only after a call has entered PluginService/MutationEngine; it
     /// never opens a second listener or becomes a parallel control plane.
     cognitive_mcp: Arc<OnceCell<Arc<CognitiveMcpServer>>>,
-    /// WARM provider clients. These connect only after an admitted typed call;
-    /// neither service participates in HOT discovery or execution.
-    notebooklm_mcp: Arc<SupervisedMcpProvider>,
+    /// WARM provider client. Connects only after an admitted typed call;
+    /// it does not participate in HOT discovery or execution.
     mongodb_mcp: Arc<SupervisedMcpProvider>,
     /// Verified session identities, keyed by session_id. Projection of the
     /// session records for the mutation path — not a second store.
@@ -500,45 +489,46 @@ fn sealed_sealed_id(
 }
 
 impl MutationEngine {
-    /// Materialize the protected local MCP service identity at bridge startup.
+    /// Materialize the control-plane chatbot service identity at bridge startup.
     /// The public key is not a credential; it selects the already configured
     /// WireGuard account, while both derived IDs are checked against the
     /// release-owned expectations before the MutationEngine mints anything.
-    pub async fn bootstrap_configured_mcp_identity(
+    pub async fn bootstrap_control_plane_chatbot_identity(
         &self,
     ) -> anyhow::Result<Option<SessionContext>> {
-        let Ok(wireguard_pubkey) = std::env::var("OP_MCP_IDENTITY_WIREGUARD_PUBKEY") else {
+        let Ok(wireguard_pubkey) = std::env::var("OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY")
+        else {
             return Ok(None);
         };
         let wireguard_pubkey = wireguard_pubkey.trim();
         if wireguard_pubkey.is_empty() {
-            anyhow::bail!("OP_MCP_IDENTITY_WIREGUARD_PUBKEY is empty");
+            anyhow::bail!("OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY is empty");
         }
         let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
         let principal_id = op_identity::session::derive_principal_id(wireguard_pubkey);
-        if let Ok(expected) = std::env::var("OP_MCP_IDENTITY_SESSION_ID") {
+        if let Ok(expected) = std::env::var("OP_CONTROL_PLANE_CHATBOT_SESSION_ID") {
             if expected.trim() != session_id {
                 anyhow::bail!(
-                    "configured MCP identity session_id does not match its WireGuard key"
+                    "configured control-plane chatbot session_id does not match its WireGuard key"
                 );
             }
         }
-        if let Ok(expected) = std::env::var("OP_MCP_IDENTITY_PRINCIPAL_ID") {
+        if let Ok(expected) = std::env::var("OP_CONTROL_PLANE_CHATBOT_PRINCIPAL_ID") {
             if expected.trim() != principal_id {
                 anyhow::bail!(
-                    "configured MCP identity principal_id does not match its WireGuard key"
+                    "configured control-plane chatbot principal_id does not match its WireGuard key"
                 );
             }
         }
         match crate::human_principal_dispatch::resolve_key_for_assertion(wireguard_pubkey).await {
             Ok(Some(record)) if record.revoked_at != 0 => {
-                anyhow::bail!("configured MCP identity is revoked")
+                anyhow::bail!("configured control-plane chatbot identity is revoked")
             }
             Ok(Some(record))
                 if record.principal_id != principal_id
                     || record.human_pubkey != wireguard_pubkey =>
             {
-                anyhow::bail!("configured MCP identity registry binding changed")
+                anyhow::bail!("configured control-plane chatbot registry binding changed")
             }
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -560,18 +550,95 @@ impl MutationEngine {
                 )
                 .await?;
             }
-            Err(error) => anyhow::bail!("configured MCP principal registry unavailable: {error:?}"),
+            Err(error) => {
+                anyhow::bail!("configured control-plane chatbot registry unavailable: {error:?}")
+            }
         }
         self.mint_and_store_genesis(&session_id, wireguard_pubkey)
             .await?;
-        let context = self
-            .session_context(&session_id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("configured MCP identity was not cached after mint"))?;
+        let context = self.session_context(&session_id).await.ok_or_else(|| {
+            anyhow::anyhow!("configured control-plane chatbot identity was not cached after mint")
+        })?;
         tracing::info!(
             %principal_id,
             %session_id,
-            "configured MCP identity sealed into its sled"
+            "control-plane chatbot identity sealed into its sled"
+        );
+        Ok(Some(context))
+    }
+
+    /// Materialize the operator-configured local human identity at startup.
+    ///
+    /// This is the same WireGuard-derived principal used by the human's other
+    /// authenticated surfaces. It exists so local clients such as Codex can
+    /// forward the MutationEngine-authored SID1 from that human sled; it does
+    /// not create a Codex daemon or service principal.
+    pub async fn bootstrap_configured_local_human_identity(
+        &self,
+    ) -> anyhow::Result<Option<SessionContext>> {
+        let Ok(wireguard_pubkey) = std::env::var("OP_LOCAL_HUMAN_WIREGUARD_PUBKEY") else {
+            return Ok(None);
+        };
+        let wireguard_pubkey = wireguard_pubkey.trim();
+        if wireguard_pubkey.is_empty() {
+            anyhow::bail!("OP_LOCAL_HUMAN_WIREGUARD_PUBKEY is empty");
+        }
+        let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
+        let principal_id = op_identity::session::derive_principal_id(wireguard_pubkey);
+        if let Ok(expected) = std::env::var("OP_LOCAL_HUMAN_SESSION_ID") {
+            if expected.trim() != session_id {
+                anyhow::bail!("configured local human session_id does not match its WireGuard key");
+            }
+        }
+        if let Ok(expected) = std::env::var("OP_LOCAL_HUMAN_PRINCIPAL_ID") {
+            if expected.trim() != principal_id {
+                anyhow::bail!(
+                    "configured local human principal_id does not match its WireGuard key"
+                );
+            }
+        }
+        match crate::human_principal_dispatch::resolve_key_for_assertion(wireguard_pubkey).await {
+            Ok(Some(record)) if record.revoked_at != 0 => {
+                anyhow::bail!("configured local human identity is revoked")
+            }
+            Ok(Some(record))
+                if record.principal_id != principal_id
+                    || record.human_pubkey != wireguard_pubkey =>
+            {
+                anyhow::bail!("configured local human registry binding changed")
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let display_alias = std::env::var("OP_LOCAL_HUMAN_DISPLAY_ALIAS")
+                    .unwrap_or_else(|_| "local-human".to_string());
+                let args = simd_json::serde::to_owned_value(serde_json::json!({
+                    "human_pubkey": wireguard_pubkey,
+                    "display_alias": display_alias
+                }))?;
+                self.mutate(
+                    "human_principal".to_string(),
+                    "/org/opdbus/v1/plugins/human_principal".to_string(),
+                    ChangeType::MethodCall,
+                    Some("register_key".to_string()),
+                    args,
+                    "op-grpc-bridge.bootstrap-local-human".to_string(),
+                    Some("human_principal.write".to_string()),
+                )
+                .await?;
+            }
+            Err(error) => {
+                anyhow::bail!("configured local human registry unavailable: {error:?}")
+            }
+        }
+        self.mint_and_store_genesis(&session_id, wireguard_pubkey)
+            .await?;
+        let context = self.session_context(&session_id).await.ok_or_else(|| {
+            anyhow::anyhow!("configured local human identity was not cached after mint")
+        })?;
+        tracing::info!(
+            %principal_id,
+            %session_id,
+            "local human identity sealed into its sled"
         );
         Ok(Some(context))
     }
@@ -861,7 +928,7 @@ impl MutationEngine {
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
         let (chain_tx, _) = broadcast::channel(1024);
-        Self {
+        let engine = Self {
             event_chain,
             change_tx,
             chain_tx,
@@ -875,18 +942,17 @@ impl MutationEngine {
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
             cognitive_mcp: Arc::new(OnceCell::new()),
-            notebooklm_mcp: Arc::new(SupervisedMcpProvider::new(
-                "notebooklm",
-                std::env::var("OP_NOTEBOOKLM_MCP_URL")
-                    .unwrap_or_else(|_| DEFAULT_NOTEBOOKLM_MCP_URL.to_string()),
-            )),
             mongodb_mcp: Arc::new(SupervisedMcpProvider::new(
                 "mongodb",
                 std::env::var("OP_MONGODB_MCP_URL")
                     .unwrap_or_else(|_| DEFAULT_MONGODB_MCP_URL.to_string()),
             )),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+        };
+        if let Err(error) = crate::nlm_cli::touch_bin_ready_marker(&crate::nlm_cli::nlm_bin()) {
+            tracing::warn!(%error, "could not update NotebookLM binary readiness marker");
         }
+        engine
     }
 
     pub fn chain_tx(&self) -> &broadcast::Sender<ChainEvent> {
@@ -2234,26 +2300,8 @@ impl MutationEngine {
                 self.dispatch_cognitive_mcp_method(method, &args).await?
             }
             "notebooklm" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                let upstream = match method {
-                    "query_notebook" => "ask_question",
-                    "reauth" | "refresh_auth" => "re_auth",
-                    other => other,
-                };
-                let result = self.notebooklm_mcp.call_tool(upstream, args).await?;
-                if matches!(
-                    method,
-                    "get_health" | "setup_auth" | "reauth" | "refresh_auth"
-                ) {
-                    if let Some(authenticated) = notebooklm_authentication_result(&result) {
-                        if let Err(error) =
-                            set_provider_ready_marker(NOTEBOOKLM_AUTH_READY, authenticated)
-                        {
-                            tracing::warn!(%error, "could not update NotebookLM authentication readiness");
-                        }
-                    }
-                }
-                result
+                self.dispatch_notebooklm_method(method, &parsed_value)
+                    .await?
             }
             "mongodb_mcp" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2343,6 +2391,77 @@ impl MutationEngine {
             source: method_change.source,
         };
         let _ = self.change_tx.send(signal);
+    }
+
+    async fn dispatch_notebooklm_method(
+        &self,
+        method: &str,
+        parsed_value: &simd_json::OwnedValue,
+    ) -> anyhow::Result<serde_json::Value> {
+        let args = serde_json::to_value(parsed_value)?;
+        let mut state = self
+            .projected_state::<op_plugins::state_plugins::notebooklm::NotebookLmState>("notebooklm")
+            .await
+            .unwrap_or_else(op_plugins::state_plugins::notebooklm::NotebookLmPlugin::current_state);
+        let selected = state.selected_notebook_id.clone();
+        match crate::nlm_cli::notebooklm_dispatch(method, &args, selected.as_deref())? {
+            crate::nlm_cli::NotebooklmDispatch::LocalSelect { notebook_id } => {
+                state.selected_notebook_id = Some(notebook_id.clone());
+                let mut bytes = serde_json::to_vec(&state)?;
+                let owned = simd_json::to_owned_value(&mut bytes)?;
+                self.update_state_cache("notebooklm".to_string(), owned)
+                    .await;
+                if let Err(error) = self
+                    .publish_plugin_projection_from_cache("notebooklm", ChangeType::PropertySet)
+                    .await
+                {
+                    tracing::warn!(%error, "could not project NotebookLM selected notebook");
+                }
+                Ok(serde_json::json!({
+                    "selected_notebook_id": notebook_id,
+                    "success": true
+                }))
+            }
+            crate::nlm_cli::NotebooklmDispatch::Cli(invocation) => {
+                let mut result = crate::nlm_cli::run_nlm(&invocation).await?;
+                if matches!(
+                    method,
+                    "get_health"
+                        | "setup_auth"
+                        | "reauth"
+                        | "refresh_auth"
+                        | "save_auth_tokens"
+                        | "server_info"
+                ) {
+                    if let Some(status) = crate::nlm_cli::auth_status_from_value(&result) {
+                        if let Err(error) = crate::nlm_cli::apply_ready_marker(
+                            crate::nlm_cli::NOTEBOOKLM_AUTH_READY,
+                            crate::nlm_cli::ready_marker_action(&status),
+                        ) {
+                            tracing::warn!(
+                                %error,
+                                "could not update NotebookLM authentication readiness"
+                            );
+                        }
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert(
+                                "authenticated".into(),
+                                serde_json::Value::Bool(status == "configured"),
+                            );
+                            if status == "stale" {
+                                object.insert(
+                                    "hint".into(),
+                                    serde_json::Value::String(
+                                        "auth_status is stale; run setup_auth".into(),
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            }
+        }
     }
 
     async fn persist_tched_router_mutation(
@@ -2581,57 +2700,6 @@ impl MutationEngine {
 
     pub fn change_tx(&self) -> broadcast::Sender<StateChange> {
         self.change_tx.clone()
-    }
-}
-
-fn notebooklm_authentication_result(result: &serde_json::Value) -> Option<bool> {
-    if let Some(value) = find_boolean_field(result, "authenticated") {
-        return Some(value);
-    }
-    for item in result
-        .get("content")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(text) = item.get("text").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-            if let Some(authenticated) = find_boolean_field(&value, "authenticated") {
-                return Some(authenticated);
-            }
-        }
-    }
-    None
-}
-
-fn find_boolean_field(value: &serde_json::Value, field: &str) -> Option<bool> {
-    match value {
-        serde_json::Value::Object(object) => object
-            .get(field)
-            .and_then(serde_json::Value::as_bool)
-            .or_else(|| {
-                object
-                    .values()
-                    .find_map(|nested| find_boolean_field(nested, field))
-            }),
-        serde_json::Value::Array(values) => values
-            .iter()
-            .find_map(|nested| find_boolean_field(nested, field)),
-        _ => None,
-    }
-}
-
-fn set_provider_ready_marker(path: &str, ready: bool) -> std::io::Result<()> {
-    if ready {
-        std::fs::write(path, b"ready\n")
-    } else {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
     }
 }
 

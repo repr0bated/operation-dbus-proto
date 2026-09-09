@@ -28,7 +28,7 @@ They must never share an identity.
 ### 2.1 Control-plane chatbot (service principal)
 
 - The singleton daemon reasoning loop. Principal is server-side configuration
-  (`OP_MCP_IDENTITY_*` on `op-grpc-bridge`), registered in `human_principal` with
+  (`OP_CONTROL_PLANE_CHATBOT_*` on `op-grpc-bridge`), registered in `human_principal` with
   `display_alias = "control-plane-chatbot"`, sealed with SID1 at bridge start.
 - Its **only** surface is the authenticated MCP door at `:8090/mcp`, presenting its
   SID1. It sees what FR-12/13/14 already define: the HOT five (`memory_recall`,
@@ -115,7 +115,7 @@ No `chat_manager.current_model()` process-global default.
   came from and who acted.
 - G-5 The chatbot keypair exposed in the 2026-09-04 session
   (`/var/lib/opdbus-runtime/identities/chatbot/private.key`, `mcp_token`) is rotated:
-  new keypair → new blake3 session/principal → `OP_MCP_IDENTITY_*` in the bridge run
+  new keypair → new blake3 session/principal → `OP_CONTROL_PLANE_CHATBOT_*` in the bridge run
   script → incus `user.opdbus.*` on the identity container → `capability-grants.json`
   row → identity dir.
 

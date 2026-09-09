@@ -519,6 +519,9 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
+    // Cozo is the identity-sled authority. Replay and leftover SHM can
+    // resurrect host-only session rows; overlay the provisioned containers.
+    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
     // D-Bus bindings do not survive a bridge restart. Invalidate every
     // instance-backed sled that was durably active, then stop its container,
     // before MCP/gRPC/D-Bus routes can be built or listeners exposed. Host
@@ -532,11 +535,22 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
             "parked orphaned identity containers before exposing fabric routes"
         );
     }
-    // The local chatbot's service identity is release-configured and sealed
+    // The control-plane chatbot's service identity is release-configured and sealed
     // by the same MutationEngine that owns every other session arrival.  This
-    // closes the bootstrap loop for blob-aware local MCP clients without an
-    // OAuth/OIA detour or a second MCP endpoint.
-    mutation_engine.bootstrap_configured_mcp_identity().await?;
+    // identity belongs only to that singleton service and must not be borrowed
+    // by Codex or another local human client.
+    mutation_engine
+        .bootstrap_control_plane_chatbot_identity()
+        .await?;
+    // A configured local human uses the same WireGuard-derived principal on
+    // every surface. Mint its SID1 into the human sled so local clients can
+    // authenticate without inventing a per-client service identity.
+    mutation_engine
+        .bootstrap_configured_local_human_identity()
+        .await?;
+    // Genesis mint persists SID1 without instance/btrfs. Re-overlay Cozo so
+    // provisioned container metadata survives that write.
+    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
     let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine.clone());
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from

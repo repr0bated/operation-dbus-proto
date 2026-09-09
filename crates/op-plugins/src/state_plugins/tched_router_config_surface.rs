@@ -25,8 +25,8 @@ pub const ZEROCLAW_SCHEMA_VERSION: &str = "0.8.4";
 
 /// Parse an embedded section schema document into a schemars `Schema`.
 fn embedded(raw: &str) -> schemars::Schema {
-    let value: JsonValue = serde_json::from_str(raw)
-        .expect("embedded zeroclaw section schema is valid JSON");
+    let value: JsonValue =
+        serde_json::from_str(raw).expect("embedded zeroclaw section schema is valid JSON");
     schemars::Schema::try_from(value)
         .expect("embedded zeroclaw section schema is a valid JSON Schema")
 }
@@ -1507,88 +1507,248 @@ pub const SECTIONS: &[(&str, &str, SectionSource)] = &[
     ("GetAgentsConfig", "agents", SectionSource::Upstream),
     ("GetBackupConfig", "backup", SectionSource::Upstream),
     ("GetBrowserConfig", "browser", SectionSource::Upstream),
-    ("GetBrowserDelegateConfig", "browser_delegate", SectionSource::Upstream),
+    (
+        "GetBrowserDelegateConfig",
+        "browser_delegate",
+        SectionSource::Upstream,
+    ),
     ("GetChannelsConfig", "channels", SectionSource::Upstream),
-    ("GetClaudeCodeConfig", "claude_code", SectionSource::Upstream),
-    ("GetClaudeCodeRunnerConfig", "claude_code_runner", SectionSource::Upstream),
+    (
+        "GetClaudeCodeConfig",
+        "claude_code",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetClaudeCodeRunnerConfig",
+        "claude_code_runner",
+        SectionSource::Upstream,
+    ),
     ("GetCloudOpsConfig", "cloud_ops", SectionSource::Upstream),
     ("GetCodexCliConfig", "codex_cli", SectionSource::Upstream),
     ("GetComposioConfig", "composio", SectionSource::Upstream),
-    ("GetConversationalAiConfig", "conversational_ai", SectionSource::Upstream),
+    (
+        "GetConversationalAiConfig",
+        "conversational_ai",
+        SectionSource::Upstream,
+    ),
     ("GetCostConfig", "cost", SectionSource::Upstream),
     ("GetCronConfig", "cron", SectionSource::Upstream),
-    ("GetDataRetentionConfig", "data_retention", SectionSource::Upstream),
+    (
+        "GetDataRetentionConfig",
+        "data_retention",
+        SectionSource::Upstream,
+    ),
     ("GetDelegateConfig", "delegate", SectionSource::Upstream),
-    ("GetEmbeddingRoutesConfig", "embedding_routes", SectionSource::Upstream),
+    (
+        "GetEmbeddingRoutesConfig",
+        "embedding_routes",
+        SectionSource::Upstream,
+    ),
     ("GetEscalationConfig", "escalation", SectionSource::Upstream),
     ("GetEvalConfig", "eval", SectionSource::Upstream),
-    ("GetFileDownloadConfig", "file_download", SectionSource::Upstream),
-    ("GetFileUploadConfig", "file_upload", SectionSource::Upstream),
-    ("GetFileUploadBundleConfig", "file_upload_bundle", SectionSource::Upstream),
+    (
+        "GetFileDownloadConfig",
+        "file_download",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetFileUploadConfig",
+        "file_upload",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetFileUploadBundleConfig",
+        "file_upload_bundle",
+        SectionSource::Upstream,
+    ),
     ("GetGatewayConfig", "gateway", SectionSource::Upstream),
     ("GetGeminiCliConfig", "gemini_cli", SectionSource::Upstream),
-    ("GetGoogleWorkspaceConfig", "google_workspace", SectionSource::Upstream),
+    (
+        "GetGoogleWorkspaceConfig",
+        "google_workspace",
+        SectionSource::Upstream,
+    ),
     ("GetHardwareConfig", "hardware", SectionSource::Upstream),
     ("GetHeartbeatConfig", "heartbeat", SectionSource::Upstream),
     ("GetHooksConfig", "hooks", SectionSource::Upstream),
-    ("GetHttpRequestConfig", "http_request", SectionSource::Upstream),
+    (
+        "GetHttpRequestConfig",
+        "http_request",
+        SectionSource::Upstream,
+    ),
     ("GetImageGenConfig", "image_gen", SectionSource::Upstream),
     ("GetJiraConfig", "jira", SectionSource::Upstream),
     ("GetKnowledgeConfig", "knowledge", SectionSource::Upstream),
-    ("GetKnowledgeBundlesConfig", "knowledge_bundles", SectionSource::Upstream),
-    ("GetLinkEnricherConfig", "link_enricher", SectionSource::Upstream),
+    (
+        "GetKnowledgeBundlesConfig",
+        "knowledge_bundles",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetLinkEnricherConfig",
+        "link_enricher",
+        SectionSource::Upstream,
+    ),
     ("GetLinkedinConfig", "linkedin", SectionSource::Upstream),
     ("GetMcpConfig", "mcp", SectionSource::Upstream),
-    ("GetMcpBundlesConfig", "mcp_bundles", SectionSource::Upstream),
-    ("GetMediaPipelineConfig", "media_pipeline", SectionSource::Upstream),
+    (
+        "GetMcpBundlesConfig",
+        "mcp_bundles",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetMediaPipelineConfig",
+        "media_pipeline",
+        SectionSource::Upstream,
+    ),
     ("GetMemoryConfig", "memory", SectionSource::Upstream),
-    ("GetMicrosoft365Config", "microsoft365", SectionSource::Upstream),
-    ("GetModelRoutesConfig", "model_routes", SectionSource::Upstream),
+    (
+        "GetMicrosoft365Config",
+        "microsoft365",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetModelRoutesConfig",
+        "model_routes",
+        SectionSource::Upstream,
+    ),
     ("GetMultimodalConfig", "multimodal", SectionSource::Upstream),
-    ("GetNodeTransportConfig", "node_transport", SectionSource::Upstream),
+    (
+        "GetNodeTransportConfig",
+        "node_transport",
+        SectionSource::Upstream,
+    ),
     ("GetNodesConfig", "nodes", SectionSource::Upstream),
     ("GetNotionConfig", "notion", SectionSource::Upstream),
-    ("GetObservabilityConfig", "observability", SectionSource::Upstream),
-    ("GetOnboardStateConfig", "onboard_state", SectionSource::Upstream),
-    ("GetOpencodeCliConfig", "opencode_cli", SectionSource::Upstream),
+    (
+        "GetObservabilityConfig",
+        "observability",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetOnboardStateConfig",
+        "onboard_state",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetOpencodeCliConfig",
+        "opencode_cli",
+        SectionSource::Upstream,
+    ),
     ("GetPacingConfig", "pacing", SectionSource::Upstream),
-    ("GetPeerGroupsConfig", "peer_groups", SectionSource::Upstream),
-    ("GetPeripheralsConfig", "peripherals", SectionSource::Upstream),
+    (
+        "GetPeerGroupsConfig",
+        "peer_groups",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetPeripheralsConfig",
+        "peripherals",
+        SectionSource::Upstream,
+    ),
     ("GetPipelineConfig", "pipeline", SectionSource::Upstream),
     ("GetPluginsConfig", "plugins", SectionSource::Upstream),
-    ("GetProjectIntelConfig", "project_intel", SectionSource::Upstream),
+    (
+        "GetProjectIntelConfig",
+        "project_intel",
+        SectionSource::Upstream,
+    ),
     ("GetProvidersConfig", "providers", SectionSource::Upstream),
     ("GetProxyConfig", "proxy", SectionSource::Upstream),
-    ("GetQueryClassificationConfig", "query_classification", SectionSource::Upstream),
-    ("GetReliabilityConfig", "reliability", SectionSource::Upstream),
-    ("GetRiskProfilesConfig", "risk_profiles", SectionSource::Upstream),
+    (
+        "GetQueryClassificationConfig",
+        "query_classification",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetReliabilityConfig",
+        "reliability",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetRiskProfilesConfig",
+        "risk_profiles",
+        SectionSource::Upstream,
+    ),
     ("GetRuntimeConfig", "runtime", SectionSource::Upstream),
-    ("GetRuntimeProfilesConfig", "runtime_profiles", SectionSource::Upstream),
+    (
+        "GetRuntimeProfilesConfig",
+        "runtime_profiles",
+        SectionSource::Upstream,
+    ),
     ("GetSchedulerConfig", "scheduler", SectionSource::Upstream),
     ("GetSecretsConfig", "secrets", SectionSource::Upstream),
     ("GetSecurityConfig", "security", SectionSource::Upstream),
-    ("GetSecurityOpsConfig", "security_ops", SectionSource::Upstream),
+    (
+        "GetSecurityOpsConfig",
+        "security_ops",
+        SectionSource::Upstream,
+    ),
     ("GetShellToolConfig", "shell_tool", SectionSource::Upstream),
-    ("GetSkillBundlesConfig", "skill_bundles", SectionSource::Upstream),
+    (
+        "GetSkillBundlesConfig",
+        "skill_bundles",
+        SectionSource::Upstream,
+    ),
     ("GetSkillsConfig", "skills", SectionSource::Upstream),
     ("GetSopConfig", "sop", SectionSource::Upstream),
     ("GetStorageConfig", "storage", SectionSource::Upstream),
-    ("GetTextBrowserConfig", "text_browser", SectionSource::Upstream),
-    ("GetTodotrackerConfig", "todotracker", SectionSource::Upstream),
-    ("GetTranscriptionConfig", "transcription", SectionSource::Upstream),
+    (
+        "GetTextBrowserConfig",
+        "text_browser",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetTodotrackerConfig",
+        "todotracker",
+        SectionSource::Upstream,
+    ),
+    (
+        "GetTranscriptionConfig",
+        "transcription",
+        SectionSource::Upstream,
+    ),
     ("GetTrustConfig", "trust", SectionSource::Upstream),
     ("GetTtsConfig", "tts", SectionSource::Upstream),
     ("GetTunnelConfig", "tunnel", SectionSource::Upstream),
-    ("GetVerifiableIntentConfig", "verifiable_intent", SectionSource::Upstream),
+    (
+        "GetVerifiableIntentConfig",
+        "verifiable_intent",
+        SectionSource::Upstream,
+    ),
     ("GetWebFetchConfig", "web_fetch", SectionSource::Upstream),
     ("GetWebSearchConfig", "web_search", SectionSource::Upstream),
     ("GetWssConfig", "wss", SectionSource::Upstream),
-    ("GetModelAssignmentsConfig", "model_assignments", SectionSource::Local),
-    ("GetMemoryNamespacesConfig", "memory_namespaces", SectionSource::Local),
-    ("GetRegistrationServiceConfig", "registration_service", SectionSource::Local),
-    ("GetUserContainerConfig", "user_container", SectionSource::Local),
-    ("GetIdentityChainConfig", "identity_chain", SectionSource::Local),
-    ("GetPrivacyPolicyConfig", "privacy_policy", SectionSource::Local),
+    (
+        "GetModelAssignmentsConfig",
+        "model_assignments",
+        SectionSource::Local,
+    ),
+    (
+        "GetMemoryNamespacesConfig",
+        "memory_namespaces",
+        SectionSource::Local,
+    ),
+    (
+        "GetRegistrationServiceConfig",
+        "registration_service",
+        SectionSource::Local,
+    ),
+    (
+        "GetUserContainerConfig",
+        "user_container",
+        SectionSource::Local,
+    ),
+    (
+        "GetIdentityChainConfig",
+        "identity_chain",
+        SectionSource::Local,
+    ),
+    (
+        "GetPrivacyPolicyConfig",
+        "privacy_policy",
+        SectionSource::Local,
+    ),
 ];
 
 /// Where a config section is read from.
@@ -2704,7 +2864,10 @@ pub fn register_config_methods(schema: &mut PluginSchema) {
     );
     schema.methods.insert(
         "GetQueryClassificationConfig".to_string(),
-        method_decl_from_schemars_with_output::<ConfigMethodInput, GetQueryClassificationConfigOutput>(
+        method_decl_from_schemars_with_output::<
+            ConfigMethodInput,
+            GetQueryClassificationConfigOutput,
+        >(
             "GetQueryClassificationConfig",
             SideEffect::Read,
             true,
@@ -3146,7 +3309,10 @@ pub fn register_config_methods(schema: &mut PluginSchema) {
     );
     schema.methods.insert(
         "GetRegistrationServiceConfig".to_string(),
-        method_decl_from_schemars_with_output::<ConfigMethodInput, GetRegistrationServiceConfigOutput>(
+        method_decl_from_schemars_with_output::<
+            ConfigMethodInput,
+            GetRegistrationServiceConfigOutput,
+        >(
             "GetRegistrationServiceConfig",
             SideEffect::Read,
             true,
@@ -3380,12 +3546,11 @@ fn patch_config(json_args: &str) -> std::result::Result<DispatchOutcome, TchedRo
         .ok_or_else(|| TchedRouterError::ExecutionDenied {
             reason: "config root is not a table".to_string(),
         })?;
-    let new_toml: toml::Value =
-        serde_json::from_value(incoming.clone()).map_err(|e| {
-            TchedRouterError::ExecutionDenied {
-                reason: format!("section value is not TOML-representable: {e}"),
-            }
-        })?;
+    let new_toml: toml::Value = serde_json::from_value(incoming.clone()).map_err(|e| {
+        TchedRouterError::ExecutionDenied {
+            reason: format!("section value is not TOML-representable: {e}"),
+        }
+    })?;
     table.insert(args.section.clone(), new_toml);
     let serialized = toml::to_string(&doc).map_err(|e| TchedRouterError::ExecutionDenied {
         reason: format!("serialize config: {e}"),

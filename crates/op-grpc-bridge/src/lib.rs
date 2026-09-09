@@ -34,6 +34,7 @@ pub mod interceptor;
 pub mod mcp_frontend;
 pub mod mcp_policy;
 pub mod mutation_engine;
+pub mod nlm_cli;
 pub mod oracle_assertion;
 pub mod per_plugin_reflection;
 pub mod plugin_grpc_gen;

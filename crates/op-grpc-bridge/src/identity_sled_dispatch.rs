@@ -21,6 +21,7 @@
 //! IS the identity. The legacy global 152-byte sled at
 //! The retired process-global raw identity file is not written or consulted.
 
+use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -198,23 +199,28 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
     }
 }
 
+fn parse_sled_json<T: serde::de::DeserializeOwned>(
+    label: &str,
+    session_id: &str,
+    json: &str,
+) -> Option<T> {
+    if json.is_empty() {
+        return None;
+    }
+    match serde_json::from_str(json) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!(
+                session_id,
+                error = %e,
+                "dropping corrupt {label} on identity sled row"
+            );
+            None
+        }
+    }
+}
+
 fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
-    let parse_json = |label: &str, json: &str| -> Option<serde_json::Value> {
-        if json.is_empty() {
-            return None;
-        }
-        match serde_json::from_str(json) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::warn!(
-                    session_id = %rec.session_id,
-                    error = %e,
-                    "dropping corrupt {label} on identity sled row"
-                );
-                None
-            }
-        }
-    };
     ContainerIdentitySled {
         session_id: rec.session_id.clone(),
         wireguard_pubkey: rec.wireguard_pubkey.clone(),
@@ -226,10 +232,8 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         schema_version: rec.schema_version.max(0) as u32,
         vector_id: rec.vector_id.clone(),
         sealed_id: (!rec.sealed_id.is_empty()).then(|| rec.sealed_id.clone()),
-        btrfs_device: parse_json("btrfs_device", &rec.btrfs_device_json)
-            .and_then(|v| serde_json::from_value(v).ok()),
-        instance: parse_json("instance", &rec.instance_json)
-            .and_then(|v| serde_json::from_value(v).ok()),
+        btrfs_device: parse_sled_json("btrfs_device", &rec.session_id, &rec.btrfs_device_json),
+        instance: parse_sled_json("instance", &rec.session_id, &rec.instance_json),
         session_started_at: rec.session_started_at,
         last_seen_at: rec.last_seen_at,
         active: rec.active,
@@ -284,6 +288,115 @@ async fn ensure_hydrated(engine: &MutationEngine) {
         .await;
 }
 
+fn configured_identity_session_ids() -> HashSet<String> {
+    [
+        "OP_CONTROL_PLANE_CHATBOT_SESSION_ID",
+        "OP_LOCAL_HUMAN_SESSION_ID",
+        "IDENTITY_SLED_HOST_SESSION_ID",
+    ]
+    .into_iter()
+    .filter_map(|var| {
+        std::env::var(var)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+    .collect()
+}
+
+/// Overlay the in-process identity cache from Cozo. Replay and SHM seed can
+/// resurrect deleted host-only rows; Cozo is the restart-warm authority for
+/// which containers are sleds. Rows with no Incus instance are ghosts unless
+/// they are a configured chatbot/human/host session.
+pub(crate) async fn replace_cache_from_cozo(engine: &MutationEngine) {
+    let Some(cozo) = sled_cozo() else { return };
+    let keep = configured_identity_session_ids();
+    let cozo = cozo.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        let sleds = cozo.list_identity_sessions()?;
+        let genesis = cozo.list_identity_genesis()?;
+        Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
+    })
+    .await;
+    let (rows, genesis_rows) = match rows {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "identity sled Cozo replace read failed");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "identity sled Cozo replace task failed");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let mut ghosts = Vec::new();
+    let mut sleds = Vec::new();
+    for rec in &rows {
+        tracing::info!(
+            session_id = %rec.session_id,
+            instance_len = rec.instance_json.len(),
+            btrfs_len = rec.btrfs_device_json.len(),
+            "identity sled Cozo row before hydrate"
+        );
+        let sled = record_to_sled(rec);
+        if sled.instance.is_some() || keep.contains(&sled.session_id) {
+            sleds.push(sled);
+        } else {
+            ghosts.push(rec.session_id.clone());
+        }
+    }
+    if !ghosts.is_empty() {
+        let Some(cozo) = sled_cozo() else { return };
+        let cozo = cozo.clone();
+        let to_drop = ghosts.clone();
+        match tokio::task::spawn_blocking(move || {
+            for session_id in &to_drop {
+                cozo.delete_identity_sled(session_id)?;
+            }
+            Ok::<_, op_cozo_store::CozoError>(())
+        })
+        .await
+        {
+            Ok(Ok(())) => tracing::info!(
+                dropped = ghosts.len(),
+                "dropped host-only identity sled ghosts from Cozo"
+            ),
+            Ok(Err(e)) => tracing::warn!(error = %e, "identity sled ghost delete failed"),
+            Err(e) => tracing::warn!(error = %e, "identity sled ghost delete task failed"),
+        }
+    }
+    if sleds.is_empty() {
+        return;
+    }
+    let mut cache = SledCacheState {
+        sleds,
+        events: Vec::new(),
+    };
+    join_genesis_inputs(&mut cache.sleds, &genesis_rows);
+    cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    if let Err(e) = write_cache(engine, &cache).await {
+        tracing::warn!(error = %e, "identity sled Cozo replace cache write failed");
+        return;
+    }
+    tracing::info!(
+        sleds = cache.sleds.len(),
+        with_instance = cache
+            .sleds
+            .iter()
+            .filter(|sled| sled.instance.is_some())
+            .count(),
+        with_btrfs = cache
+            .sleds
+            .iter()
+            .filter(|sled| sled.btrfs_device.is_some())
+            .count(),
+        "identity sled cache replaced from Cozo"
+    );
+}
+
 fn sled_to_genesis_inputs(sled: &ContainerIdentitySled) -> GenesisInputsRecord {
     GenesisInputsRecord {
         session_id: sled.session_id.clone(),
@@ -324,9 +437,19 @@ fn join_genesis_inputs(sleds: &mut [ContainerIdentitySled], inputs: &[GenesisInp
 async fn persist_sled(sled: &ContainerIdentitySled) {
     let Some(cozo) = sled_cozo() else { return };
     let cozo = cozo.clone();
-    let rec = sled_to_record(sled);
+    let mut rec = sled_to_record(sled);
     let inputs = (sled.arrival_timestamp != 0).then(|| sled_to_genesis_inputs(sled));
     match tokio::task::spawn_blocking(move || {
+        if rec.instance_json.is_empty() || rec.btrfs_device_json.is_empty() {
+            if let Ok(Some(existing)) = cozo.get_identity_sled(&rec.session_id) {
+                if rec.instance_json.is_empty() {
+                    rec.instance_json = existing.instance_json;
+                }
+                if rec.btrfs_device_json.is_empty() {
+                    rec.btrfs_device_json = existing.btrfs_device_json;
+                }
+            }
+        }
         cozo.put_identity_sled(&rec)?;
         if let Some(inputs) = inputs {
             cozo.put_identity_genesis(&inputs)?;

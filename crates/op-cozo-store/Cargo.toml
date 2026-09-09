@@ -12,5 +12,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[[bin]]
+name = "identity-sled-bind"
+path = "src/bin/identity_sled_bind.rs"
+
 [dev-dependencies]
 tempfile = { workspace = true }
