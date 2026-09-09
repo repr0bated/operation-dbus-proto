@@ -310,11 +310,18 @@ fn configured_identity_session_ids() -> HashSet<String> {
 /// they are a configured chatbot/human/host session.
 pub(crate) async fn replace_cache_from_cozo(engine: &MutationEngine) {
     let Some(cozo) = sled_cozo() else { return };
-    let keep = configured_identity_session_ids();
-    let cozo = cozo.clone();
+    replace_cache_from_store(engine, cozo.clone(), configured_identity_session_ids()).await;
+}
+
+async fn replace_cache_from_store(
+    engine: &MutationEngine,
+    cozo: CozoGraphShuttle,
+    keep: HashSet<String>,
+) {
+    let read_store = cozo.clone();
     let rows = tokio::task::spawn_blocking(move || {
-        let sleds = cozo.list_identity_sessions()?;
-        let genesis = cozo.list_identity_genesis()?;
+        let sleds = read_store.list_identity_sessions()?;
+        let genesis = read_store.list_identity_genesis()?;
         Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
     })
     .await;
@@ -329,9 +336,6 @@ pub(crate) async fn replace_cache_from_cozo(engine: &MutationEngine) {
             return;
         }
     };
-    if rows.is_empty() {
-        return;
-    }
     let mut ghosts = Vec::new();
     let mut sleds = Vec::new();
     for rec in &rows {
@@ -349,12 +353,11 @@ pub(crate) async fn replace_cache_from_cozo(engine: &MutationEngine) {
         }
     }
     if !ghosts.is_empty() {
-        let Some(cozo) = sled_cozo() else { return };
-        let cozo = cozo.clone();
+        let delete_store = cozo.clone();
         let to_drop = ghosts.clone();
         match tokio::task::spawn_blocking(move || {
             for session_id in &to_drop {
-                cozo.delete_identity_sled(session_id)?;
+                delete_store.delete_identity_sled(session_id)?;
             }
             Ok::<_, op_cozo_store::CozoError>(())
         })
@@ -367,9 +370,6 @@ pub(crate) async fn replace_cache_from_cozo(engine: &MutationEngine) {
             Ok(Err(e)) => tracing::warn!(error = %e, "identity sled ghost delete failed"),
             Err(e) => tracing::warn!(error = %e, "identity sled ghost delete task failed"),
         }
-    }
-    if sleds.is_empty() {
-        return;
     }
     let mut cache = SledCacheState {
         sleds,
@@ -1580,6 +1580,50 @@ pub(crate) mod tests {
         Ok(serde_json::from_value(
             out.get("identity").cloned().expect("identity in output"),
         )?)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cozo_replace_clears_cache_when_every_row_is_a_ghost() {
+        let (engine, _shm) = sled_engine();
+        let identity = write_identity(&engine, &pk(0x66)).await.expect("write");
+        assert!(identity.instance.is_none(), "fixture must be host-only");
+
+        let store = CozoGraphShuttle::new_in_memory().expect("isolated Cozo store");
+        store
+            .put_identity_sled(&sled_to_record(&identity))
+            .expect("persist isolated ghost");
+
+        replace_cache_from_store(engine.as_ref(), store.clone(), HashSet::new()).await;
+
+        assert!(
+            stored_session(engine.as_ref(), &identity.session_id)
+                .await
+                .is_none(),
+            "a Cozo-authoritative empty replacement must clear replayed credentials"
+        );
+        assert!(
+            store
+                .get_identity_sled(&identity.session_id)
+                .expect("durable lookup")
+                .is_none(),
+            "the ghost must also be removed from durable storage"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cozo_replace_clears_stale_cache_when_store_is_already_empty() {
+        let (engine, _shm) = sled_engine();
+        let identity = write_identity(&engine, &pk(0x67)).await.expect("write");
+        let empty_store = CozoGraphShuttle::new_in_memory().expect("isolated empty Cozo store");
+
+        replace_cache_from_store(engine.as_ref(), empty_store, HashSet::new()).await;
+
+        assert!(
+            stored_session(engine.as_ref(), &identity.session_id)
+                .await
+                .is_none(),
+            "an empty authoritative store must clear credentials left by an interrupted reconcile"
+        );
     }
 
     #[test]
