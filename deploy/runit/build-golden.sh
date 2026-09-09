@@ -122,15 +122,21 @@ apply_provider_patch() {
 
 write_nlm_wrapper() {
     dest=$1
-    venv_nlm=$2
+    runtime_venv=$2
     if [ "$DRY_RUN" = 1 ]; then
-        printf '  would write nlm wrapper: %s -> %s\n' "$dest" "$venv_nlm"
+        printf '  would write nlm wrapper: %s -> %s\n' "$dest" "$runtime_venv"
         return 0
     fi
-    [ ! -e /usr/bin/nlm ] || [ "$(readlink -f "$dest" 2>/dev/null || true)" != /usr/bin/nlm ] ||
-        die "refusing to overwrite /usr/bin/nlm"
-    printf '#!/bin/sh\nexec %s "$@"\n' "$venv_nlm" > "$dest"
-    chmod 0755 "$dest"
+    # Never follow an existing wrapper symlink or truncate a running wrapper.
+    [ ! -L "$dest" ] || die "refusing to overwrite a symlink at $dest"
+    wrapper_stage=$(mktemp "$(dirname "$dest")/.nlm-wrapper.XXXXXX")
+    # Invoke the module: venv console-script shebangs contain the temporary
+    # build path and are not relocatable. This is always the target's path,
+    # never a path beneath the golden staging prefix.
+    printf '#!/bin/sh\nexec "%s/bin/python" -I -m notebooklm_tools.cli.main "$@"\n' \
+        "$runtime_venv" > "$wrapper_stage"
+    chmod 0755 "$wrapper_stage"
+    mv -Tf -- "$wrapper_stage" "$dest"
 }
 
 install_nlm_cli() {
@@ -139,22 +145,29 @@ install_nlm_cli() {
     venv="$dest_root$NLM_CLI_ROOT/$NOTEBOOKLM_MCP_INSTALL_NAME"
     marker="$venv/.opdbus-artifact-sha256"
     if [ -f "$marker" ] && [ "$(sed -n '1p' "$marker")" = "$NOTEBOOKLM_MCP_SHA256" ] &&
-       [ -x "$venv/bin/nlm" ]; then
+       [ -x "$venv/bin/python" ]; then
         :
     else
-        [ ! -e "$venv" ] || run rm -r -- "$venv"
+        [ ! -e "$venv" ] && [ ! -L "$venv" ] ||
+            die "content-addressed nlm root exists but is invalid; preserving it: $venv"
         if [ "$DRY_RUN" = 1 ]; then
             printf '  would venv+pip: %s from %s\n' "$venv" "$NOTEBOOKLM_MCP_ARTIFACT_PATH"
         else
-            python3 -m venv "$venv" || die "python3 -m venv failed for nlm"
-            "$venv/bin/pip" install --no-cache-dir --disable-pip-version-check \
+            install -d -m 0755 "$dest_root$NLM_CLI_ROOT"
+            nlm_stage=$(mktemp -d "$dest_root$NLM_CLI_ROOT/.nlm-stage.XXXXXX")
+            python3 -m venv "$nlm_stage" || die "python3 -m venv failed; retained $nlm_stage"
+            "$nlm_stage/bin/python" -I -m pip install --no-cache-dir --disable-pip-version-check \
                 "$NOTEBOOKLM_MCP_ARTIFACT_PATH" ||
-                die "pip install notebooklm-mcp-cli failed"
-            printf '%s\n' "$NOTEBOOKLM_MCP_SHA256" > "$marker"
+                die "pip install notebooklm-mcp-cli failed; retained $nlm_stage"
+            "$nlm_stage/bin/python" -I -m notebooklm_tools.cli.main --version >/dev/null ||
+                die "nlm entry point validation failed; retained $nlm_stage"
+            printf '%s\n' "$NOTEBOOKLM_MCP_SHA256" > "$nlm_stage/.opdbus-artifact-sha256"
+            chmod 0755 "$nlm_stage"
+            mv -T -- "$nlm_stage" "$venv"
         fi
     fi
     run chmod 0755 "$venv"
-    write_nlm_wrapper "$wrapper" "$venv/bin/nlm"
+    write_nlm_wrapper "$wrapper" "$NLM_CLI_ROOT/$NOTEBOOKLM_MCP_INSTALL_NAME"
 }
 
 [ -r "$EMQX_VERSION_FILE" ] || die "missing EMQX artifact declaration: $EMQX_VERSION_FILE"
