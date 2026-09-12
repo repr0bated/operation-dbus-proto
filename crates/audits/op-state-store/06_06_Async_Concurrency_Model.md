@@ -8,7 +8,7 @@ This security and quality audit evaluates the `op-state-store` crate, focusing o
 
 Several critical vulnerabilities and architectural deficiencies have been identified that directly compromise memory safety, audit integrity, and service availability:
 - **Memory Safety Violations (Critical):** Widespread unsafe use of `simd_json::from_str` on unpadded, standard Rust `String` instances retrieved from databases and network streams. This bypasses `simd_json`'s strict memory padding requirements, introducing undefined behavior and potential out-of-bounds memory reads.
-- **Audit Trail Cryptographic Failure (Critical):** The "tamper-evident" blockchain-style event chain relies entirely on the cryptographically broken MD5 hash algorithm, making hash collisions trivial and defeating the audit trail's core security guarantee.
+- **Audit Trail Cryptographic Failure (Critical):** The "tamper-evident" snowball-style event chain relies entirely on the cryptographically broken MD5 hash algorithm, making hash collisions trivial and defeating the audit trail's core security guarantee.
 - **Unsigned State and Package Injection (Critical):** The disaster recovery restore process installs system dependencies via D-Bus and modifies control-plane states without verifying cryptographic signatures or checksums.
 - **Reactor Thread Blocking (High):** Spawning external processes synchronously and reading system configuration files synchronously inside asynchronous runtime contexts blocks the Tokio executor threads.
 - **Guaranteed Startup Failure (High):** A hardcoded non-base64 placeholder key for WireGuard causes immediate startup crashes in the schema shuttle service.
@@ -112,7 +112,7 @@ Throughout the codebase, unpadded standard Rust `String` instances (from SQL dat
 - **Citations:**
   - `crates/op-state-store/src/event_chain.rs:659`
   - `crates/op-state-store/src/event_chain.rs:665`
-- **Description:** The `EventChain` is represented as a blockchain-style, tamper-evident audit trail for system state transitions. However, the hashes linking block `N` to block `N-1` are computed using MD5:
+- **Description:** The `EventChain` is represented as a snowball-style, tamper-evident audit trail for system state transitions. However, the hashes linking block `N` to block `N-1` are computed using MD5:
 ```rust
 fn compute_hash(value: &Value) -> String {
     let canonical_str = simd_json::to_string(value).unwrap_or_default();

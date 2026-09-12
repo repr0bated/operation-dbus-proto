@@ -5,14 +5,14 @@ next step's input. No implementation code is written outside the named files.
 
 ---
 
-## Task 1 — Add `query_events` and `verify_chain` methods to blockchain plugin schema
+## Task 1 — Add `query_events` and `verify_chain` methods to snowball plugin schema
 
 **Crate:** `op-plugins`
-**File:** `crates/op-plugins/src/state_plugins/blockchain_plugin.rs`
+**File:** `crates/op-plugins/src/state_plugins/snowball_plugin.rs`
 
 ### What to add
 
-1. New Input/Output structs (inside or adjacent to the existing `blockchain_schema()`
+1. New Input/Output structs (inside or adjacent to the existing `snowball_schema()`
    function, matching the local struct pattern used by `ListSnapshotsOutput` etc.):
 
 ```rust
@@ -80,8 +80,8 @@ schema.methods.insert(
         "query_events",
         SideEffect::Read,
         true,
-        "blockchain.read",
-        "obs.service.blockchain.events.query@v1",
+        "snowball.read",
+        "obs.service.snowball.events.query@v1",
     ),
 );
 schema.methods.insert(
@@ -90,8 +90,8 @@ schema.methods.insert(
         "verify_chain",
         SideEffect::Read,
         true,
-        "blockchain.read",
-        "obs.service.blockchain.chain.verify@v1",
+        "snowball.read",
+        "obs.service.snowball.chain.verify@v1",
     ),
 );
 ```
@@ -102,13 +102,13 @@ schema.methods.insert(
 cargo check -p op-plugins
 cargo clippy -p op-plugins --all-targets -- -D warnings
 # After rebuild + restart of op-grpc-bridge:
-./bin/zcall methods blockchain | grep -E "query_events|verify_chain"
-# Expected: both methods listed with effect=read, capability=blockchain.read
+./bin/zcall methods snowball | grep -E "query_events|verify_chain"
+# Expected: both methods listed with effect=read, capability=snowball.read
 ```
 
 ---
 
-## Task 2 — Add `"blockchain"` dispatch arm in MutationEngine (scoped to 2 methods)
+## Task 2 — Add `"snowball"` dispatch arm in MutationEngine (scoped to 2 methods)
 
 **Crate:** `op-grpc-bridge`
 **File:** `crates/op-grpc-bridge/src/mutation_engine.rs`
@@ -118,13 +118,13 @@ cargo clippy -p op-plugins --all-targets -- -D warnings
 1. A new match arm in `dispatch_method_call` BEFORE the `_ =>` catch-all:
 
 ```rust
-"blockchain" => {
+"snowball" => {
     match method {
         "query_events" => {
-            dispatch_blockchain_query_events(&self.event_chain, &parsed_value).await?
+            dispatch_snowball_query_events(&self.event_chain, &parsed_value).await?
         }
         "verify_chain" => {
-            dispatch_blockchain_verify_chain(&self.event_chain, &parsed_value).await?
+            dispatch_snowball_verify_chain(&self.event_chain, &parsed_value).await?
         }
         _ => serde_json::to_value(&parsed_value).unwrap_or(serde_json::Value::Null),
     }
@@ -134,12 +134,12 @@ cargo clippy -p op-plugins --all-targets -- -D warnings
 2. The two dispatch functions and `chain_event_to_record` helper as specified in design.md.
 
 3. Import `QueryEventsInput`, `QueryEventsOutput`, `VerifyChainInput`, `VerifyChainOutput`,
-   `AuditEventRecord` from `op_plugins::state_plugins::blockchain_plugin` (or define locally
+   `AuditEventRecord` from `op_plugins::state_plugins::snowball_plugin` (or define locally
    if the types are not `pub` — adjust visibility accordingly).
 
 ### Key design points
 
-- The inner `_ =>` for un-handled blockchain methods reproduces the outer catch-all's
+- The inner `_ =>` for un-handled snowball methods reproduces the outer catch-all's
   echo behavior. This is intentional — the existing 7 methods stay un-wired.
 - `query_events` reads `self.event_chain` directly (same data as gRPC `GetEvents`).
 - `verify_chain` reuses the chain's existing `verify_range` or equivalent logic (check
@@ -152,12 +152,12 @@ cargo clippy -p op-plugins --all-targets -- -D warnings
 cargo check -p op-grpc-bridge
 cargo clippy -p op-grpc-bridge --all-targets -- -D warnings
 # After rebuild + restart:
-./bin/zcall blockchain query_events -a '{"limit": 5}'
+./bin/zcall snowball query_events -a '{"limit": 5}'
 # Expected: JSON with "events" array (possibly empty if chain is fresh), "has_more", "total_in_chain"
 # NOT an echo of the input args.
-./bin/zcall blockchain verify_chain -a '{}'
+./bin/zcall snowball verify_chain -a '{}'
 # Expected: {"valid": true, "events_verified": N, "errors": []}
-./bin/zcall blockchain list_snapshots -a '{}'
+./bin/zcall snowball list_snapshots -a '{}'
 # Expected: STILL echoes args (existing methods remain un-wired — scope boundary)
 ```
 
@@ -209,7 +209,7 @@ cargo check -p zeroclaw-gui
 //! transport, no shared state. Queries the `EventChainService` gRPC surface
 //! directly (same pattern as chat queries `ChatService`).
 //!
-//! The D-Bus `blockchain.query_events` method provides the same audit data
+//! The D-Bus `snowball.query_events` method provides the same audit data
 //! for MCP clients and zcall operators; the GUI uses gRPC for efficiency.
 
 pub mod store;
@@ -346,17 +346,17 @@ grep -n "Route::Accountability" crates/zeroclaw-gui/src/views/mod.rs
 
 ### What to change
 
-1. Ensure `MutationEngine` holds a reference to `StreamingBlockchain`:
+1. Ensure `MutationEngine` holds a reference to `StreamingSnowball`:
    ```rust
-   pub streaming_blockchain: Option<Arc<StreamingBlockchain>>,
+   pub streaming_snowball: Option<Arc<StreamingSnowball>>,
    ```
-   Initialize from `OPDBUS_BLOCKCHAIN_PATH` env var or default path.
+   Initialize from `OPDBUS_SNOWBALL_PATH` env var or default path.
 
 2. After each `record_method_call` (lines 525 and 971), add the `add_footprint` call.
 
 3. Add the `event_to_footprint` conversion function as specified in design.md.
 
-4. Verify `op-grpc-bridge/Cargo.toml` depends on `op-blockchain`.
+4. Verify `op-grpc-bridge/Cargo.toml` depends on `op-snowball`.
 
 ### Important constraints
 
@@ -370,7 +370,7 @@ cargo check -p op-grpc-bridge
 cargo clippy -p op-grpc-bridge --all-targets -- -D warnings
 # After rebuild + restart:
 ./bin/zcall cognitive_mcp get_health
-ls /var/lib/opdbus/blockchain/timing/ | tail -3
+ls /var/lib/opdbus/snowball/timing/ | tail -3
 # Expected: new JSON file appeared in timing_subvol
 ```
 
@@ -399,7 +399,7 @@ ls /var/lib/opdbus/blockchain/timing/ | tail -3
 cargo check -p op-grpc-bridge
 cargo check -p op-state-store
 # After rebuild + restart:
-./bin/zcall blockchain query_events -a '{"limit": 5}'
+./bin/zcall snowball query_events -a '{"limit": 5}'
 # Expected: events from BEFORE the restart are visible (rebuilt from disk).
 ```
 
@@ -417,20 +417,20 @@ cargo check --workspace
 cargo clippy -p op-plugins -p op-grpc-bridge -p op-state-store -p zeroclaw-gui \
   --all-targets -- -D warnings
 
-# 3. Verify blockchain methods appear:
-./bin/zcall methods blockchain | grep -E "query_events|verify_chain"
+# 3. Verify snowball methods appear:
+./bin/zcall methods snowball | grep -E "query_events|verify_chain"
 # Expected: both listed
 
 # 4. D-Bus path — query audit trail:
-./bin/zcall blockchain query_events -a '{"limit": 10}'
+./bin/zcall snowball query_events -a '{"limit": 10}'
 # Expected: JSON with events array (not echo)
 
 # 5. D-Bus path — verify chain integrity:
-./bin/zcall blockchain verify_chain -a '{}'
+./bin/zcall snowball verify_chain -a '{}'
 # Expected: {"valid": true, "events_verified": N, "errors": []}
 
 # 6. Scope boundary — existing methods still echo:
-./bin/zcall blockchain list_snapshots -a '{}'
+./bin/zcall snowball list_snapshots -a '{}'
 # Expected: echoes args (NOT a real result)
 
 # 7. Verify route is wired (not hitting stub):
@@ -448,12 +448,12 @@ grep -rn "crate::chat\|ChatStore\|ChatTransport\|ChatService" \
 
 # 10. Verify durability:
 ./bin/zcall cognitive_mcp get_health  # trigger an event
-ls /var/lib/opdbus/blockchain/timing/ | tail -3
+ls /var/lib/opdbus/snowball/timing/ | tail -3
 # Expected: timing_subvol has JSON files
 
 # 11. After restart, events survive:
 # (restart op-grpc-bridge, then query again)
-./bin/zcall blockchain query_events -a '{"limit": 5}'
+./bin/zcall snowball query_events -a '{"limit": 5}'
 # Expected: events from before restart are present
 
 # 12. GUI: launch zeroclaw-gui, navigate to Accountability tab
@@ -464,9 +464,9 @@ ls /var/lib/opdbus/blockchain/timing/ | tail -3
 
 - `cargo check --workspace` exits 0.
 - `cargo clippy` on affected crates produces no new `-D warnings` failures.
-- `./bin/zcall blockchain query_events` returns real event data (not echo).
-- `./bin/zcall blockchain verify_chain` returns integrity result.
-- `./bin/zcall blockchain list_snapshots` STILL echoes (scope boundary).
+- `./bin/zcall snowball query_events` returns real event data (not echo).
+- `./bin/zcall snowball verify_chain` returns integrity result.
+- `./bin/zcall snowball list_snapshots` STILL echoes (scope boundary).
 - The `accountability/` module exists with 4 files.
 - `Route::Accountability` dispatches to the real view, not `stub()`.
 - No import from `crate::chat` exists in `crate::accountability`.
@@ -480,8 +480,8 @@ ls /var/lib/opdbus/blockchain/timing/ | tail -3
 
 | Task | Crate(s) | File(s) | Type |
 |------|----------|---------|------|
-| 1 — Schema methods | op-plugins | blockchain_plugin.rs | Modify (add methods + structs) |
-| 2 — Dispatch arm | op-grpc-bridge | mutation_engine.rs | Modify (add blockchain arm) |
+| 1 — Schema methods | op-plugins | snowball_plugin.rs | Modify (add methods + structs) |
+| 2 — Dispatch arm | op-grpc-bridge | mutation_engine.rs | Modify (add snowball arm) |
 | 3 — Proto codegen | zeroclaw-gui | build.rs | Modify |
 | 4 — Module declaration | zeroclaw-gui | accountability/mod.rs, main.rs | New + Modify |
 | 5 — Store | zeroclaw-gui | accountability/store.rs | New |
@@ -496,7 +496,7 @@ ls /var/lib/opdbus/blockchain/timing/ | tail -3
 
 ## Explicitly Not Done (see Non-Goals in requirements.md)
 
-- The existing 7 blockchain methods remain un-dispatched (scope boundary: inner `_ =>`
+- The existing 7 snowball methods remain un-dispatched (scope boundary: inner `_ =>`
   echo). Their wiring belongs to the paused schema-methods sweep.
 - No automated PII detection or redaction.
 - No changes to `crate::chat`, `ChatService`, or the `zeroclaw` plugin.

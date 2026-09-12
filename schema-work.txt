@@ -3,8 +3,8 @@
   ▘▘ ▝▝    ~/git/operation-dbus-proto
 
 
-❯ check all logs journals dmesg app log sys log  for any error or warnings and  
-  f9ix                                                                          
+❯ check all logs journals dmesg app log sys log  for any error or warnings and
+  f9ix
 
 ● I'll sweep the system logs for errors and warnings. Since this is Artix
   (s6-rc, not systemd), I'll check dmesg, s6 logs, and traditional log files
@@ -86,7 +86,7 @@
   Ran 1 shell command (ctrl+o to expand)
 
 ● zeroclaw-gui is running fine (the reflection failure is non-fatal — it logged
-  once and continued). But notably, assistant.3tched.com still doesn't resolve 
+  once and continued). But notably, assistant.3tched.com still doesn't resolve
   right now — so this isn't only a boot race; the name doesn't resolve at all
   via the local resolver. Let me diagnose the DNS path:
 
@@ -118,16 +118,16 @@
   Fixed
 
   1. D-Bus policy rejected wholesale — /etc/dbus-1/system.d/org.dbusmcp.conf
-  Every config load logged Attribute "receive_sender_prefix" is invalid on 
+  Every config load logged Attribute "receive_sender_prefix" is invalid on
   <allow> element. That attribute doesn't exist in D-Bus (only own_prefix and
   send_destination_prefix have prefix variants; receive rules only allow exact
-  receive_sender). A parse error like this makes dbus-daemon discard the entire 
+  receive_sender). A parse error like this makes dbus-daemon discard the entire
   file — so none of your org.dbusmcp allow-rules were actually in effect.
   Removed the 2 offending lines, validated the XML, and ReloadConfig now parses
   clean. Backup kept at org.dbusmcp.conf.bak.20260621.
 
   2. nfsd-mountd boot fatal — /etc/s6/sv/nfsd-mountd-srv/run
-  Recurring s6-svwait: fatal: unable to subscribe to events for 
+  Recurring s6-svwait: fatal: unable to subscribe to events for
   /run/s6/legacy-services/nfsd-srv: No such file or directory. The script waited
   on a legacy-services path, but nfsd-srv is a proper s6-rc longrun — that path
   never exists. Since dependencies.d/nfsd-srv already enforces ordering the
@@ -138,7 +138,7 @@
 
   Needs your call — internal DNS gap (OD-26)
 
-  zeroclaw-gui logged reflection bootstrap failed: Temporary failure in name 
+  zeroclaw-gui logged reflection bootstrap failed: Temporary failure in name
   resolution for assistant.3tched.com:50051. This isn't just a boot race —
   .3tched.com doesn't resolve at all right now. nextdns (your 127.0.0.1:53
   system resolver) handles public names fine (google.com resolves) but doesn't
@@ -164,8 +164,8 @@
 
 ✻ Sautéed for 5m 43s
 
-❯ assistant.3tched.com shoutld nhot have a IP sgiykd  be a socket. where did    
-  10.22.x.x cojme fro0m                                                         
+❯ assistant.3tched.com shoutld nhot have a IP sgiykd  be a socket. where did
+  10.22.x.x cojme fro0m
 
 ● You're right to flag that — let me trace where 10.220.35.1 actually comes from
   on this box rather than asserting it.
@@ -229,12 +229,12 @@
 
   Recalled 1 memory (ctrl+o to expand)
 
-❯ NO CONTAINER IS TO HAVE A NIC OR IP                                           
+❯ NO CONTAINER IS TO HAVE A NIC OR IP
   ⎿  Interrupted · What should Claude do instead?
 
-❯ WHY IS THAT WHEN EVEN LOVABLE HAD IT WORKING DIRECTLY WITH REFLECTION/GRPC    
+❯ WHY IS THAT WHEN EVEN LOVABLE HAD IT WORKING DIRECTLY WITH REFLECTION/GRPC
 
-● Understood — that's a hard architecture rule: no container gets a NIC or an 
+● Understood — that's a hard architecture rule: no container gets a NIC or an
   IP. Let me ground this in what the box is actually doing right now, because
   that directly explains why reflection broke.
 
@@ -255,8 +255,8 @@
   Recalled 1 memory, wrote 3 memories (ctrl+o to expand)
   ⎿  Interrupted · What should Claude do instead?
 
-❯ WHEN AND HOW DID THE CONTAINERS GET OIP ASDDRESS. THEY ALL WERE SOCKET        
-  GRPC-BRIDGE TONIC WEB A COUPLE OF HOURS AGO                                   
+❯ WHEN AND HOW DID THE CONTAINERS GET OIP ASDDRESS. THEY ALL WERE SOCKET
+  GRPC-BRIDGE TONIC WEB A COUPLE OF HOURS AGO
 ● Let me find out — the containers themselves still have no IP (empty IPV4), so
   what I need to pin down is when the transport flipped from UDS to TCP
   host:port. Let me check the timestamps and recent history of the things that
@@ -274,7 +274,7 @@
   the reflection failure
 
   That 12:51 edit lines up with today's zeroclaw commits (971ee905 zeroclaw,
-  f530c7c4 feat(op-grpc-bridge): zeroclaw Axum host and remaining runtime 
+  f530c7c4 feat(op-grpc-bridge): zeroclaw Axum host and remaining runtime
   wiring). And the live :50051 listener is op-dbus on the host (10.200.0.1 =
   ovsbr0), with no gRPC UDS bound at all. Let me confirm whether the bridge
   transport itself was flipped from UDS→TCP — your working tree has uncommitted
@@ -300,7 +300,7 @@
 
 ● The UDS is not live — /run/opdbus/zeroclaw-grpc.sock isn't bound, and
   /run/opdbus/ is empty. So the UDS-native bridge server (the zeroclaw Axum host
-  from today's f530c7c4) isn't the thing running on :50051 — the older op-dbus 
+  from today's f530c7c4) isn't the thing running on :50051 — the older op-dbus
   TCP listener is. Let me find where ZEROCLAW_GRPC is consumed so I can tell you
   the exact format the client wants for a socket:
 
@@ -333,7 +333,7 @@
   directly with reflection/gRPC a couple hours ago," it was dialing a reachable
   TCP endpoint (the grpc-bridge that used to answer on 10.200.0.x:50051).
 
-  Today, two things landed (commits 971ee905 zeroclaw + f530c7c4 "zeroclaw Axum 
+  Today, two things landed (commits 971ee905 zeroclaw + f530c7c4 "zeroclaw Axum
   host and remaining runtime wiring", and zeroclaw-gui-srv/run was rewritten at
   12:51):
 
@@ -345,7 +345,7 @@
   resolve — and the UDS-serving bridge isn't running (only the older op-dbus TCP
   :50051 is).
 
-  So nothing gave a container an IP. The reflection break is a client/transport 
+  So nothing gave a container an IP. The reflection break is a client/transport
   mismatch introduced at 12:51 today: the Lovable GUI can only do TCP, but it
   was pointed at an unresolvable name while the bridge was being moved to a
   socket it can't dial.
@@ -369,7 +369,7 @@
 
 ✻ Worked for 2m 9s
 
-❯ NOU SAID NETMAKER IP AND WAS DOWN                                             
+❯ NOU SAID NETMAKER IP AND WAS DOWN
 
 ● Let me get the exact facts on netmaker — I want to be precise, because
   "netmaker" is both a host interface and a container here, and I shouldn't
@@ -378,8 +378,8 @@
   Ran 1 shell command (ctrl+o to expand)
   ⎿  Interrupted · What should Claude do instead?
 
-❯ SO  THE GRPC-BRIDGE IS 10.200.0.1 THERE SHOULD BE NO LOOPBAC TCP TONIC WWEB   
-  TRANSLATES HTTP>GRPC WITH TONIC WEB SO ZEROCLAW_GRPC=10.200.0.1:6.?.?.        
+❯ SO  THE GRPC-BRIDGE IS 10.200.0.1 THERE SHOULD BE NO LOOPBAC TCP TONIC WWEB
+  TRANSLATES HTTP>GRPC WITH TONIC WEB SO ZEROCLAW_GRPC=10.200.0.1:6.?.?.
 
 ● Got it — don't use loopback; the bridge lives on the ovsbr0 host address
   10.200.0.1, and tonic-web does the HTTP→gRPC translation, so zeroclaw should
@@ -392,7 +392,7 @@
   serves two transports:
 
   - native gRPC on the UDS /run/opdbus/zeroclaw-grpc.sock (server.rs:220)
-  - HTTP + gRPC-Web via tonic_web::enable(...) on TCP — DEFAULT_BIND_ADDR = 
+  - HTTP + gRPC-Web via tonic_web::enable(...) on TCP — DEFAULT_BIND_ADDR =
   "0.0.0.0:8090" (server.rs:36, 152–153, 229–235), overridable with env
   ZEROCLAW_BIND_ADDR.
 
@@ -406,7 +406,7 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-❯ SLOOK FOR PORRT I CANT REMEMBER EXAT                                          
+❯ SLOOK FOR PORRT I CANT REMEMBER EXAT
 
 ● Port = 8090. That's the one you couldn't remember.
 
@@ -442,7 +442,7 @@
 
 ✻ Worked for 1m 11s
 
-❯ YES'                                                                          
+❯ YES'
 
 ● Doing both. First let me find out why the bridge is down and locate the live
   service dirs (editing the source /etc/s6/sv alone won't take effect — s6-rc
@@ -637,9 +637,9 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-❯ SHOULD READ STATE PLUGIN LIST                                                 
+❯ SHOULD READ STATE PLUGIN LIST
 
-● lib.rs:121-162 confirms your point — DbusMirror.start() does an "initial 
+● lib.rs:121-162 confirms your point — DbusMirror.start() does an "initial
   full-tree publication" / "Initial full sync" that reads sm.list_plugins() and
   calls query_current_state() on each (lib.rs:774/780, 811/817). That initial
   sync is exactly what should write the zeroclaw schema by reading the
@@ -663,12 +663,12 @@
   Read 1 file (ctrl+o to expand)
   ⎿  Interrupted · What should Claude do instead?
 
-❯ THE FULL TREEE IS OP.DBUS.V1.PLUGINS THAT IS IT NOTHING ELSE IF IT IS MISSING 
-  FROM TREEE IT NEEDS TO HAVE A PLUGIN, NO PLUGIN NO SCHEMA BECAUSE THER        
-  SCHEMA IS THE PLUGIN                                                          
+❯ THE FULL TREEE IS OP.DBUS.V1.PLUGINS THAT IS IT NOTHING ELSE IF IT IS MISSING
+  FROM TREEE IT NEEDS TO HAVE A PLUGIN, NO PLUGIN NO SCHEMA BECAUSE THER
+  SCHEMA IS THE PLUGIN
 
-● That's the key architectural rule: the tree under /org/opdbus/v1/plugins is 
-  the whole truth — the schema is the plugin, so if zeroclaw isn't a node in 
+● That's the key architectural rule: the tree under /org/opdbus/v1/plugins is
+  the whole truth — the schema is the plugin, so if zeroclaw isn't a node in
   that tree, the plugin isn't loaded, and there's no schema to publish. Let me
   read the actual live D-Bus tree and see whether zeroclaw is even there:
 
@@ -684,7 +684,7 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-● The node exposes org.opdbus.PluginsV1 with .List, .Get, .GetAll. Let me read 
+● The node exposes org.opdbus.PluginsV1 with .List, .Get, .GetAll. Let me read
   the state-plugin list directly — this is the authoritative tree:
 
   Ran 1 shell command (ctrl+o to expand)
@@ -699,8 +699,8 @@
   Ran 1 shell command (ctrl+o to expand)
   ⎿  Interrupted · What should Claude do instead?
 
-❯ what  is pluginsv1, nver seen that before and the plugin treee was worjkign   
-  fine whayt happened                                                           
+❯ what  is pluginsv1, nver seen that before and the plugin treee was worjkign
+  fine whayt happened
 
 ● Good question — PluginsV1 is new, and if the tree was working before, this is
   a regression. Let me trace where PluginInterface/PluginsV1 came from and what
@@ -710,13 +710,13 @@
 
 ● Here's what happened: the org.opdbus.PluginsV1 interface (the List/Get/GetAll
   aggregate at /org/opdbus/v1/plugins) is new — git log shows it was introduced
-  in commit 18bd7c61 "allchanges" and reworked in d8bce91d "...D-Bus canonical 
+  in commit 18bd7c61 "allchanges" and reworked in d8bce91d "...D-Bus canonical
   path fix". Before that, the tree was the per-plugin objects published
   individually. That new aggregate is what you've never seen, and its snapshot
   is coming up empty.
 
   Also important: the running binary is stale — /usr/local/bin/ovs-dbus-init was
-  built 2026-06-20 21:34, but HEAD is 971ee905 (today 00:44) and lib.rs has 
+  built 2026-06-20 21:34, but HEAD is 971ee905 (today 00:44) and lib.rs has
   uncommitted changes on top. So the live op-dbus-mirror is neither HEAD nor
   your working tree. Let me pull the swallowed init-sync error to see why the
   list is empty:
@@ -724,7 +724,7 @@
   Ran 2 shell commands (ctrl+o to expand)
 
 ● /var/log/opdbus/current is empty too — op-dbus-mirror's output isn't being
-  captured (separate problem). Let me check whether your uncommitted lib.rs 
+  captured (separate problem). Let me check whether your uncommitted lib.rs
   changes are the in-progress fix for this — that tells us if a rebuild resolves
   it:
 
@@ -748,7 +748,7 @@
 
   PluginsV1.List returns as 0 — zero plugins. The new aggregate interface
   registered at /org/opdbus/v1/plugins, but its snapshot is never populated in
-  the deployed binary. So by your own rule — no plugin in the tree → no schema, 
+  the deployed binary. So by your own rule — no plugin in the tree → no schema,
   because the schema is the plugin — the zeroclaw schema can never be written,
   which is the exact error the bridge dies on.
 
@@ -756,7 +756,7 @@
 
   - Live ovs-dbus-init was built 2026-06-20 21:34
   - HEAD is 971ee905 (today 00:44) — newer
-  - and lib.rs has uncommitted edits on top, which are actively ripping out 
+  - and lib.rs has uncommitted edits on top, which are actively ripping out
   publish_nonnet_snapshot (the old plugin-publication path)
 
   So the plugin publication is caught between two worlds: the old NonNet-based
@@ -802,11 +802,11 @@
 
 ✻ Brewed for 2m 4s
 
-❯ i never approvede a refaqct #1 #2  changing somethinsyt that isnty broken. i  
-  know ther was some nonnet but snapswhots of plugings i have bneve sdeen that  
-  befor4e ther e was  nogt snapshots in place. i had all schema moved from      
-  swchema_def (aggrigat) to the actual plugin sxo 98i9 know it was loookign yup 
-  to plufgin                                                                    
+❯ i never approvede a refaqct #1 #2  changing somethinsyt that isnty broken. i
+  know ther was some nonnet but snapswhots of plugings i have bneve sdeen that
+  befor4e ther e was  nogt snapshots in place. i had all schema moved from
+  swchema_def (aggrigat) to the actual plugin sxo 98i9 know it was loookign yup
+  to plufgin
 
 ● You're right, and I mis-framed it — let me be clear: I was describing what the
   code shows someone changed, not proposing you approve a refactor. Offering
@@ -863,13 +863,13 @@
   Two questions before I do anything:
   1. Want me to remove the snapshot layer and restore direct plugin lookup?
   (yes/no)
-  2. At /org/opdbus/v1/plugins, do you want each plugin as its own child object 
+  2. At /org/opdbus/v1/plugins, do you want each plugin as its own child object
   node (…/plugins/zeroclaw, introspectable, schema from the plugin) — i.e., the
   per-plugin tree you remember — rather than the List/Get/GetAll aggregate?
 
 ✻ Cooked for 1m 13s
 
-❯ what abougt the schemars                                                      
+❯ what abougt the schemars
 
 ● Good question — schemars is the other half of "the schema is the plugin." Let
   me check whether zeroclaw's schema is actually schemars-derived and exactly
@@ -890,12 +890,12 @@
 
   zeroclaw's schema is 100% schemars-derived
 
-  zeroclaw.rs:25   #[derive(Debug, Clone, Default, Serialize, Deserialize, 
+  zeroclaw.rs:25   #[derive(Debug, Clone, Default, Serialize, Deserialize,
   schemars::JsonSchema)]
   zeroclaw.rs:26   #[schemars(extend("x-oscal-subid" =
   "sch.software.zeroclaw-transport.schema@v1"))]
   zeroclaw.rs:59   #[derive(... schemars::JsonSchema)]   // struct ZeroclawState
-  zeroclaw.rs:549  /// Canonical `zeroclaw` schema derived from 
+  zeroclaw.rs:549  /// Canonical `zeroclaw` schema derived from
   [`ZeroclawState`] via schemars.
   zeroclaw.rs:551      schemars::schema_for!(ZeroclawState)   →  PluginSchema
 
@@ -939,8 +939,8 @@
 
 ✻ Baked for 1m 3s
 
-❯ i thought there were like 150+ plugins after the schemars and incus devices   
-  added                                                                         
+❯ i thought there were like 150+ plugins after the schemars and incus devices
+  added
 
 ● Let me get the real count — the as 0 from PluginsV1.List is just the broken
   snapshot, not the actual registry. Let me count what's really registered
@@ -978,8 +978,8 @@
   │ incus plugin's Device enum variants              │ 12–17     │
   └──────────────────────────────────────────────────┴───────────┘
 
-  So your memory isn't wrong — it's just that "150+" is the schema count, not 
-  the plugin count. After the schemars migration, you have 132 typed JsonSchema 
+  So your memory isn't wrong — it's just that "150+" is the schema count, not
+  the plugin count. After the schemars migration, you have 132 typed JsonSchema
   structs, and once you fold in the incus device sub-types (12–17) and the
   nested config/state structs, you're right around 150 schema nodes. Each plugin
   owns multiple schemars structs (a state struct + config struct + nested
@@ -1004,14 +1004,14 @@
 
 ✻ Churned for 1m 5s
 
-❯ what do you mean? alll i knwo i that is the only path and claude had it so it 
-  displayed names and readable fields instead of id numbers, port numbers, etc  
+❯ what do you mean? alll i knwo i that is the only path and claude had it so it
+  displayed names and readable fields instead of id numbers, port numbers, etc
 
 ● Got it — I was overcomplicating it. Let me say it back plainly to make sure
   we're aligned:
 
   - One path only: /org/opdbus/v1/plugins. That's the whole tree.
-  - When Claude had it working, that path showed human-readable names and 
+  - When Claude had it working, that path showed human-readable names and
   labeled fields — because each plugin's schemars schema carries the field
   names, titles, and descriptions (and your OSCAL subids). So instead of raw
   id/port numbers, you saw "grpc target", "incus container", "browser surface",
@@ -1035,14 +1035,14 @@
 
 ✻ Sautéed for 29s
 
-❯ do we use op-dbus-mirror anymore or is it op-projection?                      
+❯ do we use op-dbus-mirror anymore or is it op-projection?
 
 ● Fair question — let me check what's actually running and what each does,
   rather than assume:
 
   Ran 1 shell command (ctrl+o to expand)
 
-● That reframes everything. Both are running and both target 
+● That reframes everything. Both are running and both target
   /org/opdbus/v1/plugins — and op-projection is the newer, correct one:
 
   - op-dbus-mirror (ovs-dbus-init, pid 3273) — the legacy path, serves the
@@ -1063,12 +1063,12 @@
 
 ● There it is — they're on different buses, and that's the whole confusion:
 
-  - System bus: org.opdbus.v1.plugins is owned by projection_server 
+  - System bus: org.opdbus.v1.plugins is owned by projection_server
   (op-projection) — the real readable tree.
   - Session bus: the same name is owned by ovs-dbus-init (op-dbus-mirror) — the
   empty snapshot.
 
-  I introspected the session bus earlier, so I hit the dead legacy snapshot (as 
+  I introspected the session bus earlier, so I hit the dead legacy snapshot (as
   0). The live readable tree is op-projection on the system bus. Let me confirm
   it actually has the readable per-plugin objects:
 
@@ -1098,7 +1098,7 @@
 
   SystemPluginReader::new() (plugin_reader.rs:58-62) does:
   let registry = DefaultPluginRegistry::new(state_store);
-  let plugins = registry.load_all_plugins().await?;   // loads ALL plugins 
+  let plugins = registry.load_all_plugins().await?;   // loads ALL plugins
   directly
   It loads every plugin straight from the registry, resolves each one's schemars
   schema, and serves them as readable objects at
@@ -1119,7 +1119,7 @@
 
   The catch
 
-  op-projection owns the system-bus name but introspection times out with zero 
+  op-projection owns the system-bus name but introspection times out with zero
   objects — it's up but not mounting the tree (wedged or fell back to empty()
   during load_all_plugins/state query). So neither path is actually serving
   right now: mirror serves empty, projection serves nothing.
@@ -1135,14 +1135,14 @@
   /dev/shm/opdbus/schemas/zeroclaw.json — that write path still needs an owner
   (it's currently orphaned inside the dead snapshot trigger).
 
-  Before I touch anything: do you want me to dig into why op-projection serves 
+  Before I touch anything: do you want me to dig into why op-projection serves
   an empty tree (is load_all_plugins erroring, or is it mounting then the query
   hangs)? That's the thing to fix — op-dbus-mirror can just be stopped.
 
 ✻ Cogitated for 3m 8s
 
-❯ i thoughtg plugin_def was the enumerator and gathered the schema for the      
-  plugins and sent to shm                                                       
+❯ i thoughtg plugin_def was the enumerator and gathered the schema for the
+  plugins and sent to shm
 
 ● Let me check that — you may be right that there's an enumerator that gathers
   all plugin schemas to SHM. Let me look at plugin_schema_defs / the plugin-def
@@ -1155,7 +1155,7 @@
   module only re-exports them for backward compatibility." It just holds helpers
   (schema_from_state, simple_schema). It doesn't gather schemas or write to
   SHM.
-  2. The only writer to /dev/shm/opdbus/schemas/ in the entire codebase is 
+  2. The only writer to /dev/shm/opdbus/schemas/ in the entire codebase is
   zeroclaw.rs — writing its own single file. There is no general enumerator that
   gathers all plugins' schemas and sends them to the Sled.
 
@@ -1165,7 +1165,7 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-❯ whaqt is the live json then?                                                  
+❯ whaqt is the live json then?
 
 ● Right — let me stop the history digging and look at what's actually live on
   the box right now:
@@ -1183,8 +1183,8 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-● The user's memory was correct. /dev/shm/live-schema.json is the live 
-  enumerated schema — a dict keyed by plugin name (wgcf, gcloud_adc, 
+● The user's memory was correct. /dev/shm/live-schema.json is the live
+  enumerated schema — a dict keyed by plugin name (wgcf, gcloud_adc,
   unix_socket, zeroclaw, ovsdb_daemon, common, privacy_router, workflows, …),
   and zeroclaw is already in it. That's the enumerator output you remembered,
   and it's the single source of truth:
@@ -1207,8 +1207,8 @@
   Ran 1 shell command (ctrl+o to expand)
   ⎿  Interrupted · What should Claude do instead?
 
-❯ zero claw is new, so unimportiant because swe just point it to wshat ever is  
-  ceratiing live schema                                                         
+❯ zero claw is new, so unimportiant because swe just point it to wshat ever is
+  ceratiing live schema
 
 ● Agreed — that's the clean call. zeroclaw is the newcomer; it should bend to
   the existing source of truth, not invent its own. Everything else already
@@ -1225,7 +1225,7 @@
 
 ● This is an env-path change plus a small loader change. The reason: the
   bridge's SchemaLoader::load() expects the file to be the zeroclaw schema
-  directly, but live-schema.json is the aggregate { "zeroclaw": [<schema>], 
+  directly, but live-schema.json is the aggregate { "zeroclaw": [<schema>],
   "wgcf": [...], … }. So it needs to extract root["zeroclaw"][0] — exactly the
   pattern grpc_server.rs:read_live_schema() already uses. Let me see the rest of
   load() to write the minimal edit:
@@ -1233,9 +1233,9 @@
   Read 1 file (ctrl+o to expand)
   ⎿  Interrupted · What should Claude do instead?
 
-❯ is there a benefit to have a a folder with seperaqte schemas?                 
+❯ is there a benefit to have a a folder with seperaqte schemas?
 
-❯ rather than one monolithic                                                    
+❯ rather than one monolithic
 
 ● Real tradeoffs, grounded in how this system uses it — not a generic answer:
 
@@ -1261,8 +1261,8 @@
   schema_catalog_hash(/dev/shm/live-schema.json)
                                 || mutation_index || source_port )
 
-  The whole live-schema.json is hashed as schema_catalog_hash — it's a 
-  cryptographic identity primitive, not just data. A single file gives one 
+  The whole live-schema.json is hashed as schema_catalog_hash — it's a
+  cryptographic identity primitive, not just data. A single file gives one
   deterministic hash over a consistent snapshot of all 63 plugins. Split it into
   a folder and you now have to define a canonical hash across N files
   (ordering, concatenation, merkle) — fragile, and you can observe the folder
@@ -1290,7 +1290,7 @@
 
 ✻ Cogitated for 44s
 
-❯ cant you create the hash from the folder of individual schema?                
+❯ cant you create the hash from the folder of individual schema?
 
 ● You're right — I overstated that. Yes, you can absolutely derive a
   deterministic catalog hash from a folder; it's a standard pattern (it's
@@ -1340,11 +1340,11 @@
 
 ✻ Worked for 38s
 
-❯  The catalog hash isn't computed in one place breakes the biggeswwt           
-  foundational rule . one schema                                                
+❯  The catalog hash isn't computed in one place breakes the biggeswwt
+  foundational rule . one schema
 
 ● You're right, and that's the real point — I treated "the hash is computed in 4
-  places" as a constraint to design around when it's actually a violation of 
+  places" as a constraint to design around when it's actually a violation of
   the foundational rule: one schema, one source of truth, computed once. The
   duplication is the bug.
 
@@ -1384,9 +1384,9 @@
 
 ✻ Crunched for 55s
 
-❯ we have schema on shm in folder of individualo plugin schema and loose in shm 
-  (not in folder) is the full schema collection in one hash, so the schema can  
-  be consumed individually all together                                         
+❯ we have schema on shm in folder of individualo plugin schema and loose in shm
+  (not in folder) is the full schema collection in one hash, so the schema can
+  be consumed individually all together
 ● That's the design — and it reconciles everything I got backwards. Let me say
   it back precisely:
 
@@ -1394,15 +1394,15 @@
   (/dev/shm/opdbus/schemas/<plugin>.json) → consume one plugin at a time (this
   is exactly what the zeroclaw bridge reads — so its path was right, the folder
   just isn't being written).
-  - Loose monolith (/dev/shm/live-schema.json, not in the folder) → the full 
+  - Loose monolith (/dev/shm/live-schema.json, not in the folder) → the full
   collection in one hash → consume all together + the single
   schema_catalog_hash.
-  - Both are two views of the same single source, emitted by one enumerator in 
+  - Both are two views of the same single source, emitted by one enumerator in
   one pass — so they can never diverge. That's "one schema" honored: one
   producer, two shapes (individual + collective).
 
   So my "point zeroclaw at live-schema.json" was wrong. The right fix is: the
-  one enumerator that writes live-schema.json must also write the per-plugin 
+  one enumerator that writes live-schema.json must also write the per-plugin
   folder — then zeroclaw reads …/schemas/zeroclaw.json as designed, and the hash
   still comes from the one monolith. Currently only the monolith exists
   (/dev/shm/opdbus/ doesn't), so the enumerator is emitting only the collective
@@ -1413,7 +1413,7 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-● Found the single enumerator: op-projection/src/schema_engine.rs → 
+● Found the single enumerator: op-projection/src/schema_engine.rs →
   SchemaEngine::write_schemas_to_shm() (line 151), which writes
   /dev/shm/live-schema.json (the const at line 20), called on init (131) and
   after changes (252, 355). It runs inside projection_server (op-projection).
@@ -1431,13 +1431,13 @@
   - Line 168: blake3::hash(&json_bytes) — the one canonical catalog hash,
   returned as the footprint.
 
-  So the "one place" already exists. Its docstring even says so: "This is the 
-  single source of truth: UI, blockchain, gRPC reflection, and all downstream 
+  So the "one place" already exists. Its docstring even says so: "This is the
+  single source of truth: UI, snowball, gRPC reflection, and all downstream
   consumers read from this file."
 
   That sharpens both tasks:
 
-  1. The folder (your individual view) is a 4-line extension to this one 
+  1. The folder (your individual view) is a 4-line extension to this one
   function. Same catalog map, same pass — after writing the monolith, loop the
   entries and write each catalog[id] to /dev/shm/opdbus/schemas/<id>.json
   (atomic temp+rename). One producer, two views (individual + collective), zero
@@ -1466,7 +1466,7 @@
 
 ✻ Sautéed for 1m 47s
 
-❯ the th enumerator woulod rehash evgery change in schema                       
+❯ the th enumerator woulod rehash evgery change in schema
 
 ● Right — and that's the third time the hash argument actually cuts toward the
   folder, not away. The monolith forces a full re-hash of all 63 plugins (575KB)
@@ -1506,7 +1506,7 @@
 
 ✻ Cogitated for 51s
 
-❯ that would be every mutation, right?                                          
+❯ that would be every mutation, right?
 
 ● Important distinction, and I think you're flagging the trap: no, it should not
   be every mutation. Schema ≠ state. Let me ground it in the derivation:
@@ -1535,7 +1535,7 @@
 
 ● Confirmed — no, it is not every mutation. The actual call sites prove it:
 
-  - Line 252 — inside schema registration: right after record_audit(…, 
+  - Line 252 — inside schema registration: right after record_audit(…,
   SchemaChangeType::Registered, "Registered schema version …").
   - Line 355 — inside quarantine_schema(): SchemaChangeType::Quarantined.
   - Line 131 — boot (new()).
@@ -1561,7 +1561,7 @@
   - Per schema register (incl. boot): today = full
   ⎿  Interrupted · What should Claude do instead?
 
-❯ so is this the schema engine?                                                 
+❯ so is this the schema engine?
 
 ● Good question to pin down — because there's more than one thing called "schema
   engine," and per your one-source rule that matters. Let me check:
@@ -1590,7 +1590,7 @@
   └─────────────┴────────────────────────────┴─────────────────────────────┘
 
   So the answer: for everything we've been discussing — the live schema catalog,
-  the SHM source of truth, the catalog hash, the folder emission — yes, 
+  the SHM source of truth, the catalog hash, the folder emission — yes,
   op-projection's SchemaEngine is "the schema engine." It's the one that
   enumerates the schemas and writes the catalog.
 
@@ -1621,7 +1621,7 @@
 
   So, direct answer to your question:
 
-  - For the schema / catalog / the folder + hash work → yes, 
+  - For the schema / catalog / the folder + hash work → yes,
   op-projection::SchemaEngine is "the schema engine." That's where
   write_schemas_to_shm, the catalog, and the catalog hash live, and where the
   per-plugin folder emission belongs.
@@ -1642,7 +1642,7 @@
 
 ✻ Churned for 1m 23s
 
-❯ so we need to change name of grpc schemaengine to policyengine?               
+❯ so we need to change name of grpc schemaengine to policyengine?
 
 ● Before reaching for PolicyEngine, consider what the engine's actual identity
   is — and I'd push back slightly: I think MutationEngine is the more precise
@@ -1667,7 +1667,7 @@
   interception" be a documented responsibility, rather than rename the engine
   after the gate.
 
-  My recommendation: SchemaEngine (op-projection) + MutationEngine 
+  My recommendation: SchemaEngine (op-projection) + MutationEngine
   (op-grpc-bridge) — clean schema/mutation symmetry, matches the two hash terms,
   no "policy" ambiguity.
 
@@ -1706,7 +1706,7 @@
 
 ✻ Cogitated for 1m 4s
 
-❯ i like mutationenginge                                                        
+❯ i like mutationenginge
 
 ● MutationEngine it is. Let me do the rename cleanly. First let me read the
   exact lines I need to change (module decl, re-export, imports, struct header)
@@ -1714,7 +1714,7 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-❯ and we might end up eotha pocicy engine                                       
+❯ and we might end up eotha pocicy engine
 ● MutationEngine confirmed — and noting your "we might end up with a policy
   engine": good, keeping it MutationEngine leaves room for a separate future
   PolicyEngine (policy interception extracted out as its own component), instead
@@ -1730,7 +1730,7 @@
 
   Ran 2 shell commands (ctrl+o to expand)
 
-● Now let me verify it compiles — checking just the affected crates (cargo 
+● Now let me verify it compiles — checking just the affected crates (cargo
   check, faster than a full build):
 
   Ran 1 shell command (ctrl+o to expand)
@@ -1782,15 +1782,15 @@
 
 ✻ Cogitated for 5m 26s
 
-❯ why does gemma need a rs file? it is se5rved by ollama, maybe a plugin since  
-  gemma will be doing routing, but a rs file?                                   
+❯ why does gemma need a rs file? it is se5rved by ollama, maybe a plugin since
+  gemma will be doing routing, but a rs file?
 
 ● Let me look at what gemma.rs actually does before judging whether it should
   exist — that's the only way to answer it honestly:
 
   Read 1 file (ctrl+o to expand)
 
-● Good instinct — and looking at it, you're basically right: gemma.rs isn't 
+● Good instinct — and looking at it, you're basically right: gemma.rs isn't
   Gemma. It's not inference and it's not routing. It's a thin REST shim for the
   lovable SPA's UI-spec gallery. Four handlers:
 
@@ -1816,10 +1816,10 @@
 
   And by your own architecture, it shouldn't be a bespoke .rs handler:
 
-  1. The regenerate handler 
+  1. The regenerate handler
   tokio::process::Command::new("/usr/local/bin/op-gemma") — spawning a
   subprocess straight from the web tier. That bypasses the mutation engine /
-  "every mutation is an enforcement point." A regenerate should be a plugin 
+  "every mutation is an enforcement point." A regenerate should be a plugin
   mutation / D-Bus method, not a fork from op-web.
   2. specs and catalog are generic SHM-JSON passthroughs — not Gemma-specific
   logic. The gallery (gemma-ui-specs.json) is just another /dev/shm artifact
@@ -1844,7 +1844,7 @@
 
 ✻ Worked for 50s
 
-❯ so really should be a plugin                                                  
+❯ so really should be a plugin
 
 ● Yes — and it's a clean example of the rule, not a special case. Let me record
   the decision and the general anti-pattern it represents, then lay out
@@ -1881,7 +1881,7 @@
   default_registry.rs, served generically like every other plugin, and
   handlers/gemma.rs + the /api/gemma/* routes get deleted.
 
-  There's a nice convergence here: deleting gemma.rs is both the first step 
+  There's a nice convergence here: deleting gemma.rs is both the first step
   toward the plugin and the thing that unblocks the op-dbus build (it's the file
   with the syntax error). So you don't have to choose between "fix the build"
   and "do it right" — removing the handler does both, and op-dbus rebuilds clean
@@ -1899,9 +1899,9 @@
 
 ✻ Cooked for 1m 5s
 
-❯ i think wee need a gemma but distigush from model like gemmarouter gemmabrain 
-  gemmalogic because we actually need a generic plugin  for                     
-  large-language-model                                                          
+❯ i think wee need a gemma but distigush from model like gemmarouter gemmabrain
+  gemmalogic because we actually need a generic plugin  for
+  large-language-model
 
 ● That's the right cut — you're separating the model from what Gemma does. Two
   distinct plugins:
@@ -1926,7 +1926,7 @@
   - UI-spec generation (what gemma.rs was shimming)
   - it calls large-language-model; it doesn't embed a model.
 
-  So the boundary is clean: LLM plugin = how to talk to a model. Gemma plugin = 
+  So the boundary is clean: LLM plugin = how to talk to a model. Gemma plugin =
   what to decide with it.
 
   On the name (your three)
@@ -1955,7 +1955,7 @@
 
 ✻ Worked for 1m 8s
 
-❯ gemma is going to do multiple  things so brain i thinjk                       
+❯ gemma is going to do multiple  things so brain i thinjk
 
 ● gemma-brain it is — the umbrella cognitive plugin. Let me update the memory to
   reflect the two-plugin split with the names locked in:
@@ -1963,13 +1963,13 @@
   Recalled 1 memory, wrote 3 memories (ctrl+o to expand)
 ● Locked in and recorded. The settled design:
 
-  - large-language-model — generic, model-agnostic. Model is a field (model_id: 
+  - large-language-model — generic, model-agnostic. Model is a field (model_id:
   "gemma3"). The only thing that touches Ollama. Swap models without touching
   anything else.
   - gemma-brain — umbrella cognitive plugin (multiple jobs → "brain," not
   "router"): tag routing, subid classification, the 4 perspectives, UI-spec
   generation. Consumes large-language-model; embeds no model.
-  - Boundary: LLM plugin = how to talk to a model; gemma-brain = what to decide 
+  - Boundary: LLM plugin = how to talk to a model; gemma-brain = what to decide
   with it.
 
   Proposed build sequence:
@@ -1994,7 +1994,7 @@
 
 ✻ Sautéed for 55s
 
-❯ it is alreadiy doign ui-gen                                                   
+❯ it is alreadiy doign ui-gen
 
 ● Good — that changes step 1. If the gallery is live, then deleting gemma.rs
   doesn't just unblock the build, it takes down the running UI — the lovable SPA
@@ -2010,7 +2010,7 @@
   generation.
   - What migrates is only the surface: bespoke /api/gemma/* handlers →
   gemma-brain publishing the gallery as a projection and exposing
-  regenerate/delete-spec as mutations. That's a clean cutover you do when the 
+  regenerate/delete-spec as mutations. That's a clean cutover you do when the
   projection is ready — not before, or the gallery goes dark.
 
   So the corrected sequence:
@@ -2034,7 +2034,7 @@
 
 ✻ Cogitated for 40s
 
-❯ do proposed                                                                   
+❯ do proposed
 
 ● Update(crates/op-web/src/handlers/gemma.rs)
   ⎿  Added 1 line, removed 1 line
@@ -2044,9 +2044,9 @@
       35  /// For immediate replacement, we remove the spec and rewrite t
           he file.
       36 -pub async fn delete_spec_handler(Path(spec_id: String) -> Path<
-         -String>) -> Result<Json<Value>, (StatusCode, String)> {        
+         -String>) -> Result<Json<Value>, (StatusCode, String)> {
       36 +pub async fn delete_spec_handler(Path(spec_id): Path<String>) -
-         +> Result<Json<Value>, (StatusCode, String)> {                  
+         +> Result<Json<Value>, (StatusCode, String)> {
       37      let raw = fs::read_to_string(GEMMA_SPECS_PATH)
       38          .map_err(|e| (StatusCode::NOT_FOUND, format!("gallery n
           ot found: {e}")))?;
@@ -2061,7 +2061,7 @@
   whole blocker.
 
   Status now:
-  - ✅ gemma.rs syntax fixed — op-web builds, and the live UI-gen gallery stays 
+  - ✅ gemma.rs syntax fixed — op-web builds, and the live UI-gen gallery stays
   up (/api/gemma/* intact, op-gemma keeps producing specs).
   - ✅ MutationEngine rename compiles in both consumers (op-grpc-bridge ✓
   earlier, op-web/op-dbus ✓ now).
@@ -2094,10 +2094,10 @@
 
 ✻ Crunched for 50s
 
-❯ is the unified schema engine/shm schema nailed down?                          
+❯ is the unified schema engine/shm schema nailed down?
   ⎿  Found 12 new diagnostic issues in 2 files (ctrl+o to expand)
 
-● Honestly? The direction is nailed down; the implementation and a few concrete 
+● Honestly? The direction is nailed down; the implementation and a few concrete
   specifics are not. Let me separate them cleanly so it's not fuzzy:
 
   ✅ Decided (and the rename is even coded)
@@ -2133,7 +2133,7 @@
   schema register — the O(N²)-at-boot thing we found).
   - The 5→1 hash consolidation.
 
-  So: conceptually settled, zero of it implemented, and three specifics (file 
+  So: conceptually settled, zero of it implemented, and three specifics (file
   format, hash plumbing, atomicity) still need your call before I'd write code.
   Want to lock those three now so it's fully nailed, or leave them until we
   actually build the folder emission?
@@ -2144,7 +2144,7 @@
 
 ✻ Brewed for 40s
 
-❯ i amn going to trust your judgemnt on all of those decisions                  
+❯ i amn going to trust your judgemnt on all of those decisions
   ⎿  Found 30 new diagnostic issues in 8 files (ctrl+o to expand)
 
 ● You've got it — I'll make the calls and lock them. Here are the three
@@ -2161,7 +2161,7 @@
   2. One hash, in a manifest, computed once. The enumerator hashes each file
   into a leaf, folds the sorted leaves into one root — blake3( for id in sorted:
   id || leaf[id] ) — and writes root + leaves + generation to
-  /dev/shm/opdbus/schemas/.manifest.json. op-identity's 5 re-hash sites stop 
+  /dev/shm/opdbus/schemas/.manifest.json. op-identity's 5 re-hash sites stop
   re-hashing and read manifest.catalog_hash. A schema change re-hashes only the
   plugin that moved (incremental), and the value exists in exactly one place.
 
@@ -2175,7 +2175,7 @@
   it's no longer the hash source; the manifest root is.
   - One caveat I can't decide unilaterally: moving the derivation from
   blake3(live-schema.json bytes) → manifest.catalog_hash changes the hash value,
-  so the verifier on the other side of the WG/ghostbridge derivation must 
+  so the verifier on the other side of the WG/ghostbridge derivation must
   switch to the manifest value in lockstep. That's a coordination point, not a
   code detail — flagging it so it's not a silent break.
 
@@ -2191,7 +2191,7 @@
 
 ✻ Churned for 1m 17s
 
-❯ continue                                                                      
+❯ continue
 
 ● On it. Let me read the current write_schemas_to_shm and its surrounding
   context (imports, struct, const) so the edit is precise:
@@ -2205,64 +2205,64 @@
   ⎿  Added 11 lines, removed 2 lines
       15  use std::io::Write;
       16  use tracing::{debug, error, info, warn};
-      17  
-      18 -/// Shared-memory path for the canonical PluginSchema catalog. 
-      19 -/// This is the single source of truth for UI, blockchain, and 
-         -all components.                                                
+      17
+      18 -/// Shared-memory path for the canonical PluginSchema catalog.
+      19 -/// This is the single source of truth for UI, snowball, and
+         -all components.
       18 +/// Derived "all-together" monolith cache of the PluginSchema c
-         +atalog. Kept for                                               
+         +atalog. Kept for
       19 +/// whole-catalog readers; NO LONGER the hash source (the manif
-         +est root is).                                                  
+         +est root is).
       20  const SHM_SCHEMA_PATH: &str = "/dev/shm/live-schema.json";
-      21  
+      21
       22 +/// Directory of bare per-plugin schema objects (`<plugin>.json
-         +`) for individual                                              
-      23 +/// consumption — emitted alongside the monolith from the same 
-         +single producer.                                               
-      24 +const SHM_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";        
-      25 +                                                               
+         +`) for individual
+      23 +/// consumption — emitted alongside the monolith from the same
+         +single producer.
+      24 +const SHM_SCHEMA_DIR: &str = "/dev/shm/opdbus/schemas";
+      25 +
       26 +/// Manifest carrying the single folded `catalog_hash` + per-pl
-         +ugin leaf hashes +                                             
-      27 +/// `generation`. Written LAST as the atomic commit point; the 
-         +one place the                                                  
+         +ugin leaf hashes +
+      27 +/// `generation`. Written LAST as the atomic commit point; the
+         +one place the
       28 +/// catalog hash is published — consumers read it, never re-has
-         +h.                                                             
+         +h.
       29 +const SHM_MANIFEST_PATH: &str = "/dev/shm/opdbus/schemas/.manif
-         +est.json";                                                     
-      30 +                                                               
+         +est.json";
+      30 +
       31  /// Schema version identifier
       32  pub type SchemaVersion = u64;
-      33  
+      33
 
 ● Now the atomic-write helper:
 ● Update(crates/op-projection/src/schema_engine.rs)
   ⎿  Added 17 lines
       63      }
       64  }
-      65  
+      65
       66 +/// Atomically publish `bytes` to a `/dev/shm` path via a sibli
-         +ng temp file +                                                 
+         +ng temp file +
       67 +/// rename, so readers see either the old or new content, never
-         + a torn write.                                                 
-      68 +fn atomic_write_shm(path: &str, bytes: &[u8]) -> Result<()> {  
-      69 +    let tmp = format!("{}.tmp", path);                         
-      70 +    {                                                          
-      71 +        let mut file = std::fs::File::create(&tmp)             
+         + a torn write.
+      68 +fn atomic_write_shm(path: &str, bytes: &[u8]) -> Result<()> {
+      69 +    let tmp = format!("{}.tmp", path);
+      70 +    {
+      71 +        let mut file = std::fs::File::create(&tmp)
       72 +            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}"
-         +, tmp, e))?;                                                   
-      73 +        file.write_all(bytes)                                  
+         +, tmp, e))?;
+      73 +        file.write_all(bytes)
       74 +            .map_err(|e| anyhow::anyhow!("Failed to write {}: {
-         +}", tmp, e))?;                                                 
-      75 +        file.sync_all()                                        
+         +}", tmp, e))?;
+      75 +        file.sync_all()
       76 +            .map_err(|e| anyhow::anyhow!("Failed to sync {}: {}
-         +", tmp, e))?;                                                  
-      77 +    }                                                          
-      78 +    std::fs::rename(&tmp, path)                                
+         +", tmp, e))?;
+      77 +    }
+      78 +    std::fs::rename(&tmp, path)
       79 +        .map_err(|e| anyhow::anyhow!("Failed to rename {} -> {}
-         +: {}", tmp, path, e))?;                                        
-      80 +    Ok(())                                                     
-      81 +}                                                              
-      82 +                                                               
+         +: {}", tmp, path, e))?;
+      80 +    Ok(())
+      81 +}
+      82 +
       83  /// The authoritative schema registry that validates and manage
           s all PluginSchema definitions.
       84  ///
@@ -2275,118 +2275,118 @@
   ⎿  Added 65 lines, removed 10 lines
       181              .map(|(k, v)| (k.clone(), v.iter().collect()))
       182              .collect();
-      183  
-      184 +        // 1. Derived "all-together" monolith cache (atomic). 
-          +Kept for                                                      
+      183
+      184 +        // 1. Derived "all-together" monolith cache (atomic).
+          +Kept for
       185 +        //    whole-catalog readers; no longer the hash source
-          +.                                                             
+          +.
       186          let json_bytes = serde_json::to_vec_pretty(&catalog)
-      187              .map_err(|e| anyhow::anyhow!("Failed to serialize 
+      187              .map_err(|e| anyhow::anyhow!("Failed to serialize
            schema catalog: {}", e))?;
-      188 +        atomic_write_shm(SHM_SCHEMA_PATH, &json_bytes)?;      
-      189  
-      187 -        let mut file = std::fs::File::create(SHM_SCHEMA_PATH) 
-      188 -            .map_err(|e| anyhow::anyhow!("Cannot write schema 
-          -SHM: {}", e))?;                                               
-      189 -        file.write_all(&json_bytes)                           
+      188 +        atomic_write_shm(SHM_SCHEMA_PATH, &json_bytes)?;
+      189
+      187 -        let mut file = std::fs::File::create(SHM_SCHEMA_PATH)
+      188 -            .map_err(|e| anyhow::anyhow!("Cannot write schema
+          -SHM: {}", e))?;
+      189 -        file.write_all(&json_bytes)
       190 -            .map_err(|e| anyhow::anyhow!("Failed to write sche
-          -ma SHM: {}", e))?;                                            
-      191 -        file.sync_all()                                       
+          -ma SHM: {}", e))?;
+      191 -        file.sync_all()
       192 -            .map_err(|e| anyhow::anyhow!("Failed to sync schem
-          -a SHM: {}", e))?;                                             
+          -a SHM: {}", e))?;
       190 +        // 2. Folder of bare per-plugin schema objects + per-p
-          +lugin leaf hashes.                                            
-      191 +        std::fs::create_dir_all(SHM_SCHEMA_DIR)               
+          +lugin leaf hashes.
+      191 +        std::fs::create_dir_all(SHM_SCHEMA_DIR)
       192 +            .map_err(|e| anyhow::anyhow!("Cannot create schema
-          + dir {}: {}", SHM_SCHEMA_DIR, e))?;                           
+          + dir {}: {}", SHM_SCHEMA_DIR, e))?;
       193 +        let mut leaves: std::collections::BTreeMap<String, Str
-          +ing> =                                                        
-      194 +            std::collections::BTreeMap::new();                
-      195 +        for (id, schemas) in &catalog {                       
+          +ing> =
+      194 +            std::collections::BTreeMap::new();
+      195 +        for (id, schemas) in &catalog {
       196 +            // Bare PluginSchema object (canonical one if a pl
-          +ugin declares                                                 
+          +ugin declares
       197 +            // several) — "the schema is the plugin"; consumer
-          +s read this directly.                                         
-      198 +            let Some(schema) = schemas.first() else {         
-      199 +                continue;                                     
-      200 +            };                                                
-      201 +            let bytes = serde_json::to_vec_pretty(schema)     
+          +s read this directly.
+      198 +            let Some(schema) = schemas.first() else {
+      199 +                continue;
+      200 +            };
+      201 +            let bytes = serde_json::to_vec_pretty(schema)
       202 +                .map_err(|e| anyhow::anyhow!("Failed to serial
-          +ize schema '{}': {}", id, e))?;                               
+          +ize schema '{}': {}", id, e))?;
       203 +            atomic_write_shm(&format!("{}/{}.json", SHM_SCHEMA
-          +_DIR, id), &bytes)?;                                          
+          +_DIR, id), &bytes)?;
       204 +            leaves.insert(id.clone(), blake3::hash(&bytes).to_
-          +hex().to_string());                                           
-      205 +        }                                                     
-      206  
-      194 -        let hash = blake3::hash(&json_bytes);                 
-      195 -        let hex = hash.to_hex().to_string();                  
+          +hex().to_string());
+      205 +        }
+      206
+      194 -        let hash = blake3::hash(&json_bytes);
+      195 -        let hex = hash.to_hex().to_string();
       196 -        info!(path = SHM_SCHEMA_PATH, footprint = %hex, "Schem
-          -a catalog written to shared memory");                         
-      197 -        Ok(hex)                                               
+          -a catalog written to shared memory");
+      197 -        Ok(hex)
       207 +        // 3. Fold the sorted per-plugin leaves into the singl
-          +e catalog root hash.                                          
-      208 +        //    Incremental: a schema change only re-hashes the 
-          +plugin that moved.                                            
-      209 +        let mut hasher = blake3::Hasher::new();               
-      210 +        for (id, leaf) in &leaves {                           
-      211 +            hasher.update(id.as_bytes());                     
-      212 +            hasher.update(leaf.as_bytes());                   
-      213 +        }                                                     
+          +e catalog root hash.
+      208 +        //    Incremental: a schema change only re-hashes the
+          +plugin that moved.
+      209 +        let mut hasher = blake3::Hasher::new();
+      210 +        for (id, leaf) in &leaves {
+      211 +            hasher.update(id.as_bytes());
+      212 +            hasher.update(leaf.as_bytes());
+      213 +        }
       214 +        let catalog_hash = hasher.finalize().to_hex().to_strin
-          +g();                                                          
-      215 +                                                              
+          +g();
+      215 +
       216 +        // 4. Manifest, written LAST as the atomic commit poin
-          +t — the one place                                             
-      217 +        //    `catalog_hash` is published; consumers read it, 
-          +never re-hash.                                                
+          +t — the one place
+      217 +        //    `catalog_hash` is published; consumers read it,
+          +never re-hash.
       218 +        let generation = Self::read_manifest_generation().wrap
-          +ping_add(1);                                                  
-      219 +        let mut manifest = serde_json::Map::new();            
-      220 +        manifest.insert(                                      
-      221 +            "catalog_hash".to_string(),                       
-      222 +            serde_json::Value::String(catalog_hash.clone()),  
-      223 +        );                                                    
+          +ping_add(1);
+      219 +        let mut manifest = serde_json::Map::new();
+      220 +        manifest.insert(
+      221 +            "catalog_hash".to_string(),
+      222 +            serde_json::Value::String(catalog_hash.clone()),
+      223 +        );
       224 +        manifest.insert("generation".to_string(), serde_json::
-          +Value::from(generation));                                     
-      225 +        manifest.insert(                                      
-      226 +            "plugins".to_string(),                            
-      227 +            serde_json::to_value(&leaves)                     
+          +Value::from(generation));
+      225 +        manifest.insert(
+      226 +            "plugins".to_string(),
+      227 +            serde_json::to_value(&leaves)
       228 +                .map_err(|e| anyhow::anyhow!("Failed to serial
-          +ize leaf hashes: {}", e))?,                                   
-      229 +        );                                                    
+          +ize leaf hashes: {}", e))?,
+      229 +        );
       230 +        let manifest_bytes = serde_json::to_vec_pretty(&serde_
-          +json::Value::Object(manifest))                                
-      231 +            .map_err(|e| anyhow::anyhow!("Failed to serialize 
-          +schema manifest: {}", e))?;                                   
+          +json::Value::Object(manifest))
+      231 +            .map_err(|e| anyhow::anyhow!("Failed to serialize
+          +schema manifest: {}", e))?;
       232 +        atomic_write_shm(SHM_MANIFEST_PATH, &manifest_bytes)?;
-      233 +                                                              
-      234 +        info!(                                                
-      235 +            dir = SHM_SCHEMA_DIR,                             
-      236 +            catalog_hash = %catalog_hash,                     
-      237 +            generation,                                       
-      238 +            plugins = leaves.len(),                           
+      233 +
+      234 +        info!(
+      235 +            dir = SHM_SCHEMA_DIR,
+      236 +            catalog_hash = %catalog_hash,
+      237 +            generation,
+      238 +            plugins = leaves.len(),
       239 +            "Schema catalog written to shared memory (folder +
-          + monolith + manifest)"                                        
-      240 +        );                                                    
-      241 +        Ok(catalog_hash)                                      
+          + monolith + manifest)"
+      240 +        );
+      241 +        Ok(catalog_hash)
       242      }
-      243  
+      243
       244 +    /// Read the current manifest `generation`, or 0 if no man
-          +ifest exists yet.                                             
+          +ifest exists yet.
       245 +    /// The next write uses `generation + 1`, giving readers a
-          + monotonic marker                                             
-      246 +    /// to detect a stale catalog snapshot.                   
-      247 +    fn read_manifest_generation() -> u64 {                    
-      248 +        std::fs::read(SHM_MANIFEST_PATH)                      
-      249 +            .ok()                                             
+          + monotonic marker
+      246 +    /// to detect a stale catalog snapshot.
+      247 +    fn read_manifest_generation() -> u64 {
+      248 +        std::fs::read(SHM_MANIFEST_PATH)
+      249 +            .ok()
       250 +            .and_then(|b| serde_json::from_slice::<serde_json:
-          +:Value>(&b).ok())                                             
+          +:Value>(&b).ok())
       251 +            .and_then(|v| v.get("generation").and_then(serde_j
-          +son::Value::as_u64))                                          
-      252 +            .unwrap_or(0)                                     
-      253 +    }                                                         
-      254 +                                                              
+          +son::Value::as_u64))
+      252 +            .unwrap_or(0)
+      253 +    }
+      254 +
       255      /// Read the Blake3 footprint of the current schema catalo
            g on disk.
       256      pub fn read_schema_footprint(&self) -> Result<String> {
@@ -2413,7 +2413,7 @@
 
   Ran 1 shell command (ctrl+o to expand)
 
-● The other files' SchemaEngine mentions are all comments/strings, not type 
+● The other files' SchemaEngine mentions are all comments/strings, not type
   imports — so they don't break the build. (They're a mix: some describe the
   sled-writer = now MutationEngine, some describe the catalog = still
   SchemaEngine — ambiguous prose I'll leave rather than risk mislabeling;
@@ -2439,12 +2439,12 @@
   objects)
   - computes per-plugin leaf hashes, folds the sorted leaves into the single
   catalog_hash root
-  - writes .manifest.json (catalog_hash + per-plugin leaves + generation) last, 
+  - writes .manifest.json (catalog_hash + per-plugin leaves + generation) last,
   atomically as the commit point
   - returns the folded root; added atomic_write_shm + read_manifest_generation
   helpers
 
-  Fixed the rename fallout: op-dbus-mirror imported op_grpc_bridge::{…, 
+  Fixed the rename fallout: op-dbus-mirror imported op_grpc_bridge::{…,
   SchemaEngine} via a brace group (lib.rs + jsonrpc_interface.rs) — my first
   scope grep missed it. Now MutationEngine, and the full workspace builds.
 
@@ -2488,10 +2488,10 @@
 
 ✻ Brewed for 7m 15s
 
-❯ finish so we can closec this out                                              
+❯ finish so we can closec this out
 
 ● On it — finishing the consumer side so the schema-hash thread is complete. The
-  key move that makes this safe to close out: keep catalog_hash = 
+  key move that makes this safe to close out: keep catalog_hash =
   blake3(live-schema.json bytes) (the exact value op-identity already derives,
   so no auth/verifier break), publish it once in the manifest, and consolidate
   the 5 sites to one helper that reads the manifest with a fallback to the old
@@ -2520,32 +2520,32 @@
       204              leaves.insert(id.clone(), blake3::hash(&bytes).to_
            hex().to_string());
       205          }
-      206  
+      206
       207 -        // 3. Fold the sorted per-plugin leaves into the singl
-          -e catalog root hash.                                          
-      208 -        //    Incremental: a schema change only re-hashes the 
-          -plugin that moved.                                            
-      209 -        let mut hasher = blake3::Hasher::new();               
-      210 -        for (id, leaf) in &leaves {                           
-      211 -            hasher.update(id.as_bytes());                     
-      212 -            hasher.update(leaf.as_bytes());                   
-      213 -        }                                                     
+          -e catalog root hash.
+      208 -        //    Incremental: a schema change only re-hashes the
+          -plugin that moved.
+      209 -        let mut hasher = blake3::Hasher::new();
+      210 -        for (id, leaf) in &leaves {
+      211 -            hasher.update(id.as_bytes());
+      212 -            hasher.update(leaf.as_bytes());
+      213 -        }
       214 -        let catalog_hash = hasher.finalize().to_hex().to_strin
-          -g();                                                          
-      207 +        // 3. Canonical catalog hash = blake3 of the monolith 
-          +bytes — the EXACT                                             
+          -g();
+      207 +        // 3. Canonical catalog hash = blake3 of the monolith
+          +bytes — the EXACT
       208 +        //    value the identity derivation already uses, kept
-          + stable so the                                                
+          + stable so the
       209 +        //    WG/ghostbridge verifier needs no change. Per-plu
-          +gin `leaves` are                                              
+          +gin `leaves` are
       210 +        //    published alongside for per-file integrity / fut
-          +ure incremental use.                                          
+          +ure incremental use.
       211 +        let catalog_hash = blake3::hash(&json_bytes).to_hex().
-          +to_string();                                                  
-      212  
+          +to_string();
+      212
       213          // 4. Manifest, written LAST as the atomic commit poin
            t — the one place
-      214          //    `catalog_hash` is published; consumers read it, 
+      214          //    `catalog_hash` is published; consumers read it,
            never re-hash.
 ● Step B + the auth site — add the one helper and point etch_footprint at it
   (same file):
@@ -2567,62 +2567,62 @@
       798  /// factor (WireGuard is the authenticator; see op-grpc-bridge
             GhostbridgeInterceptor).
       799 +/// Manifest published by op-projection — the ONE place the ca
-          +nonical                                                       
-      800 +/// `catalog_hash` lives.                                     
+          +nonical
+      800 +/// `catalog_hash` lives.
       801 +const SHM_SCHEMA_MANIFEST_PATH: &str = "/dev/shm/opdbus/schema
-          +s/.manifest.json";                                            
+          +s/.manifest.json";
       802 +/// Derived monolith catalog; fallback source for the hash bef
-          +ore the manifest                                              
+          +ore the manifest
       803 +/// exists (deploy ordering). Same bytes → identical hash valu
-          +e.                                                            
+          +e.
       804 +const SHM_LIVE_SCHEMA_PATH: &str = "/dev/shm/live-schema.json"
-          +;                                                             
-      805 +                                                              
+          +;
+      805 +
       806 +/// The single canonical schema-catalog hash (32 bytes), compu
-          +ted ONCE by                                                   
+          +ted ONCE by
       807 +/// op-projection and read here — never re-hashed per call sit
-          +e. Reads the                                                  
+          +e. Reads the
       808 +/// manifest's `catalog_hash`; falls back to hashing the monol
-          +ith directly when                                             
+          +ith directly when
       809 +/// the manifest isn't present yet. `None` if neither artifact
-          + exists.                                                      
-      810 +pub fn schema_catalog_hash() -> Option<[u8; 32]> {            
+          + exists.
+      810 +pub fn schema_catalog_hash() -> Option<[u8; 32]> {
       811 +    if let Ok(bytes) = std::fs::read(SHM_SCHEMA_MANIFEST_PATH)
-          + {                                                            
+          + {
       812 +        if let Ok(v) = serde_json::from_slice::<serde_json::Va
-          +lue>(&bytes) {                                                
+          +lue>(&bytes) {
       813 +            if let Some(hex_str) = v.get("catalog_hash").and_t
-          +hen(|h| h.as_str()) {                                         
-      814 +                if let Ok(raw) = hex::decode(hex_str) {       
+          +hen(|h| h.as_str()) {
+      814 +                if let Ok(raw) = hex::decode(hex_str) {
       815 +                    if let Ok(arr) = <[u8; 32]>::try_from(raw.
-          +as_slice()) {                                                 
-      816 +                        return Some(arr);                     
-      817 +                    }                                         
-      818 +                }                                             
-      819 +            }                                                 
-      820 +        }                                                     
-      821 +    }                                                         
-      822 +    std::fs::read(SHM_LIVE_SCHEMA_PATH)                       
-      823 +        .ok()                                                 
-      824 +        .map(|bytes| *blake3::hash(&bytes).as_bytes())        
-      825 +}                                                             
-      826 +                                                              
+          +as_slice()) {
+      816 +                        return Some(arr);
+      817 +                    }
+      818 +                }
+      819 +            }
+      820 +        }
+      821 +    }
+      822 +    std::fs::read(SHM_LIVE_SCHEMA_PATH)
+      823 +        .ok()
+      824 +        .map(|bytes| *blake3::hash(&bytes).as_bytes())
+      825 +}
+      826 +
       827  pub fn etch_footprint(
       828      wireguard_pubkey: &[u8; 32],
       829      mutation_index: u64,
       830      source_port: u16,
       831  ) -> [u8; 32] {
       804 -    let schema_catalog_hash = std::fs::read("/dev/shm/live-sch
-          -ema.json")                                                    
-      805 -        .map(|bytes| blake3::hash(&bytes))                    
-      806 -        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));   
+          -ema.json")
+      805 -        .map(|bytes| blake3::hash(&bytes))
+      806 -        .unwrap_or_else(|_| blake3::Hash::from([0u8; 32]));
       832 +    let schema_catalog_hash = schema_catalog_hash().unwrap_or(
-          +[0u8; 32]);                                                   
-      833  
+          +[0u8; 32]);
+      833
       834      let mut hasher = blake3::Hasher::new();
       835      hasher.update(wireguard_pubkey);
-      810 -    hasher.update(schema_catalog_hash.as_bytes());            
-      836 +    hasher.update(&schema_catalog_hash);                      
+      810 -    hasher.update(schema_catalog_hash.as_bytes());
+      836 +    hasher.update(&schema_catalog_hash);
       837      hasher.update(&mutation_index.to_le_bytes());
       838      hasher.update(&source_port.to_le_bytes());
       839      hasher.finalize().into()
@@ -2642,28 +2642,28 @@
       68          // a direct function of the single source of truth (/de
           v/shm/live-schema.json).
       69 -        let schema_catalog_hash = match std::fs::read("/dev/shm
-         -/live-schema.json") {                                          
-      70 -            Ok(bytes) => blake3::hash(&bytes),                 
-      71 -            Err(_) => {                                        
+         -/live-schema.json") {
+      70 -            Ok(bytes) => blake3::hash(&bytes),
+      71 -            Err(_) => {
       72 -                return Err("A.N.N.A. Scribe: Schema catalog mis
-         -sing from shared memory. Connection Rejected.".to_string());   
-      73 -            }                                                  
-      74 -        };                                                     
+         -sing from shared memory. Connection Rejected.".to_string());
+      73 -            }
+      74 -        };
       69 +        let schema_catalog_hash = crate::schema_bridge::schema_
-         +catalog_hash().ok_or_else(|| {                                 
+         +catalog_hash().ok_or_else(|| {
       70 +            "A.N.N.A. Scribe: Schema catalog missing from share
-         +d memory. Connection Rejected."                                
-      71 +                .to_string()                                   
-      72 +        })?;                                                   
-      73  
+         +d memory. Connection Rejected."
+      71 +                .to_string()
+      72 +        })?;
+      73
       74          let mut hasher = blake3::Hasher::new();
       75          hasher.update(wg_pubkey.as_bytes());
-      78 -        hasher.update(schema_catalog_hash.as_bytes());         
-      76 +        hasher.update(&schema_catalog_hash);                   
+      78 -        hasher.update(schema_catalog_hash.as_bytes());
+      76 +        hasher.update(&schema_catalog_hash);
       77          hasher.update(&sled.mutation_index.to_le_bytes());
       78          let genesis_hash = hex::encode(hasher.finalize().as_byt
           es());
-      79  
+      79
   ⎿  Found 1 new diagnostic issue in 1 file (ctrl+o to expand)
 
 ● Update(crates/op-identity/src/bin/op-sled-top.rs)
@@ -2672,14 +2672,14 @@
       58              self.layout = "canonical".into();
       59              self.trace_id = sled.trace_id_hex();
       60 -            self.schema_catalog_hash = std::fs::read("/dev/shm/
-         -live-schema.json")                                             
+         -live-schema.json")
       61 -                .map(|b| hex::encode(blake3::hash(&b).as_bytes(
-         -)))                                                            
-      62 -                .unwrap_or_else(|_| "(missing)".into());       
+         -)))
+      62 -                .unwrap_or_else(|_| "(missing)".into());
       60 +            self.schema_catalog_hash = op_identity::schema_brid
-         +ge::schema_catalog_hash()                                      
-      61 +                .map(hex::encode)                              
-      62 +                .unwrap_or_else(|| "(missing)".into());        
+         +ge::schema_catalog_hash()
+      61 +                .map(hex::encode)
+      62 +                .unwrap_or_else(|| "(missing)".into());
       63          } else {
       64              self.sled = None;
       65              self.layout = "missing".into();
@@ -2698,19 +2698,19 @@
 
 ● Update(crates/op-identity/src/bin/op-identity-sled.rs)
   ⎿  Added 6 lines, removed 6 lines
-      188  
+      188
       189  impl SledView {
       190      fn from_full(path: String, sled: &IdentitySled) -> Self {
       191 -        let schema_catalog_hash = std::fs::read("/dev/shm/live
-          --schema.json")                                                
+          --schema.json")
       192 -            .map(|bytes| hex::encode(blake3::hash(&bytes).as_b
-          -ytes()))                                                      
-      193 -            .unwrap_or_else(|_| "(missing)".to_string());     
+          -ytes()))
+      193 -            .unwrap_or_else(|_| "(missing)".to_string());
       191 +        let schema_catalog_hash = op_identity::schema_bridge::
-          +schema_catalog_hash()                                         
-      192 +            .map(hex::encode)                                 
-      193 +            .unwrap_or_else(|| "(missing)".to_string());      
-      194  
+          +schema_catalog_hash()
+      192 +            .map(hex::encode)
+      193 +            .unwrap_or_else(|| "(missing)".to_string());
+      194
       195          Self {
       196              path,
      ...
@@ -2719,15 +2719,15 @@
       219          let footprint = &bytes[COMPACT_FOOTPRINT_OFFSET..COMPA
            CT_FOOTPRINT_OFFSET + 32];
       220 -        let schema_catalog_hash = std::fs::read("/dev/shm/live
-          --schema.json")                                                
+          --schema.json")
       221 -            .map(|bytes| hex::encode(blake3::hash(&bytes).as_b
-          -ytes()))                                                      
-      222 -            .unwrap_or_else(|_| "(missing)".to_string());     
+          -ytes()))
+      222 -            .unwrap_or_else(|_| "(missing)".to_string());
       220 +        let schema_catalog_hash = op_identity::schema_bridge::
-          +schema_catalog_hash()                                         
-      221 +            .map(hex::encode)                                 
-      222 +            .unwrap_or_else(|| "(missing)".to_string());      
-      223  
+          +schema_catalog_hash()
+      221 +            .map(hex::encode)
+      222 +            .unwrap_or_else(|| "(missing)".to_string());
+      223
       224          Self {
       225              path,
   ⎿  Found 2 new diagnostic issues in 1 file (ctrl+o to expand)
@@ -2736,20 +2736,20 @@
   ⎿  Added 3 lines, removed 3 lines
       27              // written with a canonical `IdentitySled` layout.
       28              let sled: &IdentitySled = unsafe { &*ptr };
-      29  
+      29
       30 -            let schema_catalog_hash = std::fs::read("/dev/shm/l
-         -ive-schema.json")                                              
+         -ive-schema.json")
       31 -                .map(|bytes| hex::encode(blake3::hash(&bytes).a
-         -s_bytes()))                                                    
-      32 -                .unwrap_or_else(|_| "(missing)".to_string());  
+         -s_bytes()))
+      32 -                .unwrap_or_else(|_| "(missing)".to_string());
       30 +            let schema_catalog_hash = op_identity::schema_bridg
-         +e::schema_catalog_hash()                                       
-      31 +                .map(hex::encode)                              
-      32 +                .unwrap_or_else(|| "(missing)".to_string());   
-      33  
+         +e::schema_catalog_hash()
+      31 +                .map(hex::encode)
+      32 +                .unwrap_or_else(|| "(missing)".to_string());
+      33
       34              let is_valid = sled.hashed_footprint != [0u8; 32] &
           & sled.trace_id != [0u8; 16];
-      35  
+      35
 
 ● All 5 sites + producer done. Let me verify the whole workspace compiles:
 
@@ -2782,9 +2782,9 @@
   ⎿  Removed 1 line
       3  //! Per AGENTS.md: The Sled is the Absolute Base — no valid sche
          ma = no entity.
-      4  
+      4
       5  use anyhow::{Context, Result};
-      6 -use blake3;                                                     
+      6 -use blake3;
       6  use crossterm::{
       7      event::{self, DisableMouseCapture, EnableMouseCapture, Event
          , KeyCode},
@@ -2800,7 +2800,7 @@
 
   Wrote 1 memory (ctrl+o to expand)
 
-● Done — closed out. The schema-hash thread is complete in source and the whole 
+● Done — closed out. The schema-hash thread is complete in source and the whole
   workspace (lib + bins) compiles clean.
 
   What landed this session
@@ -2813,8 +2813,8 @@
   - Consumer — all 5 op-identity hash sites collapsed to one helper
   op_identity::schema_bridge::schema_catalog_hash() (manifest-first, fallback to
   the monolith). One computation, single source.
-  - Safety call I made to close it out cleanly: catalog_hash = blake3(monolith 
-  bytes) — the exact value op-identity already used — so the WG/ghostbridge 
+  - Safety call I made to close it out cleanly: catalog_hash = blake3(monolith
+  bytes) — the exact value op-identity already used — so the WG/ghostbridge
   verifier needs no change, no auth break, no lockstep. The fallback means it
   works before and after the producer deploys. (The folded incremental hash
   stays a future option; leaves are published for it.)
@@ -2843,7 +2843,7 @@
 
 ✻ Crunched for 7m 23s
 
-❯ start                                                                         
+❯ start
 
 ● Starting the Gemma build — beginning with large-language-model (since
   gemma-brain depends on it). First let me study the exact plugin conventions to
@@ -2853,7 +2853,7 @@
 
   Read 2 files (ctrl+o to expand)
 
-● The pattern is clear: plugin_schema_from_json(name, version, desc, 
+● The pattern is clear: plugin_schema_from_json(name, version, desc,
   &serde_json::to_value(schema_for!(T)).unwrap()). Let me see the rest of
   zeroclaw's StatePlugin impl (all trait methods) and the StatePlugin trait
   itself:

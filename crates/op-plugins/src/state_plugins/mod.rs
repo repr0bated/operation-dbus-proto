@@ -63,6 +63,7 @@ pub mod persona;
 pub(crate) mod plugin_scaffold_helpers;
 pub mod privacy_routes;
 pub mod procfs;
+pub mod project;
 pub mod proxy_server;
 pub mod qdrant;
 pub mod rovs_commands;

@@ -1,4 +1,4 @@
-//! Axum gRPC/gRPC-Web host for the zeroclaw plugin schema.
+//! Axum gRPC/gRPC-Web host for the tched_router plugin schema.
 //!
 //! Serves the plugin-owned schema JSON on:
 //!   - host native gRPC over Unix socket `/run/opdbus/grpc.sock`
@@ -31,8 +31,8 @@ use crate::schema_loader::{SchemaLoader, SchemaReloadEvent};
 use crate::schema_router::SchemaRouter;
 use crate::tracing::{GhostbridgeTraceLayer, TraceContext};
 
-use crate::proto::zeroclaw::{
-    zeroclaw_service_server::{ZeroclawService, ZeroclawServiceServer},
+use crate::proto::tched_router::{
+    tched_router_service_server::{TchedRouterService, TchedRouterServiceServer},
     GetSchemaRequest, SchemaEvent, SchemaResponse, WatchSchemaRequest,
 };
 
@@ -55,12 +55,12 @@ const DEFAULT_EMQX_EXHOOK_CLIENT_CERT: &str = "/etc/op-dbus/tls/emqx-exhook-clie
 /// plugin-owned schema files.
 const DEFAULT_SCHEMA_PATH: &str = op_blob::catalog::DEFAULT_SHM_DIR;
 
-/// Runtime configuration for the zeroclaw Axum host.
+/// Runtime configuration for the tched_router Axum host.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub plugin_id: String,
     pub schema_path: PathBuf,
-    /// Host-local gRPC UDS (`ZEROCLAW_UNIX_SOCKET`, default `/run/opdbus/grpc.sock`).
+    /// Host-local gRPC UDS (`TCHED_ROUTER_UNIX_SOCKET`, default `/run/opdbus/grpc.sock`).
     pub unix_socket: PathBuf,
     /// Shared container UDS (`GHOSTBRIDGE_SOCKET_PATH`, default
     /// `/run/ghostbridge/container.sock`). Served with the same route set.
@@ -68,10 +68,10 @@ pub struct ServerConfig {
     pub shared_socket: PathBuf,
     /// TCP bind addresses (comma-separated). **Always TLS** — zero-trust transport
     /// policy forbids plaintext gRPC on TCP, even on loopback.
-    /// Set via `ZEROCLAW_BIND_ADDR` or `GRPC_BIND`; default `0.0.0.0:8090`.
+    /// Set via `TCHED_ROUTER_BIND_ADDR` or `GRPC_BIND`; default `0.0.0.0:8090`.
     pub bind_addr: String,
     /// TLS identity for the TCP door. `None` aborts startup with a clear error
-    /// unless `ZEROCLAW_DEV_SELF_SIGNED=1` is set (dev/CI only — never production).
+    /// unless `TCHED_ROUTER_DEV_SELF_SIGNED=1` is set (dev/CI only — never production).
     pub tls_identity: Option<Identity>,
     /// Dedicated broker callback listener. It is deliberately separate from
     /// the client-facing gRPC/MCP door: EMQX authenticates with a pinned mTLS
@@ -122,18 +122,18 @@ impl ServerConfig {
         Self {
             plugin_id: configured_schema_plugin_id(|key| std::env::var(key).ok()),
             schema_path: PathBuf::from(
-                std::env::var("ZEROCLAW_SCHEMA_PATH")
+                std::env::var("TCHED_ROUTER_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
             ),
             unix_socket: PathBuf::from(
-                std::env::var("ZEROCLAW_UNIX_SOCKET")
+                std::env::var("TCHED_ROUTER_UNIX_SOCKET")
                     .unwrap_or_else(|_| DEFAULT_UNIX_SOCKET.to_string()),
             ),
             shared_socket: PathBuf::from(
                 std::env::var("GHOSTBRIDGE_SOCKET_PATH")
                     .unwrap_or_else(|_| DEFAULT_SHARED_SOCKET.to_string()),
             ),
-            bind_addr: std::env::var("ZEROCLAW_BIND_ADDR")
+            bind_addr: std::env::var("TCHED_ROUTER_BIND_ADDR")
                 .or_else(|_| std::env::var("GRPC_BIND"))
                 .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string()),
             tls_identity: Self::load_tls_identity(),
@@ -164,32 +164,32 @@ impl ServerConfig {
     /// Load TLS identity for the TCP door.
     ///
     /// Priority:
-    ///   1. `ZEROCLAW_TLS_CERT` + `ZEROCLAW_TLS_KEY` env vars (PEM contents).
-    ///   2. `ZEROCLAW_TLS_CERT_FILE` + `ZEROCLAW_TLS_KEY_FILE` env vars pointing
+    ///   1. `TCHED_ROUTER_TLS_CERT` + `TCHED_ROUTER_TLS_KEY` env vars (PEM contents).
+    ///   2. `TCHED_ROUTER_TLS_CERT_FILE` + `TCHED_ROUTER_TLS_KEY_FILE` env vars pointing
     ///      at PEM files on disk — this is what the runit run script exports
     ///      (`/etc/op-dbus/tls/tonic-svc0.crt` / `.key`). Dropping this branch is
     ///      how the TCP door has regressed repeatedly (2026-08-22, -08-23,
     ///      -08-24): the binary aborts with "TCP fabric requires TLS" and the
     ///      mesh :8090 never binds.
-    ///   3. Self-signed via rcgen **only** if `ZEROCLAW_DEV_SELF_SIGNED=1` is set
+    ///   3. Self-signed via rcgen **only** if `TCHED_ROUTER_DEV_SELF_SIGNED=1` is set
     ///      (dev/CI use only — never set on production; op-web and mesh peers will
     ///      reject an unverified cert and connections will fail at the TLS handshake).
     ///   4. `None` — startup will abort with a clear error rather than silently
     ///      serving unencrypted gRPC (zero-trust: TLS is mandatory on TCP).
     fn load_tls_identity() -> Option<Identity> {
-        let cert_pem = std::env::var("ZEROCLAW_TLS_CERT").ok();
-        let key_pem = std::env::var("ZEROCLAW_TLS_KEY").ok();
+        let cert_pem = std::env::var("TCHED_ROUTER_TLS_CERT").ok();
+        let key_pem = std::env::var("TCHED_ROUTER_TLS_KEY").ok();
 
         if let (Some(cert), Some(key)) = (cert_pem, key_pem) {
-            tracing::info!("TLS identity loaded from ZEROCLAW_TLS_CERT/ZEROCLAW_TLS_KEY");
+            tracing::info!("TLS identity loaded from TCHED_ROUTER_TLS_CERT/TCHED_ROUTER_TLS_KEY");
             return Some(Identity::from_pem(cert, key));
         }
 
         // Certificate *files* on disk (the deployment path). Both must be set;
         // a half-configured pair falls through to the loud error below instead
         // of guessing.
-        let cert_file = std::env::var("ZEROCLAW_TLS_CERT_FILE").ok();
-        let key_file = std::env::var("ZEROCLAW_TLS_KEY_FILE").ok();
+        let cert_file = std::env::var("TCHED_ROUTER_TLS_CERT_FILE").ok();
+        let key_file = std::env::var("TCHED_ROUTER_TLS_KEY_FILE").ok();
         if let (Some(cert_path), Some(key_path)) = (cert_file, key_file) {
             match (
                 std::fs::read_to_string(&cert_path),
@@ -206,7 +206,7 @@ impl ServerConfig {
                         key_path = %key_path,
                         cert_error = ?cert_res.err(),
                         key_error = ?key_res.err(),
-                        "failed to read ZEROCLAW_TLS_CERT_FILE/ZEROCLAW_TLS_KEY_FILE"
+                        "failed to read TCHED_ROUTER_TLS_CERT_FILE/TCHED_ROUTER_TLS_KEY_FILE"
                     );
                     return None;
                 }
@@ -214,7 +214,7 @@ impl ServerConfig {
         }
 
         // Dev/CI escape hatch: self-signed cert. Never set this in production.
-        if std::env::var("ZEROCLAW_DEV_SELF_SIGNED").as_deref() == Ok("1") {
+        if std::env::var("TCHED_ROUTER_DEV_SELF_SIGNED").as_deref() == Ok("1") {
             match rcgen::generate_simple_self_signed(vec![
                 "localhost".to_string(),
                 "ghostbridge.tech".to_string(),
@@ -222,7 +222,7 @@ impl ServerConfig {
             ]) {
                 Ok(ck) => {
                     tracing::warn!(
-                        "ZEROCLAW_DEV_SELF_SIGNED=1: using ephemeral self-signed TLS cert. \
+                        "TCHED_ROUTER_DEV_SELF_SIGNED=1: using ephemeral self-signed TLS cert. \
                          DO NOT USE IN PRODUCTION — peers will reject this cert."
                     );
                     return Some(Identity::from_pem(
@@ -239,9 +239,9 @@ impl ServerConfig {
 
         tracing::error!(
             "No TLS identity configured for TCP door. \
-             Set ZEROCLAW_TLS_CERT+ZEROCLAW_TLS_KEY (PEM), \
-             ZEROCLAW_TLS_CERT_FILE+ZEROCLAW_TLS_KEY_FILE (paths), \
-             or ZEROCLAW_DEV_SELF_SIGNED=1 (dev only). \
+             Set TCHED_ROUTER_TLS_CERT+TCHED_ROUTER_TLS_KEY (PEM), \
+             TCHED_ROUTER_TLS_CERT_FILE+TCHED_ROUTER_TLS_KEY_FILE (paths), \
+             or TCHED_ROUTER_DEV_SELF_SIGNED=1 (dev only). \
              TCP listeners will not start."
         );
         None
@@ -322,18 +322,18 @@ fn first_certificate_sha256(path: &std::path::Path) -> anyhow::Result<[u8; 32]> 
 
 fn configured_schema_plugin_id(getenv: impl Fn(&str) -> Option<String>) -> String {
     getenv("OP_DBUS_SCHEMA_PLUGIN_ID")
-        .or_else(|| getenv("ZEROCLAW_PLUGIN_ID"))
+        .or_else(|| getenv("TCHED_ROUTER_PLUGIN_ID"))
         .unwrap_or_else(|| DEFAULT_SCHEMA_PLUGIN_ID.to_string())
 }
 
 /// Shared state for the gRPC service handlers.
 #[derive(Clone)]
-struct ZeroclawGrpcService {
+struct TchedRouterGrpcService {
     loader: Arc<SchemaLoader>,
 }
 
 #[tonic::async_trait]
-impl ZeroclawService for ZeroclawGrpcService {
+impl TchedRouterService for TchedRouterGrpcService {
     type WatchSchemaStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<SchemaEvent, Status>> + Send>>;
 
@@ -400,14 +400,14 @@ fn inject_trace_metadata<T>(response: &mut TonicResponse<T>, context: &TraceCont
     }
 }
 
-/// Assemble the gRPC service set for the zeroclaw bridge.
+/// Assemble the gRPC service set for the tched_router bridge.
 ///
 /// The full backplane surface (StateSync, PluginService, DbusPassthrough,
 /// OvsdbMirror, RuntimeMirror, EventChainService, ComponentRegistry, Mail,
 /// Privacy, Registration, McpService, ChatService, reflection) comes from the
 /// shared [`build_operation_routes`] — identical to what `run_grpc_server` mounts
 /// on op-dbus :50051, so reflection never advertises an unmounted service. On top
-/// of that the zeroclaw bridge adds its endpoint-specific `ZeroclawService`
+/// of that the tched_router bridge adds its endpoint-specific `TchedRouterService`
 /// (plugin-owned schema get/watch).
 ///
 /// Every container shares this one surface over `container.sock`; the assistant
@@ -419,9 +419,11 @@ fn build_routes(
     server: OperationGrpcServer,
     validator: Arc<AssertionValidator>,
 ) -> tonic::service::Routes {
-    let zeroclaw_svc =
-        crate::grpc_web::enable(ZeroclawServiceServer::new(ZeroclawGrpcService { loader }));
-    build_operation_routes_with_validator(server, validator).add_service(zeroclaw_svc)
+    let tched_router_svc =
+        crate::grpc_web::enable(TchedRouterServiceServer::new(TchedRouterGrpcService {
+            loader,
+        }));
+    build_operation_routes_with_validator(server, validator).add_service(tched_router_svc)
 }
 
 /// Build the shared TCP ingress: native MCP HTTP plus gRPC and gRPC-Web.
@@ -432,16 +434,49 @@ pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) ->
     build_axum_app_with_validator(loader, server, validator)
 }
 
+/// Build the shared ingress with an already validated MCP projection policy.
+///
+/// Production callers should use [`build_axum_app`], which keeps the
+/// root-protected environment policy loading in the normal MCP constructor.
+/// This explicit form is for isolated integration fixtures; it preserves the
+/// same assertion validator, interceptor, and authorization routes.
+pub fn build_axum_app_with_policy(
+    loader: Arc<SchemaLoader>,
+    server: OperationGrpcServer,
+    policy: crate::mcp_policy::McpProjectionPolicy,
+) -> Router {
+    let validator = Arc::new(AssertionValidator::from_env(DecoyTrustStore::load()));
+    let engine = server.mutation_engine();
+    let mcp = crate::mcp_frontend::build_mcp_router_with_policy(engine, validator.clone(), policy);
+    build_axum_app_with_mcp(loader, server, validator, mcp)
+}
+
 fn build_axum_app_with_validator(
     loader: Arc<SchemaLoader>,
     server: OperationGrpcServer,
     validator: Arc<AssertionValidator>,
 ) -> Router {
+    let engine = server.mutation_engine();
+    let mcp = crate::mcp_frontend::build_mcp_router(engine, validator.clone());
+    build_axum_app_with_mcp(loader, server, validator, mcp)
+}
+
+fn build_axum_app_with_mcp(
+    loader: Arc<SchemaLoader>,
+    server: OperationGrpcServer,
+    validator: Arc<AssertionValidator>,
+    mcp: Router,
+) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(crate::mcp_frontend::configured_allow_origin())
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::POST])
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::DELETE,
+        ])
         .allow_headers([
+            axum::http::header::ACCEPT,
             axum::http::header::CONTENT_TYPE,
             "x-grpc-web".parse().unwrap(),
             "x-user-agent".parse().unwrap(),
@@ -449,6 +484,7 @@ fn build_axum_app_with_validator(
             crate::mcp_frontend::HTTP_ASSERTION_HEADER.parse().unwrap(),
             crate::mcp_frontend::HTTP_SEALED_ID_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_VERSION_HEADER.parse().unwrap(),
+            crate::mcp_frontend::MCP_SESSION_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_METHOD_HEADER.parse().unwrap(),
             crate::mcp_frontend::MCP_NAME_HEADER.parse().unwrap(),
             crate::grpc_server::DECLARED_CAPABILITY_HEADER
@@ -459,11 +495,10 @@ fn build_axum_app_with_validator(
             "grpc-status".parse().unwrap(),
             "grpc-message".parse().unwrap(),
             "grpc-status-details-bin".parse().unwrap(),
+            crate::mcp_frontend::MCP_SESSION_HEADER.parse().unwrap(),
         ]);
 
-    let engine = server.mutation_engine();
-    crate::mcp_frontend::build_mcp_router(engine, validator.clone())
-        .merge(build_routes(loader, server, validator).into_axum_router())
+    mcp.merge(build_routes(loader, server, validator).into_axum_router())
         .layer(cors)
         .layer(GhostbridgeTraceLayer::new())
 }
@@ -477,11 +512,11 @@ fn build_tonic_routes(
     build_routes(loader, server, validator)
 }
 
-/// Run the zeroclaw Axum host.
+/// Run the tched_router Axum host.
 ///
 /// Returns only when both listeners exit (which should not happen under normal
 /// operation).
-pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
+pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()> {
     let loader = Arc::new(SchemaLoader::new_for_plugin(
         &config.schema_path,
         config.plugin_id.clone(),
@@ -510,6 +545,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
     mutation_engine.seed_missing_plugin_projections().await?;
+    // Cozo is the identity-sled authority. Replay and leftover SHM can
+    // resurrect host-only session rows; overlay the provisioned containers.
+    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
     // D-Bus bindings do not survive a bridge restart. Invalidate every
     // instance-backed sled that was durably active, then stop its container,
     // before MCP/gRPC/D-Bus routes can be built or listeners exposed. Host
@@ -523,30 +561,32 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             "parked orphaned identity containers before exposing fabric routes"
         );
     }
-    // The local chatbot's service identity is release-configured and sealed
+    // The control-plane chatbot's service identity is release-configured and sealed
     // by the same MutationEngine that owns every other session arrival.  This
-    // closes the bootstrap loop for blob-aware local MCP clients without an
-    // OAuth/OIA detour or a second MCP endpoint.
-    mutation_engine.bootstrap_configured_mcp_identity().await?;
+    // identity belongs only to that singleton service and must not be borrowed
+    // by Codex or another local human client.
+    mutation_engine
+        .bootstrap_control_plane_chatbot_identity()
+        .await?;
+    // A configured local human uses the same WireGuard-derived principal on
+    // every surface. Mint its SID1 into the human sled so local clients can
+    // authenticate without inventing a per-client service identity.
+    mutation_engine
+        .bootstrap_configured_local_human_identity()
+        .await?;
+    // Genesis mint persists SID1 without instance/btrfs. Re-overlay Cozo so
+    // provisioned container metadata survives that write.
+    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
     let mutation_engine_for_dbus = mutation_engine.clone();
     let operation_server = OperationGrpcServer::new(mutation_engine.clone());
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
     // it so a bridge restart advertises every sealed plugin immediately.
     operation_server.hydrate_reflection_from_shm().await;
 
-    // Activate the frozen per-method descriptors.
-    //
-    // Hydrating the catalog above only makes the sealed blobs *discoverable*; it
-    // does not mount them. This turns each method's frozen descriptor into a live
-    // typed gRPC service (one service per method, e.g.
-    // `operation.method.cognitive_mcp.invoke_tool.InvokeToolService`) and registers
-    // it with the per-method reflection registry.
-    //
-    // Must run before `build_axum_app` below: tonic-reflection is immutable once
-    // mounted, so a service activated after route construction can never be served.
-    // `run_grpc_server` (op-dbus :50051) already did this; omitting it here meant the
-    // zeroclaw bridge advertised sealed plugins while serving none of their typed
-    // per-method services.
+    // Freeze schema/authority metadata before constructing the server. This
+    // registers descriptors, not RPC handlers: the generated add_routes mounts
+    // the typed aggregate services. Reflection advertises that same route table,
+    // restricted to plugins whose sealed blobs are present.
     operation_server.freeze_plugin_method_reflection().await;
 
     // ── D-Bus plugin object registration ──────────────────────────────────
@@ -638,14 +678,14 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     };
     match serde_json::from_value::<op_state_store::PluginSchema>(loader.get().await) {
         Ok(schema) => {
-            let blob = crate::zeroclaw_object_blob::from_schema(schema.clone());
+            let blob = crate::tched_router_object_blob::from_schema(schema.clone());
             tracing::info!(
                 plugin_id = %blob.manifest.plugin_id,
                 schema_hash = %blob.manifest.schema_hash,
                 methods = blob.manifest.methods.len(),
                 dbus_path = %blob.manifest.dbus.object_path,
                 grpc_service = ?blob.manifest.grpc.services,
-                "zeroclaw D-Bus/gRPC object blob frozen"
+                "tched_router D-Bus/gRPC object blob frozen"
             );
             if let Err(error) = operation_server
                 .register_plugin_methods(config.plugin_id.clone(), &schema)
@@ -654,7 +694,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
                 tracing::warn!(
                     plugin_id = %config.plugin_id,
                     %error,
-                    "failed to freeze zeroclaw method descriptors for gRPC reflection"
+                    "failed to freeze tched_router method descriptors for gRPC reflection"
                 );
             }
         }
@@ -662,7 +702,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             tracing::warn!(
                 plugin_id = %config.plugin_id,
                 %error,
-                "zeroclaw schema could not be parsed for gRPC reflection"
+                "tched_router schema could not be parsed for gRPC reflection"
             );
         }
     }
@@ -718,6 +758,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         let tls = ServerTlsConfig::new()
             .identity(Identity::from_pem(server_cert, server_key))
             .client_ca_root(Certificate::from_pem(client_ca));
+        let listener = tokio::net::TcpListener::bind(bind_addr)
+            .await
+            .map_err(|error| anyhow::anyhow!("cannot bind EMQX ExHook at {bind_addr}: {error}"))?;
         info!(
             addr = %bind_addr,
             client_cert = %exhook.client_cert_path.display(),
@@ -730,7 +773,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
                 .tls_config(tls)
                 .map_err(|error| anyhow::anyhow!("invalid EMQX ExHook TLS config: {error}"))?
                 .add_service(hook_provider)
-                .serve(bind_addr),
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
         )
     } else {
         info!("EMQX ExHook listener disabled");
@@ -740,7 +783,7 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // Host-local Unix socket (operators / host clients).
     let unix_socket = config.unix_socket.clone();
     let unix_incoming = bind_unix_listener(&unix_socket).await?;
-    info!(path = %unix_socket.display(), "zeroclaw native gRPC listening on Unix socket");
+    info!(path = %unix_socket.display(), "tched_router native gRPC listening on Unix socket");
 
     // Shared container socket — same gRPC surface, path bind-mounted into CTs.
     // Skip a second bind when env points both knobs at the same path.
@@ -787,9 +830,9 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
     // bind_addr is comma-separated; each address gets its own TLS listener.
     let identity = config.tls_identity.ok_or_else(|| {
         anyhow::anyhow!(
-            "TCP fabric requires TLS — set ZEROCLAW_TLS_CERT+ZEROCLAW_TLS_KEY, \
-             ZEROCLAW_TLS_CERT_FILE+ZEROCLAW_TLS_KEY_FILE, \
-             or ZEROCLAW_DEV_SELF_SIGNED=1 (dev only)"
+            "TCP fabric requires TLS — set TCHED_ROUTER_TLS_CERT+TCHED_ROUTER_TLS_KEY, \
+             TCHED_ROUTER_TLS_CERT_FILE+TCHED_ROUTER_TLS_KEY_FILE, \
+             or TCHED_ROUTER_DEV_SELF_SIGNED=1 (dev only)"
         )
     })?;
     let bind_addrs: Vec<&str> = config
@@ -799,12 +842,15 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
     if bind_addrs.is_empty() {
-        anyhow::bail!("ZEROCLAW_BIND_ADDR is empty — no TCP addresses to bind");
+        anyhow::bail!("TCHED_ROUTER_BIND_ADDR is empty — no TCP addresses to bind");
     }
     let mut tcp_tasks = Vec::new();
     for bind_addr_str in &bind_addrs {
         let bind_addr: SocketAddr = bind_addr_str.parse()?;
-        info!(addr = %bind_addr, "zeroclaw TLS gRPC/gRPC-Web listening on TCP");
+        let listener = tokio::net::TcpListener::bind(bind_addr)
+            .await
+            .map_err(|error| anyhow::anyhow!("cannot bind TCP fabric at {bind_addr}: {error}"))?;
+        info!(addr = %bind_addr, "tched_router TLS gRPC/gRPC-Web listening on TCP");
         let tls_config = ServerTlsConfig::new().identity(identity.clone());
         let ingress = build_axum_app_with_validator(
             loader.clone(),
@@ -816,8 +862,19 @@ pub async fn run_zeroclaw_server(config: ServerConfig) -> anyhow::Result<()> {
             .tls_config(tls_config)
             .map_err(|e| anyhow::anyhow!("invalid TLS config for {bind_addr}: {e}"))?
             .add_routes(tonic::service::Routes::from(ingress))
-            .serve(bind_addr);
-        tcp_tasks.push(tokio::spawn(async move { server.await }));
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
+        tcp_tasks.push(tokio::spawn(server));
+    }
+
+    // The service, not its launcher, owns readiness. At this point every UDS
+    // and TCP listener has been bound successfully, so consumers cannot see a
+    // stale marker for a process that never opened its sockets.
+    if let Ok(ready_path) = std::env::var("OPDBUS_READY_PATH") {
+        let ready_path = std::path::Path::new(&ready_path);
+        if let Some(parent) = ready_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(ready_path, b"ready\n").await?;
     }
 
     // Drive all listeners concurrently.

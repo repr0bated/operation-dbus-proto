@@ -16,7 +16,7 @@ This codebase utilizes dynamic, untyped JSON structures (`simd_json::OwnedValue`
 | **Tool Definition Metadata** | Metadata Struct | `crates/op-tools/src/registry.rs:17` | No | Defines input schemas via dynamic JSON values instead of versioned Protocol Buffer schema descriptors. |
 | **HTTP Execute Tool Endpoint** | API Contract | `crates/op-tools/src/router.rs:121` | No | The HTTP POST endpoint `/api/tools/:name/execute` accepts untyped JSON (`Json<Value>`) directly from the web boundary, leading to an unversioned, unsafe data contract. |
 | **D-Bus Projected Method Tool** | Dynamic Schema | `crates/op-tools/src/builtin/dbus_hybrid.rs:136` | No | Dynamically reconstructs ad-hoc JSON schemas from raw D-Bus signature strings at runtime rather than relying on deterministic, pre-compiled schemas. |
-| **Orchestration Telemetry Events** | Event Model | `crates/op-tools/src/orchestration_plugin.rs:46` | No | `ToolExecutedEvent` embeds arguments and metadata as arbitrary JSON `Value` objects, violating audit-trail schemas and complicating append-only blockchain storage. |
+| **Orchestration Telemetry Events** | Event Model | `crates/op-tools/src/orchestration_plugin.rs:46` | No | `ToolExecutedEvent` embeds arguments and metadata as arbitrary JSON `Value` objects, violating audit-trail schemas and complicating append-only snowball storage. |
 | **Plugin Capabilities & States** | Config Schema | `crates/op-tools/src/builtin/plugin_state_tool.rs:102` | No | Uses ad-hoc dynamic JSON maps for state queries, diffs, and actions across state plugins without a centralized, versioned schema repository. |
 
 ---

@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "MultimodalConfig": {
+      "description": "Multimodal (image) handling configuration (`[multimodal]` section).\n\n# Privacy and cost note\n\nTool results that print real local image paths (e.g. shell tools doing\n`ls /pictures` or `find . -name '*.png'`) are canonicalized into\n`[IMAGE:...]` markers and base64-inlined into the next provider request.\nThis means image bytes that previously stayed local will be uploaded to\nthe configured provider when surfaced by a tool.\n\n`max_images` (and the `trim_old_images` LRU policy) bounds the per-request\nimage budget, but operators running shell-style tools over directories of\npersonal or sensitive images should be aware of the upload semantics. See\n`docs/book/src/contributing/privacy.md` for the project's privacy stance.",
+      "properties": {
+        "allow_remote_fetch": {
+          "default": false,
+          "description": "Allow fetching remote image URLs (http/https). Disabled by default.",
+          "type": "boolean"
+        },
+        "max_image_size_mb": {
+          "default": 5,
+          "description": "Maximum image payload size in MiB before base64 encoding.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_image_turns": {
+          "default": 0,
+          "description": "Maximum age of images in conversation turns.\n\nWhen non-zero, images in user messages that are more than this many\nturns back from the end of history are stripped before the request is\nsent to the provider. This prevents a single screenshot from being\nre-encoded and re-uploaded on every subsequent turn indefinitely.\nTool-result images are already managed by the stale-tool-result\nmechanism and are not affected by this setting.\n\n`0` (the default) disables age-based trimming entirely — images are\nonly evicted by the `max_images` count cap.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_images": {
+          "default": 4,
+          "description": "Maximum number of image attachments accepted per request.\n\nCaps the total number of `[IMAGE:...]` markers that survive into the\nprovider request after multimodal preprocessing. Older images are\ndropped first when the cumulative count exceeds this limit. Acts as\nthe upper bound on per-turn upload cost when tool outputs surface\nlocal image paths.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vision_model": {
+          "default": null,
+          "description": "Model to use when routing to the vision model_provider (e.g. `\"llava:7b\"`).\nOnly used when `vision_model_provider` is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vision_model_provider": {
+          "default": null,
+          "description": "ModelProvider name to use for vision/image messages (e.g. `\"ollama\"`).\nWhen set, messages containing `[IMAGE:]` markers are routed to this\nmodel_provider instead of the default text model_provider.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/MultimodalConfig",
+  "default": {
+    "allow_remote_fetch": false,
+    "max_image_size_mb": 5,
+    "max_image_turns": 0,
+    "max_images": 4,
+    "vision_model": null,
+    "vision_model_provider": null
+  },
+  "description": "Multimodal (image) handling configuration (`[multimodal]`)."
+}

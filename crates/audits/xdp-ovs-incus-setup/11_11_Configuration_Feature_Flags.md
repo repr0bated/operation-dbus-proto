@@ -54,7 +54,7 @@ The following relative workspace directory paths are defined as dependencies or 
 * `crates/op-plugins` (`Cargo.toml:21`)
 * `crates/op-workflows` (`Cargo.toml:22`)
 * `crates/op-ml` (`Cargo.toml:23`)
-* `crates/op-blockchain` (`Cargo.toml:24`)
+* `crates/op-snowball` (`Cargo.toml:24`)
 * `crates/op-deployment` (`Cargo.toml:25`)
 * `crates/op-mcp` (`Cargo.toml:26`)
 * `crates/op-mcp-aggregator` (`Cargo.toml:27`)

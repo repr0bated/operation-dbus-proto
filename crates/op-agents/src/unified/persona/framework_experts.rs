@@ -4,9 +4,11 @@ use super::super::agent_trait::AgentCapability;
 use super::super::prompts::frameworks::{DJANGO, FASTAPI, REACT};
 use super::base::PersonaAgent;
 
+#[allow(dead_code)]
 pub struct DjangoExpert(PersonaAgent);
 
 impl DjangoExpert {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "django-expert",
@@ -31,9 +33,11 @@ impl Default for DjangoExpert {
     }
 }
 
+#[allow(dead_code)]
 pub struct FastAPIExpert(PersonaAgent);
 
 impl FastAPIExpert {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "fastapi-expert",
@@ -54,9 +58,11 @@ impl Default for FastAPIExpert {
     }
 }
 
+#[allow(dead_code)]
 pub struct ReactExpert(PersonaAgent);
 
 impl ReactExpert {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "react-expert",

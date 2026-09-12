@@ -195,7 +195,11 @@ pub fn capitalize_plugin_name(name: &str) -> String {
             match chars.next() {
                 None => String::new(),
                 Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                    format!(
+                        "{}{}",
+                        first.to_uppercase().collect::<String>(),
+                        chars.as_str().to_lowercase()
+                    )
                 }
             }
         })

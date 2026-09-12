@@ -1,4 +1,4 @@
-//! op-introspection: D-Bus introspection service (stubbed — pending StreamingBlockchain port)
+//! op-introspection: D-Bus introspection service (stubbed — pending StreamingSnowball port)
 
 /// Stub introspection service.
 #[derive(Clone)]

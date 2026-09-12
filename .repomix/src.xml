@@ -2263,7 +2263,7 @@ export const mockDbusTools: DbusObjectTool[] = [
   },
   {
     name: "Audit.Chain",
-    description: "Blockchain audit trail interface",
+    description: "Snowball audit trail interface",
     dbusPath: "/com/3tched/audit/chain",
     interface: "com.3tched.Audit.Chain1",
     methods: [
@@ -2280,7 +2280,7 @@ export const mockDbusTools: DbusObjectTool[] = [
       { name: "BlockCommitted", args: "u height, s hash" },
     ],
     category: "audit",
-    tags: ["blockchain", "logging", "integrity"],
+    tags: ["snowball", "logging", "integrity"],
   },
   {
     name: "Dinit.Manager",
@@ -7893,7 +7893,7 @@ const immutablePrompt = `You are the op-dbus AI assistant for the GhostBridge sy
 
 CORE RULES (immutable):
 1. Never execute destructive operations without explicit user confirmation.
-2. All actions must be logged to the blockchain audit trail.
+2. All actions must be logged to the snowball audit trail.
 3. You may only interact with D-Bus objects exposed on the session bus.
 4. Respect human-in-the-loop: suggest actions, never auto-execute.
 5. Do not disclose internal system paths, keys, or credentials.
@@ -8891,7 +8891,7 @@ export default function InspectorPage() {
                 </span>
               </div>
               <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Blockchain Event</span>
+                <span className="text-muted-foreground">Snowball Event</span>
                 <Badge variant="secondary" className="text-[10px]">
                   dbus.schema.update
                 </Badge>
@@ -9271,7 +9271,7 @@ export default function SecurityPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Shield className="h-4 w-4 text-primary" />
-              Blockchain Audit Trail
+              Snowball Audit Trail
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -9419,7 +9419,7 @@ const mockServices: DinitService[] = [
   },
   {
     name: "audit-chain",
-    description: "Blockchain audit trail writer",
+    description: "Snowball audit trail writer",
     state: "started",
     type: "bgprocess",
     pid: 1350,
@@ -9685,7 +9685,7 @@ import {
   Copy,
 } from "lucide-react";
 
-// ── Mock blockchain data ──────────────────────────────────────
+// ── Mock snowball data ──────────────────────────────────────
 
 const MOCK_BLOCKS = [
   {
@@ -9831,9 +9831,9 @@ function timeAgo(iso: string) {
   return `${hrs}h ago`;
 }
 
-// ── Blockchain Tab ────────────────────────────────────────────
+// ── Snowball Tab ────────────────────────────────────────────
 
-function BlockchainTab() {
+function SnowballTab() {
   const [verifying, setVerifying] = useState<number | null>(null);
 
   const handleVerify = (idx: number) => {
@@ -10020,24 +10020,24 @@ export default function StatePage() {
           State & Audit
         </h1>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Blockchain audit trail &amp; BTRFS state management
+          Snowball audit trail &amp; BTRFS state management
         </p>
       </header>
 
       <div className="flex-1 overflow-hidden px-6 py-4">
-        <Tabs defaultValue="blockchain" className="h-full flex flex-col">
+        <Tabs defaultValue="snowball" className="h-full flex flex-col">
           <TabsList className="w-fit">
-            <TabsTrigger value="blockchain" className="text-xs gap-1.5">
+            <TabsTrigger value="snowball" className="text-xs gap-1.5">
               <Link2 className="h-3.5 w-3.5" />
-              Blockchain / Audit
+              Snowball / Audit
             </TabsTrigger>
             <TabsTrigger value="state" className="text-xs gap-1.5">
               <HardDrive className="h-3.5 w-3.5" />
               State Management
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="blockchain" className="flex-1 overflow-auto mt-3">
-            <BlockchainTab />
+          <TabsContent value="snowball" className="flex-1 overflow-auto mt-3">
+            <SnowballTab />
           </TabsContent>
           <TabsContent value="state" className="flex-1 overflow-auto mt-3">
             <StateTab />

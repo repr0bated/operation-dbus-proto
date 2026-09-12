@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "DockerRuntimeConfig": {
+      "description": "Docker runtime configuration (`[runtime.docker]` section).",
+      "properties": {
+        "allowed_workspace_roots": {
+          "default": [],
+          "description": "Optional workspace root allowlist for Docker mount validation.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cpu_limit": {
+          "default": 1.0,
+          "description": "Optional CPU limit (`None` = no explicit limit).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "image": {
+          "default": "alpine:3.20",
+          "description": "Runtime image used to execute shell commands.",
+          "type": "string"
+        },
+        "memory_limit_mb": {
+          "default": 512,
+          "description": "Optional memory limit in MB (`None` = no explicit limit).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mount_workspace": {
+          "default": true,
+          "description": "Mount configured workspace into `/workspace`.",
+          "type": "boolean"
+        },
+        "network": {
+          "default": "none",
+          "description": "Docker network mode (`none`, `bridge`, etc.).",
+          "type": "string"
+        },
+        "read_only_rootfs": {
+          "default": true,
+          "description": "Mount root filesystem as read-only.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RuntimeConfig": {
+      "description": "Runtime adapter configuration (`[runtime]` section).",
+      "properties": {
+        "docker": {
+          "$ref": "#/$defs/DockerRuntimeConfig",
+          "default": {
+            "allowed_workspace_roots": [],
+            "cpu_limit": 1.0,
+            "image": "alpine:3.20",
+            "memory_limit_mb": 512,
+            "mount_workspace": true,
+            "network": "none",
+            "read_only_rootfs": true
+          },
+          "description": "Docker runtime settings (used when `kind = \"docker\"`)."
+        },
+        "kind": {
+          "$ref": "#/$defs/RuntimeKind",
+          "default": "native",
+          "description": "Runtime kind: native | docker | cloudflare."
+        },
+        "reasoning_effort": {
+          "default": null,
+          "description": "Optional reasoning effort for model_providers that expose a level control.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_enabled": {
+          "default": null,
+          "description": "Global reasoning override for model_providers that expose explicit controls.\n- `None`: model_provider default behavior\n- `Some(true)`: request reasoning/thinking when supported\n- `Some(false)`: disable reasoning/thinking when supported",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "shell": {
+          "default": null,
+          "description": "Shell binary the native runtime uses for command execution.\n\nApplies only to `runtime.kind = \"native\"`; other runtimes ignore it.\nWhen unset or `null`, the system default `sh` is used. The shell is\ninvoked as `<shell> -c \"<command>\"`, so it must be a POSIX-compatible\nshell binary.\n\nAccepted forms (Unix):\n- a bare command name resolved via `PATH` (e.g. `\"bash\"`), or\n- an absolute path (e.g. `\"/bin/bash\"`, `\"/usr/bin/zsh\"`).\n\nThe value is validated when the native runtime is constructed, so a bad\nvalue is reported up front rather than failing on the first shell\ncommand. Rejected: empty/whitespace; a relative path with separators\n(e.g. `\"./sh\"`, `\"bin/sh\"` — use a bare `PATH` name or an absolute path\ninstead); a bare name not found on `PATH`; and a path that does not\nexist or is not executable.\n\n**Ignored on Windows and Android** (and not validated there): Windows\nalways uses `cmd.exe`, and Android always uses `/system/bin/sh`\n(its shell is not on `PATH` for spawned processes).\n\n**Examples:**\n```toml\n[runtime]\nshell = \"bash\" # resolves via PATH\nshell = \"/bin/zsh\" # absolute path\n```",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RuntimeKind": {
+      "description": "Runtime adapter kind.",
+      "enum": [
+        "native",
+        "docker",
+        "cloudflare"
+      ],
+      "type": "string"
+    }
+  },
+  "$ref": "#/$defs/RuntimeConfig",
+  "default": {
+    "docker": {
+      "allowed_workspace_roots": [],
+      "cpu_limit": 1.0,
+      "image": "alpine:3.20",
+      "memory_limit_mb": 512,
+      "mount_workspace": true,
+      "network": "none",
+      "read_only_rootfs": true
+    },
+    "kind": "native",
+    "reasoning_effort": null,
+    "reasoning_enabled": null,
+    "shell": null
+  },
+  "description": "Runtime adapter configuration (`[runtime]`). Controls native vs Docker execution."
+}

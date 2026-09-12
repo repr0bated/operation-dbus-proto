@@ -1,0 +1,32 @@
+{
+  "$defs": {
+    "ImageGenConfig": {
+      "description": "Standalone image generation tool configuration (`[image_gen]`).\n\nWhen enabled, registers an `image_gen` tool that generates images via\nfal.ai's synchronous API (Flux / Nano Banana models) and saves them\nto the workspace `images/` directory.",
+      "properties": {
+        "api_key_env": {
+          "default": "FAL_API_KEY",
+          "description": "Environment variable name holding the fal.ai API key.",
+          "type": "string"
+        },
+        "default_model": {
+          "default": "fal-ai/flux/schnell",
+          "description": "Default fal.ai model identifier.",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the standalone image generation tool. Default: false.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ImageGenConfig",
+  "default": {
+    "api_key_env": "FAL_API_KEY",
+    "default_model": "fal-ai/flux/schnell",
+    "enabled": false
+  },
+  "description": "Standalone image generation tool configuration (`[image_gen]`)."
+}

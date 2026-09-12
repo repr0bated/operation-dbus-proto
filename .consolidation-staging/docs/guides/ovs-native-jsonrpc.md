@@ -170,7 +170,7 @@ All write operations use OVSDB transactions with these operations:
 - Unix socket permissions control access
 - No shell command injection possible
 - Atomic transactions prevent partial updates
-- Audit logging via blockchain integration
+- Audit logging via snowball integration
 
 ## References
 

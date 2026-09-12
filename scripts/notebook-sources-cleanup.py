@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Consolidate ~/.notebooklm-sources so total NotebookLM source files stay ≤300.
+Consolidate /home/jeremy/.notebooklm-sources so total NotebookLM source files stay ≤300.
 
 Strategy:
   • Per model folder (default): roll individual session *.md into consolidated
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 HOME = Path.home()
-DEFAULT_ROOT = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", HOME / ".notebooklm-sources"))
+DEFAULT_ROOT = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", "/home/jeremy/.notebooklm-sources"))
 STATE_NAME = ".cleanup-state.json"
 BUNDLE_PREFIX = "_bundle_"
 SKIP_NAMES = {

@@ -26,11 +26,6 @@ pub fn admin_routes() -> Router {
         .route("/prompt/test", post(test_prompt))
         .route("/prompt/reload", post(reload_prompt))
         .route("/config", get(get_config))
-        // Device pairing codes for dashboard / egui (mesh/localhost only)
-        .route(
-            "/paircode/new",
-            post(crate::handlers::pair::paircode_new_handler),
-        )
 }
 
 // =============================================================================

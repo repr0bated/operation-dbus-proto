@@ -15,10 +15,10 @@ Based on the workspace `Cargo.lock` dependency trees, the following crates in th
 
 ### Cross-Crate Circular Dependency Risk
 *   **Location**: `crates/op-introspection/Cargo.toml:11`
-*   **Finding**: `op-introspection` maintains a direct path dependency on `op-blockchain` (`op-blockchain = { path = "../op-blockchain" }`). 
-*   **Risk Analysis**: `op-blockchain` is a low-level ledger and state storage library, whereas `op-introspection` implements high-level system analysis and D-Bus scanning. 
-    *   If `op-blockchain` ever needs to reference types, parse definitions, or use schemas defined in `op-introspection` (e.g., to validate blockchain block state modifications or `dbus.schema.update` event structures), a **circular dependency cycle** will prevent compilation.
-    *   This forces `op-blockchain` to handle event schema payloads as raw, unvalidated JSON strings rather than typed schema objects, breaking compilation-level type guarantees across the Control Plane boundary.
+*   **Finding**: `op-introspection` maintains a direct path dependency on `op-snowball` (`op-snowball = { path = "../op-snowball" }`).
+*   **Risk Analysis**: `op-snowball` is a low-level ledger and state storage library, whereas `op-introspection` implements high-level system analysis and D-Bus scanning.
+    *   If `op-snowball` ever needs to reference types, parse definitions, or use schemas defined in `op-introspection` (e.g., to validate snowball block state modifications or `dbus.schema.update` event structures), a **circular dependency cycle** will prevent compilation.
+    *   This forces `op-snowball` to handle event schema payloads as raw, unvalidated JSON strings rather than typed schema objects, breaking compilation-level type guarantees across the Control Plane boundary.
 
 ---
 
@@ -93,7 +93,7 @@ The following ad-hoc structs represent unversioned system data contracts:
 
 ### [Critical] Path Traversal / Arbitrary JSON File Read via Cache Loader
 *   **Location**: `crates/op-introspection/src/hierarchical.rs:527-531`
-*   **Vulnerability**: 
+*   **Vulnerability**:
     ```rust
     pub async fn load_by_timestamp(&self, timestamp: &str) -> Result<HierarchicalIntrospection> {
         let filename = format!("{}.json", timestamp.replace(':', "-"));
@@ -147,7 +147,7 @@ The following ad-hoc structs represent unversioned system data contracts:
 ### [Medium] Write Amplification & High CPU Usage During Bulk Indexing
 *   **Location**: `crates/op-introspection/src/indexer.rs:91-248`
 *   **Vulnerability**:
-    SQLite `AFTER INSERT` and `AFTER UPDATE` triggers are created on core tables (`methods`, `properties`, `signals`, `interfaces`) to keep virtual FTS5 search tables in sync. 
+    SQLite `AFTER INSERT` and `AFTER UPDATE` triggers are created on core tables (`methods`, `properties`, `signals`, `interfaces`) to keep virtual FTS5 search tables in sync.
 *   **Risk**: During the initial index scan (`build_index`), thousands of items are sequentially inserted. Because these triggers are active during the insert loop, SQLite must execute multiple complex `SELECT` joins with nested index lookups for *every single row* inserted. This causes heavy disk write amplification and CPU bottlenecks.
 *   **Remediation**: Populate FTS tables in a single batch operation after scanning is complete, or drop/disable the triggers during bulk indexing.
 

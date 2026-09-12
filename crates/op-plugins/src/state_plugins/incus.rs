@@ -1,6 +1,6 @@
 //! Incus state plugin - manages Incus containers and virtual machines.
 //!
-//! Uses the `incus` CLI with `--format=json` for all operations.
+//! Uses the native Incus HTTP API over its privileged Unix socket.
 //! Supports creating, starting, stopping, and deleting instances,
 //! as well as profile and config management.
 
@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use simd_json::{json, prelude::*, OwnedValue as Value};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::incus_device::{Device, NamedDevice};
 
@@ -170,105 +169,75 @@ impl IncusPlugin {
         Self
     }
 
-    /// Minimal HTTP-over-UnixSocket client for Incus REST API (AGENTS.md §4: no subprocess bypasses)
+    /// Bounded native HTTP-over-UDS. A stalled/truncated response is an error,
+    /// never evidence that an external mutation completed successfully.
     async fn incus_api_request(method: &str, path: &str, body: Option<&str>) -> Result<Vec<u8>> {
-        let socket_path = "/var/lib/incus/unix.socket";
-        if !std::path::Path::new(socket_path).exists() {
-            return Err(anyhow::anyhow!(
-                "Incus Unix socket not found at {}",
-                socket_path
-            ));
-        }
-
-        let mut stream = tokio::net::UnixStream::connect(socket_path)
-            .await
-            .context("Failed to connect to Incus Unix socket")?;
-
-        let body_len = body.map(|b| b.len()).unwrap_or(0);
-        let request = format!(
-            "{} {} HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
+        Self::incus_request_on_socket(
+            std::path::Path::new("/var/lib/incus/unix.socket"),
+            Duration::from_secs(125),
             method,
             path,
-            if body.is_some() {
-                "Content-Type: application/json\r\n"
-            } else {
-                ""
-            },
-            body_len,
-            body.unwrap_or("")
-        );
+            body,
+        )
+        .await
+    }
 
-        stream.write_all(request.as_bytes()).await?;
-
-        let mut response = Vec::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            match tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buf)).await {
-                Ok(Ok(0)) => break,
-                Ok(Ok(n)) => response.extend_from_slice(&buf[..n]),
-                Ok(Err(e)) => return Err(e.into()),
-                Err(_) => break, // timeout: assume response is complete
-            }
+    async fn incus_request_on_socket(
+        socket: &std::path::Path,
+        deadline: Duration,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        const RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
+        if !path.starts_with("/1.0") || path.chars().any(char::is_whitespace) {
+            anyhow::bail!("invalid local Incus API path");
         }
-
-        // Extract body from HTTP response
-        let body_start = if let Some(idx) = response.windows(4).position(|w| w == b"\r\n\r\n") {
-            idx + 4
-        } else if let Some(idx) = response.windows(2).position(|w| w == b"\n\n") {
-            idx + 2
-        } else {
-            return Ok(response);
-        };
-
-        let headers = std::str::from_utf8(&response[..body_start]).unwrap_or("");
-        let mut body = response[body_start..].to_vec();
-
-        // Handle chunked transfer encoding
-        if headers
-            .to_lowercase()
-            .contains("transfer-encoding: chunked")
+        let client = reqwest_unix::Client::builder()
+            .unix_socket(socket.to_path_buf())
+            .no_proxy()
+            .redirect(reqwest_unix::redirect::Policy::none())
+            .retry(reqwest_unix::retry::never())
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(deadline)
+            .build()
+            .context("failed to build Incus UDS client")?;
+        let mut request = client
+            .request(method.parse()?, format!("http://localhost{path}"))
+            .header("Accept", "application/json");
+        if let Some(body) = body {
+            request = request
+                .header("Content-Type", "application/json")
+                .body(body.to_owned());
+        }
+        let mut response = request.send().await.context("Incus UDS request failed")?;
+        if !response.status().is_success() {
+            anyhow::bail!("Incus API returned HTTP {}", response.status());
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > RESPONSE_LIMIT as u64)
         {
-            let mut decoded = Vec::new();
-            let mut pos = 0;
-            while pos < body.len() {
-                let mut line_end = pos;
-                while line_end < body.len() && body[line_end] != b'\n' {
-                    line_end += 1;
-                }
-                if line_end >= body.len() {
-                    break;
-                }
-                let line = std::str::from_utf8(&body[pos..line_end])
-                    .unwrap_or("")
-                    .trim();
-                let size = usize::from_str_radix(line.split(';').next().unwrap_or("0").trim(), 16)
-                    .unwrap_or(0);
-                if size == 0 {
-                    break;
-                }
-                pos = line_end + 1;
-                if pos < body.len() && body[pos] == b'\r' {
-                    pos += 1;
-                }
-                decoded.extend_from_slice(&body[pos..pos + size]);
-                pos += size;
-                if pos < body.len() && body[pos] == b'\r' {
-                    pos += 1;
-                }
-                if pos < body.len() && body[pos] == b'\n' {
-                    pos += 1;
-                }
-            }
-            body = decoded;
+            anyhow::bail!("Incus response exceeded size limit");
         }
-
-        Ok(body)
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("incomplete Incus response")?
+        {
+            if chunk.len() > RESPONSE_LIMIT.saturating_sub(bytes.len()) {
+                anyhow::bail!("Incus response exceeded size limit");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     /// Call Incus REST API and extract metadata from the (sync or async)
     /// response. Incus answers most mutating calls (instance create/delete,
     /// etc.) with `"type": "async"` — a background operation, not the final
-    /// result — which must be polled via `/1.0/operations/<id>/wait` before
+    /// result — whose completion must be awaited via `/1.0/operations/<id>/wait` before
     /// its outcome is known. Treating that initial "Operation created"
     /// response as the final answer (as this used to) misreads a real
     /// success as a blank error, since its own `error` field is `""`.
@@ -286,7 +255,8 @@ impl IncusPlugin {
                 .ok_or_else(|| anyhow::anyhow!("async Incus response missing 'operation' path"))?
                 .to_string();
             let wait_response =
-                Self::incus_api_request("GET", &format!("{op_path}/wait"), None).await?;
+                Self::incus_api_request("GET", &format!("{op_path}/wait?timeout=120"), None)
+                    .await?;
             let mut wait_raw = wait_response;
             let wait_val: simd_json::OwnedValue = simd_json::from_slice(&mut wait_raw)
                 .context("Failed to parse Incus operation-wait response")?;
@@ -374,6 +344,70 @@ impl IncusPlugin {
                 .await?;
         let mut raw = body;
         simd_json::from_slice(&mut raw).context("Failed to parse Incus instance")
+    }
+
+    /// Provision the project plugin's restricted container in one Incus
+    /// operation. Image/pool/path are trusted deployment policy, not chat input.
+    pub async fn create_project_container(
+        project_id: &str,
+        owner_session_id: &str,
+        fingerprint: &str,
+        pool: &str,
+        persist_path: &str,
+    ) -> Result<()> {
+        if uuid::Uuid::parse_str(project_id)?.to_string() != project_id
+            || fingerprint.len() != 64
+            || !fingerprint.bytes().all(|c| c.is_ascii_hexdigit())
+            || pool.is_empty()
+            || !std::path::Path::new(persist_path).is_absolute()
+        {
+            anyhow::bail!("invalid project provisioning policy");
+        }
+        let body = serde_json::json!({
+            "name": project_id, "type": "container", "ephemeral": false,
+            "source": {"type": "image", "fingerprint": fingerprint},
+            "profiles": [],
+            "config": {
+                "boot.autostart": "false", "security.privileged": "false", "security.nesting": "false",
+                "user.opdbus.role": "project", "user.opdbus.project_id": project_id,
+                "user.opdbus.owner_session_id": owner_session_id
+            },
+            "devices": {
+                "root": {"type": "disk", "path": "/", "pool": pool},
+                // Only the authenticated project dispatcher writes this Cozo
+                // store. A container must not alter host database files or
+                // introduce symlinks underneath a privileged store handle.
+                "project": {"type": "disk", "path": "/project", "source": persist_path, "shift": "true", "readonly": "true"}
+            }
+        });
+        Self::incus_api_call("POST", "/1.0/instances", Some(&body.to_string())).await?;
+        Self::verify_project_container(project_id, owner_session_id, persist_path).await
+    }
+
+    /// Existence and ownership are checked before project data access, including
+    /// parked containers. A stale catalog row is not a substitute for a container.
+    pub async fn verify_project_container(
+        project_id: &str,
+        owner: &str,
+        persist_path: &str,
+    ) -> Result<()> {
+        if uuid::Uuid::parse_str(project_id)?.to_string() != project_id {
+            anyhow::bail!("invalid project container id");
+        }
+        let value = serde_json::to_value(Self::incus_get_instance(project_id).await?)?;
+        if value["type"] != "container"
+            || value["config"]["user.opdbus.project_id"] != project_id
+            || value["config"]["user.opdbus.owner_session_id"] != owner
+            || value["config"]["user.opdbus.role"] != "project"
+            || value["devices"]["project"]["source"] != persist_path
+            || value["devices"]["project"]["path"] != "/project"
+            || value["devices"]["project"]["readonly"] != "true"
+            || value["config"]["security.privileged"] != "false"
+            || value["config"]["security.nesting"] != "false"
+        {
+            anyhow::bail!("project container binding does not match its catalog");
+        }
+        Ok(())
     }
 
     /// Update instance configuration via REST API (removes read-only fields first)
@@ -1256,6 +1290,36 @@ mod tests {
         assert!(matches!(devices[0].device, Device::Proxy(_)));
         assert!(matches!(devices[1].device, Device::Nic(_)));
     }
+
+    #[test]
+    fn identity_overlay_instance_roundtrips_serde_and_simd_json() {
+        let raw = r#"{
+            "name": "bea37ecb-92be-197c-660f-09e806f1a34f",
+            "status": "Stopped",
+            "type": "container",
+            "profiles": ["identity"],
+            "storage_pool": "3tched-storage",
+            "config": {
+                "boot.autostart": "false",
+                "user.opdbus.role": "chatbot"
+            },
+            "devices": [
+                {"name": "ghostbridge-socket", "device": {"type": "disk", "path": "/opt/run-mounts/ghostbridge", "source": "/run/ghostbridge"}},
+                {"name": "identity", "device": {"type": "disk", "path": "/opt/run-mounts/identity", "source": "/var/lib/opdbus-runtime/identities/chatbot", "readonly": "true"}},
+                {"name": "persist", "device": {"type": "disk", "path": "/opt/run-mounts/persist", "source": "/var/lib/opdbus-runtime/identities/chatbot/persist"}},
+                {"name": "root", "device": {"type": "disk", "path": "/", "pool": "3tched-storage"}}
+            ]
+        }"#;
+        let parsed: IncusInstance =
+            serde_json::from_str(raw).expect("overlay instance JSON must parse as IncusInstance");
+        assert_eq!(parsed.devices.len(), 4);
+        let owned = simd_json::serde::to_owned_value(&parsed)
+            .expect("simd_json must serialize IncusInstance for identity_sled SHM");
+        let back: IncusInstance = simd_json::serde::from_owned_value(owned)
+            .expect("simd_json must roundtrip IncusInstance");
+        assert_eq!(back.name, parsed.name);
+        assert_eq!(back.devices.len(), 4);
+    }
 }
 
 // =============================================================================
@@ -1696,4 +1760,102 @@ pub(crate) fn incus_schema() -> PluginSchema {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("incus", |_ctx| std::sync::Arc::new(IncusPlugin::new()))
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::IncusPlugin;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+
+    async fn request_with_response(response: &[u8], deadline: Duration) -> anyhow::Result<Vec<u8>> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("incus.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let payload = response.to_vec();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await?);
+                anyhow::ensure!(request.len() <= 8192, "test request header too large");
+            }
+            stream.write_all(&payload).await?;
+            if !payload.windows(5).any(|window| window == b"0\r\n\r\n") {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            anyhow::Ok(())
+        });
+        let result =
+            IncusPlugin::incus_request_on_socket(&socket, deadline, "GET", "/1.0", None).await;
+        server.abort();
+        let _ = server.await;
+        result
+    }
+
+    #[tokio::test]
+    async fn accepts_chunked_json() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .iter()
+            .chain(b"8\r\n{\"ok\":1}\r\n0\r\n\r\n")
+            .copied()
+            .collect::<Vec<_>>();
+        let body = request_with_response(&response, Duration::from_secs(1))
+            .await
+            .expect("chunked response should succeed");
+        assert_eq!(body, br#"{"ok":1}"#);
+    }
+
+    #[tokio::test]
+    async fn rejects_truncated_chunked_response() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n";
+        assert!(request_with_response(response, Duration::from_secs(1))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_truncated_content_length_response() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhi";
+        assert!(request_with_response(response, Duration::from_secs(1))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_content_length_before_body() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 16777217\r\n\r\n";
+        let error = request_with_response(response, Duration::from_secs(1))
+            .await
+            .expect_err("oversized response must be rejected");
+        assert!(error.to_string().contains("size limit"));
+    }
+
+    #[tokio::test]
+    async fn does_not_follow_redirects() {
+        let response =
+            b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/\r\nContent-Length: 0\r\n\r\n";
+        let error = request_with_response(response, Duration::from_secs(1))
+            .await
+            .expect_err("redirect response must be rejected");
+        assert!(error.to_string().contains("HTTP 302"));
+    }
+
+    #[tokio::test]
+    async fn rejects_http_500() {
+        let response = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
+        let error = request_with_response(response, Duration::from_secs(1))
+            .await
+            .expect_err("HTTP 500 must be rejected");
+        assert!(error.to_string().contains("HTTP 500"));
+    }
+
+    #[tokio::test]
+    async fn timeout_rejects_incomplete_response() {
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhe";
+        assert!(request_with_response(response, Duration::from_millis(30))
+            .await
+            .is_err());
+    }
 }

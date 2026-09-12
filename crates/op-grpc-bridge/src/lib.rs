@@ -34,18 +34,21 @@ pub mod interceptor;
 pub mod mcp_frontend;
 pub mod mcp_policy;
 pub mod mutation_engine;
+pub mod nlm_cli;
 pub mod oracle_assertion;
 pub mod per_plugin_reflection;
 pub mod plugin_grpc_gen;
 pub mod plugin_object_blob;
+pub mod project_dispatch;
 pub mod proto_gen;
 pub mod schema_loader;
 pub mod schema_router;
+mod sealed_schema_reader;
 pub mod server;
 pub mod shared_socket;
+pub mod tched_router_object_blob;
+pub mod tched_router_runtime;
 pub mod tracing;
-pub mod zeroclaw_object_blob;
-pub mod zeroclaw_runtime;
 
 // Re-export main types
 pub use grpc_client::{
@@ -64,11 +67,11 @@ pub use plugin_grpc_gen::{
     MethodServiceLifecycleEvent, MethodServiceRegistry, PerMethodGrpcServices,
 };
 pub use proto_gen::{ProtoGenConfig, ProtoGenerator};
-pub use server::{run_zeroclaw_server, ServerConfig};
+pub use server::{run_tched_router_server, ServerConfig};
 // Object blob artifacts (schema-coupled D-Bus + gRPC reflection units),
 // backed by the op-blob crate.
 pub use plugin_object_blob::{BlobMethod, DbusObjectIdentity, PluginObjectBlob};
-pub use zeroclaw_object_blob::TchedRouterObjectBlob;
+pub use tched_router_object_blob::TchedRouterObjectBlob;
 
 /// Generated protobuf types — one sub-module per domain proto.
 /// All are compiled into the combined operation_descriptor.bin for reflection.
@@ -94,9 +97,9 @@ pub mod proto {
         tonic::include_proto!("emqx.exhook.v3");
     }
 
-    /// Zeroclaw plugin schema gRPC service (GetSchema / WatchSchema).
-    pub mod zeroclaw {
-        tonic::include_proto!("zeroclaw");
+    /// 3tched Router plugin schema gRPC service (GetSchema / WatchSchema).
+    pub mod tched_router {
+        tonic::include_proto!("tched_router");
     }
 
     /// ChatService — operator-to-system chat interface (delegator, forced tool calling).
@@ -242,6 +245,21 @@ mod interceptor_crate_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn assertion_without_connect_info_rejects_missing_connect_info() {
         crate::interceptor::tests::assertion_without_connect_info_rejects_missing_connect_info_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sid1_parked_inserts_human_principal_identity() {
+        crate::interceptor::tests::sid1_parked_inserts_human_principal_identity_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sid1_and_oia1_together_rejected() {
+        crate::interceptor::tests::sid1_and_oia1_together_rejected_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sid1_requires_current_principal_registration() {
+        crate::interceptor::tests::sid1_requires_current_principal_registration_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

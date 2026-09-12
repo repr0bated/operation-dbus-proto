@@ -57,7 +57,7 @@
 
 #### Medium/Low Findings
 
-##### 1. Use of Cryptographically Broken Hashing (MD5) for Blockchain Auditing
+##### 1. Use of Cryptographically Broken Hashing (MD5) for Snowball Auditing
 *   **Citations**:
     *   `crates/op-plugins/src/auto_create.rs:91-92`
     *   `crates/op-plugins/src/state_plugins/config.rs:194-195`
@@ -66,7 +66,7 @@
     *   `crates/op-plugins/src/state_plugins/lxc.rs:777-778`
     *   `crates/op-plugins/src/state_plugins/netmaker.rs:260-261`
 *   **Impact**: Integrity Bypass / Footprint Falsification.
-*   **Description**: Multiple plugins use the `md5` crate to compute MD5 digests of states as "automatic hash footprints for blockchain audit trail" (e.g., `md5::compute(simd_json::to_string(current)?))`. Because MD5 is vulnerable to collision attacks, an attacker could alter the current or desired configuration state while keeping the MD5 blockchain footprint identical. This defeats the non-repudiation and auditing guarantees of the ledger trail.
+*   **Description**: Multiple plugins use the `md5` crate to compute MD5 digests of states as "automatic hash footprints for snowball audit trail" (e.g., `md5::compute(simd_json::to_string(current)?))`. Because MD5 is vulnerable to collision attacks, an attacker could alter the current or desired configuration state while keeping the MD5 snowball footprint identical. This defeats the non-repudiation and auditing guarantees of the ledger trail.
 *   **Remediation**: Replace all instances of `md5::compute` with `sha2::Sha256` or another cryptographically secure hashing function (as is done in `crates/op-plugins/src/state.rs:141`).
 
 ##### 2. Insecure Use of `unsafe` Blocks in `simd_json` Parsing

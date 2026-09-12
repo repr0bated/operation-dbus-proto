@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "BrowserComputerUseConfig": {
+      "description": "Computer-use sidecar configuration (`[browser.computer_use]` section).\n\nDelegates OS-level mouse, keyboard, and screenshot actions to a local sidecar.",
+      "properties": {
+        "allow_remote_endpoint": {
+          "default": false,
+          "description": "Allow remote/public endpoint for computer-use sidecar (default: false)",
+          "type": "boolean"
+        },
+        "api_key": {
+          "default": null,
+          "description": "Optional bearer token for computer-use sidecar",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "endpoint": {
+          "default": "http://127.0.0.1:8787/v1/actions",
+          "description": "Sidecar endpoint for computer-use actions (OS-level mouse/keyboard/screenshot)",
+          "type": "string"
+        },
+        "max_coordinate_x": {
+          "default": null,
+          "description": "Optional X-axis boundary for coordinate-based actions",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_coordinate_y": {
+          "default": null,
+          "description": "Optional Y-axis boundary for coordinate-based actions",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "default": 15000,
+          "description": "Per-action request timeout in milliseconds",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_allowlist": {
+          "default": [],
+          "description": "Optional window title/process allowlist forwarded to sidecar policy",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "BrowserConfig": {
+      "description": "Browser automation configuration (`[browser]` section).\n\nControls the `browser_open` tool and browser automation backends.",
+      "properties": {
+        "allowed_domains": {
+          "default": [
+            "*"
+          ],
+          "description": "Allowed domains for `browser_open` (exact or subdomain match)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_private_hosts": {
+          "default": [],
+          "description": "Private/internal hosts allowed to bypass SSRF protection.\nExact and subdomain matches are supported; `[\"*\"]` permits **all** private/local\nhosts (RFC 1918, loopback, link-local, `.local`). Default: empty (deny).\nListed hosts also bypass `allowed_domains`. Both the `browser` tool and\n`browser_open` accept `http://` for listed hosts — internal services\nfrequently lack a public TLS cert.\nWarning: `[\"*\"]` also reaches link-local addresses, including the cloud metadata\nendpoint (`169.254.169.254`) — list specific hosts unless you accept that exposure.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "backend": {
+          "default": "agent_browser",
+          "description": "Browser automation backend: \"agent_browser\" | \"rust_native\" | \"computer_use\" | \"auto\"",
+          "type": "string"
+        },
+        "computer_use": {
+          "$ref": "#/$defs/BrowserComputerUseConfig",
+          "default": {
+            "allow_remote_endpoint": false,
+            "api_key": null,
+            "endpoint": "http://127.0.0.1:8787/v1/actions",
+            "max_coordinate_x": null,
+            "max_coordinate_y": null,
+            "timeout_ms": 15000,
+            "window_allowlist": []
+          },
+          "description": "Computer-use sidecar configuration"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable `browser_open` tool (opens URLs in the system browser without scraping)",
+          "type": "boolean"
+        },
+        "headed": {
+          "default": null,
+          "description": "Show browser window for agent_browser backend. When unset, inherits AGENT_BROWSER_HEADED.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "native_chrome_path": {
+          "default": null,
+          "description": "Optional Chrome/Chromium executable path for rust-native backend",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native_headless": {
+          "default": true,
+          "description": "Headless mode for rust-native backend",
+          "type": "boolean"
+        },
+        "native_webdriver_url": {
+          "default": "http://127.0.0.1:9515",
+          "description": "WebDriver endpoint URL for rust-native backend (e.g. `http://127.0.0.1:9515`)",
+          "type": "string"
+        },
+        "session_name": {
+          "default": null,
+          "description": "Browser session name (for agent-browser automation)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/BrowserConfig",
+  "default": {
+    "allowed_domains": [
+      "*"
+    ],
+    "allowed_private_hosts": [],
+    "backend": "agent_browser",
+    "computer_use": {
+      "allow_remote_endpoint": false,
+      "api_key": null,
+      "endpoint": "http://127.0.0.1:8787/v1/actions",
+      "max_coordinate_x": null,
+      "max_coordinate_y": null,
+      "timeout_ms": 15000,
+      "window_allowlist": []
+    },
+    "enabled": true,
+    "headed": null,
+    "native_chrome_path": null,
+    "native_headless": true,
+    "native_webdriver_url": "http://127.0.0.1:9515",
+    "session_name": null
+  },
+  "description": "Browser automation configuration (`[browser]`)."
+}

@@ -1,13 +1,13 @@
 //! OVS Bridge Setup using Native OVSDB JSON-RPC over the rovs D-Bus proxy.
 //!
 //! This example demonstrates creating and managing OVS bridges using pure Rust
-//! via `OvsdbDbusClient` (native OVSDB JSON-RPC routed through the rovs proxy —
+//! via `OvsdbClient` (native OVSDB JSON-RPC routed through the rovs proxy —
 //! no `ovs-vsctl` CLI commands).
 //!
 //! Run with: cargo run --example ovs_native_rust
 
 use anyhow::Result;
-use op_network::OvsdbDbusClient;
+use op_network::OvsdbClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     println!("=== OVS Native Bridge Setup Example ===\n");
 
     // Create OVSDB client (routes JSON-RPC through the rovs D-Bus proxy).
-    let client = OvsdbDbusClient::new();
+    let client = OvsdbClient::new();
 
     // 1. Check connectivity
     println!("1. Checking OVSDB connectivity...");

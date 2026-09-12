@@ -20,7 +20,7 @@ Based on the workspace `Cargo.toml`, the following crate explicitly depends on `
     *   **None.** `SystemGrpcReader` (`crates/op-projection/src/grpc_reader.rs:70`) serves as a client-side discovery mechanism and does not bind or listen as a gRPC server.
 
 #### Cross-Crate Circular Dependency Risks
-*   **High Structural Coupling:** `op-projection` depends on a large portion of the workspace crates (`op-core`, `op-state`, `op-state-store`, `op-plugins`, `op-dbus-mirror`, `op-grpc-bridge`, `op-blockchain`, `op-identity`) while the main control plane orchestrator `op-dbus` concurrently depends on `op-projection`. 
+*   **High Structural Coupling:** `op-projection` depends on a large portion of the workspace crates (`op-core`, `op-state`, `op-state-store`, `op-plugins`, `op-dbus-mirror`, `op-grpc-bridge`, `op-snowball`, `op-identity`) while the main control plane orchestrator `op-dbus` concurrently depends on `op-projection`.
 *   **Circular Architecture Pattern:** `op-projection` consumes `op-plugins` and `op-state-store` directly to project live state (`crates/op-projection/src/plugin_reader.rs:16-24`). However, plugins often require configuration/projections to execute. If a plugin in `op-plugins` attempts to import `op-projection` to query the materialized engine state, a hard circular dependency compile-time error will occur.
 
 ---

@@ -44,7 +44,7 @@ The workspace explicitly maps internal workspace members using standard Cargo re
 * `Cargo.toml:41`: `op-state-store = { path = "crates/op-state-store" }`
 * `Cargo.toml:42`: `op-plugins = { path = "crates/op-plugins" }`
 * `Cargo.toml:43`: `op-workflows = { path = "crates/op-workflows" }`
-* `Cargo.toml:44`: `op-blockchain = { path = "crates/op-blockchain" }`
+* `Cargo.toml:44`: `op-snowball = { path = "crates/op-snowball" }`
 * `Cargo.toml:45`: `op-inspector = { path = "crates/op-inspector" }`
 * `Cargo.toml:46`: `op-mcp = { path = "crates/op-mcp" }`
 * `Cargo.toml:47`: `op-web = { path = "crates/op-web" }`

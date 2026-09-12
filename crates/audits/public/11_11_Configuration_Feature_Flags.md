@@ -43,7 +43,7 @@ The build-time workspace member path mappings defined in the manifest are purely
 * `op-state-store` at `Cargo.toml:46`
 * `op-plugins` at `Cargo.toml:47`
 * `op-workflows` at `Cargo.toml:48`
-* `op-blockchain` at `Cargo.toml:49`
+* `op-snowball` at `Cargo.toml:49`
 * `op-inspector` at `Cargo.toml:50`
 * `op-mcp` at `Cargo.toml:51`
 * `op-web` at `Cargo.toml:52`

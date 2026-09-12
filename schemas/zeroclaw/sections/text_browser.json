@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "TextBrowserConfig": {
+      "description": "Text browser tool configuration (`[text_browser]` section).\n\nUses text-based browsers (lynx, links, w3m) to render web pages as plain\ntext. Designed for headless/SSH environments without graphical browsers.",
+      "properties": {
+        "allowed_private_hosts": {
+          "default": [],
+          "description": "Private/internal hosts allowed to bypass SSRF protection.\nExact and subdomain matches are supported; `[\"*\"]` permits **all** private/local\nhosts (RFC 1918, loopback, link-local, `.local`). Default: empty (deny).\nWarning: `[\"*\"]` also reaches link-local addresses, including the cloud metadata\nendpoint (`169.254.169.254`) — list specific hosts unless you accept that exposure.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable `text_browser` tool",
+          "type": "boolean"
+        },
+        "preferred_browser": {
+          "default": null,
+          "description": "Preferred text browser (\"lynx\", \"links\", or \"w3m\"). If unset, auto-detects.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "default": 30,
+          "description": "Request timeout in seconds (default: 30)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/TextBrowserConfig",
+  "default": {
+    "allowed_private_hosts": [],
+    "enabled": false,
+    "preferred_browser": null,
+    "timeout_secs": 30
+  },
+  "description": "Text browser tool configuration (`[text_browser]`)."
+}

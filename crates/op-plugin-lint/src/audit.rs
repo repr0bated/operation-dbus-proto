@@ -528,7 +528,7 @@ trait AttrExt {
 impl AttrExt for Attribute {
     fn to_token_stream_string(&self) -> String {
         // Avoid quote dependency: use Debug-ish via parse tree stringification
-        format!("{}", self.meta.to_token_stream_display())
+        self.meta.to_token_stream_display().to_string()
     }
 }
 

@@ -17,7 +17,7 @@ Migrate ALL plugins in `crates/op-plugins/src/state_plugins/` to a uniform GB.<P
 ### Phase 1: Failing-test plugins (block CI)
 1. fail2ban (invalid subid category "security")
 2. persona (invalid subid category "agent")
-3. blockchain (mut.* missing actor_id/capability_id)
+3. snowball (mut.* missing actor_id/capability_id)
 4. json_render (src.* missing source_system/source_locator)
 5. openflow_obfuscation (mut.* missing actor_id/capability_id)
 6. software (stale golden: packages.type any -> array<object>)

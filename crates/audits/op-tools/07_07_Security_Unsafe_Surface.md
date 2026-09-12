@@ -158,7 +158,7 @@ This repository is built as an orchestration tool that relies on a schema-as-cod
         pub arguments: Value,
         pub metadata: Value,
         ```
-        This violates schema-as-code by failing to enforce structural schemas on events that are recorded in the immutable audit log (blockchain). If the log is used for compliance auditing (OSCAL), downstream consumers cannot parse these payloads reliably without schema drift.
+        This violates schema-as-code by failing to enforce structural schemas on events that are recorded in the immutable audit log (snowball). If the log is used for compliance auditing (OSCAL), downstream consumers cannot parse these payloads reliably without schema drift.
 
 *   **`crates/op-tools/src/orchestration_plugin.rs:87-108` & `117-127`**
     *   **Violation**: `LlmDecisionEvent` and `SessionEvent` are declared as ad-hoc Rust structs that are serialized to/from JSON in an unversioned manner, without a schema definition file (such as `.proto` or an OSCAL-aligned component definition).

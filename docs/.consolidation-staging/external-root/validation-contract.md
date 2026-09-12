@@ -12,7 +12,7 @@ This contract defines assertions ensuring that each state plugin under `crates/o
 | VAL-PLUGIN-AGENT_CONFIG | `agent_config.rs` | Agent Config schema includes required methods | Ensure the Agent Config plugin schema defines D‑Bus methods such as `GetConfig`, `SetConfig`, `Reload`. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
 | VAL-PLUGIN-ANTIGRAVITY_CHAT | `antigravity_chat.rs` | Antigravity Chat schema includes required methods | Check that the schema lists D‑Bus methods like `SendMessage`, `ReceiveMessage`, `ListChats`. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
 | VAL-PLUGIN-ANTIGRAVITY | `antigravity.rs` | Antigravity schema includes required methods | Verify methods `Initialize`, `Terminate`, `GetStatus`. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
-| VAL-PLUGIN-BLOCKCHAIN_PLUGIN | `blockchain_plugin.rs` | Blockchain Plugin schema includes required methods | Ensure methods `SubmitTransaction`, `QueryBlock`, `GetBalance` are present. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
+| VAL-PLUGIN-SNOWBALL_PLUGIN | `snowball_plugin.rs` | Snowball Plugin schema includes required methods | Ensure methods `SubmitTransaction`, `QueryBlock`, `GetBalance` are present. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
 | VAL-PLUGIN-BTRFS_PLUGIN | `btrfs_plugin.rs` | Btrfs Plugin schema includes required methods | Verify methods `CreateSubvolume`, `DeleteSubvolume`, `Snapshot`. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
 | VAL-PLUGIN-COGNITIVE_MCP | `cognitive_mcp.rs` | Cognitive MCP schema includes required methods | Check for methods `ProcessInput`, `GenerateResponse`, `GetContext`. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
 | VAL-PLUGIN-COMPACT_MCP | `compact_mcp.rs` | Compact MCP schema includes required methods | Verify methods `StartSession`, `EndSession`, `SendHeartbeat`. | cargo check | Successful `cargo check` and presence of method fields in the generated schema struct. |
@@ -91,7 +91,7 @@ VAL-PLUGIN-ADC
 VAL-PLUGIN-AGENT_CONFIG
 VAL-PLUGIN-ANTIGRAVITY_CHAT
 VAL-PLUGIN-ANTIGRAVITY
-VAL-PLUGIN-BLOCKCHAIN_PLUGIN
+VAL-PLUGIN-SNOWBALL_PLUGIN
 VAL-PLUGIN-BTRFS_PLUGIN
 VAL-PLUGIN-COGNITIVE_MCP
 VAL-PLUGIN-COMPACT_MCP

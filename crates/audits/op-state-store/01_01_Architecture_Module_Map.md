@@ -71,7 +71,7 @@ Either use `simd_json::to_owned_value` which handles safe allocation internally,
     *   `crates/op-state-store/src/schema_shuttle.rs:82`
 
 #### Description
-The `EventChain` module defines a blockchain-style, tamper-evident audit ledger intended to guarantee compliance and state reproducibility. However, all cryptographic hashes—including chain transition links, state snapshot effective hashes, and disaster recovery block checksums—are computed using **MD5**.
+The `EventChain` module defines a snowball-style, tamper-evident audit ledger intended to guarantee compliance and state reproducibility. However, all cryptographic hashes—including chain transition links, state snapshot effective hashes, and disaster recovery block checksums—are computed using **MD5**.
 
 MD5 is cryptographically broken and vulnerable to fast, low-cost collision attacks. An attacker can construct distinct state patches or ledger records that resolve to identical MD5 hashes. This allows history to be rewritten or malicious transitions to be injected without triggering a hash verification failure.
 

@@ -110,7 +110,7 @@ no further volume reads, no polling.
 
 **REQ-3.3** The Btrfs seed volume is produced EXTERNALLY to this workspace's runtime
 code — it is a deploy-time artifact (Btrfs snapshot/send of the state tree; the
-install path is itself `btrfs send`). It has NO relationship to `op-blockchain`
+install path is itself `btrfs send`). It has NO relationship to `op-snowball`
 (see REQ-6). This spec requires only that the consumer can read it at startup.
 
 **REQ-3.4** If the seed volume is empty or missing (first boot), the consumer MUST
@@ -154,13 +154,13 @@ this claim dies with the crate. No action beyond deletion.
 
 ---
 
-### REQ-6 — Seed Volume Independence from op-blockchain
+### REQ-6 — Seed Volume Independence from op-snowball
 
-**REQ-6.1** `op-blockchain` MUST remain untouched by this spec. It is the per-mutation
+**REQ-6.1** `op-snowball` MUST remain untouched by this spec. It is the per-mutation
 durability chain; it is not the seed-volume producer, and nothing needs "rehoming"
 from it.
 
-**REQ-6.2** The cold-start seed volume is completely separate from the blockchain.
+**REQ-6.2** The cold-start seed volume is completely separate from the snowball.
 It is produced externally at deploy time (Btrfs snapshot/send of the state tree —
 the install path is itself `btrfs send`). No runtime code in this workspace is
 required to produce it.
@@ -169,9 +169,9 @@ required to produce it.
 read from it at cold start only (`state_tree::read_seed_volume()`). A missing
 volume is first boot (REQ-3.4), not an error.
 
-**REQ-6.4** The earlier "snapshot reachability hard gate" (proving op-blockchain
+**REQ-6.4** The earlier "snapshot reachability hard gate" (proving op-snowball
 snapshot code callable from the mutation engine before Phase 2) is VOID: it was
-predicated on the seed volume being an op-blockchain product, which it is not.
+predicated on the seed volume being an op-snowball product, which it is not.
 
 ---
 

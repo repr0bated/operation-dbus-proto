@@ -32,7 +32,7 @@ graph TD
         subgraph Control Plane
             GrpcBridge --> Interceptor[OIA1 Interceptor & Replay Cache]
             Interceptor --> MutationEng[MutationEngine]
-            MutationEng --> EventChain[Event Chain / Blockchain Audit]
+            MutationEng --> EventChain[Event Chain / Snowball Audit]
             MutationEng --> DbusAuthority[D-Bus System/Session Bus]
         end
         
@@ -133,7 +133,7 @@ graph TD
 ---
 
 ### 4.3 Authoritative Mutation Engine (`crates/op-grpc-bridge`)
-* **Architecture**: Central coordinator for all state changes. Appends linear `StateChange` records to `EventChain`, mirrors events to durable `StreamingBlockchain` (`/var/lib/opdbus/blockchain`), and broadcasts to subscribers.
+* **Architecture**: Central coordinator for all state changes. Appends linear `StateChange` records to `EventChain`, mirrors events to durable `StreamingSnowball` (`/var/lib/opdbus/snowball`), and broadcasts to subscribers.
 * **Zen Review Findings**:
   - 🟠 **Major (Projection Drift on Filesystem Error)**: Errors in `write_projection` must trigger alarms to avoid in-memory vs on-disk divergence.
   - 🟠 **Major (Actor Resolution Security)**: Sled actor fallback uses validated `read_sled()` with strict 152-byte bounds.

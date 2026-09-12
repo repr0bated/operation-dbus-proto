@@ -8,7 +8,7 @@ description = "DBus introspection capabilities for op-dbus-v2"
 
 [dependencies]
 op-core = { workspace = true }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 tokio = { workspace = true }
 serde = { workspace = true }
 simd-json = { workspace = true }

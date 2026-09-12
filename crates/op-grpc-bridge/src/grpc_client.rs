@@ -95,6 +95,7 @@ impl GrpcClientPool {
     ///   1. `OP_DBUS_GRPC_CA_FILE` — PEM file to pin (what op-web's run script
     ///      exports; may point at the leaf cert itself since it is its own CA).
     ///   2. Native system roots (`with_native_roots`).
+    ///
     /// `OP_DBUS_GRPC_TLS_DOMAIN` overrides the SNI/verification name when the
     /// dial address is an IP or differs from the certificate SAN.
     fn configure_endpoint(

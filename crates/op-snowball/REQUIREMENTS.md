@@ -39,10 +39,10 @@ the direct event data. That fallback must not be used to replace an authoritativ
 
 ## R3 — Identity separation
 
-OIB1/OIA1 identity envelopes, WireGuard keys, principal IDs, session genesis, and
+SID1/OIA1 identity envelopes, WireGuard keys, principal IDs, session genesis, and
 capability grants are owned by the identity and authorization pipelines. They do not
 derive from `PluginFootprint`, and no footprint/hash value may authorize a request.
-The OIB1 integrity trailer is only an envelope byte-integrity check and is not a
+The SID1 integrity trailer is only an envelope byte-integrity check and is not a
 Snowball chain term.
 
 ## R4 — Vectorization

@@ -1,0 +1,310 @@
+{
+  "$defs": {
+    "ApprovalGroupConfig": {
+      "description": "A named approver group (`[sop.approval.groups.<name>]`).",
+      "properties": {
+        "members": {
+          "default": [],
+          "description": "Identity labels that belong to this group.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ApprovalMode": {
+      "description": "WHO may clear a SOP approval gate. Layered with execution_mode / priority /\nrequires_confirmation (all of which still apply). Closed set => serde enum.",
+      "oneOf": [
+        {
+          "const": "both",
+          "description": "Agent `sop_approve` OR an out-of-band principal both clear. Backward-compat default.",
+          "type": "string"
+        },
+        {
+          "const": "out_of_band_required",
+          "description": "Only out-of-band principals (CLI / WS / HTTP / timeout) clear; `sop_approve`\nbecomes a no-op. Lets an operator require a separate approver without bricking runs.",
+          "type": "string"
+        },
+        {
+          "const": "agent_tool",
+          "description": "Only the agent tool clears; out-of-band surfaces are read-only pending lists. Niche.",
+          "type": "string"
+        }
+      ]
+    },
+    "ApprovalPolicyConfig": {
+      "description": "A named approval policy (`[sop.approval.policies.<name>]`) the broker enforces.",
+      "properties": {
+        "escalation_route": {
+          "default": null,
+          "description": "Route to escalate to on timeout (the distinct \"second route\"). `None`/empty\nre-surfaces to the same route (today's `Escalate` behavior). When configured,\nthe route must use the `channel:recipient` format.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quorum": {
+          "default": 0,
+          "description": "Distinct approvers required before the gate clears. `0`/`1` both mean a\nsingle approval; `>= 2` requires a quorum of distinct approver identities.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_route": {
+          "default": null,
+          "description": "Channel to deliver the INITIAL approval request to when a run parks at a\ngate this policy governs, formatted `channel:recipient` (e.g.\n`discord.ops:123456789012345678`). The `channel` names a configured channel\n(the `<channel>.<alias>` / bare-`<channel>` key from the channel map); the\n`recipient` is that channel's addressee (a Discord channel id, a chat id,\netc.). Delivery is best-effort - the gate is the source of truth and a\ndelivery failure never blocks or clears it; approvals still come back\nthrough the normal HTTP/WS/tool surfaces. `None`/empty = no out-of-band\nrequest notice (today's behavior: only the originating surface is notified).\nThis is a DISTINCT lifecycle event from `escalation_route`: the request goes\nout when the run parks; the escalation goes out only if it later times out.\nWhen configured, the route must use the `channel:recipient` format.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required_group": {
+          "default": null,
+          "description": "Group whose members may satisfy this policy's gate. `None`/empty = any\nprincipal permitted by `approval_mode` (back-compat, no membership gate).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ApprovalTimeoutAction": {
+      "description": "What happens to a SOP approval gate when it times out. Default is fail-closed:\nthe gate never self-approves. Closed set => serde enum.",
+      "oneOf": [
+        {
+          "const": "escalate",
+          "description": "Re-surface to the out-of-band approver and keep waiting; never self-approve.\nDefault, fail-closed.",
+          "type": "string"
+        },
+        {
+          "const": "cancel",
+          "description": "Terminate the run (fail-safe cancel). Strict mode.",
+          "type": "string"
+        },
+        {
+          "const": "auto_approve",
+          "description": "LEGACY: auto-approve on timeout. The ONLY path to the old fail-open behavior;\nopt-in only.",
+          "type": "string"
+        }
+      ]
+    },
+    "SopApprovalConfig": {
+      "description": "`[sop.approval]` - approval broker policy config. A permanent identity source\nfor channel-provided approvers (not a stopgap): the approval broker consumes it\nfor group-membership and quorum checks. Empty = no broker policy applies.",
+      "properties": {
+        "groups": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ApprovalGroupConfig"
+          },
+          "description": "Named approver groups: `group name -> members`. A member is matched against\nthe transport-derived (channel-authenticated) `ApprovalPrincipal` identity.\nA member may be source-qualified (`<source>:<identity>`, e.g. `http:ZeroClawOperator`,\n`ws:<subject>`, `agent:<alias>`) to grant rights on one transport only, or a\nbare identity (`alice`) to grant from any non-channel source. Channel members\nmust include the channel namespace (`channel:<channel-key>:<sender>`) so sender\nids from different channel aliases cannot collide. A future auth system adds a\nsecond resolver alongside this one; it does not replace channel identities.",
+          "type": "object"
+        },
+        "policies": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ApprovalPolicyConfig"
+          },
+          "description": "Named approval policies a SOP step may reference by name.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "SopConfig": {
+      "description": "Standard Operating Procedures engine configuration (`[sop]`).\n\nThe `default_execution_mode` field uses the `SopExecutionMode` type from\n`sop::types` (re-exported via `sop::SopExecutionMode`). To avoid circular\nmodule references, config stores it using the same enum definition.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/SopApprovalConfig",
+          "default": {},
+          "description": "Approval broker policy config (`[sop.approval]`): named approver groups and\nper-name approval policies (required group + quorum + escalation route) the\napproval broker consumes for group-membership and quorum checks. Members are\nchannel-provided identities (a gateway user, a forge login), so this is a\npermanent identity source, not a stopgap; a future auth system adds another\nresolver alongside it rather than replacing it. An empty block means no broker\npolicy applies (`approval_mode` alone governs a gate, unchanged behavior)."
+        },
+        "approval_mode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "default": "both",
+          "description": "WHO may clear a SOP approval gate. Layered with execution_mode / priority /\nrequires_confirmation (those still apply). Default `both` keeps today's\nbehavior (the agent tool OR an out-of-band principal can clear a gate)."
+        },
+        "approval_timeout_action": {
+          "$ref": "#/$defs/ApprovalTimeoutAction",
+          "default": "escalate",
+          "description": "What happens to a SOP gate that times out (after `approval_timeout_secs`).\nDefault `escalate` is fail-closed: re-surface to the out-of-band approver and\nkeep waiting, never self-approve. (The SOP-gate analog of the channel\napproval-routing fail-closed default; reconcile with that model if both land.)"
+        },
+        "approval_timeout_secs": {
+          "default": 300,
+          "description": "Approval timeout in seconds. When a run waits for approval longer than\nthis, the configured `approval_timeout_action` is applied (default\n`escalate`: re-surface the gate to the out-of-band approver and never\nself-approve). Set to 0 to disable the timeout sweep.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "default_execution_mode": {
+          "default": "supervised",
+          "description": "Default execution mode for SOPs that omit `execution_mode`.\nValues: `auto`, `supervised` (default), `step_by_step`,\n`priority_based`, `deterministic`.",
+          "type": "string"
+        },
+        "maintenance_interval_secs": {
+          "default": 60,
+          "description": "How often (seconds) the daemon runs the SOP maintenance tick: fire\nfail-closed approval timeouts (per `approval_timeout_secs` /\n`approval_timeout_action`), reap expired concurrency-claim leases, and\nprune terminal runs past `max_finished_runs`. Default `60`; set to `0` to\ndisable the tick entirely. The tick itself self-approves nothing - timeout\nhandling is governed by `approval_timeout_action` (default `escalate`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_concurrent_total": {
+          "default": 4,
+          "description": "Maximum total concurrent SOP runs across all SOPs.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_finished_runs": {
+          "default": 100,
+          "description": "Maximum number of finished runs kept in memory for status queries.\nOldest runs are evicted when over capacity. 0 = unlimited.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_step_retries": {
+          "default": 2,
+          "description": "Maximum retries allowed by a step failure policy.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_step_visits": {
+          "default": 256,
+          "description": "Maximum times a routed SOP run can visit one step.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "persist_runs": {
+          "default": true,
+          "description": "Persist run state durably across restarts. Default `true`: `build_sop_engine`\nselects the configured backend (`sqlite`) and in-flight runs - including runs\nparked at a HITL approval - survive a restart. This is the durable substrate\nthe HITL admission model relies on so a pending approval is not lost when the\ndaemon restarts. Set to `false` to opt back into ephemeral in-memory state.",
+          "type": "boolean"
+        },
+        "procedural_memory_enabled": {
+          "default": false,
+          "description": "Enable SOP procedural-memory proposal tooling. Default false keeps\nself-modifying SOP write-back opt-in while the SOP subsystem is\nExperimental.",
+          "type": "boolean"
+        },
+        "run_state_dir": {
+          "default": null,
+          "description": "Directory for the durable run store (created mode-0700). When omitted,\n`<data_dir>/sop`. Never OS-temp.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_store_backend": {
+          "$ref": "#/$defs/SopRunStoreBackend",
+          "default": "sqlite",
+          "description": "Durable run-state backend when `persist_runs` is true: `sqlite` (default,\ndurable) or `memory` (explicitly non-durable, for tests/degraded)."
+        },
+        "sops_dir": {
+          "default": null,
+          "description": "Directory containing SOP definitions (subdirs with SOP.toml + SOP.md).\nOptional override. When omitted, the runtime and CLI both resolve the\ndefault `<workspace>/sops`; SOPs load from there whenever it exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step_mandatory_tools": {
+          "default": [
+            "sop_advance",
+            "sop_approve",
+            "sop_status"
+          ],
+          "description": "Tool names that remain available while step scope is enforced.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "step_schema_enforce": {
+          "default": true,
+          "description": "Enforce per-step input/output schemas when a step declares them.",
+          "type": "boolean"
+        },
+        "step_scope_enforce": {
+          "default": false,
+          "description": "Enforce per-step tool scope. Default false keeps `tools:` advisory.",
+          "type": "boolean"
+        },
+        "untrusted_frame_warning": {
+          "default": true,
+          "description": "Include the explanatory warning text inside untrusted-content frames.\nBoundary framing itself is always on once wired.",
+          "type": "boolean"
+        },
+        "untrusted_guard_sensitivity": {
+          "default": 0.7,
+          "description": "Prompt-guard and outbound-redaction sensitivity for untrusted SOP content.",
+          "format": "double",
+          "type": "number"
+        },
+        "untrusted_input_guard": {
+          "default": "warn",
+          "description": "Prompt-guard action for untrusted SOP trigger input: warn, block, or sanitize.",
+          "type": "string"
+        },
+        "untrusted_outbound_redact": {
+          "default": true,
+          "description": "Redact outbound SOP content before persistence/audit consumers write it.\nIntended to converge with the shared B/F redaction switch once those consumers land.",
+          "type": "boolean"
+        },
+        "untrusted_payload_max_bytes": {
+          "default": 8192,
+          "description": "Maximum bytes accepted from untrusted SOP trigger payload/topic content\nbefore char-boundary truncation. 0 disables the cap.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SopRunStoreBackend": {
+      "description": "Durable SOP run-state backend selector. A closed, compile-time-known set, so it\nis a serde enum rather than free text (mirrors `SandboxBackend` /\n`ObservabilityBackend` in this file); unknown values are rejected at parse time.",
+      "oneOf": [
+        {
+          "const": "sqlite",
+          "description": "Durable WAL-mode SQLite store (default).",
+          "type": "string"
+        },
+        {
+          "const": "memory",
+          "description": "Ephemeral in-memory store: explicitly non-durable, for tests / degraded boot.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/SopConfig",
+  "default": {
+    "approval": {},
+    "approval_mode": "both",
+    "approval_timeout_action": "escalate",
+    "approval_timeout_secs": 300,
+    "default_execution_mode": "supervised",
+    "maintenance_interval_secs": 60,
+    "max_concurrent_total": 4,
+    "max_finished_runs": 100,
+    "max_step_retries": 2,
+    "max_step_visits": 256,
+    "persist_runs": true,
+    "procedural_memory_enabled": false,
+    "run_state_dir": null,
+    "run_store_backend": "sqlite",
+    "sops_dir": null,
+    "step_mandatory_tools": [
+      "sop_advance",
+      "sop_approve",
+      "sop_status"
+    ],
+    "step_schema_enforce": true,
+    "step_scope_enforce": false,
+    "untrusted_frame_warning": true,
+    "untrusted_guard_sensitivity": 0.7,
+    "untrusted_input_guard": "warn",
+    "untrusted_outbound_redact": true,
+    "untrusted_payload_max_bytes": 8192
+  },
+  "description": "Standard Operating Procedures engine configuration (`[sop]`)."
+}

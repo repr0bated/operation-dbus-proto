@@ -81,7 +81,7 @@ Sessions transition through these states:
 
 1. **Limit cryptographic exposure** — Even if PSK is compromised, damage window is bounded by rotation interval
 2. **Detect stale peers** — Failed rotation indicates peer is offline or misconfigured
-3. **Audit trail** — Each rotation creates immutable blockchain record of key lifecycle events
+3. **Audit trail** — Each rotation creates immutable snowball record of key lifecycle events
 4. **Comply with zero-trust principles** — Continuous re-authentication prevents "set and forget" configurations
 
 ### Rotation Triggers

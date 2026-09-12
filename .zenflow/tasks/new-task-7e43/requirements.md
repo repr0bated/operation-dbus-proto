@@ -26,7 +26,7 @@ The current codebase has several core crates that lack detailed, manually-curate
 - **`op-core`**: Common types, errors, security models, and utilities.
 - **Root `op-*` components**: `op-api`, `op-worker`, `op-cli`, `op-storage`, `op-parser`.
 - **`op-execution-tracker`**: Lightweight execution monitoring and telemetry.
-- **`op-plugins`**: Modular plugin system, domain-specific logic, and blockchain footprints.
+- **`op-plugins`**: Modular plugin system, domain-specific logic, and snowball footprints.
 - **`op-identity`**: Service and user identity management, tokens, and cryptographic keys.
 
 ### Excluded Components

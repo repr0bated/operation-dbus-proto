@@ -144,7 +144,7 @@ The content is organized as follows:
                     seo_meta_optimizer.rs
                   specialty/
                     arm_cortex_expert.rs
-                    blockchain_developer.rs
+                    snowball_developer.rs
                     error_detective.rs
                     hybrid_cloud_architect.rs
                     legacy_modernizer.rs
@@ -9329,23 +9329,23 @@ impl AgentTrait for ARMCortexExpertAgent {
 }
 </file>
 
-<file path="/home/jeremy/git/operation-dbus-proto/crates/op-agents/src/agents/specialty/blockchain_developer.rs">
-//! Blockchain Developer Agent
+<file path="/home/jeremy/git/operation-dbus-proto/crates/op-agents/src/agents/specialty/snowball_developer.rs">
+//! Snowball Developer Agent
 
 use crate::agents::base::{AgentTask, AgentTrait, TaskResult};
 use crate::security::SecurityProfile;
 use async_trait::async_trait;
 use simd_json::json;
 
-pub struct BlockchainDeveloperAgent {
+pub struct SnowballDeveloperAgent {
     agent_id: String,
     profile: SecurityProfile,
 }
 
-impl BlockchainDeveloperAgent {
+impl SnowballDeveloperAgent {
     pub fn new(agent_id: String) -> Self {
         Self {
-            profile: SecurityProfile::content_generation("blockchain-developer"),
+            profile: SecurityProfile::content_generation("snowball-developer"),
             agent_id,
         }
     }
@@ -9379,15 +9379,15 @@ impl BlockchainDeveloperAgent {
 }
 
 #[async_trait]
-impl AgentTrait for BlockchainDeveloperAgent {
+impl AgentTrait for SnowballDeveloperAgent {
     fn agent_type(&self) -> &str {
-        "blockchain-developer"
+        "snowball-developer"
     }
     fn name(&self) -> &str {
-        "Blockchain Developer"
+        "Snowball Developer"
     }
     fn description(&self) -> &str {
-        "Develop smart contracts and blockchain applications."
+        "Develop smart contracts and snowball applications."
     }
     fn operations(&self) -> Vec<String> {
         vec![
@@ -9401,11 +9401,11 @@ impl AgentTrait for BlockchainDeveloperAgent {
         &self.profile
     }
     fn get_status(&self) -> String {
-        format!("Blockchain Developer agent {} is running", self.agent_id)
+        format!("Snowball Developer agent {} is running", self.agent_id)
     }
 
     async fn execute(&self, task: AgentTask) -> Result<TaskResult, String> {
-        if task.task_type != "blockchain-developer" {
+        if task.task_type != "snowball-developer" {
             return Err(format!("Invalid task type: {}", task.task_type));
         }
         match self.analyze(task.args.as_deref()) {
@@ -9681,7 +9681,7 @@ impl AgentTrait for LegacyModernizerAgent {
 //! Niche and specialized domain agents
 
 mod arm_cortex_expert;
-mod blockchain_developer;
+mod snowball_developer;
 mod error_detective;
 mod hybrid_cloud_architect;
 mod legacy_modernizer;
@@ -9691,7 +9691,7 @@ mod ui_ux_designer;
 mod unity_developer;
 
 pub use arm_cortex_expert::ARMCortexExpertAgent;
-pub use blockchain_developer::BlockchainDeveloperAgent;
+pub use snowball_developer::SnowballDeveloperAgent;
 pub use error_detective::ErrorDetectiveAgent;
 pub use hybrid_cloud_architect::HybridCloudArchitectAgent;
 pub use legacy_modernizer::LegacyModernizerAgent;
@@ -10655,7 +10655,7 @@ macro_rules! impl_agent_common {
 //! - security: Security-focused coding agents
 //! - business: Business and operations agents
 //! - seo: SEO and content marketing agents
-//! - specialty: Niche domain agents (blockchain, gaming, finance, etc.)
+//! - specialty: Niche domain agents (snowball, gaming, finance, etc.)
 
 pub mod aiml;
 pub mod analysis;
@@ -11020,7 +11020,7 @@ use op_agents::agents::{
         SEOMetaOptimizerAgent, SearchSpecialistAgent,
     },
     specialty::{
-        ARMCortexExpertAgent, BlockchainDeveloperAgent, ErrorDetectiveAgent,
+        ARMCortexExpertAgent, SnowballDeveloperAgent, ErrorDetectiveAgent,
         HybridCloudArchitectAgent, LegacyModernizerAgent, ObservabilityEngineerAgent,
         QuantAnalystAgent, UIUXDesignerAgent, UnityDeveloperAgent,
     },
@@ -11110,7 +11110,7 @@ fn build_agent(agent_type: &str, agent_id: String) -> Option<Box<dyn AgentTrait>
         "seo-meta-optimizer" => Some(Box::new(SEOMetaOptimizerAgent::new(agent_id))),
         // Specialty agents
         "arm-cortex-expert" => Some(Box::new(ARMCortexExpertAgent::new(agent_id))),
-        "blockchain-developer" => Some(Box::new(BlockchainDeveloperAgent::new(agent_id))),
+        "snowball-developer" => Some(Box::new(SnowballDeveloperAgent::new(agent_id))),
         "error-detective" => Some(Box::new(ErrorDetectiveAgent::new(agent_id))),
         "hybrid-cloud-architect" => Some(Box::new(HybridCloudArchitectAgent::new(agent_id))),
         "legacy-modernizer" => Some(Box::new(LegacyModernizerAgent::new(agent_id))),
@@ -16083,7 +16083,7 @@ use crate::agents::{
         SEOMetaOptimizerAgent, SearchSpecialistAgent,
     },
     specialty::{
-        ARMCortexExpertAgent, BlockchainDeveloperAgent, ErrorDetectiveAgent,
+        ARMCortexExpertAgent, SnowballDeveloperAgent, ErrorDetectiveAgent,
         HybridCloudArchitectAgent, LegacyModernizerAgent, ObservabilityEngineerAgent,
         QuantAnalystAgent, UIUXDesignerAgent, UnityDeveloperAgent,
     },
@@ -16181,7 +16181,7 @@ pub fn builtin_agent_descriptors() -> Vec<AgentDescriptor> {
         Box::new(SEOMetaOptimizerAgent::new(agent_id.clone())),
         // Specialty agents
         Box::new(ARMCortexExpertAgent::new(agent_id.clone())),
-        Box::new(BlockchainDeveloperAgent::new(agent_id.clone())),
+        Box::new(SnowballDeveloperAgent::new(agent_id.clone())),
         Box::new(ErrorDetectiveAgent::new(agent_id.clone())),
         Box::new(HybridCloudArchitectAgent::new(agent_id.clone())),
         Box::new(LegacyModernizerAgent::new(agent_id.clone())),
@@ -17512,7 +17512,7 @@ pub fn create_agent(
             SEOMetaOptimizerAgent, SearchSpecialistAgent,
         },
         specialty::{
-            ARMCortexExpertAgent, BlockchainDeveloperAgent, ErrorDetectiveAgent,
+            ARMCortexExpertAgent, SnowballDeveloperAgent, ErrorDetectiveAgent,
             HybridCloudArchitectAgent, LegacyModernizerAgent, ObservabilityEngineerAgent,
             QuantAnalystAgent, UIUXDesignerAgent, UnityDeveloperAgent,
         },
@@ -17641,8 +17641,8 @@ pub fn create_agent(
 
         // Specialty agents
         "arm-cortex-expert" | "arm_cortex_expert" => Box::new(ARMCortexExpertAgent::new(agent_id)),
-        "blockchain-developer" | "blockchain_developer" => {
-            Box::new(BlockchainDeveloperAgent::new(agent_id))
+        "snowball-developer" | "snowball_developer" => {
+            Box::new(SnowballDeveloperAgent::new(agent_id))
         }
         "error-detective" | "error_detective" => Box::new(ErrorDetectiveAgent::new(agent_id)),
         "hybrid-cloud-architect" | "hybrid_cloud_architect" => {
@@ -17752,7 +17752,7 @@ pub fn list_agent_types() -> Vec<&'static str> {
         "mobile-developer",
         // Specialty
         "arm-cortex-expert",
-        "blockchain-developer",
+        "snowball-developer",
         "error-detective",
         "hybrid-cloud-architect",
         "legacy-modernizer",

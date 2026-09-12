@@ -4,9 +4,11 @@ use super::super::agent_trait::AgentCapability;
 use super::super::prompts::architecture::{BACKEND_ARCHITECT, CODE_REVIEWER, SECURITY_AUDITOR};
 use super::base::PersonaAgent;
 
+#[allow(dead_code)]
 pub struct BackendArchitect(PersonaAgent);
 
 impl BackendArchitect {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "backend-architect",
@@ -27,9 +29,11 @@ impl Default for BackendArchitect {
     }
 }
 
+#[allow(dead_code)]
 pub struct SecurityAuditor(PersonaAgent);
 
 impl SecurityAuditor {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "security-auditor",
@@ -50,9 +54,11 @@ impl Default for SecurityAuditor {
     }
 }
 
+#[allow(dead_code)]
 pub struct CodeReviewer(PersonaAgent);
 
 impl CodeReviewer {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "code-reviewer",

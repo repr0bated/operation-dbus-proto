@@ -72,7 +72,7 @@ This specification establishes the mandatory architectural invariants, implement
 
 ### 3.3 Authoritative Mutation Engine (`op-grpc-bridge`)
 - **Mutation Authority**: All state mutations from gRPC or D-Bus MUST flow through `MutationEngine`.
-- **Audit Persistence**: Every mutation MUST append to the `EventChain` and attempt replication to `StreamingBlockchain` (`/var/lib/opdbus/blockchain`).
+- **Audit Persistence**: Every mutation MUST append to the `EventChain` and attempt replication to `StreamingSnowball` (`/var/lib/opdbus/snowball`).
 - **EMQX Audit Tap**: The EMQX exhook provider MUST return `ResponsedType::Ignore` on all hook events to preserve native broker ACLs.
 
 ### 3.4 Ingress Security & Identity Sleds (`op-identity`)

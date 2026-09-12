@@ -32,7 +32,7 @@ The codebase does not utilize any macros from the modern `tracing` crate. Instea
   * Line 34: `log::info!("Network authority enforced - plugin system is sole controller");`
 * **`crates/op-state/src/dbus_plugin_base.rs`**
   * Line 193: `log::debug!("Recorded footprint for {} action: {}", self.name(), action);`
-  * Line 196: `log::trace!("No blockchain sender configured, skipping footprint");`
+  * Line 196: `log::trace!("No snowball sender configured, skipping footprint");`
   * Line 247: `log::debug!("Introspection XML for {}: {}", base_path, xml);`
 * **`crates/op-state/src/plugin_workflow.rs`**
   * Line 121: `log::info!("🔧 Preparing plugin '{}' for workflow execution", ...)`

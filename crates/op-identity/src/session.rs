@@ -3,9 +3,7 @@
 //! Sessions are created when a WireGuard peer connects and
 //! destroyed on disconnect or timeout.
 
-use anyhow::{Context, Result};
-use argon2::Argon2;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -24,27 +22,6 @@ const SESSION_TIMEOUT_SECS: i64 = 3600; // 1 hour
 /// re-authentication after a timeout resumes the same logical session without
 /// server-side custody of the private key.
 const SESSION_ID_KDF_CONTEXT: &str = "op-identity session-id v1";
-
-/// Canonical registration identity: Argon2(secret = PSK, salt = WireGuard pubkey).
-pub fn derive_session_id_from_psk(wg_pubkey_b64: &str, psk: &[u8]) -> Result<String> {
-    let pubkey_bytes = BASE64
-        .decode(wg_pubkey_b64.trim())
-        .context("decode wireguard public key")?;
-    if pubkey_bytes.len() != 32 {
-        anyhow::bail!(
-            "invalid wireguard public key length: expected 32, got {}",
-            pubkey_bytes.len()
-        );
-    }
-    let mut session_key = [0u8; 32];
-    Argon2::default()
-        .hash_password_into(psk, &pubkey_bytes, &mut session_key)
-        .map_err(|e| anyhow::anyhow!("argon2 session derivation failed: {e}"))?;
-    let bytes: [u8; 16] = session_key[..16]
-        .try_into()
-        .expect("16 bytes from 32-byte Argon2 output");
-    Ok(Uuid::from_bytes(bytes).to_string())
-}
 
 /// Server-side proof stored in Cozo; the raw PSK is never persisted.
 pub fn session_proof(session_id: &str) -> String {
@@ -417,11 +394,10 @@ mod tests {
     }
 
     #[test]
-    fn psk_session_id_is_deterministic_and_psk_bound() {
-        let pubkey = BASE64.encode([7u8; 32]);
-        let first = derive_session_id_from_psk(&pubkey, b"registration-secret").unwrap();
-        let again = derive_session_id_from_psk(&pubkey, b"registration-secret").unwrap();
-        let other = derive_session_id_from_psk(&pubkey, b"different-secret").unwrap();
+    fn session_proof_is_bound_to_the_canonical_session_id() {
+        let first = derive_session_id("public-key-a");
+        let again = derive_session_id("public-key-a");
+        let other = derive_session_id("public-key-b");
         assert_eq!(first, again);
         assert_ne!(first, other);
         assert!(Uuid::parse_str(&first).is_ok());

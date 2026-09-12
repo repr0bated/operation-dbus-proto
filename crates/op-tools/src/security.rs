@@ -516,6 +516,17 @@ pub fn init_security_validator() {
 }
 
 /// Get the global security validator
+#[cfg(test)]
+pub fn get_security_validator() -> Arc<SecurityValidator> {
+    // Unit tests exercise tools directly without running the application
+    // bootstrap that initializes the process-global validator.
+    SECURITY_VALIDATOR
+        .get_or_init(|| Arc::new(SecurityValidator::with_admin_profile()))
+        .clone()
+}
+
+/// Get the global security validator
+#[cfg(not(test))]
 pub fn get_security_validator() -> Arc<SecurityValidator> {
     SECURITY_VALIDATOR
         .get()

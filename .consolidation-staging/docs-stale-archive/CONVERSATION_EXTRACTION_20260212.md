@@ -10,7 +10,7 @@ The update trigger follows a strict, auditable path:
 - **Ingress**: Mutations arrive via gRPC, JSON-RPC, or Internal calls.
 - **Enforcement**: The `SyncEngine` (`op-grpc-bridge`) validates the contract and pushes it to the canonical D-Bus ingress: `org.opdbus.StateManager.ApplyContractMutation`.
 - **Materialization**: The `StateManager` merges the mutation with schema defaults from the `SchemaRegistry`, ensuring the resulting state is always "complete" according to the plugin contract.
-- **Footprinting**: Every change is hashed and appended to the immutable `EventChain`, providing a blockchain-ready audit trail.
+- **Footprinting**: Every change is hashed and appended to the immutable `EventChain`, providing a snowball-ready audit trail.
 - **Reactive Update**: A `StateChange` event is broadcasted immediately, allowing the Hub (Chatbot/MCP) to react without polling.
 
 #### 2. D-Bus Surface Optimization

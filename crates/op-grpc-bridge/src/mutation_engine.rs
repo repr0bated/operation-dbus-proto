@@ -26,16 +26,15 @@ use op_network::rovs_proxy::OvsdbDbusClient;
 use op_plugins::state_plugins::snowball_plugin::{
     AuditEventRecord, QueryEventsInput, QueryEventsOutput, VerifyChainInput, VerifyChainOutput,
 };
-use op_snowball::{PluginFootprint, StreamingSnowball};
+use op_snowball::{OptimizedSnowball, PluginFootprint, StreamingSnowball};
 use op_state_store::{ChainEvent, Decision, EventChain, MemoryStore, OperationType, StateStore};
 
 /// Default on-disk location of the streaming snowball that backs the durable
 /// audit trail, when `$OPDBUS_SNOWBALL_PATH` is unset. Matches
 /// `snowball_plugin::DEFAULT_BASE_PATH` so both read the same chain.
 const DEFAULT_SNOWBALL_PATH: &str = "/var/lib/opdbus/snowball";
-const DEFAULT_NOTEBOOKLM_MCP_URL: &str = "http://127.0.0.1:3101/mcp";
+const DEFAULT_CACHE_PATH: &str = "/var/lib/opdbus/cache";
 const DEFAULT_MONGODB_MCP_URL: &str = "http://127.0.0.1:3102/mcp";
-const NOTEBOOKLM_AUTH_READY: &str = "/run/opdbus/runit-ready/notebooklm-mcp-authenticated";
 const DEFAULT_MCP_PROVIDER_CALL_TIMEOUT_SECS: u64 = 30;
 
 /// Reconnecting client for a runit-supervised loopback MCP provider.
@@ -71,7 +70,7 @@ impl SupervisedMcpProvider {
         })
     }
 
-    fn call_timeout(&self) -> std::time::Duration {
+    fn call_timeout(&self, _upstream_name: &str) -> std::time::Duration {
         let seconds = std::env::var("OP_MCP_PROVIDER_CALL_TIMEOUT_SECS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -93,14 +92,6 @@ impl SupervisedMcpProvider {
                     provider = %self.name,
                     "timed out closing supervised MCP session"
                 ),
-            }
-        }
-        if self.name == "notebooklm" {
-            if let Err(error) = set_provider_ready_marker(NOTEBOOKLM_AUTH_READY, false) {
-                tracing::warn!(
-                    %error,
-                    "could not clear NotebookLM authentication readiness"
-                );
             }
         }
     }
@@ -149,7 +140,7 @@ impl SupervisedMcpProvider {
             .as_mut()
             .expect("provider client initialized")
             .call_tool(upstream_name, input);
-        let call_timeout = self.call_timeout();
+        let call_timeout = self.call_timeout(upstream_name);
         match tokio::time::timeout(call_timeout, call).await {
             Ok(Ok(value)) => serde_json::to_value(value).map_err(Into::into),
             Ok(Err(error)) => {
@@ -237,28 +228,44 @@ pub struct MutationEngine {
     dbus_call_limiter: Arc<Semaphore>,
 
     /// Durable audit sink: the streaming snowball's `timing_subvol` holds one
-    /// JSON record per event chain event, so the trail survives a restart.
+    /// JSON record per event chain event, so the trail survives a restart. The
+    /// optimized form also mirrors footprints into the NUMA-aware Btrfs cache;
+    /// cache initialization is best-effort and never gates the timing trail.
     /// Empty until [`MutationEngine::init_audit_durability`] runs; a missing
     /// sink degrades to RAM-only recording rather than failing dispatches.
-    audit_sink: Arc<OnceCell<Arc<StreamingSnowball>>>,
+    audit_sink: Arc<OnceCell<AuditSink>>,
 
     /// Authoritative RCP stores
     pub ovsdb: Arc<OvsdbDbusClient>,
     /// In-process plugin handles for MethodCall dispatch (e.g. createunixsocket).
     pub unix_socket: Arc<op_plugins::state_plugins::UnixSocketPlugin>,
     /// Provider runtime used only after ZeroClaw resolves a schema-declared route.
+    #[allow(dead_code)] // wired for chat dispatch; not yet called from dispatch loop
     chat_manager: Arc<ChatManager>,
     /// Lazily initialized cognitive runtime.  It is owned by the bridge and is
     /// reached only after a call has entered PluginService/MutationEngine; it
     /// never opens a second listener or becomes a parallel control plane.
     cognitive_mcp: Arc<OnceCell<Arc<CognitiveMcpServer>>>,
-    /// WARM provider clients. These connect only after an admitted typed call;
-    /// neither service participates in HOT discovery or execution.
-    notebooklm_mcp: Arc<SupervisedMcpProvider>,
+    /// WARM provider client. Connects only after an admitted typed call;
+    /// it does not participate in HOT discovery or execution.
     mongodb_mcp: Arc<SupervisedMcpProvider>,
     /// Verified session identities, keyed by session_id. Projection of the
     /// session records for the mutation path — not a second store.
     sessions: Arc<RwLock<HashMap<String, SessionContext>>>,
+}
+
+enum AuditSink {
+    Optimized(Arc<OptimizedSnowball>),
+    TimingOnly(Arc<StreamingSnowball>),
+}
+
+impl AuditSink {
+    async fn add_footprint(&self, footprint: PluginFootprint) -> anyhow::Result<String> {
+        match self {
+            Self::Optimized(sink) => sink.add_footprint(footprint).await,
+            Self::TimingOnly(sink) => sink.add_footprint(footprint).await,
+        }
+    }
 }
 
 impl std::fmt::Debug for MutationEngine {
@@ -418,16 +425,16 @@ fn write_identity_projection_at(
     json: &[u8],
     group_gid: nix::unistd::Gid,
 ) -> anyhow::Result<()> {
-    std::fs::create_dir_all(&state_dir)?;
+    std::fs::create_dir_all(state_dir)?;
     let credential_dir =
-        op_core::projection_shm::credential_projection_dir_for_state_dir(&state_dir);
+        op_core::projection_shm::credential_projection_dir_for_state_dir(state_dir);
     std::fs::create_dir_all(&credential_dir)?;
     std::fs::set_permissions(&credential_dir, std::fs::Permissions::from_mode(0o750))?;
     nix::unistd::chown(std::path::Path::new(&credential_dir), None, Some(group_gid))
         .map_err(|error| anyhow::anyhow!("set identity credential directory group: {error}"))?;
 
     let credential_path =
-        op_core::projection_shm::credential_projection_file_path_in(&state_dir, "identity_sled");
+        op_core::projection_shm::credential_projection_file_path_in(state_dir, "identity_sled");
     op_core::projection_shm::atomic_write_shm_with_permissions(
         &credential_path,
         json,
@@ -439,7 +446,7 @@ fn write_identity_projection_at(
     let mut public = simd_json::to_owned_value(&mut parsed)?;
     redact_identity_credentials(&mut public);
     let public_json = simd_json::to_vec(&public)?;
-    let public_path = op_core::projection_shm::projection_file_path_in(&state_dir, "identity_sled");
+    let public_path = op_core::projection_shm::projection_file_path_in(state_dir, "identity_sled");
     op_core::projection_shm::atomic_write_shm_with_permissions(
         &public_path,
         &public_json,
@@ -449,7 +456,7 @@ fn write_identity_projection_at(
 
     // The public manifest is only a generation counter and contains no sled
     // data. Bump it after both files are installed as the commit point.
-    op_core::projection_shm::bump_manifest_generation_in(&state_dir)?;
+    op_core::projection_shm::bump_manifest_generation_in(state_dir)?;
     Ok(())
 }
 
@@ -482,52 +489,53 @@ fn sealed_sealed_id(
 }
 
 impl MutationEngine {
-    /// Materialize the protected local MCP service identity at bridge startup.
+    /// Materialize the control-plane chatbot service identity at bridge startup.
     /// The public key is not a credential; it selects the already configured
     /// WireGuard account, while both derived IDs are checked against the
     /// release-owned expectations before the MutationEngine mints anything.
-    pub async fn bootstrap_configured_mcp_identity(
+    pub async fn bootstrap_control_plane_chatbot_identity(
         &self,
     ) -> anyhow::Result<Option<SessionContext>> {
-        let Ok(wireguard_pubkey) = std::env::var("OP_MCP_IDENTITY_WIREGUARD_PUBKEY") else {
+        let Ok(wireguard_pubkey) = std::env::var("OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY")
+        else {
             return Ok(None);
         };
         let wireguard_pubkey = wireguard_pubkey.trim();
         if wireguard_pubkey.is_empty() {
-            anyhow::bail!("OP_MCP_IDENTITY_WIREGUARD_PUBKEY is empty");
+            anyhow::bail!("OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY is empty");
         }
         let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
         let principal_id = op_identity::session::derive_principal_id(wireguard_pubkey);
-        if let Ok(expected) = std::env::var("OP_MCP_IDENTITY_SESSION_ID") {
+        if let Ok(expected) = std::env::var("OP_CONTROL_PLANE_CHATBOT_SESSION_ID") {
             if expected.trim() != session_id {
                 anyhow::bail!(
-                    "configured MCP identity session_id does not match its WireGuard key"
+                    "configured control-plane chatbot session_id does not match its WireGuard key"
                 );
             }
         }
-        if let Ok(expected) = std::env::var("OP_MCP_IDENTITY_PRINCIPAL_ID") {
+        if let Ok(expected) = std::env::var("OP_CONTROL_PLANE_CHATBOT_PRINCIPAL_ID") {
             if expected.trim() != principal_id {
                 anyhow::bail!(
-                    "configured MCP identity principal_id does not match its WireGuard key"
+                    "configured control-plane chatbot principal_id does not match its WireGuard key"
                 );
             }
         }
         match crate::human_principal_dispatch::resolve_key_for_assertion(wireguard_pubkey).await {
             Ok(Some(record)) if record.revoked_at != 0 => {
-                anyhow::bail!("configured MCP identity is revoked")
+                anyhow::bail!("configured control-plane chatbot identity is revoked")
             }
             Ok(Some(record))
                 if record.principal_id != principal_id
                     || record.human_pubkey != wireguard_pubkey =>
             {
-                anyhow::bail!("configured MCP identity registry binding changed")
+                anyhow::bail!("configured control-plane chatbot registry binding changed")
             }
             Ok(Some(_)) => {}
             Ok(None) => {
                 // This is a release-owned singleton identity, so its first
                 // registration is itself a MutationEngine event. No direct
                 // Cozo bootstrap or unaudited startup write is permitted.
-                let args = simd_json::serde::to_owned_value(&serde_json::json!({
+                let args = simd_json::serde::to_owned_value(serde_json::json!({
                     "human_pubkey": wireguard_pubkey,
                     "display_alias": "control-plane-chatbot"
                 }))?;
@@ -542,18 +550,95 @@ impl MutationEngine {
                 )
                 .await?;
             }
-            Err(error) => anyhow::bail!("configured MCP principal registry unavailable: {error:?}"),
+            Err(error) => {
+                anyhow::bail!("configured control-plane chatbot registry unavailable: {error:?}")
+            }
         }
         self.mint_and_store_genesis(&session_id, wireguard_pubkey)
             .await?;
-        let context = self
-            .session_context(&session_id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("configured MCP identity was not cached after mint"))?;
+        let context = self.session_context(&session_id).await.ok_or_else(|| {
+            anyhow::anyhow!("configured control-plane chatbot identity was not cached after mint")
+        })?;
         tracing::info!(
             %principal_id,
             %session_id,
-            "configured MCP identity sealed into its sled"
+            "control-plane chatbot identity sealed into its sled"
+        );
+        Ok(Some(context))
+    }
+
+    /// Materialize the operator-configured local human identity at startup.
+    ///
+    /// This is the same WireGuard-derived principal used by the human's other
+    /// authenticated surfaces. It exists so local clients such as Codex can
+    /// forward the MutationEngine-authored SID1 from that human sled; it does
+    /// not create a Codex daemon or service principal.
+    pub async fn bootstrap_configured_local_human_identity(
+        &self,
+    ) -> anyhow::Result<Option<SessionContext>> {
+        let Ok(wireguard_pubkey) = std::env::var("OP_LOCAL_HUMAN_WIREGUARD_PUBKEY") else {
+            return Ok(None);
+        };
+        let wireguard_pubkey = wireguard_pubkey.trim();
+        if wireguard_pubkey.is_empty() {
+            anyhow::bail!("OP_LOCAL_HUMAN_WIREGUARD_PUBKEY is empty");
+        }
+        let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
+        let principal_id = op_identity::session::derive_principal_id(wireguard_pubkey);
+        if let Ok(expected) = std::env::var("OP_LOCAL_HUMAN_SESSION_ID") {
+            if expected.trim() != session_id {
+                anyhow::bail!("configured local human session_id does not match its WireGuard key");
+            }
+        }
+        if let Ok(expected) = std::env::var("OP_LOCAL_HUMAN_PRINCIPAL_ID") {
+            if expected.trim() != principal_id {
+                anyhow::bail!(
+                    "configured local human principal_id does not match its WireGuard key"
+                );
+            }
+        }
+        match crate::human_principal_dispatch::resolve_key_for_assertion(wireguard_pubkey).await {
+            Ok(Some(record)) if record.revoked_at != 0 => {
+                anyhow::bail!("configured local human identity is revoked")
+            }
+            Ok(Some(record))
+                if record.principal_id != principal_id
+                    || record.human_pubkey != wireguard_pubkey =>
+            {
+                anyhow::bail!("configured local human registry binding changed")
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let display_alias = std::env::var("OP_LOCAL_HUMAN_DISPLAY_ALIAS")
+                    .unwrap_or_else(|_| "local-human".to_string());
+                let args = simd_json::serde::to_owned_value(serde_json::json!({
+                    "human_pubkey": wireguard_pubkey,
+                    "display_alias": display_alias
+                }))?;
+                self.mutate(
+                    "human_principal".to_string(),
+                    "/org/opdbus/v1/plugins/human_principal".to_string(),
+                    ChangeType::MethodCall,
+                    Some("register_key".to_string()),
+                    args,
+                    "op-grpc-bridge.bootstrap-local-human".to_string(),
+                    Some("human_principal.write".to_string()),
+                )
+                .await?;
+            }
+            Err(error) => {
+                anyhow::bail!("configured local human registry unavailable: {error:?}")
+            }
+        }
+        self.mint_and_store_genesis(&session_id, wireguard_pubkey)
+            .await?;
+        let context = self.session_context(&session_id).await.ok_or_else(|| {
+            anyhow::anyhow!("configured local human identity was not cached after mint")
+        })?;
+        tracing::info!(
+            %principal_id,
+            %session_id,
+            "local human identity sealed into its sled"
         );
         Ok(Some(context))
     }
@@ -638,7 +723,6 @@ impl MutationEngine {
         {
             let now = chrono::Utc::now().timestamp();
             let current = record.is_anchored()
-                && record.active
                 && record.wireguard_pubkey == wireguard_pubkey
                 && record
                     .expires_at
@@ -646,7 +730,7 @@ impl MutationEngine {
             if !current {
                 tracing::warn!(
                     %session_id,
-                    "verified identity has an inactive, expired, or mismatched authoritative sled"
+                    "verified identity has an expired or mismatched authoritative sled"
                 );
                 return None;
             }
@@ -843,7 +927,7 @@ impl MutationEngine {
     pub fn new(event_chain: Arc<RwLock<EventChain>>, ovsdb: Arc<OvsdbDbusClient>) -> Self {
         let (change_tx, _) = broadcast::channel(1024);
         let (chain_tx, _) = broadcast::channel(1024);
-        Self {
+        let engine = Self {
             event_chain,
             change_tx,
             chain_tx,
@@ -857,18 +941,17 @@ impl MutationEngine {
             unix_socket: Arc::new(op_plugins::state_plugins::UnixSocketPlugin::new()),
             chat_manager: Arc::new(ChatManager::new()),
             cognitive_mcp: Arc::new(OnceCell::new()),
-            notebooklm_mcp: Arc::new(SupervisedMcpProvider::new(
-                "notebooklm",
-                std::env::var("OP_NOTEBOOKLM_MCP_URL")
-                    .unwrap_or_else(|_| DEFAULT_NOTEBOOKLM_MCP_URL.to_string()),
-            )),
             mongodb_mcp: Arc::new(SupervisedMcpProvider::new(
                 "mongodb",
                 std::env::var("OP_MONGODB_MCP_URL")
                     .unwrap_or_else(|_| DEFAULT_MONGODB_MCP_URL.to_string()),
             )),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+        };
+        if let Err(error) = crate::nlm_cli::touch_bin_ready_marker(&crate::nlm_cli::nlm_bin()) {
+            tracing::warn!(%error, "could not update NotebookLM binary readiness marker");
         }
+        engine
     }
 
     pub fn chain_tx(&self) -> &broadcast::Sender<ChainEvent> {
@@ -905,26 +988,71 @@ impl MutationEngine {
     pub async fn init_audit_durability(&self) -> usize {
         let base_path = std::env::var("OPDBUS_SNOWBALL_PATH")
             .unwrap_or_else(|_| DEFAULT_SNOWBALL_PATH.to_string());
-        self.init_audit_durability_at(&base_path).await
+        let cache_path =
+            std::env::var("OP_DBUS_CACHE_DIR").unwrap_or_else(|_| DEFAULT_CACHE_PATH.to_string());
+        self.init_audit_durability_with_cache_at(&base_path, &cache_path)
+            .await
     }
 
     /// [`init_audit_durability`](Self::init_audit_durability) against an explicit
     /// chain path, bypassing `$OPDBUS_SNOWBALL_PATH`.
     pub async fn init_audit_durability_at(&self, base_path: &str) -> usize {
+        let base = std::path::Path::new(base_path);
+        let cache_name = format!(
+            "{}-cache",
+            base.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("snowball")
+        );
+        let cache_path = base
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(cache_name);
+        self.init_audit_durability_with_cache_at(base_path, &cache_path.to_string_lossy())
+            .await
+    }
+
+    async fn init_audit_durability_with_cache_at(
+        &self,
+        base_path: &str,
+        cache_path: &str,
+    ) -> usize {
         if self.audit_sink.get().is_some() {
             return 0;
         }
 
-        let chain_store = match StreamingSnowball::new(base_path).await {
-            Ok(chain) => Arc::new(chain),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
+        let chain_store = match OptimizedSnowball::new(base_path, cache_path).await {
+            Ok(chain) => {
+                tracing::info!(
                     path = %base_path,
-                    "durable audit sink unavailable; event chain stays in memory only"
+                    cache_path = %cache_path,
+                    "durable audit timing, Btrfs cache, and NUMA topology initialized"
                 );
-                return 0;
+                AuditSink::Optimized(Arc::new(chain))
             }
+            Err(cache_error) => match StreamingSnowball::new(base_path).await {
+                Ok(chain) => {
+                    tracing::warn!(
+                        error = %cache_error,
+                        path = %base_path,
+                        cache_path = %cache_path,
+                        "NUMA-aware Btrfs cache unavailable; durable timing remains active"
+                    );
+                    AuditSink::TimingOnly(Arc::new(chain))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        path = %base_path,
+                        "durable audit sink unavailable; event chain stays in memory only"
+                    );
+                    // A previously persisted trail is still replayable even
+                    // when the current host cannot reopen its Btrfs sink.
+                    return self
+                        .rebuild_chain_from_disk(&std::path::Path::new(base_path).join("timing"))
+                        .await;
+                }
+            },
         };
 
         let timing_dir = std::path::Path::new(base_path).join("timing");
@@ -1016,21 +1144,27 @@ impl MutationEngine {
                     continue;
                 }
             };
-            // Only records carrying an embedded ChainEvent are replayable;
-            // other footprints in the timing directory are ignored.
+            // Audit footprints store the lossless ChainEvent in `data.payload`.
+            // Accept the older metadata envelope too, so trails written before
+            // the optimized sink remain restart-compatible.
             let Some(event) = value
                 .get("data")
                 .and_then(|d| d.get("metadata"))
                 .and_then(|m| m.get("audit_event"))
+                .or_else(|| value.get("data").and_then(|d| d.get("payload")))
             else {
                 continue;
             };
-            let Some(event_id) = event.get("event_id").and_then(|v| v.as_u64()) else {
-                tracing::warn!(path = %path.display(), "audit record has no event_id");
+            // Replay the validated event itself.  The state-store accepts a
+            // bare ChainEvent and this avoids coupling recovery to the outer
+            // Snowball envelope shape.
+            let event_value = event.clone();
+            let Ok(event_record) = serde_json::from_value::<ChainEvent>(event_value.clone()) else {
+                tracing::warn!(path = %path.display(), "audit record is not a complete ChainEvent");
                 skipped += 1;
                 continue;
             };
-            records.push((event_id, value));
+            records.push((event_record.event_id, event_value));
         }
 
         records.sort_by_key(|(event_id, _)| *event_id);
@@ -1542,7 +1676,9 @@ impl MutationEngine {
         // and op-web's state_tree read from. The `{"data","_introspection"}`
         // composite existed only for the deleted projection server's child-path
         // derivation; readers expect the raw state object.
-        if change_type != ChangeType::ObjectRemoved {
+        // A signal is an observation, not a replacement state document. In
+        // particular, broker callbacks must not overwrite the EMQX projection.
+        if !matches!(change_type, ChangeType::ObjectRemoved | ChangeType::Signal) {
             match simd_json::to_string(&new_value) {
                 Ok(json) => {
                     if let Err(e) = write_plugin_projection(&plugin_id, json.as_bytes()) {
@@ -1988,6 +2124,19 @@ impl MutationEngine {
             anyhow::bail!("sealed_id is MutationEngine-authored and cannot be supplied");
         }
 
+        // Tenant data must not leak through the global chain/change streams.
+        // Notarize a digest, while dispatch still receives the original input.
+        let audit_json = if plugin_id == "project" {
+            serde_json::json!({"arguments_redacted": true,
+                "request_hash": blake3::hash(json_args.as_bytes()).to_hex().to_string()})
+            .to_string()
+        } else {
+            json_args.to_string()
+        };
+        let audit_value = simd_json::serde::to_owned_value(serde_json::from_str::<
+            serde_json::Value,
+        >(&audit_json)?)?;
+
         // Record the immutable event with the full accountability surface.
         // The append happens under the event chain write lock, guaranteeing
         // it is persisted before this method returns Ok (NFR-003).
@@ -2000,7 +2149,7 @@ impl MutationEngine {
                 plugin_id.to_string(),
                 method.to_string(),
                 capability_id.map(|s| s.to_string()),
-                json_args,
+                &audit_json,
             );
             (
                 event.event_id,
@@ -2025,7 +2174,7 @@ impl MutationEngine {
             change_type: ChangeType::MethodCall,
             member_name: Some(method.to_string()),
             old_value: None,
-            new_value: parsed_value.clone(),
+            new_value: audit_value,
             tags_touched: vec![],
             event_hash: event_summary.1.clone(),
             timestamp: event_summary.2,
@@ -2066,6 +2215,17 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::human_principal_dispatch::dispatch_human_principal_method(method, &args)
                     .await?
+            }
+            "project" => {
+                crate::project_dispatch::dispatch(
+                    self,
+                    method,
+                    &serde_json::to_value(&parsed_value)?,
+                    actor_id,
+                    session_id,
+                    session_genesis,
+                )
+                .await?
             }
             "persona" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2121,7 +2281,7 @@ impl MutationEngine {
                     // Selected model on tched-router (:8084). Tools are compact
                     // MCP on that agent — not deprecated op-llm.
                     serde_json::to_value(
-                        crate::zeroclaw_runtime::ZeroclawRuntimeClient::from_env()
+                        crate::tched_router_runtime::TchedRouterRuntimeClient::from_env()
                             .chat(&state, args)
                             .await?,
                     )?
@@ -2131,7 +2291,7 @@ impl MutationEngine {
                     ) {
                         Ok(outcome) => {
                             if method.starts_with("Set") {
-                                self.persist_zeroclaw_mutation(method, &outcome.result)
+                                self.persist_tched_router_mutation(method, &outcome.result)
                                     .await?;
                             }
                             if let Some(sig) = &outcome.signal {
@@ -2165,26 +2325,15 @@ impl MutationEngine {
                 self.dispatch_cognitive_mcp_method(method, &args).await?
             }
             "notebooklm" => {
-                let args = serde_json::to_value(&parsed_value)?;
-                let upstream = match method {
-                    "query_notebook" => "ask_question",
-                    "reauth" | "refresh_auth" => "re_auth",
-                    other => other,
-                };
-                let result = self.notebooklm_mcp.call_tool(upstream, args).await?;
-                if matches!(
-                    method,
-                    "get_health" | "setup_auth" | "reauth" | "refresh_auth"
-                ) {
-                    if let Some(authenticated) = notebooklm_authentication_result(&result) {
-                        if let Err(error) =
-                            set_provider_ready_marker(NOTEBOOKLM_AUTH_READY, authenticated)
-                        {
-                            tracing::warn!(%error, "could not update NotebookLM authentication readiness");
-                        }
-                    }
-                }
-                result
+                let verified_session = crate::project_dispatch::verified_session(
+                    self,
+                    actor_id,
+                    session_id,
+                    session_genesis,
+                )
+                .await?;
+                self.dispatch_notebooklm_method(method, &parsed_value, &verified_session)
+                    .await?
             }
             "mongodb_mcp" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2276,7 +2425,81 @@ impl MutationEngine {
         let _ = self.change_tx.send(signal);
     }
 
-    async fn persist_zeroclaw_mutation(
+    async fn dispatch_notebooklm_method(
+        &self,
+        method: &str,
+        parsed_value: &simd_json::OwnedValue,
+        session_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let args = serde_json::to_value(parsed_value)?;
+        let store = crate::identity_sled_dispatch::sled_cozo()
+            .ok_or_else(|| anyhow::anyhow!("durable NotebookLM selection store is unavailable"))?
+            .clone();
+        let selection_store = store.clone();
+        let selector = session_id.to_string();
+        let rows = tokio::task::spawn_blocking(move || selection_store.run_query(
+            "?[notebook_id] := *notebooklm_selection{session_id, notebook_id}, session_id = $session",
+            Some(serde_json::json!({"session":selector})))).await??;
+        let selected = rows
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["notebook_id"].as_str())
+            .map(str::to_string);
+        match crate::nlm_cli::notebooklm_dispatch(method, &args, selected.as_deref())? {
+            crate::nlm_cli::NotebooklmDispatch::LocalSelect { notebook_id } => {
+                let selector = session_id.to_string();
+                let selected_id = notebook_id.clone();
+                tokio::task::spawn_blocking(move || store.run_query(
+                    "?[session_id, notebook_id] <- [[$session, $notebook]] :put notebooklm_selection {session_id => notebook_id}",
+                    Some(serde_json::json!({"session":selector, "notebook":selected_id})))).await??;
+                Ok(serde_json::json!({
+                    "selected_notebook_id": notebook_id,
+                    "session_id": session_id
+                }))
+            }
+            crate::nlm_cli::NotebooklmDispatch::Cli(invocation) => {
+                let mut result = crate::nlm_cli::run_notebooklm_method(method, &invocation).await?;
+                if matches!(
+                    method,
+                    "get_health"
+                        | "setup_auth"
+                        | "reauth"
+                        | "refresh_auth"
+                        | "save_auth_tokens"
+                        | "server_info"
+                ) {
+                    if let Some(status) = crate::nlm_cli::auth_status_from_value(&result) {
+                        if let Err(error) = crate::nlm_cli::apply_ready_marker(
+                            crate::nlm_cli::NOTEBOOKLM_AUTH_READY,
+                            crate::nlm_cli::ready_marker_action(&status),
+                        ) {
+                            tracing::warn!(
+                                %error,
+                                "could not update NotebookLM authentication readiness"
+                            );
+                        }
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert(
+                                "authenticated".into(),
+                                serde_json::Value::Bool(status == "configured"),
+                            );
+                            if status == "stale" {
+                                object.insert(
+                                    "hint".into(),
+                                    serde_json::Value::String(
+                                        "auth_status is stale; run setup_auth".into(),
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            }
+        }
+    }
+
+    async fn persist_tched_router_mutation(
         &self,
         method: &str,
         result: &serde_json::Value,
@@ -2301,7 +2524,7 @@ impl MutationEngine {
     }
 
     /// Merge a flat JSON object of changed fields into the authoritative
-    /// in-memory state cache for `plugin_id` (used to persist Zeroclaw `Set*`
+    /// in-memory state cache for `plugin_id` (used to persist 3tched Router `Set*`
     /// selection changes so readers observe the new effective state).
     async fn merge_into_state_cache(&self, plugin_id: &str, changes: &serde_json::Value) {
         let changes_obj = match changes.as_object() {
@@ -2512,57 +2735,6 @@ impl MutationEngine {
 
     pub fn change_tx(&self) -> broadcast::Sender<StateChange> {
         self.change_tx.clone()
-    }
-}
-
-fn notebooklm_authentication_result(result: &serde_json::Value) -> Option<bool> {
-    if let Some(value) = find_boolean_field(result, "authenticated") {
-        return Some(value);
-    }
-    for item in result
-        .get("content")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(text) = item.get("text").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-            if let Some(authenticated) = find_boolean_field(&value, "authenticated") {
-                return Some(authenticated);
-            }
-        }
-    }
-    None
-}
-
-fn find_boolean_field(value: &serde_json::Value, field: &str) -> Option<bool> {
-    match value {
-        serde_json::Value::Object(object) => object
-            .get(field)
-            .and_then(serde_json::Value::as_bool)
-            .or_else(|| {
-                object
-                    .values()
-                    .find_map(|nested| find_boolean_field(nested, field))
-            }),
-        serde_json::Value::Array(values) => values
-            .iter()
-            .find_map(|nested| find_boolean_field(nested, field)),
-        _ => None,
-    }
-}
-
-fn set_provider_ready_marker(path: &str, ready: bool) -> std::io::Result<()> {
-    if ready {
-        std::fs::write(path, b"ready\n")
-    } else {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
     }
 }
 
@@ -2847,8 +3019,35 @@ async fn dispatch_rovs_commands_method(
                 .get("port_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
-            ovsdb.add_port(bridge_name, port_name).await?;
-            Ok(serde_json::json!({"added": port_name, "to": bridge_name}))
+            let interface_type = args
+                .get("interface_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("internal");
+            ovsdb
+                .add_port_with_type(bridge_name, port_name, Some(interface_type))
+                .await?;
+            Ok(serde_json::json!({
+                "added": port_name,
+                "to": bridge_name,
+                "interface_type": interface_type
+            }))
+        }
+        "ensure_internal_port" => {
+            let bridge_name = args
+                .get("bridge_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("bridge_name required"))?;
+            let port_name = args
+                .get("port_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_name required"))?;
+            let created = ovsdb.ensure_internal_port(bridge_name, port_name).await?;
+            Ok(serde_json::json!({
+                "bridge_name": bridge_name,
+                "port_name": port_name,
+                "interface_type": "internal",
+                "created": created
+            }))
         }
         "remove_port" => {
             let bridge_name = args
@@ -2999,6 +3198,7 @@ fn find_xray_pids() -> Vec<nix::unistd::Pid> {
 impl MutationEngine {
     /// Resolve trusted per-tool authority metadata from the live in-process
     /// registry. MCP callers never provide or override this descriptor.
+    #[allow(dead_code)] // infrastructure for cognitive MCP tool dispatch
     pub(crate) async fn cognitive_tool_descriptor(
         &self,
         tool_name: &str,
@@ -3043,6 +3243,47 @@ impl MutationEngine {
                 .filter_map(project_sealed_cognitive_tool_descriptor)
                 .collect::<Vec<_>>();
             return Ok(serde_json::json!({ "tools": descriptors }));
+        }
+
+        if method == "schema_read" {
+            let plugin_id = args
+                .get("plugin_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("schema_read requires plugin_id"))?
+                .to_string();
+            let dir = crate::sealed_schema_reader::blob_catalog_dir_from_env();
+            return tokio::task::spawn_blocking(move || {
+                crate::sealed_schema_reader::read_sealed_schema_result(&dir, &plugin_id)
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("sealed schema task failed: {error}"))?;
+        }
+
+        if method == "oscal_subids" {
+            let plugin_id = args
+                .get("plugin_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let prefix = args
+                .get("prefix")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let dir = crate::sealed_schema_reader::blob_catalog_dir_from_env();
+            return tokio::task::spawn_blocking(move || {
+                crate::sealed_schema_reader::read_oscal_subids_result(
+                    &dir,
+                    plugin_id.as_deref(),
+                    prefix.as_deref(),
+                )
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("OSCAL subid task failed: {error}"))?;
         }
 
         // `toolsets` is admitted and audited here exactly once. The bridge
@@ -3157,6 +3398,27 @@ fn map_schema_method_to_tool(
         "code_search" => Ok(("code_search".into(), base)),
         "code_index" => Ok(("code_index".into(), base)),
         "code_context" => Ok(("code_context".into(), base)),
+        "rust_pro" => {
+            let operation = args
+                .get("operation")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("rust_pro: missing required field 'operation'"))?;
+            if !matches!(
+                operation,
+                "check" | "build" | "test" | "clippy" | "format" | "run"
+            ) {
+                anyhow::bail!("rust_pro: unsupported operation '{operation}'");
+            }
+            let mut tool_args = serde_json::json!({
+                "config": {
+                    "release": args.get("release").and_then(|value| value.as_bool()).unwrap_or(false)
+                }
+            });
+            if let Some(path) = args.get("path").and_then(|value| value.as_str()) {
+                tool_args["path"] = serde_json::Value::String(path.to_string());
+            }
+            Ok((format!("agent_rust_pro_{operation}"), tool_args))
+        }
         // Gemini question answering: the tool names the field `question`.
         "gemini_query" => {
             let mut v = base.clone();
@@ -3237,6 +3499,28 @@ mod cognitive_dispatch_tests {
             assert_eq!(actual, expected);
             assert_eq!(forwarded, args);
         }
+    }
+
+    #[test]
+    fn rust_pro_routes_to_the_eager_agent_operation() {
+        let (tool, args) = map_schema_method_to_tool(
+            "rust_pro",
+            &serde_json::json!({
+                "operation": "check",
+                "path": "/srv/git/odbus",
+                "release": false
+            }),
+        )
+        .expect("Rust Pro mapping must exist");
+        assert_eq!(tool, "agent_rust_pro_check");
+        assert_eq!(args["path"], "/srv/git/odbus");
+        assert_eq!(args["config"]["release"], false);
+
+        assert!(map_schema_method_to_tool(
+            "rust_pro",
+            &serde_json::json!({"operation": "shell", "path": "/tmp"})
+        )
+        .is_err());
     }
 
     #[test]

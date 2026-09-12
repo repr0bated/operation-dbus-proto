@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Collect LLM CLI conversations + tool calls → ~/.notebooklm-sources/<model>/
+Collect LLM CLI conversations + tool calls → /home/jeremy/.notebooklm-sources/<model>/
 
 Sources (DB-backed called out explicitly):
   - OpenCode   ~/.local/share/opencode/opencode.db   (session/message/part)
@@ -13,9 +13,9 @@ Sources (DB-backed called out explicitly):
   - Claude     ~/.claude/projects/**/*.jsonl
 
 Output per session:
-  ~/.notebooklm-sources/<model-slug>/{cli}_{session_id}.md
-  ~/.notebooklm-sources/<model-slug>/{cli}_{session_id}.json
-  ~/.notebooklm-sources/MANIFEST.json   (for NotebookLM sync_sources / add_source_file)
+  /home/jeremy/.notebooklm-sources/<model-slug>/{cli}_{session_id}.md
+  /home/jeremy/.notebooklm-sources/<model-slug>/{cli}_{session_id}.json
+  /home/jeremy/.notebooklm-sources/MANIFEST.json   (for NotebookLM sync_sources / add_source_file)
 
 Usage:
   python3 scripts/export-llm-sessions-to-notebooklm-sources.py -v
@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 HOME = Path.home()
-EXPORT_ROOT = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", HOME / ".notebooklm-sources"))
+EXPORT_ROOT = Path(os.environ.get("NOTEBOOKLM_SOURCES_DIR", "/home/jeremy/.notebooklm-sources"))
 
 class Cfg:
     """Runtime export config. Persistent CLIs (factory/opencode) rely on hash watermarks."""
@@ -907,7 +907,7 @@ EXPORTERS = {
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Export LLM CLI sessions → ~/.notebooklm-sources")
+    ap = argparse.ArgumentParser(description="Export LLM CLI sessions → /home/jeremy/.notebooklm-sources")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--only", help="comma list: opencode,kilo,codex,agy,cursor,factory,grok,claude")
     ap.add_argument("--sync", action="store_true", help="best-effort NotebookLM source upload (needs OP_NOTEBOOK_ID + nlm)")

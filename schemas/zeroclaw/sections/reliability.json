@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "ReliabilityConfig": {
+      "description": "Reliability and supervision configuration (`[reliability]` section).\n\nControls model_provider retries, API key rotation, and channel restart backoff.",
+      "properties": {
+        "api_keys": {
+          "default": [],
+          "description": "Additional API keys for round-robin rotation on rate-limit (429) errors.\nThe primary `api_key` is always tried first; these are extras.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-secret": true
+        },
+        "channel_initial_backoff_secs": {
+          "default": 2,
+          "description": "Initial backoff for channel/daemon restarts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "channel_max_backoff_secs": {
+          "default": 60,
+          "description": "Max backoff for channel/daemon restarts.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider_backoff_ms": {
+          "default": 500,
+          "description": "Base backoff (ms) for model_provider retry delay.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider_retries": {
+          "default": 2,
+          "description": "Retries per model_provider before bailing.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scheduler_poll_secs": {
+          "default": 15,
+          "description": "Scheduler polling cadence in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scheduler_retries": {
+          "default": 2,
+          "description": "Max retries for cron job execution attempts.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ReliabilityConfig",
+  "default": {
+    "api_keys": [],
+    "channel_initial_backoff_secs": 2,
+    "channel_max_backoff_secs": 60,
+    "provider_backoff_ms": 500,
+    "provider_retries": 2,
+    "scheduler_poll_secs": 15,
+    "scheduler_retries": 2
+  },
+  "description": "Reliability settings: retries, backoff, key rotation (`[reliability]`)."
+}

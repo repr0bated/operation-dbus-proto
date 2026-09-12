@@ -1,8 +1,8 @@
-//! op-introspection: D-Bus introspection service (stubbed — pending StreamingBlockchain port)
+//! op-introspection: D-Bus introspection service (stubbed — pending StreamingSnowball port)
 
 pub mod projection;
 
-/// Stub introspection service. Real implementation pending blockchain API port.
+/// Stub introspection service. Real implementation pending snowball API port.
 #[derive(Clone)]
 pub struct IntrospectionService;
 

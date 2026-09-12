@@ -102,9 +102,9 @@ Listens `0.0.0.0:8443`. TLS front for the NetMaker API.
 
 ### nm-warp-egress-proxy.py — service `nm-warp-egress-proxy`
 
-`nm-warp-egress-proxy.py 127.0.0.1 13128`. Listens `127.0.0.1:13128`; it is
-the egress side of the WARP tunnels (`wgcf-egress`, `wgcf-uiStream`, both
-`172.16.0.2/32`). `xsock-netmaker-egress` feeds it from
+`nm-warp-egress-proxy.py 127.0.0.1 13128`. Listens `127.0.0.1:13128`; it was
+the egress side of the retired WARP tunnels. The deprecated `wgcf-uiStream`
+service has been removed. `xsock-netmaker-egress` feeds it from
 `/run/ghostbridge/NetMaker/egress.sock`. A stale
 `.bak-pre-mark-flip-20260815T000603Z` copy sits beside it — read the diff
 before porting, it records a behavior change.

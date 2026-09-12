@@ -1,3 +1,5 @@
-NOTEBOOKLM_MCP_VERSION=2.0.0
-NOTEBOOKLM_MCP_ARTIFACT=notebooklm-mcp-2.0.0-node_modules.tar.gz
-NOTEBOOKLM_MCP_SHA256=060a2c3b4e3f149e0d517426c0e0d4907de5830881a375ab984fed8975bdcd00
+# jacob-bd notebooklm-mcp-cli (nlm). Not the PleasePrompto Node notebooklm-mcp tree.
+# Installs to /usr/local/bin/nlm — never overwrite /usr/bin/nlm (unrelated Node tool).
+NOTEBOOKLM_MCP_VERSION=0.11.2
+NOTEBOOKLM_MCP_ARTIFACT=notebooklm_mcp_cli-0.11.2-py3-none-any.whl
+NOTEBOOKLM_MCP_SHA256=86f23f282d04e632a10d5612e29b3a0d4f8166320c74337bd9f2e0a5cd0dac12

@@ -22,7 +22,7 @@ While the system is architected for high-performance, real-time data streaming (
 | `op-plugins` | Path: `../op-plugins` | N/A | Local internal dependency | None |
 | `op-dbus-mirror`| Path: `../op-dbus-mirror` | N/A | Local internal dependency | None |
 | `op-grpc-bridge`| Path: `../op-grpc-bridge` | N/A | Local internal dependency | None |
-| `op-blockchain` | Path: `../op-blockchain` | N/A | Local internal dependency | None |
+| `op-snowball` | Path: `../op-snowball` | N/A | Local internal dependency | None |
 | `op-identity` | Path: `../op-identity` | N/A | Local internal dependency | Interacts with raw pointer shared memory |
 | `tokio` | Workspace | `"full"`, `"sync"` | Pulled via workspace `version = "1"` | **Unpinned** workspace version. Broad feature footprint. |
 | `tokio-stream` | Workspace | None | Pulled via workspace `version = "0.1"` | **Unpinned** |

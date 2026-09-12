@@ -546,7 +546,7 @@ fn plugin_id_to_uuid(plugin_id: &str) -> uuid::Uuid {
     // (generated once) — must never change, or a refresh would orphan every
     // existing point instead of overwriting it.
     const BLOB_VECTORS_NAMESPACE: uuid::Uuid =
-        uuid::Uuid::from_u128(0x8f2b_6c4a_0d1e_4a3f_9b7c_2e5d1a6f8c3b);
+        uuid::Uuid::from_u128(0x8f2b_6c4a_0d1e_4a3f_9b7c_2e5d_1a6f_8c3b);
     uuid::Uuid::new_v5(&BLOB_VECTORS_NAMESPACE, plugin_id.as_bytes())
 }
 

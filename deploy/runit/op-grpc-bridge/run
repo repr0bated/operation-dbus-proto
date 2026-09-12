@@ -1,6 +1,9 @@
 #!/bin/sh
 exec 2>&1
 
+DEFAULT_READY_PATH=/run/opdbus/runit-ready/op-grpc-bridge
+rm -f -- "$DEFAULT_READY_PATH"
+
 wait_dep() {
     sv start "$1" >/dev/null 2>&1 || true
     i=0
@@ -28,6 +31,8 @@ wait_dep ovsdb-server
 set -a
 [ -r /etc/op-dbus/environment ] && . /etc/op-dbus/environment
 set +a
+export OPDBUS_READY_PATH="${OPDBUS_READY_PATH:-$DEFAULT_READY_PATH}"
+rm -f -- "$OPDBUS_READY_PATH"
 
 has_ipv4() {
     interface=$1
@@ -82,6 +87,9 @@ export GRPC_BIND="$FABRIC_BIND"
 export ZEROCLAW_UNIX_SOCKET="${ZEROCLAW_UNIX_SOCKET:-/run/opdbus/grpc.sock}"
 export ZEROCLAW_TLS_CERT_FILE="${ZEROCLAW_TLS_CERT_FILE:-/etc/op-dbus/tls/tonic-svc0.crt}"
 export ZEROCLAW_TLS_KEY_FILE="${ZEROCLAW_TLS_KEY_FILE:-/etc/op-dbus/tls/tonic-svc0.key}"
+# 2026-09-07: the bridge binary now reads TCHED_ROUTER_TLS_* for the TCP door.
+export TCHED_ROUTER_TLS_CERT_FILE="${TCHED_ROUTER_TLS_CERT_FILE:-$ZEROCLAW_TLS_CERT_FILE}"
+export TCHED_ROUTER_TLS_KEY_FILE="${TCHED_ROUTER_TLS_KEY_FILE:-$ZEROCLAW_TLS_KEY_FILE}"
 /usr/local/libexec/3tched/emqx-prepare
 export OP_EMQX_EXHOOK_ENABLE=1
 export OP_EMQX_EXHOOK_BIND_ADDR=127.0.0.1:9000
@@ -93,16 +101,37 @@ export OP_EMQX_EXHOOK_CLIENT_CERT_FILE=/etc/emqx/certs/emqx-exhook-client.crt
 # accepted nonce before dispatch. Keeping it outside tmpfs preserves replay
 # rejection across service/process restarts.
 export OP_AUTH_REPLAY_DB_PATH="${OP_AUTH_REPLAY_DB_PATH:-/var/lib/op-dbus/auth-replay.db}"
+export OPDBUS_SNOWBALL_PATH="${OPDBUS_SNOWBALL_PATH:-/var/lib/opdbus/snowball}"
+export OP_DBUS_CACHE_DIR="${OP_DBUS_CACHE_DIR:-/var/lib/opdbus/cache}"
+export OPDBUS_CACHE_PLACEMENT="${OPDBUS_CACHE_PLACEMENT:-local}"
+export OPDBUS_CACHE_MEMORY_POLICY="${OPDBUS_CACHE_MEMORY_POLICY:-default}"
+export OPDBUS_NUMA_POLICY="${OPDBUS_NUMA_POLICY:-localalloc}"
 export OP_MCP_AUDIENCE_POLICY_PATH="${OP_MCP_AUDIENCE_POLICY_PATH:-/etc/opdbus/mcp-audience-policy.json}"
 export OP_MCP_TOOLSETS_PATH="${OP_MCP_TOOLSETS_PATH:-/etc/opdbus/mcp-toolsets.json}"
 export OP_IDENTITY_PROJECTION_GROUP="${OP_IDENTITY_PROJECTION_GROUP:-secrets}"
-# Protected local MCP client identity.  These are public selectors, not
-# credentials: the MutationEngine re-derives and exact-checks both IDs before
-# sealing the identity into the chatbot sled.  The OIB1 blob in that sled is
-# the only value the short-lived native HTTP header helper forwards.
-export OP_MCP_IDENTITY_WIREGUARD_PUBKEY="${OP_MCP_IDENTITY_WIREGUARD_PUBKEY:-VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=}"
-export OP_MCP_IDENTITY_SESSION_ID="${OP_MCP_IDENTITY_SESSION_ID:-bea37ecb-92be-197c-660f-09e806f1a34f}"
-export OP_MCP_IDENTITY_PRINCIPAL_ID="${OP_MCP_IDENTITY_PRINCIPAL_ID:-87b0decc-8464-5abf-05d8-b52ec88ff9f1}"
+# jacob-bd nlm lives at /usr/local/bin/nlm. Never put NOTEBOOKLM_COOKIES in this
+# environment — those vars freeze stale auth over the on-disk profile.
+unset NOTEBOOKLM_COOKIES NOTEBOOKLM_CSRF_TOKEN NOTEBOOKLM_SESSION_ID NOTEBOOKLM_COOKIE
+export OP_NLM_BIN="${OP_NLM_BIN:-/usr/local/bin/nlm}"
+NLM_READY_DIR=/run/opdbus/runit-ready
+install -d -m 0755 "$NLM_READY_DIR"
+if [ -x "$OP_NLM_BIN" ]; then
+    touch -- "$NLM_READY_DIR/notebooklm-mcp"
+else
+    rm -f -- "$NLM_READY_DIR/notebooklm-mcp"
+fi
+# The singleton control-plane chatbot's service identity. These are public
+# selectors, not credentials; this identity belongs only to that chatbot.
+export OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY="${OP_CONTROL_PLANE_CHATBOT_WIREGUARD_PUBKEY:-VaRh9EUieQxA3zIoOj3qNiNIqZoPGpqztPU4muyF1zM=}"
+export OP_CONTROL_PLANE_CHATBOT_SESSION_ID="${OP_CONTROL_PLANE_CHATBOT_SESSION_ID:-bea37ecb-92be-197c-660f-09e806f1a34f}"
+export OP_CONTROL_PLANE_CHATBOT_PRINCIPAL_ID="${OP_CONTROL_PLANE_CHATBOT_PRINCIPAL_ID:-87b0decc-8464-5abf-05d8-b52ec88ff9f1}"
+# Local interactive clients, including Codex, authenticate as the existing
+# human WireGuard principal. The MutationEngine mints SID1 into this same sled;
+# there is deliberately no Codex-specific service identity.
+export OP_LOCAL_HUMAN_WIREGUARD_PUBKEY="${OP_LOCAL_HUMAN_WIREGUARD_PUBKEY:-GEMLT/+I81zs5HDPsOF22ntqGf71OEy6eFKMm7P7Dzk=}"
+export OP_LOCAL_HUMAN_SESSION_ID="${OP_LOCAL_HUMAN_SESSION_ID:-f036f8d8-aabb-c5f2-49c9-18dac19f41ea}"
+export OP_LOCAL_HUMAN_PRINCIPAL_ID="${OP_LOCAL_HUMAN_PRINCIPAL_ID:-0b7933b7-c8d5-1c01-814e-0c3066d19bbd}"
+export OP_LOCAL_HUMAN_DISPLAY_ALIAS="${OP_LOCAL_HUMAN_DISPLAY_ALIAS:-jeremy-wg-f036}"
 # WARP + Xray necessarily replace the decoy's human-WG inner source address.
 # Bind OIA1 to the trusted decoy signature, short lifetime, one-time nonce, and
 # registered human key rather than the legacy Netmaker TCP-source equality.
@@ -112,6 +141,60 @@ export COGNITIVE_MCP_QDRANT_URL="${COGNITIVE_MCP_QDRANT_URL:-http://10.200.0.2:6
 [ -r /etc/op-dbus/secrets/voyage-api-key ] && export VOYAGE_API_KEY="$(cat /etc/op-dbus/secrets/voyage-api-key)"
 # Phase 2: tool dispatch is in-process ToolRegistry — no HTTP MCP loopback URL.
 
-/usr/local/libexec/3tched/runit-ready-signal op-grpc-bridge
+# These are runtime requirements, not merely build-host packages. Fail with a
+# precise error on a received golden image instead of silently dropping the
+# Btrfs/NUMA path when a target is missing a dependency.
+for command_name in btrfs findmnt numactl taskset; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+        echo "required runtime command is missing: $command_name" >&2
+        exit 127
+    fi
+done
+
+existing_path() {
+    candidate=$1
+    while [ ! -e "$candidate" ]; do
+        parent=${candidate%/*}
+        [ -n "$parent" ] || parent=/
+        [ "$parent" != "$candidate" ] || break
+        candidate=$parent
+    done
+    printf '%s\n' "$candidate"
+}
+
+snowball_mount=$(existing_path "$OPDBUS_SNOWBALL_PATH")
+cache_mount=$(existing_path "$OP_DBUS_CACHE_DIR")
+snowball_fstype=$(findmnt -n -o FSTYPE -T "$snowball_mount")
+cache_fstype=$(findmnt -n -o FSTYPE -T "$cache_mount")
+snowball_device=$(findmnt -n -o MAJ:MIN -T "$snowball_mount")
+cache_device=$(findmnt -n -o MAJ:MIN -T "$cache_mount")
+if [ "$snowball_fstype" != btrfs ] || [ "$cache_fstype" != btrfs ]; then
+    echo "snowball timing and cache require Btrfs storage" >&2
+    exit 78
+fi
+if [ "$snowball_device" != "$cache_device" ]; then
+    echo "snowball timing and cache must use the same Btrfs filesystem" >&2
+    exit 78
+fi
+
+case "$OPDBUS_NUMA_POLICY" in
+    localalloc|interleave|default|disabled|none) ;;
+    *)
+        echo "unsupported OPDBUS_NUMA_POLICY: $OPDBUS_NUMA_POLICY" >&2
+        exit 64
+        ;;
+esac
+
 umask 0077
-exec /usr/local/bin/op-grpc-bridge
+
+case "$OPDBUS_NUMA_POLICY" in
+    localalloc)
+        exec numactl --localalloc /usr/local/bin/op-grpc-bridge
+        ;;
+    interleave)
+        exec numactl --interleave=all /usr/local/bin/op-grpc-bridge
+        ;;
+    default|disabled|none)
+        exec /usr/local/bin/op-grpc-bridge
+        ;;
+esac

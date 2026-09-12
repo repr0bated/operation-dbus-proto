@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "WssConfig": {
+      "description": "WebSocket Secure (WSS) transport for remote TUI-to-daemon connections (`[wss]`).\n\nWhen enabled, the daemon listens for TLS-encrypted WebSocket connections\non the configured bind address and port. TUI clients connect via\n`--connect wss://host:port`.",
+      "properties": {
+        "bind": {
+          "default": "0.0.0.0",
+          "description": "Bind address for the WSS listener (default: \"0.0.0.0\").",
+          "type": "string"
+        },
+        "cert_path": {
+          "default": "",
+          "description": "Path to the PEM-encoded server certificate file.",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the WSS listener (default: false).",
+          "type": "boolean"
+        },
+        "key_path": {
+          "default": "",
+          "description": "Path to the PEM-encoded server private key file.",
+          "type": "string"
+        },
+        "port": {
+          "default": 9781,
+          "description": "Port for the WSS listener (default: 9781).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/WssConfig",
+  "default": {
+    "bind": "0.0.0.0",
+    "cert_path": "",
+    "enabled": false,
+    "key_path": "",
+    "port": 9781
+  },
+  "description": "WebSocket Secure (WSS) transport for remote TUI connections (`[wss]`)."
+}

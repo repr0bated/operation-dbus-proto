@@ -3,6 +3,7 @@
 //! Implements the `op_chat.chat.ChatService` trait from `chat.proto`.
 //! Served on the op-grpc-bridge alongside StateSync, PluginService, etc.
 //! so zeroclaw-gui discovers it via a single reflection endpoint.
+#![allow(dead_code)] // many items are infrastructure for upcoming chat features
 //!
 //! Architecture:
 //! - zeroclaw owns provider/model routing (OD-28) — SendRequest carries them.
@@ -28,7 +29,7 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
-use crate::interceptor::GhostbridgeIdentity;
+use crate::interceptor::{bridge_capability_identity, GhostbridgeIdentity};
 use crate::mutation_engine::MutationEngine;
 use crate::proto::chat::{
     chat_frame, chat_service_server::ChatService, ApproveRequest, ApproveResponse, CancelRequest,
@@ -38,6 +39,55 @@ use crate::proto::chat::{
 const ROUTER_PLUGIN_ID: &str = "tched_router";
 const ROUTER_CHAT_CAPABILITY: &str = "cap.software.3tched-router.chat@v1";
 
+// Conversation/tool ids are client-controlled correlation labels, never an
+// authorization boundary. Include both stable principal and verified session.
+type ConversationKey = (String, String, String);
+type ApprovalKey = (ConversationKey, String);
+
+#[allow(clippy::result_large_err)]
+fn conversation_key(identity: &GhostbridgeIdentity, id: &str) -> Result<ConversationKey, Status> {
+    if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+        return Err(Status::invalid_argument("invalid conversation_id"));
+    }
+    Ok((
+        identity.principal_id.clone(),
+        identity.session_id.clone(),
+        id.into(),
+    ))
+}
+
+#[allow(clippy::result_large_err)]
+fn chat_identity<T>(request: &Request<T>) -> Result<GhostbridgeIdentity, Status> {
+    let identity = bridge_capability_identity(request.extensions())
+        .ok_or_else(|| Status::unauthenticated("verified chat identity is required"))?;
+    crate::grpc_server::authorize_schema_method(
+        ROUTER_PLUGIN_ID,
+        "Chat",
+        Some(ROUTER_CHAT_CAPABILITY),
+        Some(&identity),
+    )?;
+    Ok(identity)
+}
+
+#[allow(clippy::result_large_err)]
+fn reserve_cancellation(
+    cancellations: &mut std::collections::HashMap<
+        ConversationKey,
+        tokio::sync::watch::Sender<bool>,
+    >,
+    key: ConversationKey,
+    cancel_tx: tokio::sync::watch::Sender<bool>,
+) -> Result<(), Status> {
+    if cancellations.contains_key(&key) {
+        return Err(Status::already_exists(
+            "conversation already has an active turn",
+        ));
+    }
+    cancellations.insert(key, cancel_tx);
+    Ok(())
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct ResolvedExecutionRoute {
     provider: ProviderType,
@@ -50,9 +100,11 @@ struct ResolvedExecutionRoute {
 /// Shared state for the ChatService.
 pub struct ChatServiceImpl {
     /// Active conversation cursors for cancel support.
-    cancellations: Arc<Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
-    /// Pending approvals: tool_call_id -> oneshot sender.
-    approvals: Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    cancellations:
+        Arc<Mutex<std::collections::HashMap<ConversationKey, tokio::sync::watch::Sender<bool>>>>,
+    /// Pending approvals are scoped to principal, session and conversation.
+    approvals:
+        Arc<Mutex<std::collections::HashMap<ApprovalKey, tokio::sync::oneshot::Sender<bool>>>>,
     /// The sole schema method/event-chain authority.
     engine: Arc<MutationEngine>,
 }
@@ -253,7 +305,7 @@ async fn execute_chat(
     Ok((route, response))
 }
 
-/// Execute the schema-declared `zeroclaw.Chat` method after the mutation
+/// Execute the schema-declared `tched_router.Chat` method after the mutation
 /// engine has recorded the call. Provider/model selection remains owned by
 /// the projected ZeroClaw schema; `ChatManager` only performs the resolved
 /// upstream call.
@@ -264,7 +316,7 @@ pub(crate) async fn dispatch_schema_chat(
 ) -> anyhow::Result<ChatOutput> {
     let messages = if input.messages.is_empty() {
         if input.message.trim().is_empty() {
-            return Err(anyhow!("zeroclaw.Chat requires message or messages"));
+            return Err(anyhow!("tched_router.Chat requires message or messages"));
         }
         vec![op_llm::ChatMessage {
             role: "user".to_string(),
@@ -305,19 +357,10 @@ impl ChatService for ChatServiceImpl {
         &self,
         request: Request<SendRequest>,
     ) -> Result<Response<Self::SendStream>, Status> {
-        let identity = request
-            .extensions()
-            .get::<GhostbridgeIdentity>()
-            .cloned()
-            .ok_or_else(|| Status::unauthenticated("Ghostbridge identity is required"))?;
-        crate::grpc_server::authorize_schema_method(
-            ROUTER_PLUGIN_ID,
-            "Chat",
-            Some(ROUTER_CHAT_CAPABILITY),
-            Some(&identity),
-        )?;
+        let identity = chat_identity(&request)?;
         let req = request.into_inner();
         let conversation_id = req.conversation_id.clone();
+        let key = conversation_key(&identity, &conversation_id)?;
         let provider = req.provider.clone();
         let model = req.model.clone();
 
@@ -329,8 +372,27 @@ impl ChatService for ChatServiceImpl {
         );
 
         // Parse ui_messages from JSON bytes.
+        if req.ui_messages.len() > 1024 * 1024 {
+            return Err(Status::resource_exhausted("chat input exceeds 1 MiB"));
+        }
         let ui_messages: Vec<serde_json::Value> = serde_json::from_slice(&req.ui_messages)
             .map_err(|e| Status::invalid_argument(format!("Invalid ui_messages JSON: {e}")))?;
+        if ui_messages.is_empty()
+            || ui_messages.len() > 256
+            || ui_messages.iter().any(|message| {
+                !matches!(
+                    message.get("role").and_then(serde_json::Value::as_str),
+                    Some("user" | "assistant")
+                ) || message
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none()
+            })
+        {
+            return Err(Status::invalid_argument(
+                "expected 1–256 user/assistant text messages",
+            ));
+        }
         let chat_args = ChatInput {
             message: String::new(),
             messages: ui_messages
@@ -358,7 +420,7 @@ impl ChatService for ChatServiceImpl {
         let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
         {
             let mut cancellations = self.cancellations.lock().await;
-            cancellations.insert(conversation_id.clone(), cancel_tx);
+            reserve_cancellation(&mut cancellations, key.clone(), cancel_tx)?;
         }
 
         // Cursor for monotonic frame ordering.
@@ -368,7 +430,6 @@ impl ChatService for ChatServiceImpl {
 
         let cancellations = self.cancellations.clone();
         let engine = self.engine.clone();
-        let identity = identity;
         let conv_id = conversation_id.clone();
 
         tokio::spawn(async move {
@@ -385,6 +446,7 @@ impl ChatService for ChatServiceImpl {
 
             let completion = tokio::select! {
                 result = dispatch_chat_method(engine.as_ref(), &chat_args, &identity) => result,
+                _ = tx.closed() => Err(anyhow!("chat cancelled: client disconnected")),
                 changed = cancel_rx.changed() => {
                     match changed {
                         Ok(()) if *cancel_rx.borrow() => Err(anyhow!("chat cancelled")),
@@ -450,7 +512,7 @@ impl ChatService for ChatServiceImpl {
             // Cleanup cancellation registration.
             {
                 let mut cancellations = cancellations.lock().await;
-                cancellations.remove(&conv_id);
+                cancellations.remove(&key);
             }
         });
 
@@ -461,7 +523,12 @@ impl ChatService for ChatServiceImpl {
         &self,
         request: Request<ApproveRequest>,
     ) -> Result<Response<ApproveResponse>, Status> {
+        let identity = chat_identity(&request)?;
         let req = request.into_inner();
+        let key = (
+            conversation_key(&identity, &req.conversation_id)?,
+            req.tool_call_id.clone(),
+        );
         info!(
             conversation_id = %req.conversation_id,
             tool_call_id = %req.tool_call_id,
@@ -471,7 +538,7 @@ impl ChatService for ChatServiceImpl {
 
         // Deliver the approval decision to the pending tool call.
         let mut approvals = self.approvals.lock().await;
-        match approvals.remove(&req.tool_call_id) {
+        match approvals.remove(&key) {
             Some(sender) => {
                 let _ = sender.send(req.approved);
                 Ok(Response::new(ApproveResponse {
@@ -498,14 +565,18 @@ impl ChatService for ChatServiceImpl {
         &self,
         request: Request<CancelRequest>,
     ) -> Result<Response<CancelResponse>, Status> {
+        let identity = chat_identity(&request)?;
         let req = request.into_inner();
+        let key = conversation_key(&identity, &req.conversation_id)?;
         info!(
             conversation_id = %req.conversation_id,
             "ChatService.Cancel"
         );
 
-        let mut cancellations = self.cancellations.lock().await;
-        match cancellations.remove(&req.conversation_id) {
+        let cancellations = self.cancellations.lock().await;
+        // Keep the slot until the running task finishes. Removing it here
+        // lets an overlapping Send install a slot that old cleanup erases.
+        match cancellations.get(&key) {
             Some(cancel_tx) => {
                 let _ = cancel_tx.send(true);
                 Ok(Response::new(CancelResponse {
@@ -532,6 +603,22 @@ mod tests {
     use super::*;
     use op_plugins::state_plugins::tched_router::TchedRouterPlugin;
 
+    fn identity(principal_id: &str, session_id: &str) -> GhostbridgeIdentity {
+        GhostbridgeIdentity {
+            principal_id: principal_id.into(),
+            session_id: session_id.into(),
+            session_genesis: "test-genesis".into(),
+        }
+    }
+
+    fn test_service() -> ChatServiceImpl {
+        let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
+            op_state_store::ChainConfig::default(),
+        )));
+        let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
+        ChatServiceImpl::new(Arc::new(MutationEngine::new(event_chain, ovsdb)))
+    }
+
     #[test]
     fn chat_service_binding_matches_router_schema() {
         let schema = op_plugins::state_plugins::tched_router::tched_router_plugin_schema();
@@ -546,11 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_send_requires_ghostbridge_identity() {
-        let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
-            op_state_store::ChainConfig::default(),
-        )));
-        let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
-        let service = ChatServiceImpl::new(Arc::new(MutationEngine::new(event_chain, ovsdb)));
+        let service = test_service();
 
         let status = service
             .send(Request::new(SendRequest::default()))
@@ -559,6 +642,96 @@ mod tests {
             .expect("request without identity must be rejected");
 
         assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn conversation_key_scopes_principal_and_session() {
+        let conversation = "same-conversation";
+        let first = conversation_key(&identity("principal-a", "session-a"), conversation)
+            .expect("valid key");
+        let other_principal =
+            conversation_key(&identity("principal-b", "session-a"), conversation).unwrap();
+        let other_session =
+            conversation_key(&identity("principal-a", "session-b"), conversation).unwrap();
+        assert_ne!(first, other_principal);
+        assert_ne!(first, other_session);
+        assert_ne!(other_principal, other_session);
+    }
+
+    #[tokio::test]
+    async fn chat_approve_and_cancel_require_ghostbridge_identity() {
+        let service = test_service();
+        let approve = service
+            .approve(Request::new(ApproveRequest {
+                conversation_id: "conversation".into(),
+                tool_call_id: "tool".into(),
+                approved: true,
+                operator_note: Some(String::new()),
+            }))
+            .await
+            .expect_err("approve without identity must be rejected");
+        assert_eq!(approve.code(), tonic::Code::Unauthenticated);
+
+        let cancel = service
+            .cancel(Request::new(CancelRequest {
+                conversation_id: "conversation".into(),
+            }))
+            .await
+            .expect_err("cancel without identity must be rejected");
+        assert_eq!(cancel.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn cancellation_slots_are_keyed_and_duplicate_sends_do_not_replace_them() {
+        let service = test_service();
+        let first_key = conversation_key(&identity("principal-a", "session-a"), "conversation")
+            .expect("valid key");
+        let other_key = conversation_key(&identity("principal-b", "session-a"), "conversation")
+            .expect("valid key");
+        let (first_tx, _first_rx) = tokio::sync::watch::channel(false);
+        let (replacement_tx, _replacement_rx) = tokio::sync::watch::channel(false);
+        let mut cancellations = service.cancellations.lock().await;
+        reserve_cancellation(&mut cancellations, first_key.clone(), first_tx)
+            .expect("first send reserves its slot");
+        let duplicate = reserve_cancellation(&mut cancellations, first_key.clone(), replacement_tx)
+            .expect_err("duplicate send must not replace the active slot");
+        assert_eq!(duplicate.code(), tonic::Code::AlreadyExists);
+        assert!(!cancellations.contains_key(&other_key));
+        drop(cancellations);
+
+        let cancel = service
+            .cancellations
+            .lock()
+            .await
+            .get(&first_key)
+            .expect("original slot remains")
+            .clone();
+        cancel.send(true).expect("cancel original slot");
+        assert!(cancel.borrow().to_owned());
+    }
+
+    #[tokio::test]
+    async fn approval_slots_cannot_cross_principal_or_session_boundaries() {
+        let service = test_service();
+        let first = (
+            conversation_key(&identity("principal-a", "session-a"), "conversation")
+                .expect("valid key"),
+            "tool".to_string(),
+        );
+        let other = (
+            conversation_key(&identity("principal-b", "session-a"), "conversation")
+                .expect("valid key"),
+            "tool".to_string(),
+        );
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        service.approvals.lock().await.insert(first.clone(), sender);
+
+        let mut approvals = service.approvals.lock().await;
+        assert!(approvals.remove(&other).is_none());
+        let sender = approvals.remove(&first).expect("original approval slot");
+        sender.send(true).expect("deliver original approval");
+        drop(approvals);
+        assert!(receiver.await.expect("approval response"));
     }
 
     #[tokio::test]

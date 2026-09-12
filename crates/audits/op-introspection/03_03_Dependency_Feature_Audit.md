@@ -16,7 +16,7 @@ As mandated by the system architecture, we scanned all source files to map out a
 | :--- | :--- | :--- | :--- |
 | **rusqlite** | `crates/op-introspection/src/indexer.rs:16` | Full-Text Search (FTS5) Index of D-Bus objects, methods, properties, and signals. | Appropriate use of SQLite FTS5 for document indexing. No architectural violations found (CozoDB is reserved for the graph/knowledge layer). |
 | **rusqlite** | `crates/op-introspection/src/indexer_manager.rs:13` | Management and instantiation of the SQLite database. | Violates connection safety by bypassing the serialized access mutex (see Finding 2). |
-| **op-blockchain** | `crates/op-introspection/src/projection.rs:9` | System state persistence on BTRFS state subvolumes and event blockchain. | Manages restorable state projection for system rollback and disaster recovery. |
+| **op-snowball** | `crates/op-introspection/src/projection.rs:9` | System state persistence on BTRFS state subvolumes and event snowball. | Manages restorable state projection for system rollback and disaster recovery. |
 
 ---
 

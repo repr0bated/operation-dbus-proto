@@ -1,9 +1,10 @@
-//! op-snowball: Streaming snowball with BTRFS subvolumes
+//! op-snowball: Streaming snowball with data directories for timing, vectors,
+//! and state
 //!
 //! This crate provides:
 //! - Streaming snowball for audit trails
 //! - Plugin footprints for change tracking
-//! - Dual BTRFS subvolumes (timing/vectors/state)
+//! - Data directories for timing, vectors, and state
 //! - Automatic snapshots with configurable intervals
 //! - Rolling retention policies
 //! - btrfs send/receive for replication

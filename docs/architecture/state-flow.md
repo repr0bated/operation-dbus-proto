@@ -9,7 +9,7 @@ Ensure all state changes follow one auditable path:
 3. `StateManager::apply_state_single_plugin` / `apply_state`
 4. Schema materialization + validation
 5. Plugin diff/apply
-6. Persistent state + audit + blockchain footprint
+6. Persistent state + audit + snowball footprint
 
 ## Canonical Write Path
 

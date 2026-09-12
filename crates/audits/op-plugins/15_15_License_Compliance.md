@@ -65,8 +65,8 @@
     *   `crates/op-plugins/src/state_plugins/dinit.rs:212-213`
     *   `crates/op-plugins/src/state_plugins/openflow_obfuscation.rs:440-441`
     *   `crates/op-plugins/src/state_plugins/privacy_router.rs:722-723`
-*   **Description**: Throughout the system, `md5::compute` is used to generate state hashes for current and desired configurations. These hashes are populated in `DiffMetadata` to provide "automatic hash footprints for blockchain audit trail".
-*   **Impact**: MD5 is cryptographically broken and highly vulnerable to collision attacks. An attacker could craft two distinct configurations that generate identical MD5 hashes, allowing them to modify the system state without altering the blockchain footprint, effectively rendering the audit trail untrusted.
+*   **Description**: Throughout the system, `md5::compute` is used to generate state hashes for current and desired configurations. These hashes are populated in `DiffMetadata` to provide "automatic hash footprints for snowball audit trail".
+*   **Impact**: MD5 is cryptographically broken and highly vulnerable to collision attacks. An attacker could craft two distinct configurations that generate identical MD5 hashes, allowing them to modify the system state without altering the snowball footprint, effectively rendering the audit trail untrusted.
 *   **Remediation**: Replace MD5 with a secure cryptographic hashing algorithm such as SHA-256 (using the `sha2` crate already present in the workspace).
 
 ### LOW: Option Injection via Unvalidated Package Name

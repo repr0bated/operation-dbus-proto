@@ -1,0 +1,305 @@
+{
+  "$defs": {
+    "ImageProviderDalleConfig": {
+      "description": "OpenAI DALL-E settings (`[linkedin.image.dalle]`).",
+      "properties": {
+        "api_key_env": {
+          "default": "OPENAI_API_KEY",
+          "description": "Environment variable name holding the OpenAI API key.",
+          "type": "string"
+        },
+        "model": {
+          "default": "dall-e-3",
+          "description": "DALL-E model identifier.",
+          "type": "string"
+        },
+        "size": {
+          "default": "1024x1024",
+          "description": "Image dimensions.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ImageProviderFluxConfig": {
+      "description": "Flux (fal.ai) image generation settings (`[linkedin.image.flux]`).",
+      "properties": {
+        "api_key_env": {
+          "default": "FAL_API_KEY",
+          "description": "Environment variable name holding the fal.ai API key.",
+          "type": "string"
+        },
+        "model": {
+          "default": "fal-ai/flux/schnell",
+          "description": "Flux model identifier.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ImageProviderImagenConfig": {
+      "description": "Google Imagen (Vertex AI) settings (`[linkedin.image.imagen]`).",
+      "properties": {
+        "api_key_env": {
+          "default": "GOOGLE_VERTEX_API_KEY",
+          "description": "Environment variable name holding the API key.",
+          "type": "string"
+        },
+        "project_id_env": {
+          "default": "GOOGLE_CLOUD_PROJECT",
+          "description": "Environment variable for the Google Cloud project ID.",
+          "type": "string"
+        },
+        "region": {
+          "default": "us-central1",
+          "description": "Vertex AI region.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ImageProviderStabilityConfig": {
+      "description": "Stability AI image generation settings (`[linkedin.image.stability]`).",
+      "properties": {
+        "api_key_env": {
+          "default": "STABILITY_API_KEY",
+          "description": "Environment variable name holding the API key.",
+          "type": "string"
+        },
+        "model": {
+          "default": "stable-diffusion-xl-1024-v1-0",
+          "description": "Stability model identifier.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LinkedInConfig": {
+      "description": "LinkedIn integration configuration (`[linkedin]` section).\n\nWhen enabled, the `linkedin` tool is registered in the agent tool surface.\nRequires `LINKEDIN_*` credentials in the workspace `.env` file.",
+      "properties": {
+        "api_version": {
+          "default": "202602",
+          "description": "LinkedIn REST API version header (YYYYMM format).",
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/LinkedInContentConfig",
+          "default": {
+            "github_repos": [],
+            "github_users": [],
+            "instructions": "",
+            "persona": "",
+            "rss_feeds": [],
+            "topics": []
+          },
+          "description": "Content strategy for automated posting."
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the LinkedIn tool.",
+          "type": "boolean"
+        },
+        "image": {
+          "$ref": "#/$defs/LinkedInImageConfig",
+          "default": {
+            "card_accent_color": "#0A66C2",
+            "dalle": {
+              "api_key_env": "OPENAI_API_KEY",
+              "model": "dall-e-3",
+              "size": "1024x1024"
+            },
+            "enabled": false,
+            "fallback_card": true,
+            "flux": {
+              "api_key_env": "FAL_API_KEY",
+              "model": "fal-ai/flux/schnell"
+            },
+            "imagen": {
+              "api_key_env": "GOOGLE_VERTEX_API_KEY",
+              "project_id_env": "GOOGLE_CLOUD_PROJECT",
+              "region": "us-central1"
+            },
+            "providers": [
+              "stability",
+              "imagen",
+              "dalle",
+              "flux"
+            ],
+            "stability": {
+              "api_key_env": "STABILITY_API_KEY",
+              "model": "stable-diffusion-xl-1024-v1-0"
+            },
+            "temp_dir": "linkedin/images"
+          },
+          "description": "Image generation for posts (`[linkedin.image]`)."
+        }
+      },
+      "type": "object"
+    },
+    "LinkedInContentConfig": {
+      "description": "Content strategy configuration for LinkedIn auto-posting (`[linkedin.content]`).\n\nThe agent reads this via the `linkedin get_content_strategy` action to know\nwhat feeds to check, which repos to highlight, and how to write posts.",
+      "properties": {
+        "github_repos": {
+          "default": [],
+          "description": "GitHub repositories to highlight (format: `owner/repo`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "github_users": {
+          "default": [],
+          "description": "GitHub usernames whose public activity to reference.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instructions": {
+          "default": "",
+          "description": "Freeform posting instructions for the AI agent.",
+          "type": "string"
+        },
+        "persona": {
+          "default": "",
+          "description": "Professional persona description (name, role, expertise).",
+          "type": "string"
+        },
+        "rss_feeds": {
+          "default": [],
+          "description": "RSS feed URLs to monitor for topic inspiration (titles only).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "topics": {
+          "default": [],
+          "description": "Topics of expertise and interest for post themes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "LinkedInImageConfig": {
+      "description": "Image generation configuration for LinkedIn posts (`[linkedin.image]`).",
+      "properties": {
+        "card_accent_color": {
+          "default": "#0A66C2",
+          "description": "Accent color for the fallback card (CSS hex).",
+          "type": "string"
+        },
+        "dalle": {
+          "$ref": "#/$defs/ImageProviderDalleConfig",
+          "default": {
+            "api_key_env": "OPENAI_API_KEY",
+            "model": "dall-e-3",
+            "size": "1024x1024"
+          },
+          "description": "OpenAI DALL-E model_provider settings."
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable image generation for posts.",
+          "type": "boolean"
+        },
+        "fallback_card": {
+          "default": true,
+          "description": "Generate a branded SVG text card when all AI model_providers fail.",
+          "type": "boolean"
+        },
+        "flux": {
+          "$ref": "#/$defs/ImageProviderFluxConfig",
+          "default": {
+            "api_key_env": "FAL_API_KEY",
+            "model": "fal-ai/flux/schnell"
+          },
+          "description": "Flux (fal.ai) model_provider settings."
+        },
+        "imagen": {
+          "$ref": "#/$defs/ImageProviderImagenConfig",
+          "default": {
+            "api_key_env": "GOOGLE_VERTEX_API_KEY",
+            "project_id_env": "GOOGLE_CLOUD_PROJECT",
+            "region": "us-central1"
+          },
+          "description": "Google Imagen (Vertex AI) model_provider settings."
+        },
+        "providers": {
+          "default": [
+            "stability",
+            "imagen",
+            "dalle",
+            "flux"
+          ],
+          "description": "ModelProvider priority order. Tried in sequence; first success wins.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stability": {
+          "$ref": "#/$defs/ImageProviderStabilityConfig",
+          "default": {
+            "api_key_env": "STABILITY_API_KEY",
+            "model": "stable-diffusion-xl-1024-v1-0"
+          },
+          "description": "Stability AI model_provider settings."
+        },
+        "temp_dir": {
+          "default": "linkedin/images",
+          "description": "Temp directory for generated images, relative to workspace.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/LinkedInConfig",
+  "default": {
+    "api_version": "202602",
+    "content": {
+      "github_repos": [],
+      "github_users": [],
+      "instructions": "",
+      "persona": "",
+      "rss_feeds": [],
+      "topics": []
+    },
+    "enabled": false,
+    "image": {
+      "card_accent_color": "#0A66C2",
+      "dalle": {
+        "api_key_env": "OPENAI_API_KEY",
+        "model": "dall-e-3",
+        "size": "1024x1024"
+      },
+      "enabled": false,
+      "fallback_card": true,
+      "flux": {
+        "api_key_env": "FAL_API_KEY",
+        "model": "fal-ai/flux/schnell"
+      },
+      "imagen": {
+        "api_key_env": "GOOGLE_VERTEX_API_KEY",
+        "project_id_env": "GOOGLE_CLOUD_PROJECT",
+        "region": "us-central1"
+      },
+      "providers": [
+        "stability",
+        "imagen",
+        "dalle",
+        "flux"
+      ],
+      "stability": {
+        "api_key_env": "STABILITY_API_KEY",
+        "model": "stable-diffusion-xl-1024-v1-0"
+      },
+      "temp_dir": "linkedin/images"
+    }
+  },
+  "description": "LinkedIn integration configuration (`[linkedin]`)."
+}

@@ -79,6 +79,15 @@ pub fn init_response_accumulator() {
 }
 
 /// Get the global response accumulator
+#[cfg(test)]
+pub fn get_response_accumulator() -> Arc<RwLock<ResponseAccumulator>> {
+    RESPONSE_ACCUMULATOR
+        .get_or_init(|| Arc::new(RwLock::new(ResponseAccumulator::new())))
+        .clone()
+}
+
+/// Get the global response accumulator
+#[cfg(not(test))]
 pub fn get_response_accumulator() -> Arc<RwLock<ResponseAccumulator>> {
     RESPONSE_ACCUMULATOR
         .get()

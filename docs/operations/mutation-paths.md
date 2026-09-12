@@ -37,4 +37,4 @@ Implementation path:
 
 - Apply checkpoints are created per plugin.
 - Apply results and failures are logged.
-- Footprints are recorded to blockchain sender when enabled.
+- Footprints are recorded to snowball sender when enabled.

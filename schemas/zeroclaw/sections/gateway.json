@@ -1,0 +1,299 @@
+{
+  "$defs": {
+    "GatewayClientAuthConfig": {
+      "description": "Client certificate authentication (mTLS) configuration (`[gateway.tls.client_auth]`).",
+      "properties": {
+        "ca_cert_path": {
+          "default": "",
+          "description": "Path to the PEM-encoded CA certificate used to verify client certs.",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable client certificate verification (default: false).",
+          "type": "boolean"
+        },
+        "pinned_certs": {
+          "default": [],
+          "description": "Optional SHA-256 fingerprints for certificate pinning.\nWhen non-empty, only client certs matching one of these fingerprints are accepted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "require_client_cert": {
+          "default": true,
+          "description": "Reject connections that do not present a valid client certificate (default: true).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "GatewayConfig": {
+      "description": "Gateway server configuration (`[gateway]` section).\n\nControls the HTTP gateway for webhook and pairing endpoints.",
+      "properties": {
+        "allow_public_bind": {
+          "default": false,
+          "description": "Allow binding to non-localhost without a tunnel (default: false)",
+          "type": "boolean"
+        },
+        "allow_remote_admin": {
+          "default": false,
+          "description": "Allow authenticated remote callers to use admin endpoints that are\notherwise localhost-only. Currently this gates `POST /admin/reload`.\nWhen false (default), those endpoints reject any non-loopback peer.\nWhen true, a non-loopback request is accepted only if it also passes\npairing authentication — which requires `require_pairing = true`; with\npairing off a remote caller cannot be authenticated and is rejected, so\nthis flag never exposes an anonymous remote reload. `/admin/shutdown`\nand the pairing-code endpoints stay localhost-only regardless.\n(default: false)",
+          "type": "boolean"
+        },
+        "allow_self_upgrade": {
+          "default": false,
+          "description": "Allow triggering a self-upgrade (binary swap via `zeroclaw update`) from\nthe dashboard. This is a remote-code-execution-adjacent surface: any\nauthenticated dashboard user could replace the running binary. Keep off\nunless you trust every paired client. (default: false)",
+          "type": "boolean"
+        },
+        "check_updates": {
+          "default": true,
+          "description": "Poll GitHub for newer releases and show an \"update available\" indicator\non the dashboard version tag. Read-only; does not install anything.\n(default: true)",
+          "type": "boolean"
+        },
+        "host": {
+          "default": "127.0.0.1",
+          "description": "Gateway host (default: 127.0.0.1)",
+          "type": "string"
+        },
+        "idempotency_max_keys": {
+          "default": 10000,
+          "description": "Maximum distinct idempotency keys retained in memory.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idempotency_ttl_secs": {
+          "default": 300,
+          "description": "TTL for webhook idempotency keys.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "long_running_request_timeout_secs": {
+          "default": 600,
+          "description": "HTTP request timeout (seconds) for `POST /api/cron/{id}/run`, which\nruns jobs synchronously and routinely exceeds the 30s default.\nDefault: 600s (10 minutes).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pair_rate_limit_per_minute": {
+          "default": 10,
+          "description": "Max `/pair` requests per minute per client key.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paired_tokens": {
+          "default": [],
+          "description": "Paired bearer tokens (managed automatically, not user-edited)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-secret": true
+        },
+        "pairing_dashboard": {
+          "$ref": "#/$defs/PairingDashboardConfig",
+          "default": {
+            "code_length": 8,
+            "code_ttl_secs": 3600,
+            "lockout_secs": 300,
+            "max_failed_attempts": 5,
+            "max_pending_codes": 3
+          },
+          "description": "Pairing dashboard configuration"
+        },
+        "path_prefix": {
+          "default": null,
+          "description": "Optional URL path prefix for reverse-proxy deployments.\nWhen set, all gateway routes are served under this prefix.\nMust start with `/` and must not end with `/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "default": 42617,
+          "description": "Gateway port (default: 42617)",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit_max_keys": {
+          "default": 10000,
+          "description": "Maximum distinct client keys tracked by gateway rate limiter maps.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_timeout_secs": {
+          "default": 30,
+          "description": "HTTP request timeout (seconds) for gateway routes other than the\nlong-running cron-trigger endpoint. Default: 30s.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "require_pairing": {
+          "default": true,
+          "description": "Require pairing before accepting requests (default: true)",
+          "type": "boolean"
+        },
+        "session_persistence": {
+          "default": true,
+          "description": "Persist gateway WebSocket chat sessions to SQLite. Default: true.",
+          "type": "boolean"
+        },
+        "session_ttl_hours": {
+          "default": 0,
+          "description": "Auto-archive stale gateway sessions older than N hours. 0 = disabled. Default: 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GatewayTlsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "TLS configuration for the gateway server (`[gateway.tls]`)."
+        },
+        "trust_forwarded_headers": {
+          "default": false,
+          "description": "Trust proxy-forwarded client IP headers (`X-Forwarded-For`, `X-Real-IP`).\nDisabled by default; enable only behind a trusted reverse proxy.",
+          "type": "boolean"
+        },
+        "web_dist_dir": {
+          "default": null,
+          "description": "Path to the web dashboard `dist` directory. When set, the gateway\nserves the compiled frontend from the filesystem instead of requiring\nit to be embedded in the binary. Accepts absolute paths or paths\nrelative to the working directory. When omitted the gateway runs in\nAPI-only mode (no web dashboard) unless auto-detection finds it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "webhook_rate_limit_per_minute": {
+          "default": 60,
+          "description": "Max `/webhook` requests per minute per client key.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "GatewayTlsConfig": {
+      "description": "TLS configuration for the gateway server (`[gateway.tls]`).",
+      "properties": {
+        "cert_path": {
+          "description": "Path to the PEM-encoded server certificate file.",
+          "type": "string"
+        },
+        "client_auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GatewayClientAuthConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Client certificate authentication (mutual TLS) settings."
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable TLS for the gateway (default: false).",
+          "type": "boolean"
+        },
+        "key_path": {
+          "description": "Path to the PEM-encoded server private key file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cert_path",
+        "key_path"
+      ],
+      "type": "object"
+    },
+    "PairingDashboardConfig": {
+      "description": "Pairing dashboard configuration (`[gateway.pairing_dashboard]`).",
+      "properties": {
+        "code_length": {
+          "default": 8,
+          "description": "Length of pairing codes (default: 8)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "code_ttl_secs": {
+          "default": 3600,
+          "description": "Time-to-live for pending pairing codes in seconds (default: 3600)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lockout_secs": {
+          "default": 300,
+          "description": "Lockout duration in seconds after max attempts (default: 300)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_failed_attempts": {
+          "default": 5,
+          "description": "Maximum failed pairing attempts before lockout (default: 5)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_pending_codes": {
+          "default": 3,
+          "description": "Maximum concurrent pending pairing codes (default: 3)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/GatewayConfig",
+  "default": {
+    "allow_public_bind": false,
+    "allow_remote_admin": false,
+    "allow_self_upgrade": false,
+    "check_updates": true,
+    "host": "127.0.0.1",
+    "idempotency_max_keys": 10000,
+    "idempotency_ttl_secs": 300,
+    "long_running_request_timeout_secs": 600,
+    "pair_rate_limit_per_minute": 10,
+    "paired_tokens": [],
+    "pairing_dashboard": {
+      "code_length": 8,
+      "code_ttl_secs": 3600,
+      "lockout_secs": 300,
+      "max_failed_attempts": 5,
+      "max_pending_codes": 3
+    },
+    "path_prefix": null,
+    "port": 42617,
+    "rate_limit_max_keys": 10000,
+    "request_timeout_secs": 30,
+    "require_pairing": true,
+    "session_persistence": true,
+    "session_ttl_hours": 0,
+    "tls": null,
+    "trust_forwarded_headers": false,
+    "web_dist_dir": null,
+    "webhook_rate_limit_per_minute": 60
+  },
+  "description": "Gateway server configuration: host, port, pairing, rate limits (`[gateway]`)."
+}

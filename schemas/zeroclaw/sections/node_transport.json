@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "NodeTransportConfig": {
+      "description": "Secure transport configuration for inter-node communication (`[node_transport]`).",
+      "properties": {
+        "allowed_peers": {
+          "default": [],
+          "description": "Allow specific node IPs/CIDRs.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "connection_pool_size": {
+          "default": 4,
+          "description": "Maximum number of connections per peer.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable the secure transport layer.",
+          "type": "boolean"
+        },
+        "max_request_age_secs": {
+          "default": 300,
+          "description": "Maximum age of signed requests in seconds (replay protection).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "mutual_tls": {
+          "default": false,
+          "description": "Require client certificates (mutual TLS).",
+          "type": "boolean"
+        },
+        "require_https": {
+          "default": true,
+          "description": "Require HTTPS for all node communication.",
+          "type": "boolean"
+        },
+        "shared_secret": {
+          "default": "",
+          "description": "Shared secret for HMAC authentication between nodes.",
+          "type": "string",
+          "x-secret": true
+        },
+        "tls_cert_path": {
+          "default": null,
+          "description": "Path to TLS certificate file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_key_path": {
+          "default": null,
+          "description": "Path to TLS private key file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/NodeTransportConfig",
+  "default": {
+    "allowed_peers": [],
+    "connection_pool_size": 4,
+    "enabled": true,
+    "max_request_age_secs": 300,
+    "mutual_tls": false,
+    "require_https": true,
+    "shared_secret": "",
+    "tls_cert_path": null,
+    "tls_key_path": null
+  },
+  "description": "Secure inter-node transport configuration (`[node_transport]`)."
+}

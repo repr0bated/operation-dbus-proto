@@ -1,0 +1,423 @@
+{
+  "$defs": {
+    "AuditConfig": {
+      "description": "Audit logging configuration",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable audit logging",
+          "type": "boolean"
+        },
+        "log_path": {
+          "default": "audit.log",
+          "description": "Path to audit log file (relative to zeroclaw dir)",
+          "type": "string"
+        },
+        "max_size_mb": {
+          "default": 100,
+          "description": "Maximum log size in MB before rotation",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sign_events": {
+          "default": false,
+          "description": "Sign events with HMAC for tamper evidence",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "EstopConfig": {
+      "additionalProperties": false,
+      "description": "Emergency stop configuration.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable emergency stop controls.",
+          "type": "boolean"
+        },
+        "require_otp_to_resume": {
+          "default": true,
+          "description": "Require a valid OTP before resume operations.",
+          "type": "boolean"
+        },
+        "state_file": {
+          "default": "/home/jeremy/.zeroclaw/estop-state.json",
+          "description": "File path used to persist estop state.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LeakDetectionConfig": {
+      "description": "Outbound credential leak detection configuration.\n\nThese settings control the final guardrail pass over outbound channel\nresponses before they are delivered. Deterministic credential patterns\ninclude API keys, private keys, database URLs, bot tokens, and related\ntoken syntax. The high-entropy pass is a separate heuristic for standalone\nopaque tokens.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable outbound credential leak detection and redaction.",
+          "type": "boolean"
+        },
+        "high_entropy_tokens": {
+          "default": true,
+          "description": "Enable high-entropy token redaction; deterministic patterns still run when false.",
+          "type": "boolean"
+        },
+        "sensitivity": {
+          "default": 0.7,
+          "description": "Detection sensitivity from 0.0 to 1.0; higher is more aggressive.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "NevisConfig": {
+      "additionalProperties": false,
+      "description": "Nevis IAM integration configuration.\n\nWhen `enabled` is true, ZeroClaw validates incoming requests against a Nevis\nSecurity Suite instance and maps Nevis roles to tool/workspace permissions.",
+      "properties": {
+        "client_id": {
+          "default": "",
+          "description": "OAuth2 client ID registered in Nevis.",
+          "type": "string"
+        },
+        "client_secret": {
+          "default": null,
+          "description": "OAuth2 client secret. Encrypted via SecretStore when stored on disk.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable Nevis IAM integration. Defaults to false for backward compatibility.",
+          "type": "boolean"
+        },
+        "instance_url": {
+          "default": "",
+          "description": "Base URL of the Nevis instance (e.g. `https://nevis.example.com`).",
+          "type": "string"
+        },
+        "jwks_url": {
+          "default": null,
+          "description": "JWKS endpoint URL for local token validation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "realm": {
+          "default": "master",
+          "description": "Nevis realm to authenticate against.",
+          "type": "string"
+        },
+        "require_mfa": {
+          "default": false,
+          "description": "Require MFA verification for all Nevis-authenticated requests.",
+          "type": "boolean"
+        },
+        "role_mapping": {
+          "default": [],
+          "description": "Nevis role to ZeroClaw permission mappings.",
+          "items": {
+            "$ref": "#/$defs/NevisRoleMappingConfig"
+          },
+          "type": "array"
+        },
+        "session_timeout_secs": {
+          "default": 3600,
+          "description": "Session timeout in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token_validation": {
+          "default": "local",
+          "description": "Token validation strategy: `\"local\"` (JWKS) or `\"remote\"` (introspection).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NevisRoleMappingConfig": {
+      "additionalProperties": false,
+      "description": "Maps a Nevis role to ZeroClaw tool permissions and workspace access.",
+      "properties": {
+        "nevis_role": {
+          "description": "Nevis role name (case-insensitive).",
+          "type": "string"
+        },
+        "workspace_access": {
+          "default": [],
+          "description": "Workspace names this role can access. Use `\"all\"` for unrestricted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "zeroclaw_permissions": {
+          "default": [],
+          "description": "Tool names this role can access. Use `\"all\"` for unrestricted tool access.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nevis_role"
+      ],
+      "type": "object"
+    },
+    "OtpConfig": {
+      "additionalProperties": false,
+      "description": "Security OTP configuration.",
+      "properties": {
+        "cache_valid_secs": {
+          "default": 300,
+          "description": "Reuse window for recently validated OTP codes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "challenge_max_attempts": {
+          "default": 3,
+          "description": "Maximum number of OTP challenge attempts before lockout.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable OTP gating. Defaults to disabled for backward compatibility.",
+          "type": "boolean"
+        },
+        "gated_actions": {
+          "default": [
+            "shell",
+            "file_write",
+            "browser_open",
+            "browser",
+            "memory_forget"
+          ],
+          "description": "Tool/action names gated by OTP. Empty or malformed entries are rejected\nat config load; an entry that does not match a known gated action is\naccepted but logged at WARN, since it cannot be enforced.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gated_domain_categories": {
+          "default": [],
+          "description": "Domain-category presets expanded into `gated_domains`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gated_domains": {
+          "default": [],
+          "description": "Explicit domain patterns gated by OTP.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "method": {
+          "$ref": "#/$defs/OtpMethod",
+          "default": "totp",
+          "description": "OTP method."
+        },
+        "token_ttl_secs": {
+          "default": 30,
+          "description": "TOTP time-step in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "OtpMethod": {
+      "description": "OTP validation strategy.",
+      "oneOf": [
+        {
+          "const": "totp",
+          "description": "Time-based one-time password (RFC 6238).",
+          "type": "string"
+        },
+        {
+          "const": "pairing",
+          "description": "Future method for paired-device confirmations.",
+          "type": "string"
+        },
+        {
+          "const": "cli-prompt",
+          "description": "Future method for local CLI challenge prompts.",
+          "type": "string"
+        }
+      ]
+    },
+    "SecurityConfig": {
+      "description": "Security configuration for audit logging, OTP, e-stop, IAM/SSO, and WebAuthn.\n\nSandbox backend and resource limits live on per-agent risk profiles\n(see `RiskProfileConfig::sandbox_*` and `RiskProfileConfig::max_*`); the\nruntime resolves them via `Config::active_risk_profile(agent_alias)`.",
+      "properties": {
+        "audit": {
+          "$ref": "#/$defs/AuditConfig",
+          "default": {
+            "enabled": true,
+            "log_path": "audit.log",
+            "max_size_mb": 100,
+            "sign_events": false
+          },
+          "description": "Audit logging configuration"
+        },
+        "estop": {
+          "$ref": "#/$defs/EstopConfig",
+          "default": {
+            "enabled": false,
+            "require_otp_to_resume": true,
+            "state_file": "/home/jeremy/.zeroclaw/estop-state.json"
+          },
+          "description": "Emergency-stop state machine configuration."
+        },
+        "leak_detection": {
+          "$ref": "#/$defs/LeakDetectionConfig",
+          "default": {
+            "enabled": true,
+            "high_entropy_tokens": true,
+            "sensitivity": 0.7
+          },
+          "description": "Outbound credential leak detection and redaction configuration. See\n`[security.leak_detection]` for the detector controls."
+        },
+        "nevis": {
+          "$ref": "#/$defs/NevisConfig",
+          "default": {
+            "client_id": "",
+            "client_secret": null,
+            "enabled": false,
+            "instance_url": "",
+            "jwks_url": null,
+            "realm": "master",
+            "require_mfa": false,
+            "role_mapping": [],
+            "session_timeout_secs": 3600,
+            "token_validation": "local"
+          },
+          "description": "Nevis IAM integration for SSO/MFA authentication and role-based access."
+        },
+        "otp": {
+          "$ref": "#/$defs/OtpConfig",
+          "default": {
+            "cache_valid_secs": 300,
+            "challenge_max_attempts": 3,
+            "enabled": false,
+            "gated_actions": [
+              "shell",
+              "file_write",
+              "browser_open",
+              "browser",
+              "memory_forget"
+            ],
+            "gated_domain_categories": [],
+            "gated_domains": [],
+            "method": "totp",
+            "token_ttl_secs": 30
+          },
+          "description": "OTP gating configuration for sensitive actions/domains."
+        },
+        "webauthn": {
+          "$ref": "#/$defs/WebAuthnConfig",
+          "default": {
+            "enabled": false,
+            "rp_id": "localhost",
+            "rp_name": "ZeroClaw",
+            "rp_origin": "http://localhost:42617"
+          },
+          "description": "WebAuthn / FIDO2 hardware key authentication configuration."
+        }
+      },
+      "type": "object"
+    },
+    "WebAuthnConfig": {
+      "description": "WebAuthn / FIDO2 hardware key authentication configuration (`[security.webauthn]`).\n\nEnables registration and authentication via hardware security keys\n(YubiKey, SoloKey, etc.) and platform authenticators (Touch ID, Windows Hello).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable WebAuthn authentication. Default: false.",
+          "type": "boolean"
+        },
+        "rp_id": {
+          "default": "localhost",
+          "description": "Relying Party ID (domain name, e.g. \"example.com\"). Default: \"localhost\".",
+          "type": "string"
+        },
+        "rp_name": {
+          "default": "ZeroClaw",
+          "description": "Relying Party display name. Default: \"ZeroClaw\".",
+          "type": "string"
+        },
+        "rp_origin": {
+          "default": "http://localhost:42617",
+          "description": "Relying Party origin URL (e.g. `\"https://example.com\"`). Default: `\"http://localhost:42617\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/SecurityConfig",
+  "default": {
+    "audit": {
+      "enabled": true,
+      "log_path": "audit.log",
+      "max_size_mb": 100,
+      "sign_events": false
+    },
+    "estop": {
+      "enabled": false,
+      "require_otp_to_resume": true,
+      "state_file": "/home/jeremy/.zeroclaw/estop-state.json"
+    },
+    "leak_detection": {
+      "enabled": true,
+      "high_entropy_tokens": true,
+      "sensitivity": 0.7
+    },
+    "nevis": {
+      "client_id": "",
+      "client_secret": null,
+      "enabled": false,
+      "instance_url": "",
+      "jwks_url": null,
+      "realm": "master",
+      "require_mfa": false,
+      "role_mapping": [],
+      "session_timeout_secs": 3600,
+      "token_validation": "local"
+    },
+    "otp": {
+      "cache_valid_secs": 300,
+      "challenge_max_attempts": 3,
+      "enabled": false,
+      "gated_actions": [
+        "shell",
+        "file_write",
+        "browser_open",
+        "browser",
+        "memory_forget"
+      ],
+      "gated_domain_categories": [],
+      "gated_domains": [],
+      "method": "totp",
+      "token_ttl_secs": 30
+    },
+    "webauthn": {
+      "enabled": false,
+      "rp_id": "localhost",
+      "rp_name": "ZeroClaw",
+      "rp_origin": "http://localhost:42617"
+    }
+  },
+  "description": "Security subsystem configuration (`[security]`)."
+}

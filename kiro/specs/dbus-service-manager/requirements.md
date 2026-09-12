@@ -36,7 +36,7 @@ Replace systemd dependency with a D-Bus-native service manager that:
 ### FR3: Service Monitoring
 - Subscribe to service state changes via D-Bus signals
 - Track service health over time
-- Emit events for blockchain audit trail
+- Emit events for snowball audit trail
 
 ### FR4: Init System Abstraction
 - Detect available init system (systemd, dinit, other)

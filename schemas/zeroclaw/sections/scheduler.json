@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "SchedulerConfig": {
+      "description": "Scheduler configuration for periodic task execution (`[scheduler]` section).\n\nOwns the cron-runtime knobs: per-job declarations live on\n`Config.cron: HashMap<String, CronJobDecl>` (alias-keyed), while the\nscheduler loop's runtime behavior (`enabled`, polling cap, catch-up) lives here.",
+      "properties": {
+        "catch_up_on_startup": {
+          "default": true,
+          "description": "Run all overdue jobs at scheduler startup. Default: `true`.\n\nWhen the daemon restarts late, jobs whose `next_run` is in the past\nfire once before normal polling resumes. Disable to wait for the\nnext scheduled occurrence instead.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable the built-in scheduler loop. When false, no cron jobs run.",
+          "type": "boolean"
+        },
+        "max_concurrent": {
+          "default": 4,
+          "description": "Maximum tasks executed in parallel within a single polling cycle.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_run_history": {
+          "default": 50,
+          "description": "Maximum number of historical cron run records to retain. Default: `50`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tasks": {
+          "default": 64,
+          "description": "Maximum number of persisted scheduled tasks per polling cycle.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/SchedulerConfig",
+  "default": {
+    "catch_up_on_startup": true,
+    "enabled": true,
+    "max_concurrent": 4,
+    "max_run_history": 50,
+    "max_tasks": 64
+  },
+  "description": "Scheduler configuration for periodic task execution (`[scheduler]`)."
+}

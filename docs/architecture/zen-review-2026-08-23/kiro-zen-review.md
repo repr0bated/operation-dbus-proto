@@ -122,4 +122,4 @@ graph TD
 | `cognitive-mcp-bridge` | `op-cognitive-mcp` | Ingress gated strictly through gRPC bridge | **VERIFIED** |
 | `netmaker-xray-identity` | `op-identity` | OIA1 Ed25519 token replay validation & Xray static path | **VERIFIED** |
 | `autogen-ui-blob-catalog` | `operation-dashboard-ui-07` | Stream subscriptions, schema migration frames & abort handling | **VERIFIED & FIXED** |
-| `accountability-audit` | `op-grpc-bridge` | Linear `EventChain` mutation recording & blockchain audit | **VERIFIED** |
+| `accountability-audit` | `op-grpc-bridge` | Linear `EventChain` mutation recording & snowball audit | **VERIFIED** |

@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "TodoTrackerConfig": {
+      "description": "ZeroCode live task tracker configuration (`[todotracker]` section).\n\nRead-only visual tracker driven by the model's `TodoWrite` tool.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Master switch. When `false` the tracker never renders and never\nauto-pops. Default: `true`.",
+          "type": "boolean"
+        },
+        "enabled_at_start": {
+          "default": false,
+          "description": "Whether the panel is visible at launch (when `enabled`). When\n`false` it stays hidden until toggled or auto-popped by the first\nplan. Default: `false`.",
+          "type": "boolean"
+        },
+        "location": {
+          "$ref": "#/$defs/TodoTrackerLocation",
+          "default": "right",
+          "description": "Panel location: `bottom` (between transcript and input), `left`,\nor `right` (default)."
+        },
+        "max_height": {
+          "default": 5,
+          "description": "Bottom-strip maximum height in rows (grows up to this). Ignored for\nleft/right. Default: `5`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "default": 32,
+          "description": "Side-panel target column width (left/right). Runtime-clamped to at\nmost half the terminal width. Ignored for `bottom`. Default: `32`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TodoTrackerLocation": {
+      "description": "Location of the ZeroCode TodoWrite tracker panel.",
+      "oneOf": [
+        {
+          "const": "bottom",
+          "description": "Horizontal strip between the transcript and the input bar (Claude Code style).",
+          "type": "string"
+        },
+        {
+          "const": "left",
+          "description": "Vertical side panel on the left.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "Vertical side panel on the right (OpenCode style). Default.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/TodoTrackerConfig",
+  "default": {
+    "enabled": true,
+    "enabled_at_start": false,
+    "location": "right",
+    "max_height": 5,
+    "width": 32
+  },
+  "description": "ZeroCode live task tracker (`[todotracker]`), the read-only\nTodoWrite visual tracker in the Code pane."
+}

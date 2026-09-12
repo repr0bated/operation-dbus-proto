@@ -13,7 +13,7 @@ crates/op-introspection/
     ├── indexer.rs (rusqlite/FTS5 search index)
     ├── indexer_manager.rs (Async pool for FTS5 queries)
     ├── parser.rs (Ad-hoc parser placeholder)
-    ├── projection.rs (Blockchain-backed state persistence)
+    ├── projection.rs (Snowball-backed state persistence)
     ├── scanner.rs (D-Bus XML collector via quick-xml)
     └── mod.rs (Stray system introspection module root)
         ├── cpu_features.rs (CPU/BIOS security check)

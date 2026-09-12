@@ -59,7 +59,7 @@ The disaster recovery module interacts with the system bus to manage system depe
   * `crates/op-state-store/src/disaster_recovery.rs:90`, `137` (in `PluginStateExport`)
 * **Impact**: High. Tampering with compliance trails and security sled footprints.
 * **Description**:
-  The `EventChain` module implements a blockchain-style, tamper-evident audit trail with Merkle tree batching to enforce compliance. However, it relies entirely on **MD5** as its hashing algorithm (`md5::compute`).
+  The `EventChain` module implements a snowball-style, tamper-evident audit trail with Merkle tree batching to enforce compliance. However, it relies entirely on **MD5** as its hashing algorithm (`md5::compute`).
   MD5 is cryptographically broken and highly vulnerable to collision attacks. An attacker can craft two different state-transition payloads that produce the identical MD5 digest. This allows an adversary to execute unauthorized state changes (e.g., modifying firewall rules or adding backdoors) while presenting a forged, matching event hash to the ledger, completely undermining the integrity of the compliance proofs.
   Additionally, the `SchemaShuttle` uses MD5 to forge the `hashed_footprint` injected into network components (`crates/op-state-store/src/schema_shuttle.rs:44`), creating a risk of fingerprint collisions and validation bypasses.
 * **Recommendation**:

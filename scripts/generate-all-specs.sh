@@ -34,7 +34,7 @@ CRATES=(
     # API & Gateway
     "op-gateway" "op-http" "op-grpc-bridge" "op-jsonrpc" "op-web"
     # Infrastructure
-    "op-deployment" "op-blockchain" "op-identity" "op-dynamic-loader" "op-inspector"
+    "op-deployment" "op-snowball" "op-identity" "op-dynamic-loader" "op-inspector"
     # CLI & Tooling
     "op-cli" "op-api" "op-parser"
     # Storage & Data

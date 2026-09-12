@@ -12,7 +12,7 @@ Native, deterministic control plane for Artix Linux infrastructure.
 
 ## Workspace
 
-31 crates under `crates/`:
+~40 crates under `crates/` (see AGENTS.md for the current workspace map):
 
 | Crate              | Role                                                 |
 | ------------------ | ---------------------------------------------------- |
@@ -29,14 +29,17 @@ Native, deterministic control plane for Artix Linux infrastructure.
 ## Quick Start
 
 ```bash
-# Build everything
-cargo build --workspace --release
+# Build everything (dev)
+cargo build --workspace
 
-# Build frontend
-cd lovable && npm ci && npm run build
+# Release build (needs the cstdint shim for vendored RocksDB)
+CXXFLAGS="-include cstdint" cargo build --workspace --release
 
-# Run web server
-cargo run --release -p op-web
+# Build the embedded UI that op-web serves (required for release op-web)
+cd crates/op-web/ui && npx vite build
+
+# Run web server (dev — empty UI assets are fine in dev)
+cargo run -p op-web
 ```
 
 ## Key Principles
@@ -48,9 +51,11 @@ cargo run --release -p op-web
 
 ## Documentation
 
-- `CLAUDE.md` — agent guidance + project coding standards
+- `AGENTS.md` — agent guidance, build gotchas, host-service policy
+- `SIGNALS.md` — live model observations (append-only)
+- `WISHLIST.md` — task board (OD-## ids)
 - `docs/` — architecture docs
-- `deploy/runit/` — runit service definitions + `recompile-and-update.sh`
+- `deploy/runit/` — runit service definitions
 
 ## License
 

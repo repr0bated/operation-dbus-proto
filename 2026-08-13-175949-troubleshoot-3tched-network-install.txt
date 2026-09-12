@@ -1276,7 +1276,7 @@
 
   Live sockets under those dirs are only the relays (decoy, fwd-qdrant, fwd-web,
   netmaker, netmaker-broker) plus session-bus.sock — none of them the bridge's.
-  Its threads are parked, one in epoll_wait, and the log stops at blockchain
+  Its threads are parked, one in epoll_wait, and the log stops at snowball
   init 16:25:25. Finding where it's stuck:
 
   Ran 3 shell commands (ctrl+o to expand)
@@ -1300,7 +1300,7 @@
   Ran 1 shell command (ctrl+o to expand)
 
 ● Freeing the Cozo lock helped — CognitiveMcpServer now loads (409 tools)
-  instead of erroring. But it still stops at blockchain init with nothing
+  instead of erroring. But it still stops at snowball init with nothing
   listening. Pinpointing what runs next:
 
   Read 1 file, ran 1 shell command (ctrl+o to expand)
@@ -1374,7 +1374,7 @@
   Ran 1 shell command (ctrl+o to expand)
 
 ● Everything bound. It wasn't hung — just a heavy startup (409 MCP tools, CozoDB
-  schema, blockchain, reflection over 67 blobs), and CPU is back to idle:
+  schema, snowball, reflection over 67 blobs), and CPU is back to idle:
 
   /run/opdbus/grpc.sock             LISTEN  fd=27
   /run/ghostbridge/container.sock   LISTEN  fd=28

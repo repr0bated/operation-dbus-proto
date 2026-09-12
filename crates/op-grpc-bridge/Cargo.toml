@@ -105,8 +105,8 @@ serde_json = { workspace = true }
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
 
 [[test]]
-name = "zeroclaw_integration"
-path = "tests/zeroclaw_integration.rs"
+name = "tched_router_integration"
+path = "tests/tched_router_integration.rs"
 
 [[test]]
 name = "tonic_tls_reflection"

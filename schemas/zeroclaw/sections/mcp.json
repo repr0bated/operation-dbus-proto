@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "McpConfig": {
+      "description": "External MCP client configuration (`[mcp]` section).",
+      "properties": {
+        "deferred_loading": {
+          "default": false,
+          "description": "Load MCP tool schemas on-demand via `tool_search` instead of eagerly\nincluding them in the LLM context window. When enabled, only tool names\nare listed in the system prompt; the LLM must call `tool_search` to fetch\nfull schemas before invoking a deferred tool.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable MCP tool loading.",
+          "type": "boolean"
+        },
+        "servers": {
+          "default": [],
+          "description": "Configured MCP servers. The `#[nested]` annotation makes the macro\nexpose this as a List section in `map_key_sections()`, so the\ndashboard's `+ Add MCP server` affordance and the `POST\n/api/config/map-key?path=mcp.servers&key=<name>` endpoint pick it\nup automatically (no hand-table on the gateway side).\n\n`#[natural_key = \"name\"]` opts the Vec into per-element property\nrouting (see `route_vec_path` and the `Configurable` derive's\n`#[natural_key]` arm). With it, `set_prop(\"mcp.servers.<name>.url\",\n...)` and `get_prop(\"mcp.servers.<name>.transport\")` resolve to\nthe matching element's own `set_prop` / `get_prop`, and the\n`mcp.servers` section behaves like a `HashMap<String,\nMcpServerConfig>` from the dashboard / TUI's point of view.\n`name` itself becomes read-only via `set_prop`; rename goes\nthrough `rename_map_key` which mutates the `name` field in place.",
+          "items": {
+            "$ref": "#/$defs/McpServerConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "McpServerConfig": {
+      "description": "Configuration for a single external MCP server.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Command arguments for stdio transport.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "default": "",
+          "description": "Executable to spawn for stdio transport.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Optional environment variables for stdio transport.",
+          "type": "object",
+          "x-secret": true
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Optional HTTP headers for HTTP/SSE transports. Treated as secret:\nthe values commonly carry Bearer tokens for the upstream MCP server.",
+          "type": "object",
+          "x-secret": true
+        },
+        "name": {
+          "default": "",
+          "description": "Display name used as a tool prefix (`<server>__<tool>`). Filled in\nfrom the supplied `map_key` when the entry is created via\n`create_map_key(\"mcp.servers\", \"<name>\")`; `#[serde(default)]` lets\nthe macro default-construct from `{}` before the name gets injected.",
+          "type": "string"
+        },
+        "pinned_resources": {
+          "default": [],
+          "description": "Resource URIs to read once at agent startup and inject into the system\nprompt as untrusted, server-origin context. Each is read via\n`resources/read` on this server; pins on a server that does not advertise\nresources, or that the agent's tool policy denies, are skipped with a\nwarning. Read once per run (not refreshed; no subscriptions).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tool_timeout_secs": {
+          "default": null,
+          "description": "Optional per-call timeout in seconds (hard capped in validation).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "transport": {
+          "$ref": "#/$defs/McpTransport",
+          "default": "stdio",
+          "description": "Transport type (default: stdio)."
+        },
+        "url": {
+          "default": null,
+          "description": "URL for HTTP/SSE transports.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object",
+      "x-required-by-transport": {
+        "http": "url",
+        "sse": "url",
+        "stdio": "command"
+      }
+    },
+    "McpTransport": {
+      "description": "Transport type for MCP server connections.",
+      "oneOf": [
+        {
+          "const": "stdio",
+          "description": "Spawn a local process and communicate over stdin/stdout.",
+          "type": "string"
+        },
+        {
+          "const": "http",
+          "description": "Connect via HTTP POST.",
+          "type": "string"
+        },
+        {
+          "const": "sse",
+          "description": "Connect via HTTP + Server-Sent Events.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/McpConfig",
+  "default": {
+    "deferred_loading": false,
+    "enabled": true,
+    "servers": []
+  },
+  "description": "External MCP server connections (`[mcp]`)."
+}

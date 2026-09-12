@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "ConversationalAiConfig": {
+      "description": "Conversational AI agent builder configuration (`[conversational_ai]` section).\n\n**Status: Reserved for future use.** This configuration is parsed but not yet\nconsumed by the runtime. Setting `enabled = true` will produce a startup warning.",
+      "properties": {
+        "analytics_enabled": {
+          "default": false,
+          "description": "Enable conversation analytics tracking. Default: false (privacy-by-default).",
+          "type": "boolean"
+        },
+        "auto_detect_language": {
+          "default": true,
+          "description": "Automatically detect user language from message content. Default: true.",
+          "type": "boolean"
+        },
+        "conversation_timeout_secs": {
+          "default": 1800,
+          "description": "Conversation timeout in seconds (inactivity). Default: 1800.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "default_language": {
+          "default": "en",
+          "description": "Default language for conversations (BCP-47 tag). Default: \"en\".",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable conversational AI features. Default: false.",
+          "type": "boolean"
+        },
+        "escalation_confidence_threshold": {
+          "default": 0.3,
+          "description": "Intent confidence below this threshold triggers escalation. Default: 0.3.",
+          "format": "double",
+          "type": "number"
+        },
+        "knowledge_base_tool": {
+          "default": null,
+          "description": "Optional tool name for RAG-based knowledge base lookup during conversations.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_conversation_turns": {
+          "default": 50,
+          "description": "Maximum conversation turns before auto-ending. Default: 50.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "supported_languages": {
+          "default": [
+            "en",
+            "de",
+            "fr",
+            "it"
+          ],
+          "description": "Supported languages for conversations. Default: [`en`, `de`, `fr`, `it`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ConversationalAiConfig",
+  "description": "Conversational AI agent builder configuration (`[conversational_ai]`).\n\nExperimental / future feature — not yet wired into the agent runtime.\nOmitted from generated config files when disabled (the default).\nExisting configs that already contain this section will continue to\ndeserialize correctly thanks to `#[serde(default)]`."
+}

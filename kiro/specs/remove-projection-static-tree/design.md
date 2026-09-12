@@ -219,16 +219,16 @@ For op-web (stateless HTTP handlers), step 1 is optional — each request reads 
 directly. The seed volume matters for consumers that maintain an in-memory aggregate
 (e.g., a future SSE stream that needs to send a full initial frame).
 
-#### Snapshot Production — EXTERNAL to op-blockchain
+#### Snapshot Production — EXTERNAL to op-snowball
 
-The seed volume has **no relationship to `op-blockchain`**. The blockchain is the
+The seed volume has **no relationship to `op-snowball`**. The snowball is the
 per-mutation durability chain; the seed volume is a deploy-time artifact. It is
 produced outside the runtime code in this workspace (Btrfs snapshot/send of the
 state tree at install/deploy time — the install path itself is `btrfs send`,
 the legacy shell install scripts being deprecated). This spec only requires the
 consumer read path (`state_tree::read_seed_volume()`), which treats a missing
 volume as first boot (empty tree, REQ-3.4). No snapshot cadence is defined or
-modified by this spec, and no op-blockchain code is reachable from, or required
+modified by this spec, and no op-snowball code is reachable from, or required
 by, the mutation engine for seed production.
 
 ---
@@ -243,7 +243,7 @@ by, the mutation engine for seed production.
 
 (Install scripts are deprecated — see the note at the end of this section.)
 
-`op-blockchain` is entirely untouched by this spec — the seed volume is external
+`op-snowball` is entirely untouched by this spec — the seed volume is external
 to it (see §4). Nothing needs rehoming because nothing in the runtime depended
 on the projection binary for snapshot production.
 
@@ -328,7 +328,7 @@ Cold start:
   RETARGETED: it now writes `/dev/shm/opdbus/state/<plugin_id>.json` (where
   schema_router and state_tree read) instead of the orphaned `projections/` dir.
 - One-file-per-plugin layout (`<plugin_id>.json`, whole state object) — KEPT.
-- `op-blockchain` — UNTOUCHED. It is the per-mutation durability chain and has no
+- `op-snowball` — UNTOUCHED. It is the per-mutation durability chain and has no
   relationship to the cold-start seed volume (§4).
 - `op-grpc-bridge` schema_router.rs — MODIFIED (gains `Updated` signal), not deleted.
 - The broadcast `StateChange` payload on the gRPC event stream — UNCHANGED (the

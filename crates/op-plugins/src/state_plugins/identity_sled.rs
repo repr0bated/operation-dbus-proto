@@ -79,9 +79,15 @@ pub struct ContainerIdentitySled {
         extend("x-oscal-subid" = "src.service.identity-sled.sealed-id@v1")
     )]
     pub sealed_id: Option<String>,
-    /// The sled's persistence: an immutable sealed btrfs image, registered as
-    /// a first-class btrfs device record in Cozo and attached via
-    /// `btrfs device add` — no overlay layers, no subvolumes.
+    /// Actor class for implicit session selection: `human` or `service`.
+    /// This is not the SID1 envelope's `principal_kind` (always
+    /// `wireguard-principal`). Do not seal this value into SID1.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "src.service.identity-sled.actor-class@v1"))]
+    pub principal_kind: Option<String>,
+    /// Dedicated per-identity btrfs on a loop-backed `fstorage.img`,
+    /// registered in Cozo and bind-mounted into the leaf. Not
+    /// `btrfs device add` onto the Incus pool.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "src.service.identity-sled.btrfs-device@v1"))]
     pub btrfs_device: Option<SledBtrfsDevice>,
@@ -147,14 +153,15 @@ impl ContainerIdentitySled {
 }
 
 /// The btrfs device that IS the sled's persistence. The record of truth lives
-/// in Cozo (the device registry); the physical attach is `btrfs device add`.
+/// in Cozo; the image is a dedicated loop-backed filesystem, not an Incus-pool
+/// extra device.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.service.identity-sled.btrfs-device.schema@v1"))]
 pub struct SledBtrfsDevice {
     /// Path of the sealed image / block device (e.g. loop-backed image file).
     pub device_path: String,
-    /// Mounted btrfs filesystem the device is added TO (`btrfs device add
-    /// <device_path> <mount_point>`).
+    /// Host mount of the dedicated identity btrfs (loop-backed image).
+    /// Bind-mounted into the leaf; never added as a device of the Incus pool.
     #[serde(default)]
     pub mount_point: String,
     /// btrfs filesystem UUID of the sealed image.
@@ -163,7 +170,7 @@ pub struct SledBtrfsDevice {
     /// Cozo row id of the device record (the registry of truth).
     #[serde(default)]
     pub cozo_id: String,
-    /// Whether the device is currently attached (`btrfs device add` done).
+    /// Whether the dedicated identity filesystem is mounted and bind-ready.
     #[serde(default)]
     pub attached: bool,
 }
@@ -323,8 +330,7 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub interface: String,
         #[serde(default)]
         pub peer_ip: Option<String>,
-        /// btrfs device (Cozo-registered, `btrfs device add`-attached) that is
-        /// this sled's persistence.
+        /// Cozo-registered dedicated identity btrfs (loop-backed image).
         #[serde(default)]
         pub btrfs_device: Option<SledBtrfsDevice>,
     }
@@ -333,10 +339,6 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         /// WireGuard public key (base64). session_id — and therefore the
         /// container name — is DERIVED from this, never supplied.
         pub wireguard_pubkey: String,
-        /// Provision-time PSK (base64); when present the session_id derivation
-        /// is Argon2(PSK, salt=pubkey).
-        #[serde(default)]
-        pub psk: Option<String>,
         /// btrfs persistence device to register for this sled.
         #[serde(default)]
         pub btrfs_device: Option<SledBtrfsDevice>,

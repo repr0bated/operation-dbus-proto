@@ -249,16 +249,16 @@ Gating: chatbot=read-only (`mcp.read`); local agents=execute (`mcp.invoke`); adm
 | GetCounts | ()→StoreCounts | R | y | datastore.read | obs.software.plugin.datastore.counts@v1 |
 | ExportCanonical | ()→CanonicalExportView | R | y | datastore.read | obs.software.plugin.datastore.export.canonical@v1 |
 
-## blockchain  (StreamingBlockchain footprint ledger)
+## snowball  (StreamingSnowball footprint ledger)
 | method | I/O | side | idem | cap | subid |
 |---|---|---|---|---|---|
-| GetState | ()→BlockchainState | R | y | blockchain.read | obs.software.plugin.blockchain.state@v1 |
-| GetFootprint | {key}→FootprintView | R | y | blockchain.read | obs.software.plugin.blockchain.footprint.read@v1 |
-| VerifyHash | {event_hash,data}→VerifyResult | R | y | blockchain.read | evt.software.plugin.blockchain.footprint.verify@v1 |
-| ListSnapshots | ()→SnapshotList | R | y | blockchain.read | obs.software.plugin.blockchain.snapshots.list@v1 |
-| GetRetention | ()→RetentionConfig | R | y | blockchain.read | obs.software.plugin.blockchain.retention@v1 |
-| AddFootprint | AddFootprintInput→FootprintAck{event_hash} | M | n | blockchain.write | evt.software.plugin.blockchain.footprint.append@v1 |
-| CreateSnapshot | ()→SnapshotAck{event_id} | M | n | blockchain.write | evt.software.plugin.blockchain.snapshot.create@v1 |
+| GetState | ()→SnowballState | R | y | snowball.read | obs.software.plugin.snowball.state@v1 |
+| GetFootprint | {key}→FootprintView | R | y | snowball.read | obs.software.plugin.snowball.footprint.read@v1 |
+| VerifyHash | {event_hash,data}→VerifyResult | R | y | snowball.read | evt.software.plugin.snowball.footprint.verify@v1 |
+| ListSnapshots | ()→SnapshotList | R | y | snowball.read | obs.software.plugin.snowball.snapshots.list@v1 |
+| GetRetention | ()→RetentionConfig | R | y | snowball.read | obs.software.plugin.snowball.retention@v1 |
+| AddFootprint | AddFootprintInput→FootprintAck{event_hash} | M | n | snowball.write | evt.software.plugin.snowball.footprint.append@v1 |
+| CreateSnapshot | ()→SnapshotAck{event_id} | M | n | snowball.write | evt.software.plugin.snowball.snapshot.create@v1 |
 
 ---
 

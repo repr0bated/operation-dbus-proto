@@ -191,7 +191,7 @@ while let Some(update) = monitor_rx.recv().await {
 - D-Bus method access is controlled by the D-Bus policy and the rovs service ACL.
 - No shell command injection possible.
 - Atomic transactions prevent partial updates.
-- Audit logging via the immutable blockchain.
+- Audit logging via the immutable snowball.
 
 ## References
 

@@ -106,10 +106,10 @@ This document provides a complete, line-by-line audit mapping **EVERY specificat
 
 ### Spec 15: `accountability-audit-trail`
 * **Requirements**: [`.kiro/specs/accountability-audit-trail/requirements.md:1-50`](file:///srv/git/odbus/.kiro/specs/accountability-audit-trail/requirements.md#L1-L50)
-  - Mutation logging to `EventChain` and durable blockchain store.
+  - Mutation logging to `EventChain` and durable snowball store.
 * **Code Implementation**:
   - [`crates/op-grpc-bridge/src/mutation_engine.rs:913-1032`](file:///srv/git/odbus/crates/op-grpc-bridge/src/mutation_engine.rs#L913-L1032)
-  - [`crates/op-blockchain/src/blockchain.rs:1-120`](file:///srv/git/odbus/crates/op-blockchain/src/blockchain.rs#L1-L120)
+  - [`crates/op-snowball/src/snowball.rs:1-120`](file:///srv/git/odbus/crates/op-snowball/src/snowball.rs#L1-L120)
 
 ### Spec 16: `zeroclaw-router-wiring`
 * **Requirements**: [`.kiro/specs/zeroclaw-router-wiring/requirements.md:1-45`](file:///srv/git/odbus/.kiro/specs/zeroclaw-router-wiring/requirements.md#L1-L45)

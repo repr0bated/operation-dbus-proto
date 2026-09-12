@@ -161,26 +161,17 @@ impl ActiveReflectionCatalog {
 
 impl ActiveReflectionInner {
     fn rebuild_index(&mut self) {
-        // Collect all service names from active blobs (including per-method services
-        // like operation.method.*). These are the services that will be listed in
-        // ListServices and available for discovery.
-        let mut active_services = self
-            .blobs
-            .values()
-            .flat_map(|blob| blob.manifest.grpc.services.clone())
+        // A sealed blob proves plugin presence, not that every descriptor in
+        // it has a mounted RPC handler. The blob's operation.method.* entries
+        // are schema metadata; add_routes mounts operation.plugin.v1.* instead.
+        // Advertise only those mounted services, gated by live blob presence.
+        // This table is generated alongside add_routes, not an existence check
+        // against the Rust plugin registry. Blob descriptors remain readable.
+        let active_services = crate::grpc_server::LEGACY_PLUGIN_METHOD_SERVICES
+            .iter()
+            .filter(|(plugin_id, _)| self.blobs.contains_key(*plugin_id))
+            .map(|(_, service)| service.to_string())
             .collect::<BTreeSet<_>>();
-
-        // A blob manifest only carries the per-method `operation.method.*`
-        // services. The build-time aggregate `operation.plugin.v1.*PluginMethods`
-        // is mounted by the generated `add_routes`, so leaving it unadvertised
-        // makes a callable service undiscoverable. Both sides read the same
-        // generated table.
-        active_services.extend(
-            crate::grpc_server::LEGACY_PLUGIN_METHOD_SERVICES
-                .iter()
-                .filter(|(plugin_id, _)| self.blobs.contains_key(*plugin_id))
-                .map(|(_, service)| service.to_string()),
-        );
 
         let mut index = ReflectionIndex::new(active_services);
 
@@ -472,13 +463,17 @@ mod tests {
             .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
 
         catalog
-            .upsert_blob(crate::zeroclaw_object_blob::from_plugin_schema())
+            .upsert_blob(crate::tched_router_object_blob::from_plugin_schema())
             .await;
         let after = catalog.list_services().await;
         // Legacy service (mounted via build.rs) is advertised.
         assert!(after
             .iter()
             .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
+        assert!(after.iter().all(|service| {
+            service == "grpc.reflection.v1.ServerReflection"
+                || service == "operation.plugin.v1.TchedRouterPluginMethods"
+        }));
 
         catalog.remove_blob("tched_router").await;
         let removed = catalog.list_services().await;
@@ -502,8 +497,9 @@ mod tests {
 
         // External sealer (the op-blob binary's role): seals the blob and
         // commits the manifest — no call into the bridge.
-        let blob = crate::zeroclaw_object_blob::from_plugin_schema();
-        let expected_services = blob.manifest.grpc.services.clone();
+        let blob = crate::tched_router_object_blob::from_plugin_schema();
+        let descriptor_only_services = blob.manifest.grpc.services.clone();
+        assert!(!descriptor_only_services.is_empty());
         {
             let mut store = op_blob::BlobStore::open(&dir).unwrap();
             store.write(&blob).unwrap();
@@ -511,10 +507,13 @@ mod tests {
 
         catalog.sync_from_shm().await;
         let after = catalog.list_services().await;
-        for service in &expected_services {
+        assert!(after
+            .iter()
+            .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
+        for service in &descriptor_only_services {
             assert!(
-                after.iter().any(|s| s == service),
-                "missing {service} after SHM resync"
+                !after.iter().any(|s| s == service),
+                "unmounted descriptor {service} advertised after SHM resync"
             );
         }
 

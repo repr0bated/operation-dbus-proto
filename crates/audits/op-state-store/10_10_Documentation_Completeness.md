@@ -3,7 +3,7 @@
 ## 1. Documentation Quality Audit (Docs Role)
 
 ### Crate-Level Documentation Check
-The crate-level documentation is declared in `crates/op-state-store/src/lib.rs:3-17`. It contains a well-structured `//!` header introducing the *OP State Store* execution tracking and job ledger, highlighting its features (SQLite, Redis, Prometheus, Schema validation, Disaster Recovery, Blockchain compliance, and Merkle-tree batching).
+The crate-level documentation is declared in `crates/op-state-store/src/lib.rs:3-17`. It contains a well-structured `//!` header introducing the *OP State Store* execution tracking and job ledger, highlighting its features (SQLite, Redis, Prometheus, Schema validation, Disaster Recovery, Snowball compliance, and Merkle-tree batching).
 
 ### README.md Presence
 No `README.md` was provided in the inspected files. A production-ready crate should include a comprehensive `README.md` at the crate root to document setup, prerequisites (such as SQLite and Redis), deployment architectures, and developer onboarding instructions.
@@ -41,7 +41,7 @@ This approach violates the schema-as-code discipline and introduces serializatio
    * **Ad-hoc structs**: `ExecutionJob` (`crates/op-state-store/src/execution_job.rs:22`) and `ExecutionResult` (`crates/op-state-store/src/execution_job.rs:14`) are manually maintained and serialized to/from JSON. They should instead be defined as versioned Protocol Buffer schemas to guarantee deterministic backward-compatible wire representation across the system.
 
 2. **Ledger Compliance Event Ledger Contracts**:
-   * **Ad-hoc structs**: `ChainEvent` (`crates/op-state-store/src/event_chain.rs:125`), `EventBatch` (`crates/op-state-store/src/event_chain.rs:242`), `MerkleProof` (`crates/op-state-store/src/event_chain.rs:293`), and `StateSnapshot` (`crates/op-state-store/src/event_chain.rs:320`) are used for blockchain-style compliance proofs. Defining security audit trail objects in ad-hoc JSON format risks parsing discrepancies between different validation tools. These should follow highly defined OSCAL schemas or binary-stable Protobuf schemas.
+   * **Ad-hoc structs**: `ChainEvent` (`crates/op-state-store/src/event_chain.rs:125`), `EventBatch` (`crates/op-state-store/src/event_chain.rs:242`), `MerkleProof` (`crates/op-state-store/src/event_chain.rs:293`), and `StateSnapshot` (`crates/op-state-store/src/event_chain.rs:320`) are used for snowball-style compliance proofs. Defining security audit trail objects in ad-hoc JSON format risks parsing discrepancies between different validation tools. These should follow highly defined OSCAL schemas or binary-stable Protobuf schemas.
 
 3. **Disaster Recovery Wire Contracts**:
    * **Ad-hoc structs**: `SystemDependency` (`crates/op-state-store/src/disaster_recovery.rs:14`), `PluginStateExport` (`crates/op-state-store/src/disaster_recovery.rs:29`), and `DisasterRecoveryExport` (`crates/op-state-store/src/disaster_recovery.rs:45`) represent complete control plane backups. There is no machine-readable metadata or versioning schema mapping outside of hardcoded string version checks.
@@ -88,7 +88,7 @@ This approach violates the schema-as-code discipline and introduces serializatio
   * `crates/op-state-store/src/disaster_recovery.rs:101`, `183`
   * `crates/op-state-store/src/schema_shuttle.rs:49`, `82`
 * **Impact**: High / Cryptographic validation bypass, ledger forgery.
-* **Description**: The compliance system advertises a "tamper-evident audit trail" with a "blockchain-style compliance and reproducibility layer." However, the entire hash linkage mechanism, Merkle tree batching, and snapshot validation rely exclusively on **MD5** hashing:
+* **Description**: The compliance system advertises a "tamper-evident audit trail" with a "snowball-style compliance and reproducibility layer." However, the entire hash linkage mechanism, Merkle tree batching, and snapshot validation rely exclusively on **MD5** hashing:
   ```rust
   // event_chain.rs:537-540
   fn compute_hash(value: &Value) -> String {

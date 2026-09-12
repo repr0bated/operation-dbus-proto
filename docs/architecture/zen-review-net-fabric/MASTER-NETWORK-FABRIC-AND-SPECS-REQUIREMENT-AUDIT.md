@@ -136,7 +136,7 @@ graph TD
 | **GEN-REQ-2** | Memory-mapped sled file bounds validation (`len >= 152`) before `mmap`. | [`crates/op-identity/src/lib.rs:25-45`](file:///srv/git/odbus/crates/op-identity/src/lib.rs#L25-L45) | **PASS** |
 | **TORCH-REQ-1**| Zero-downtime session handoff across reconnecting operator instances. | Sled sequence number increment in `crates/op-identity`. | **PASS** |
 | **AUDIT-REQ-1**| Linear `StateChange` records appended to `EventChain` on every mutation. | [`crates/op-grpc-bridge/src/mutation_engine.rs:913-1032`](file:///srv/git/odbus/crates/op-grpc-bridge/src/mutation_engine.rs#L913-L1032) | **PASS** |
-| **AUDIT-REQ-2**| Streaming blockchain persistence to `/var/lib/opdbus/blockchain`. | [`crates/op-blockchain/src/blockchain.rs:1-120`](file:///srv/git/odbus/crates/op-blockchain/src/blockchain.rs#L1-L120) | **PASS** |
+| **AUDIT-REQ-2**| Streaming snowball persistence to `/var/lib/opdbus/snowball`. | [`crates/op-snowball/src/snowball.rs:1-120`](file:///srv/git/odbus/crates/op-snowball/src/snowball.rs#L1-L120) | **PASS** |
 
 ---
 

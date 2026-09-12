@@ -1,0 +1,26 @@
+{
+  "$defs": {
+    "EvalHarnessConfig": {
+      "description": "Configuration for the agent evaluation harness (`[eval]`), surfaced via the\n`zeroclaw eval` command. Distinct from `[agent.eval]`, which is the in-loop\nresponse-quality scorer.",
+      "properties": {
+        "mode": {
+          "default": "replay",
+          "description": "Default execution mode (`replay` or `live`) used when `--mode` is omitted.",
+          "type": "string"
+        },
+        "suite_dir": {
+          "default": "evals",
+          "description": "Default directory of `*.json` trace fixtures used when `--suite` is omitted.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/EvalHarnessConfig",
+  "default": {
+    "mode": "replay",
+    "suite_dir": "evals"
+  },
+  "description": "Agent evaluation harness (`[eval]`) — surfaced via `zeroclaw eval`.\nDistinct from `[agent.eval]`, which is the in-loop response-quality scorer."
+}

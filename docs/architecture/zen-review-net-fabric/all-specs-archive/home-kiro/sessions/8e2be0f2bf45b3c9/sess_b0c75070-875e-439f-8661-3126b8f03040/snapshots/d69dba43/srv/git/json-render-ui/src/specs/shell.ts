@@ -52,7 +52,7 @@ export const shellSpec: Spec = {
     },
     "stat-events": {
       type: "stateValue",
-      props: { path: "blockchain.event_count", label: "Events", format: "raw" },
+      props: { path: "snowball.event_count", label: "Events", format: "raw" },
     },
     "stat-uptime": {
       type: "stateValue",

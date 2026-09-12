@@ -1,0 +1,282 @@
+{
+  "$defs": {
+    "ApprovalRoute": {
+      "description": "Routes tool approvals to a distinct approver channel with fail-closed defaults.",
+      "properties": {
+        "approver_channel": {
+          "description": "A registered channel name (NOT the originator) — the distinct-approver hop.",
+          "type": "string"
+        },
+        "on_no_approver": {
+          "$ref": "#/$defs/OnNoApprover",
+          "default": "deny",
+          "description": "Behavior when the approver is unreachable. Fail-closed by default."
+        },
+        "timeout_secs": {
+          "default": 120,
+          "description": "Bound the approver's response window; a timeout denies (DoS guard). Default 120s.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "approver_channel"
+      ],
+      "type": "object"
+    },
+    "AutonomyLevel": {
+      "description": "The agent's autonomy level, ordered from least to most autonomous.",
+      "oneOf": [
+        {
+          "const": "readonly",
+          "description": "Read-only: can observe but not act",
+          "type": "string"
+        },
+        {
+          "const": "supervised",
+          "description": "Supervised: acts but requires approval for risky operations",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "Full: autonomous execution within policy bounds",
+          "type": "string"
+        }
+      ]
+    },
+    "DelegationMode": {
+      "description": "Delegation mode for a risk profile.",
+      "oneOf": [
+        {
+          "const": "forbidden",
+          "description": "No delegation permitted.",
+          "type": "string"
+        },
+        {
+          "const": "allow",
+          "description": "Delegation permitted to the agents named in the allow-list.",
+          "type": "string"
+        }
+      ]
+    },
+    "DelegationPolicy": {
+      "description": "Risk-profile delegation policy for work sent to agents that share it.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/DelegationMode",
+          "default": "forbidden"
+        }
+      },
+      "type": "object"
+    },
+    "OnNoApprover": {
+      "description": "What to do when a configured approver cannot be reached. Default FAIL-CLOSED.",
+      "oneOf": [
+        {
+          "const": "deny",
+          "description": "Fail-closed: deny when the approver is unreachable / declines / times out.",
+          "type": "string"
+        },
+        {
+          "const": "inherit-originator",
+          "description": "Explicit opt-in: fall back to the originating channel (today's behavior).",
+          "type": "string"
+        }
+      ]
+    },
+    "RiskProfileConfig": {
+      "description": "Named risk/autonomy profile (`[risk_profiles.<alias>]`).\n\nUnified policy surface. Agents reference a profile by alias and the\nruntime resolves through it for shell command allowlists, approval gates,\nsandbox/resource limits, and delegation guardrails. The conventional\n`risk_profiles[\"default\"]` is the resolution target for non-agent\ncontexts (orchestrator init, cron worker startup); the `Default` impl\nbelow mirrors the legacy safety-first defaults so a fresh install\nbehaves the same as a config from before the per-profile split.",
+      "properties": {
+        "allowed_commands": {
+          "default": [
+            "git",
+            "npm",
+            "cargo",
+            "ls",
+            "cat",
+            "grep",
+            "find",
+            "echo",
+            "pwd",
+            "wc",
+            "head",
+            "tail",
+            "date",
+            "df",
+            "du",
+            "uname",
+            "uptime",
+            "hostname",
+            "python",
+            "python3",
+            "pip",
+            "node",
+            "free"
+          ],
+          "description": "Allowlist of executable names for shell execution.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_roots": {
+          "default": [],
+          "description": "Extra directory roots the agent may access.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_tools": {
+          "default": [],
+          "description": "Tools the agent may call in agentic mode. Empty = inherit / no\nauthorization constraint. Authorization decision: which tools is\nthe agent permitted to invoke at all. See `excluded_tools` for\nthe inverse denylist scoped to non-CLI channels.\n\nThe TOML config does not distinguish an omitted field from\n`allowed_tools = []`; both deserialize to `Vec::new()` and\n`SecurityPolicy::from_profiles` maps that to \"no authorization\nconstraint\" at this layer. If you need an explicit deny-all gate,\napply it on the caller-supplied per-run `allowed_tools` (cron\njobs and other narrowers pass that list in directly to\n`ToolAccessPolicy`, which honors `Some(vec![])` as deny-all) or\nvia `excluded_tools` covering the specific tools you want blocked.\n\nMCP exception: when the list is non-empty, runtime-discovered MCP\ntools (any name containing `__`, which is the `<server>__<tool>`\nconvention used by the MCP wrapper) are auto-admitted into the\neffective allow-list without needing to be listed here individually.\nThis keeps the post-change eager-MCP default usable for agents with an\nexplicit allow-list. Block individual MCP tools via `excluded_tools`.\n\nScope of the exception: the `__` auto-admit applies only to this\nrisk-profile allow-list, **not** to caller-supplied per-run\n`allowed_tools` (cron job `allowed_tools`, narrowed delegate\ninvocations, etc.). Per-run lists are still strict explicit-list\nintersections, so a job that narrows `allowed_tools = [\"cron_add\"]`\nwill not see runtime-discovered MCP tools unless it names them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "always_ask": {
+          "default": [],
+          "description": "Tools that always require approval in this profile.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "approval_route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalRoute"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Route this profile's tool approvals to a DISTINCT approver channel instead of the\nchannel that triggered the run (closes the cross-channel-HITL gap). Absent ⇒ the\noriginating channel approves (today's behavior). See [`crate::autonomy::ApprovalRoute`].\n\nHonored on both the interactive channel-driven path and the non-interactive turn path\n(gateway chat/webhook dispatch and agent-to-agent peer messages). On the non-interactive\npath the approver is resolved from the live daemon channel registry; if no registry is\navailable or the approver is not live, the gate keeps the non-interactive default\n(fail-closed deny under the default `on_no_approver`)."
+        },
+        "auto_approve": {
+          "default": [
+            "file_read",
+            "memory_recall",
+            "web_search_tool",
+            "web_fetch",
+            "calculator",
+            "glob_search",
+            "content_search",
+            "image_info",
+            "weather",
+            "tool_search",
+            "browser",
+            "browser_open"
+          ],
+          "description": "Tools that never require approval in this profile.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "block_high_risk_commands": {
+          "default": true,
+          "description": "Block high-risk commands even when allowlisted.",
+          "type": "boolean"
+        },
+        "delegation_policy": {
+          "$ref": "#/$defs/DelegationPolicy",
+          "default": {
+            "mode": "forbidden"
+          },
+          "description": "Whether agents using this profile may initiate delegation. Defaults to\n`Forbidden`. Reachable delegate targets and bounded/independent mode\nare resolved from each caller agent's config."
+        },
+        "excluded_tools": {
+          "default": [],
+          "description": "Tools excluded from non-CLI channels under this profile.\n\nAlso subtracts from the agentic-delegate allow-list resolved at\nruntime, which is the only way to block individual\n`<server>__<tool>` MCP names that would otherwise be auto-admitted\nby the `allowed_tools` MCP exception described above.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "firejail_args": {
+          "default": [],
+          "description": "Extra arguments forwarded to firejail when sandbox_backend = \"firejail\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "forbidden_paths": {
+          "default": [
+            "/etc",
+            "/root",
+            "/home",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/lib",
+            "/opt",
+            "/boot",
+            "/dev",
+            "/proc",
+            "/sys",
+            "/var",
+            "/tmp",
+            "~/.ssh",
+            "~/.gnupg",
+            "~/.aws",
+            "~/.config"
+          ],
+          "description": "Explicit path denylist.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "level": {
+          "$ref": "#/$defs/AutonomyLevel",
+          "default": "supervised",
+          "description": "Autonomy level applied to this profile. Default: `supervised`."
+        },
+        "require_approval_for_medium_risk": {
+          "default": true,
+          "description": "Require approval for medium-risk operations.",
+          "type": "boolean"
+        },
+        "sandbox_backend": {
+          "default": null,
+          "description": "Sandbox backend identifier (e.g. `\"firejail\"`, `\"landlock\"`). `None` inherits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox_enabled": {
+          "default": null,
+          "description": "Whether the sandbox is enabled for this profile. `None` inherits global.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "shell_env_passthrough": {
+          "default": [],
+          "description": "Environment variable names passed through to shell subprocesses.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workspace_only": {
+          "default": true,
+          "description": "Restrict filesystem access to workspace-relative paths. Default: `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": {
+    "$ref": "#/$defs/RiskProfileConfig"
+  },
+  "description": "Named risk/autonomy profiles (`[risk_profiles.<alias>]`).",
+  "type": "object"
+}

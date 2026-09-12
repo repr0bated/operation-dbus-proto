@@ -4,7 +4,7 @@ description: >-
   Expert skill for building json-render.dev catalog components, page specs, and
   generative UI across three repos: /srv/git/json-render (library source),
   /srv/git/odbus (Rust backend + op-web Axum server), and
-  /srv/git/operation-dashboard-ui-07 (React/TypeScript operator console).
+  /srv/git/json-render-ui-vercel (separate chatbot-rendered UI repository).
   Covers the full stack: defineCatalog → Zod schema → React component →
   pageSpec → NAV_MANIFEST → factory plugin wiring → sealed blob pipeline →
   gallery/catalog promotion gate. Also covers the D-Bus plugin schema for
@@ -12,6 +12,29 @@ description: >-
 ---
 
 # json-render Skill
+
+## Local deployment policy — runit, not systemd
+
+The user-designated UI repository is `/srv/git/json-render-ui-vercel`, separate
+from `/srv/git/odbus` and synchronized by a script. Inspect that repository's
+actual build/sync scripts before invoking them; do not assume older examples
+below describe files that already exist there. `/srv/git/vercel-json-render-ui`
+and `/srv/git/operation-dashboard-ui-07` are not targets for new UI work.
+
+The host uses runit. Backend runtime actions go through the authenticated D-Bus
+plugin surface. Only for authorized operator service work use `sudo -n sv`
+(for example `sudo -n sv status op-web`); never use `systemctl`, its shim, s6 or
+service6. Edit versioned runit inputs, not `/run/runit/service`. Backend releases
+use `deploy/runit/build-golden.sh --dry-run` before the authorized golden/live
+deployment; never hand-copy binaries. Static UI synchronization does not itself
+require an op-web restart. Do not create a parallel frontend backend or expose
+broker credentials to the browser.
+
+EMQX is the retained vendor-binary-backed `emqx` D-Bus plugin, independent of
+retired Netmaker. Broker events may drive authorized live state updates while
+the chatbot generates schema-pinned layout patches. A generated mode, component
+or action never grants permissions: enforce verified session and project ACLs
+server-side, including on streamed updates and reconnects.
 
 ## Overview — Three Repos, One System
 
@@ -21,7 +44,7 @@ description: >-
   crates/op-plugins/src/state_plugins/json_render.rs    D-Bus plugin schema
   crates/op-plugins/src/state_plugins/schema_renderer.rs
   crates/op-web/src/handlers/ui_model.rs                Axum gallery/catalog routes
-/srv/git/operation-dashboard-ui-07     ← React operator console (TypeScript)
+/srv/git/json-render-ui-vercel        ← active UI target; paths below are layout examples
   src/json-render/
     catalog/catalog.ts                 defineCatalog (app catalog contract)
     catalog/registry.tsx               defineRegistry (component implementations)
@@ -69,7 +92,7 @@ Dynamic prop state references:
 
 ---
 
-## 2. Catalog Contract (operation-dashboard-ui-07)
+## 2. Catalog Contract (reference layout)
 
 **File:** `src/json-render/catalog/catalog.ts`
 
@@ -138,7 +161,7 @@ Component anatomy:
 
 ---
 
-## 4. Adding a Page (operation-dashboard-ui-07)
+## 4. Adding a Page (reference layout)
 
 ### Step 1 — NAV_MANIFEST entry
 **File:** `src/json-render/navigation/manifest.ts`
@@ -246,12 +269,12 @@ From `FACTORY-HANDOFF.md` and `CLAUDE.md` in `/srv/git/odbus`:
 - Compliance mappings belong in metadata arrays, not inside the `subid` string.
 
 ZeroClaw context:
-- ZeroClaw = model router / LLM gateway for GhostBridge.
-- Runs on host at `127.0.0.1:8090` (tonic-web), not in a container.
-- Factory plugin methods route through zeroclaw session/model management.
-- `factory.discover_byom` discovers BYOM (Bring Your Own Model) providers.
-- `factory.set_autonomy` configures autonomy level for sessions.
-- Live D-Bus name: `org.opdbus.projection`.
+
+- `tched_router` is the OP-DBUS scaffolding for the autonomous `zeroclaw` binary.
+- `op-grpc-bridge`, not that binary, owns the `:8090` TLS fabric. Cognitive MCP
+  is in-process; do not start a standalone cognitive MCP runit service.
+- The factory examples above are historical; verify current methods, input
+  types, capabilities and bus names from the sealed plugin surface before use.
 
 ---
 
@@ -335,7 +358,7 @@ Use when rendering raw gRPC response data without a custom component.
 
 | What | Path |
 |---|---|
-| Catalog contract | `/srv/git/operation-dashboard-ui-07/src/json-render/catalog/catalog.ts` |
+| Catalog contract (reference layout; inspect target first) | `/srv/git/json-render-ui-vercel/src/json-render/catalog/catalog.ts` |
 | Component registry | `src/json-render/catalog/registry.tsx` |
 | Shell components | `src/json-render/catalog/components/shell.tsx` |
 | Dashboard widgets | `src/json-render/catalog/components/dashboard.tsx` |

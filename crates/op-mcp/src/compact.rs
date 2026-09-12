@@ -570,7 +570,9 @@ pub async fn run_compact_stdio_server() -> Result<()> {
     let peer_pubkey = if let Ok(pubkey) = std::env::var("WG_PUBKEY") {
         info!(pubkey = %pubkey, "WG_PUBKEY configured; using injected WireGuard identity");
         Some(pubkey)
-    } else if let Ok(wg_iface) = std::env::var("WG_INTERFACE").or_else(|_| std::env::var("FABRIC_WG_INTERFACE")) {
+    } else if let Ok(wg_iface) =
+        std::env::var("WG_INTERFACE").or_else(|_| std::env::var("FABRIC_WG_INTERFACE"))
+    {
         tracing::warn!(
             interface = %wg_iface,
             "WG_INTERFACE/FABRIC_WG_INTERFACE identity path is deprecated; prefer explicit pubkey injection"
@@ -588,7 +590,9 @@ pub async fn run_compact_stdio_server() -> Result<()> {
             }
         }
     } else {
-        tracing::info!("No WG interface or WG_PUBKEY configured; running compact MCP without peer pubkey");
+        tracing::info!(
+            "No WG interface or WG_PUBKEY configured; running compact MCP without peer pubkey"
+        );
         None
     };
 
@@ -640,7 +644,9 @@ pub async fn run_compact_unix_server(unix_path: &std::path::Path) -> Result<()> 
             }
         }
     } else {
-        tracing::info!("No WG interface or WG_PUBKEY configured; running compact MCP without peer pubkey");
+        tracing::info!(
+            "No WG interface or WG_PUBKEY configured; running compact MCP without peer pubkey"
+        );
         None
     };
 

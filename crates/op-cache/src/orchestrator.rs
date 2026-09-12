@@ -463,7 +463,7 @@ mod tests {
         })
     }
 
-    async fn setup_test_orchestrator() -> Orchestrator {
+    async fn setup_test_orchestrator() -> (Orchestrator, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let registry = Arc::new(AgentRegistry::new());
 
@@ -495,14 +495,19 @@ mod tests {
             ..Default::default()
         };
 
-        Orchestrator::new(temp_dir.path().to_path_buf(), config, registry)
+        let orchestrator = Orchestrator::new(temp_dir.path().to_path_buf(), config, registry)
             .await
-            .unwrap()
+            .unwrap();
+
+        // Keep the directory owner alive for the lifetime of the database
+        // connections. Dropping it moves/deletes the files and causes SQLite
+        // error 1032 ("database file has moved") on the first write.
+        (orchestrator, temp_dir)
     }
 
     #[tokio::test]
     async fn test_single_capability_resolution() {
-        let orchestrator = setup_test_orchestrator().await;
+        let (orchestrator, _temp_dir) = setup_test_orchestrator().await;
 
         let request =
             CapabilityRequest::new(vec![AgentCapability::CodeAnalysis], b"test input".to_vec());
@@ -516,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multi_capability_workstack() {
-        let orchestrator = setup_test_orchestrator().await;
+        let (orchestrator, _temp_dir) = setup_test_orchestrator().await;
 
         let request = CapabilityRequest::new(
             vec![
@@ -536,7 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_direct_agent_execution() {
-        let orchestrator = setup_test_orchestrator().await;
+        let (orchestrator, _temp_dir) = setup_test_orchestrator().await;
 
         let result = orchestrator
             .execute_agents(&["analyzer", "tester", "security"], b"input".to_vec())

@@ -96,9 +96,9 @@ Mesh state gets embedded too: peer configs, topology changes, and posture snapsh
 
 ---
 
-## 4. The evidence chain ("blockchain" spin) — tamper-evident audit
+## 4. The evidence chain ("snowball" spin) — tamper-evident audit
 
-We don't run a coin or a public ledger. What we have is a **hash-linked chain of custody** — the property people actually want when they say "blockchain": *you can't quietly alter the record.*
+We don't run a coin or a public ledger. What we have is a **hash-linked chain of custody** — the property people actually want when they say "snowball": *you can't quietly alter the record.*
 
 How the chain is built:
 

@@ -1,7 +1,7 @@
 # Requirements — Session Genesis Identity
 
 > **Split the two meanings.** Genesis is the session anchor — minted once, at
-> login, never recomputed. Footprint goes back to meaning the blockchain record
+> login, never recomputed. Footprint goes back to meaning the snowball record
 > — one per mutation, carrying the genesis as its session stamp. The header is on
 > every packet. Constant for the life of the session. Verified with a single
 > equality. Fail closed.
@@ -11,7 +11,7 @@
 | Status | Draft — amended after review 2026-08-16. **Amendments are binding; do not revert them.** FR-4 rewritten (one authoritative store), OQ-1 reopened for the xray-terminated path, FR-11 added (replay), FR-12 added (session lifetime), FR-6 consequence stated, §9 schema-version row corrected, one deletion rationale corrected |
 | Extends | `netmaker-xray-identity-handoff/` (locked) |
 | Respects | `3tched-ghostbridge-control-plane/` (topology lock) |
-| Crates | `op-identity`, `op-grpc-bridge`, `op-state-store`, `op-blockchain` |
+| Crates | `op-identity`, `op-grpc-bridge`, `op-state-store`, `op-snowball` |
 | Supersedes | The "footprint = identity anchor" interpretation; `anna_scribe.rs` duplicate reader; `etch_footprint`'s index+port terms; the zeros sentinel; all seven global-sled writer sites |
 
 ---
@@ -27,7 +27,7 @@ Mismatch" because the header is stale before the client can present it.
 Two unrelated concepts share the name "footprint":
 1. The **identity anchor** (the header the interceptor checks), which chases a
    moving global counter and therefore cannot stay stable.
-2. The **blockchain record** (`PluginFootprint` in `op-blockchain`), which
+2. The **snowball record** (`PluginFootprint` in `op-snowball`), which
    carries no session identity at all — no pubkey, no session_id, no genesis —
    making the chain unsliceable per session and unverifiable offline.
 
@@ -136,7 +136,7 @@ removed**; absent identity is a hard rejection, not a degraded pass.
 
 ### FR-3: Chain record carries session identity for per-session slicing
 
-**When** the mutation engine persists an audit event to the blockchain,
+**When** the mutation engine persists an audit event to the snowball,
 **the system shall** include in the `PluginFootprint` metadata:
 
 - `session_genesis` — the genesis hash of the session that delivered this mutation.
@@ -205,7 +205,7 @@ sled) or be refactored to use the same lookup.
 
 **Acceptance criteria:**
 - [ ] `anna_scribe::notarize_arrival` is deleted or deprecated (its `File::open("/dev/shm/plugin_schema.dat")` is the duplicate reader).
-- [ ] `etch_footprint` is no longer called for identity-anchor purposes (it may survive for the blockchain footprint record if needed, renamed for clarity).
+- [ ] `etch_footprint` is no longer called for identity-anchor purposes (it may survive for the snowball footprint record if needed, renamed for clarity).
 - [ ] `CanonicalPeerIdentity::from_sled()` no longer reads the global 152-byte SHM file; it reads the session-specific record.
 - [ ] A grep-based gate confirms at most one function whose name or doc says "genesis" / "session anchor".
 

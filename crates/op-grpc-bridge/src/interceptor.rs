@@ -5,13 +5,12 @@
 //
 // Operated by A.N.N.A. Scribe. No payload enters the system without a cryptographic
 // "Snowball" session. No process-wide, last-writer-wins identity is consulted.
+#![allow(clippy::items_after_test_module)]
 
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
-use tonic::metadata::MetadataValue;
-use tonic::service::Interceptor;
 use tonic::transport::server::{TcpConnectInfo, TlsConnectInfo};
 use tonic::{Request, Status};
 
@@ -20,6 +19,8 @@ use crate::oracle_assertion::{AssertionRejection, AssertionValidator, HumanPrinc
 
 /// gRPC metadata key for the optional oracle identity assertion (OIA1 wire bytes).
 pub const ASSERTION_METADATA_KEY: &str = "x-oracle-identity-assertion-bin";
+/// gRPC metadata key for MutationEngine-authored SID1 (local identity).
+pub const SEALED_ID_METADATA_KEY: &str = op_identity::sealed_id::HTTP_HEADER_NAME;
 
 /// Identity extracted by the Ghostbridge interceptor and attached to each
 /// accepted request for bridge-layer authorization.
@@ -146,12 +147,9 @@ fn peer_socket_addr(req: &Request<()>) -> Option<SocketAddr> {
     connect_info_peer_addr(req)
 }
 
-fn read_assertion_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
-    let values: Vec<_> = req
-        .metadata()
-        .get_all_bin(ASSERTION_METADATA_KEY)
-        .into_iter()
-        .collect();
+#[allow(clippy::result_large_err)]
+fn read_bin_metadata(req: &Request<()>, key: &str) -> Result<Option<Vec<u8>>, Status> {
+    let values: Vec<_> = req.metadata().get_all_bin(key).into_iter().collect();
     if values.is_empty() {
         return Ok(None);
     }
@@ -164,12 +162,64 @@ fn read_assertion_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
     Ok(Some(wire.to_vec()))
 }
 
+#[allow(clippy::result_large_err)]
+fn read_assertion_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
+    read_bin_metadata(req, ASSERTION_METADATA_KEY)
+}
+
+#[allow(clippy::result_large_err)]
+fn read_sealed_id_wire(req: &Request<()>) -> Result<Option<Vec<u8>>, Status> {
+    read_bin_metadata(req, SEALED_ID_METADATA_KEY)
+}
+
+#[allow(clippy::result_large_err)]
+fn authenticate_sid1_grpc(mut req: Request<()>, wire: &[u8]) -> Result<Request<()>, Status> {
+    let engine =
+        engine_handle().ok_or_else(|| Status::internal("MutationEngine Memory Unreachable"))?;
+    let claims = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            crate::identity_sled_dispatch::authenticate_sid1_wire(engine.as_ref(), wire, "grpc"),
+        )
+    })
+    .map_err(Status::unauthenticated)?;
+    // SID1 proves the sled binding, not that its key remains authorized.
+    // Match the registry/revocation gate used by OIA1, MCP and D-Bus.
+    let principal_id = resolve_active_principal_id(&claims.wireguard_pubkey)?;
+    if principal_id != claims.principal_id {
+        return Err(Status::unauthenticated(
+            "Sealed identity does not match the registered principal",
+        ));
+    }
+    req.extensions_mut().insert(HumanPrincipalIdentity {
+        principal_id: claims.principal_id,
+        human_pubkey: claims.wireguard_pubkey,
+        session_id: claims.session_id,
+        expires_at: claims.expires_at,
+        session_genesis: claims.session_genesis,
+    });
+    Ok(req)
+}
+
+#[allow(clippy::result_large_err)]
 fn ghostbridge_interceptor_with_validator(
     validator: &AssertionValidator,
     mut req: Request<()>,
 ) -> Result<Request<()>, Status> {
-    let wire = read_assertion_wire(&req)?
-        .ok_or_else(|| Status::unauthenticated("Missing Oracle identity assertion"))?;
+    let assertion = read_assertion_wire(&req)?;
+    let sealed = read_sealed_id_wire(&req)?;
+    match (assertion.as_deref(), sealed.as_deref()) {
+        (Some(_), Some(_)) => {
+            return Err(Status::unauthenticated(
+                "send exactly one identity credential, not both OIA1 and SID1",
+            ));
+        }
+        (None, Some(wire)) => return authenticate_sid1_grpc(req, wire),
+        (Some(_), None) => {}
+        (None, None) => {
+            return Err(Status::unauthenticated("Missing Oracle identity assertion"));
+        }
+    }
+    let wire = assertion.expect("OIA1 wire after match");
     let source = peer_socket_addr(&req);
     let now = chrono::Utc::now().timestamp();
     let registration_bootstrap = req
@@ -209,6 +259,7 @@ pub fn ghostbridge_interceptor(req: Request<()>) -> Result<Request<()>, Status> 
 /// WireGuard identity of its own - e.g. Lovable). Returns `None` when
 /// there's no engine registered yet, no identifying header, or no matching
 /// record, so the caller can fall back to the shared host legacy sled.
+#[allow(clippy::result_large_err)]
 fn resolve_active_principal_id(human_pubkey: &str) -> Result<String, Status> {
     if human_pubkey.is_empty() {
         return Err(Status::unauthenticated(
@@ -266,10 +317,7 @@ fn verify_per_identity(
         .get("genesis")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let stored = match stored {
-        Some(s) => s,
-        None => return None,
-    };
+    let stored = stored?;
     let expires_at = identity.get("expires_at").and_then(|v| v.as_i64());
 
     if let Some(expires_at) = expires_at {
@@ -412,8 +460,10 @@ pub(crate) mod tests {
         signed_with_fields, source_at, test_ip, test_issuer, trust_store_for_issuer,
     };
     use crate::oracle_assertion::AssertionValidator;
+    use base64::Engine as _;
     use op_identity::session::derive_principal_id;
     use tonic::metadata::MetadataValue;
+    use tonic::service::Interceptor;
     use tonic::Code;
 
     fn install_grants(document: serde_json::Value) -> tempfile::TempDir {
@@ -657,6 +707,11 @@ pub(crate) mod tests {
         assert!(status.message().contains("Malformed"));
     }
 
+    fn insert_sealed_id_metadata(req: &mut Request<()>, wire: &[u8]) {
+        req.metadata_mut()
+            .insert_bin(SEALED_ID_METADATA_KEY, MetadataValue::from_bytes(wire));
+    }
+
     /// VAL-BRIDGE-026
     pub async fn assertion_without_connect_info_rejects_missing_connect_info_impl() {
         let _cozo = temp_cozo();
@@ -672,6 +727,107 @@ pub(crate) mod tests {
         let status = gate.call(req).unwrap_err();
         assert_eq!(status.code(), Code::Unauthenticated);
         assert!(status.message().contains("MissingConnectInfo"));
+    }
+
+    pub async fn sid1_parked_inserts_human_principal_identity_impl() {
+        let _cozo = temp_cozo();
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x72);
+        register(&pubkey, "parked-sid1").await.expect("register");
+        let identity = write_identity(engine.as_ref(), &pubkey)
+            .await
+            .expect("write");
+        crate::identity_sled_dispatch::deactivate_session(engine.as_ref(), &identity.session_id)
+            .await
+            .expect("park");
+        set_engine(engine);
+        let sealed = identity.sealed_id.clone().expect("sid1");
+        let encoded = sealed
+            .strip_prefix(op_identity::sealed_id::INLINE_PREFIX)
+            .expect("sid1 prefix");
+        let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.as_bytes())
+            .expect("sid1 b64");
+        let mut gate = make_ghostbridge_interceptor(validator_for_tests());
+        let mut req = Request::new(());
+        insert_sealed_id_metadata(&mut req, &wire);
+        let out = gate.call(req).expect("parked sid1");
+        let inserted = out
+            .extensions()
+            .get::<HumanPrincipalIdentity>()
+            .expect("human identity inserted");
+        assert_eq!(inserted.human_pubkey, pubkey);
+        assert_eq!(inserted.session_id, identity.session_id);
+        assert_eq!(
+            inserted.session_genesis,
+            identity.genesis.clone().expect("genesis")
+        );
+    }
+
+    pub async fn sid1_and_oia1_together_rejected_impl() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x73);
+        let identity = write_identity(engine.as_ref(), &pubkey)
+            .await
+            .expect("write");
+        set_engine(engine);
+        let sealed = identity.sealed_id.expect("sid1");
+        let encoded = sealed
+            .strip_prefix(op_identity::sealed_id::INLINE_PREFIX)
+            .expect("sid1 prefix");
+        let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.as_bytes())
+            .expect("sid1 b64");
+        let issuer = test_issuer();
+        let signed = fresh_signed(&issuer, &pubkey, [0x73; 16]);
+        let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
+            trust_store_for_issuer(&issuer),
+        )));
+        let mut req = request_with_connect_info(test_ip());
+        insert_assertion_metadata(&mut req, &signed.to_wire());
+        insert_sealed_id_metadata(&mut req, &wire);
+        let status = gate.call(req).unwrap_err();
+        assert_eq!(status.code(), Code::Unauthenticated);
+        assert!(status.message().contains("exactly one identity credential"));
+    }
+
+    pub async fn sid1_requires_current_principal_registration_impl() {
+        let _cozo = temp_cozo();
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x74);
+        let identity = write_identity(engine.as_ref(), &pubkey)
+            .await
+            .expect("write");
+        set_engine(engine);
+        let sealed = identity.sealed_id.expect("sid1");
+        let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(
+                sealed
+                    .strip_prefix(op_identity::sealed_id::INLINE_PREFIX)
+                    .unwrap(),
+            )
+            .expect("sid1 b64");
+        let request = || {
+            let mut req = Request::new(());
+            insert_sealed_id_metadata(&mut req, &wire);
+            req
+        };
+        let mut gate = make_ghostbridge_interceptor(validator_for_tests());
+        assert_eq!(
+            gate.call(request()).unwrap_err().code(),
+            Code::Unauthenticated
+        );
+        register(&pubkey, "sid1-revocation")
+            .await
+            .expect("register");
+        assert!(gate.call(request()).is_ok());
+        crate::human_principal_dispatch::tests::revoke(&pubkey)
+            .await
+            .expect("revoke");
+        assert_eq!(
+            gate.call(request()).unwrap_err().code(),
+            Code::PermissionDenied
+        );
     }
 
     /// VAL-BRIDGE-027

@@ -74,7 +74,7 @@ the moment"). Treat it as noted-but-out-of-scope. Keep ONLY what applies to a re
 eventually run locally:
 - Read SHM blobs / use `read_plugin_schema_shm` as SSOT. No live D-Bus session assumed.
 - Blobs are sectioned binary files in tmpfs `/dev/shm`, NOT btrfs filesystems. Do not describe them as
-  mountable filesystems or suggest mounting them; the durable layer is the blockchain, not btrfs mounts.
+  mountable filesystems or suggest mounting them; the durable layer is the snowball, not btrfs mounts.
 - The following local-only items from the access doc are EXCLUDED (remote agent cannot drive the bus or
   run privileged local tooling): `sudo /usr/local/bin/opblob seal-shm`, `zcall list/methods/expand`
   (interactive D-Bus discovery), and any assumption the bus is up. A remote agent reads sealed blobs; it

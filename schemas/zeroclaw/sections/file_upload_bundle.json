@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "FileUploadBundleConfig": {
+      "description": "Standalone multi-file bundle upload tool configuration\n(`[file_upload_bundle]`).\n\nWhen `url` is set to a non-empty value, registers a `file_upload_bundle`\ntool that POSTs N files from the agent's local filesystem to the\nconfigured endpoint as a single `multipart/form-data` request. The LLM\nprovides only file paths; the host reads the bytes.\n\nWhen `url` is `None` or empty, the tool is not registered.",
+      "properties": {
+        "field_name": {
+          "default": "file",
+          "description": "Multipart form-field name reused across every file part. Default: `file`.",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Static HTTP headers attached to every upload request.",
+          "type": "object",
+          "x-secret": true
+        },
+        "max_file_size_bytes": {
+          "default": 10485760,
+          "description": "Maximum per-file size in bytes. Default: 10 MiB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_files": {
+          "default": 16,
+          "description": "Maximum number of files per call. Default: 16.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_response_body_bytes": {
+          "default": 4096,
+          "description": "Maximum response body bytes to read from the upload endpoint.\nPrevents unbounded memory use from a malicious or verbose receiver.\nDefault: 4096 (4 KiB).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_total_size_bytes": {
+          "default": 33554432,
+          "description": "Maximum cumulative size across every file in one call. Default: 32 MiB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "method": {
+          "default": "POST",
+          "description": "HTTP method. Only `POST` (default) and `PUT` are accepted.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "default": 120,
+          "description": "Request timeout in seconds. Default: 120.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "default": null,
+          "description": "Upload endpoint URL. Tool is disabled when this is `None` or empty.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/FileUploadBundleConfig",
+  "default": {
+    "field_name": "file",
+    "headers": {},
+    "max_file_size_bytes": 10485760,
+    "max_files": 16,
+    "max_response_body_bytes": 4096,
+    "max_total_size_bytes": 33554432,
+    "method": "POST",
+    "timeout_secs": 120,
+    "url": null
+  },
+  "description": "Standalone multi-file bundle upload tool configuration\n(`[file_upload_bundle]`)."
+}

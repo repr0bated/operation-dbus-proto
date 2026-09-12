@@ -1,0 +1,26 @@
+{
+  "$defs": {
+    "VerifiableIntentConfig": {
+      "description": "Verifiable Intent (VI) credential verification and issuance (`[verifiable_intent]` section).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable VI credential verification on commerce tool calls (default: false).",
+          "type": "boolean"
+        },
+        "strictness": {
+          "default": "strict",
+          "description": "Strictness mode for constraint evaluation: \"strict\" (fail-closed on unknown\nconstraint types) or \"permissive\" (skip unknown types with a warning).\nDefault: \"strict\".",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/VerifiableIntentConfig",
+  "default": {
+    "enabled": false,
+    "strictness": "strict"
+  },
+  "description": "Verifiable Intent (VI) credential verification and issuance (`[verifiable_intent]`)."
+}

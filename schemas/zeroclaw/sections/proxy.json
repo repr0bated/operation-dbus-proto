@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "ProxyConfig": {
+      "description": "Proxy configuration for outbound HTTP/HTTPS/SOCKS5 traffic (`[proxy]` section).",
+      "properties": {
+        "all_proxy": {
+          "default": null,
+          "description": "Fallback proxy URL for all schemes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable proxy support for selected scope.",
+          "type": "boolean"
+        },
+        "http_proxy": {
+          "default": null,
+          "description": "Proxy URL for HTTP requests (supports http, https, socks5, socks5h).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "https_proxy": {
+          "default": null,
+          "description": "Proxy URL for HTTPS requests (supports http, https, socks5, socks5h).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "no_proxy": {
+          "default": [],
+          "description": "No-proxy bypass list. Same format as NO_PROXY.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/ProxyScope",
+          "default": "zeroclaw",
+          "description": "Proxy application scope."
+        },
+        "services": {
+          "default": [],
+          "description": "Service selectors used when scope = \"services\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ProxyScope": {
+      "description": "Proxy application scope — determines which outbound traffic uses the proxy.",
+      "oneOf": [
+        {
+          "const": "environment",
+          "description": "Use system environment proxy variables only.",
+          "type": "string"
+        },
+        {
+          "const": "zeroclaw",
+          "description": "Apply proxy to all ZeroClaw-managed HTTP traffic (default).",
+          "type": "string"
+        },
+        {
+          "const": "services",
+          "description": "Apply proxy only to explicitly listed service selectors.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/ProxyConfig",
+  "default": {
+    "all_proxy": null,
+    "enabled": false,
+    "http_proxy": null,
+    "https_proxy": null,
+    "no_proxy": [],
+    "scope": "zeroclaw",
+    "services": []
+  },
+  "description": "Proxy configuration for outbound HTTP/HTTPS/SOCKS5 traffic (`[proxy]`)."
+}

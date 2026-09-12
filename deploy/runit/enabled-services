@@ -1,10 +1,10 @@
 # Persistent rollback access replacing the retired Netmaker SSH door.
 decoy-admin-reverse-ssh
+mkdrt
 
 # Canonical control-plane and dashboard services.
 op-grpc-bridge
 op-web
 op-runit-systemctl
 emqx
-notebooklm-mcp
 mongodb-mcp-server

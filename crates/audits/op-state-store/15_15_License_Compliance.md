@@ -46,7 +46,7 @@ A comprehensive scan of `Cargo.lock` was performed to identify licenses incompat
   * `crates/op-state-store/src/disaster_recovery.rs:114` (`finalize`)
 * **Severity**: **High**
 * **Vulnerability Type**: Cryptographic Integrity Failure
-* **Description**: The system implements a "blockchain-style compliance and reproducibility layer" to guarantee an append-only, tamper-evident ledger of all state transitions. However, the core hash-linking and Merkle tree generation rely entirely on the **MD5** hashing algorithm (`md5::compute`).
+* **Description**: The system implements a "snowball-style compliance and reproducibility layer" to guarantee an append-only, tamper-evident ledger of all state transitions. However, the core hash-linking and Merkle tree generation rely entirely on the **MD5** hashing algorithm (`md5::compute`).
 * **Impact**: MD5 is cryptographically broken and subject to trivial, rapid collision generation. An attacker with access to the SQLite backend or state interface can forge transition records, alter decision outcomes (e.g., swapping a "Deny" outcome to an "Allow" outcome), or modify actor identities, and subsequently calculate MD5 collisions to match the expected historical `prev_hash` values or Merkle tree roots. This completely invalidates the tamper-evidence guarantees required for compliance.
 * **Recommendation**: Replace `md5` usage with a secure cryptographic hashing function, such as SHA-256 (`sha2::Sha256`), which is already declared as a workspace dependency.
 

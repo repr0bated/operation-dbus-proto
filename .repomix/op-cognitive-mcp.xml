@@ -926,7 +926,7 @@ pub enum OpKind {
 
 impl OpKind {
     /// Operations that are always Noise regardless of schema.
-    /// These never reach the blockchain or Qdrant.
+    /// These never reach the snowball or Qdrant.
     pub fn is_always_noise(&self) -> bool {
         matches!(self, OpKind::HealthCheck | OpKind::DebugRead)
     }
@@ -991,9 +991,9 @@ pub struct ActivityEvent {
 /// Outcome of the filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilterDecision {
-    /// Emit to blockchain AND Qdrant vector search.
+    /// Emit to snowball AND Qdrant vector search.
     Emit(Significance),
-    /// Emit to blockchain only — payload/summary stripped before Qdrant upsert.
+    /// Emit to snowball only — payload/summary stripped before Qdrant upsert.
     /// Used for PII-tagged plugin fields: auditable but not searchable.
     EmitChainOnly(Significance),
     Suppress(SuppressReason),
@@ -1009,7 +1009,7 @@ pub enum SuppressReason {
 
 /// Check whether a plugin schema or the specific field touched is tagged PII.
 ///
-/// PII events reach the blockchain (audit trail) but are stripped before Qdrant upsert.
+/// PII events reach the snowball (audit trail) but are stripped before Qdrant upsert.
 /// Tag the schema-level with `"pii"` to mark the entire plugin,
 /// or tag individual fields with `"pii"` in their description/metadata to mark specific fields.
 pub fn is_pii(schema: &PluginSchema, field: Option<&str>) -> bool {

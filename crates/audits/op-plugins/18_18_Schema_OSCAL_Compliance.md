@@ -61,7 +61,7 @@
 
 #### 4. MAJOR: Cryptographically Broken Hashing (MD5) for Audit Trail Verification
 * **Location:** `crates/op-plugins/src/auto_create.rs:114` (and duplicated across multiple plugins, e.g., `net.rs:677`, `dinit.rs:231`)
-* **Impact:** Risk of state manipulation and hash collision attacks in the blockchain footprint audit trail. The codebase relies on MD5 to compute current and desired hashes for state verification.
+* **Impact:** Risk of state manipulation and hash collision attacks in the snowball footprint audit trail. The codebase relies on MD5 to compute current and desired hashes for state verification.
 * **Remediation:** Replace all instances of `md5::compute` with a cryptographically secure hashing algorithm such as SHA-256 (`sha2::Sha256`), which is already imported in the cargo configuration:
   ```rust
   use sha2::{Digest, Sha256};

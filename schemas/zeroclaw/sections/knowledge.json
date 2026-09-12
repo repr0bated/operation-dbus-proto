@@ -1,0 +1,46 @@
+{
+  "$defs": {
+    "KnowledgeConfig": {
+      "description": "Knowledge graph configuration for capturing and reusing expertise.",
+      "properties": {
+        "auto_capture": {
+          "default": false,
+          "description": "Automatically capture knowledge from conversations. Default: false.",
+          "type": "boolean"
+        },
+        "db_path": {
+          "default": "/home/jeremy/.zeroclaw/knowledge.db",
+          "description": "Path to the knowledge graph SQLite database.",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the knowledge graph tool. Default: false.",
+          "type": "boolean"
+        },
+        "max_nodes": {
+          "default": 100000,
+          "description": "Maximum number of knowledge nodes. Default: 100000.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "suggest_on_query": {
+          "default": true,
+          "description": "Proactively suggest relevant knowledge on queries. Default: true.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/KnowledgeConfig",
+  "default": {
+    "auto_capture": false,
+    "db_path": "/home/jeremy/.zeroclaw/knowledge.db",
+    "enabled": false,
+    "max_nodes": 100000,
+    "suggest_on_query": true
+  },
+  "description": "Knowledge graph configuration (`[knowledge]`)."
+}

@@ -3574,7 +3574,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use crate::IntrospectionService;
 pub use op_core::types::BusType;
 
-use op_blockchain::StreamingBlockchain;
+use op_snowball::StreamingSnowball;
 use op_core::types::ObjectSchemaRef;
 
 // ============================================================================
@@ -3586,12 +3586,12 @@ use op_core::types::ObjectSchemaRef;
 /// All results are JSON-serializable. No raw XML exposed.
 ///
 /// For restorable system configs:
-/// - Uses StreamingBlockchain.write_state() for BTRFS state subvolume
-/// - Triggers blockchain block to signal state change for backup
+/// - Uses StreamingSnowball.write_state() for BTRFS state subvolume
+/// - Triggers snowball block to signal state change for backup
 #[derive(Clone)]
 pub struct DbusProjection {
     introspection: Arc<IntrospectionService>,
-    blockchain: Option<Arc<AsyncRwLock<StreamingBlockchain>>>,
+    snowball: Option<Arc<AsyncRwLock<StreamingSnowball>>>,
 }
 
 impl DbusProjection {
@@ -3599,7 +3599,7 @@ impl DbusProjection {
     pub fn new() -> Self {
         Self {
             introspection: Arc::new(IntrospectionService::new()),
-            blockchain: None,
+            snowball: None,
         }
     }
 
@@ -3607,14 +3607,14 @@ impl DbusProjection {
     pub fn with_service(introspection: Arc<IntrospectionService>) -> Self {
         Self {
             introspection,
-            blockchain: None,
+            snowball: None,
         }
     }
 
-    /// Attach a StreamingBlockchain for restorable state persistence
-    /// JSON writes go to state_subvol (BTRFS) and trigger blockchain backup
-    pub fn with_blockchain(mut self, blockchain: Arc<AsyncRwLock<StreamingBlockchain>>) -> Self {
-        self.blockchain = Some(blockchain);
+    /// Attach a StreamingSnowball for restorable state persistence
+    /// JSON writes go to state_subvol (BTRFS) and trigger snowball backup
+    pub fn with_snowball(mut self, snowball: Arc<AsyncRwLock<StreamingSnowball>>) -> Self {
+        self.snowball = Some(snowball);
         self
     }
 
@@ -3651,7 +3651,7 @@ impl DbusProjection {
 
     /// Introspect and persist to BTRFS state subvolume (restorable system config)
     ///
-    /// This writes JSON to the blockchain's state_subvol AND triggers a blockchain
+    /// This writes JSON to the snowball's state_subvol AND triggers a snowball
     /// block to signal that restorable state has changed (for backup)
     ///
     /// Only use this for managed services that should be restored in disaster recovery.
@@ -3677,15 +3677,15 @@ impl DbusProjection {
             path.replace('/', "_")
         );
 
-        // Write to BTRFS state subvolume AND trigger blockchain block
-        if let Some(blockchain) = &self.blockchain {
-            let bc = blockchain.read().await;
+        // Write to BTRFS state subvolume AND trigger snowball block
+        if let Some(snowball) = &self.snowball {
+            let bc = snowball.read().await;
 
             // Write JSON to state_subvol (restorable system config)
             bc.write_state(&state_key, &json).await?;
 
-            // Trigger blockchain block to signal state change for backup
-            bc.add_event(op_blockchain::BlockEvent::new(
+            // Trigger snowball block to signal state change for backup
+            bc.add_event(op_snowball::BlockEvent::new(
                 "dbus.schema.update",
                 &schema_hash,
                 simd_json::json!({"service": service, "path": path}),
@@ -3747,7 +3747,7 @@ impl DbusProjection {
 
         let final_schemas = Arc::try_unwrap(schemas).unwrap().into_inner();
         tracing::info!(
-            "Discovered {} schemas for service {} (BTRFS state + blockchain trigger)",
+            "Discovered {} schemas for service {} (BTRFS state + snowball trigger)",
             final_schemas.len(),
             service
         );
@@ -4236,7 +4236,7 @@ description = "DBus introspection capabilities for op-dbus-v2"
 
 [dependencies]
 op-core = { workspace = true }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 tokio = { workspace = true }
 serde = { workspace = true }
 simd-json = { workspace = true }
@@ -4281,7 +4281,7 @@ hex = "0.4"
 ## Current Implementation Overview
 
 - DBus introspection capabilities for op-dbus-v2
-- Internal crate integrations: op-core, op-blockchain.
+- Internal crate integrations: op-core, op-snowball.
 
 ## Module / File Comparison
 
@@ -4317,7 +4317,7 @@ hex = "0.4"
 
 ### Internal Workspace Dependencies
 - `op-core` - documented in SPEC
-- `op-blockchain` - documented in SPEC
+- `op-snowball` - documented in SPEC
 
 ### External Runtime Dependencies
 - `tokio` - documented in SPEC
@@ -4382,7 +4382,7 @@ op-introspection/src/cache.rs
 ### Key Dependencies
 ```toml
 op-core = { workspace = true }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 tokio = { workspace = true }
 serde = { workspace = true }
 simd-json = { workspace = true }
@@ -4438,7 +4438,7 @@ DBus introspection capabilities for op-dbus-v2
 
 ## Related Crates
 Internal dependencies:
-- op-blockchain
+- op-snowball
 
 ---
 *Generated from crate analysis*

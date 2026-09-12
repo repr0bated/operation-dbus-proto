@@ -1369,7 +1369,7 @@ code 0)
       16  pub mod agent_config;
       17  // pub mod antigravity;      // migrated to gb_antigravity (leg
           acy .bak)
-      18  // pub mod blockchain_plugin; // migrated to gb_blockchain_plug
+      18  // pub mod snowball_plugin; // migrated to gb_snowball_plug
           in (legacy .bak)
 
 ● Update(crates/op-plugins/src/state_plugins/mod.rs)  ⎿  Added 1 line
@@ -1378,7 +1378,7 @@ code 0)
       35  pub mod full_system;
       36 +pub mod gb_adc;                                                
       37  pub mod gb_antigravity;
-      38  pub mod gb_blockchain_plugin;
+      38  pub mod gb_snowball_plugin;
       39  pub mod gb_fail2ban;
 
 ● Update(crates/op-plugins/src/state_plugins/mod.rs)

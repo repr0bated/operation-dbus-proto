@@ -184,8 +184,11 @@ impl GCloudParser {
 
         let output = cmd.output().await.context("Failed to run gcloud help")?;
 
-        let help_text = String::from_utf8_lossy(&output.stdout).to_string()
-            + &String::from_utf8_lossy(&output.stderr);
+        let help_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
 
         // Cache the result
         {

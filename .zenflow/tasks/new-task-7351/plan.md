@@ -59,7 +59,7 @@ Explored all 31 crates. Key findings:
 
 Write `compare-<crate>.md` for 8 auto-generated SPEC crates.
 
-**Crates**: `op-agents`, `op-blockchain`, `op-cache`, `op-cognitive-mcp`, `op-core`, `op-dbus-mirror`, `op-dynamic-loader`, `op-execution-tracker`
+**Crates**: `op-agents`, `op-snowball`, `op-cache`, `op-cognitive-mcp`, `op-core`, `op-dbus-mirror`, `op-dynamic-loader`, `op-execution-tracker`
 
 **Per-crate process**:
 1. Read `crates/<crate>/SPEC.md` — extract from `### Source Structure` the listed `.rs` file paths; extract from `### Main Modules` the bare module names; extract `### Key Dependencies` toml block for spec-deps; check `### Binaries` for binary entries.

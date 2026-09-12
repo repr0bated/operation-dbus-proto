@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "ModelRouteConfig": {
+      "description": "Route a task hint to a specific model_provider + model.\n\n```toml\n[[model_routes]]\nhint = \"reasoning\"\nmodel_provider = \"openrouter.default\"\nmodel = \"anthropic/claude-opus-4-20250514\"\n\n[[model_routes]]\nhint = \"fast\"\nmodel_provider = \"groq.low-latency\"\nmodel = \"llama-3.3-70b-versatile\"\n```\n\nUsage: pass `hint:reasoning` as the model parameter to route the request.",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "Optional API key override for this route's model provider",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "hint": {
+          "default": "",
+          "description": "Task hint name (e.g. \"reasoning\", \"fast\", \"code\", \"summarize\")\n`#[serde(default)]` lets the `create_map_key` macro default-construct\nfrom `{}` before the hint gets injected via `set_prop`. Empty strings\nare rejected by `Config::validate()`.",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "description": "Provider-local model identifier to use with that provider profile\n`#[serde(default)]` is required for `Default` + `create_map_key` construction.\nEmpty strings are rejected by `Config::validate()`.",
+          "type": "string"
+        },
+        "model_provider": {
+          "default": "",
+          "description": "Dotted provider profile ref to route to (must resolve to `providers.models.<type>.<alias>`)\n`#[serde(default)]` is required for `Default` + `create_map_key` construction.\nEmpty strings are rejected by `Config::validate()`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "Model-routing rules — route `hint:<name>` to specific\nmodel_provider + model combos.",
+  "items": {
+    "$ref": "#/$defs/ModelRouteConfig"
+  },
+  "type": "array"
+}

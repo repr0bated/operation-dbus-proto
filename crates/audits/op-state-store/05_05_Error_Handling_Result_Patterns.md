@@ -114,7 +114,7 @@ The `op-state-store` crate contains several areas where data contracts are defin
 * **Citation:** `crates/op-state-store/src/event_chain.rs:114-166`
 * **Violation:** `ChainEvent` and `StateSnapshot` serve as the immutable compliance log and state database audit trail. They are declared as raw, non-versioned Rust structs with dynamic fields like `Value` (from `simd_json`).
 * **Impact:** For an immutable compliance system, any change to the layout of `ChainEvent` will break verification of historical logs. Ad-hoc structures do not enforce semantic schema-on-write.
-* **Remediation:** Express the blockchain compliance ledger event envelope as an OSCAL (Open Security Controls Assessment Language) or Protocol Buffers schema with explicit serialization versions and semantic constraints.
+* **Remediation:** Express the snowball compliance ledger event envelope as an OSCAL (Open Security Controls Assessment Language) or Protocol Buffers schema with explicit serialization versions and semantic constraints.
 
 ### 3. Execution Job Contract
 * **Citation:** `crates/op-state-store/src/execution_job.rs:21-39`

@@ -29,7 +29,7 @@ crates/op-agents/
     │   ├── orchestration/      # Context managers, TDD, persistent memory
     │   ├── security/           # Application security development helpers
     │   ├── seo/                # Keyword strategy & copy writers
-    │   ├── specialty/          # Niche domains (blockchain, finance, ARMCortex)
+    │   ├── specialty/          # Niche domains (snowball, finance, ARMCortex)
     │   └── system/             # D-Bus based system-level controllers
     ├── bin/                    # Executables
     │   ├── dbus-agent.rs       # Individual agent process launcher

@@ -15,7 +15,7 @@
 pub mod adc;
 pub mod agent_config;
 pub mod antigravity;
-pub mod blockchain_plugin;
+pub mod snowball_plugin;
 pub mod btrfs_plugin;
 pub mod cognitive_mcp;
 pub mod common;

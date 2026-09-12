@@ -51,7 +51,7 @@ op-dbus-model/    # Native database schema operations
 op-state/         # Native state management (no external state tools)
 op-state-store/   # Native SQLite operations with sqlx
 op-cache/         # Native BTRFS operations with NUMA-aware optimization
-op-blockchain/    # Native streaming blockchain implementation
+op-snowball/    # Native streaming snowball implementation
 numa_cache.rs     # NUMA-aware cache optimization and memory management
 ```
 
@@ -1059,7 +1059,7 @@ impl AgentConnectionRegistry {
 
 **Purpose**: Immutable audit trail and activity tracking for all tool executions
 
-**Architecture**: Event-driven plugin system with blockchain integration
+**Architecture**: Event-driven plugin system with snowball integration
 
 #### Core Components:
 
@@ -1285,7 +1285,7 @@ impl DbusAgentExecutor {
 
 #### 2. **Immutable Audit Trail**
 - **Orchestration plugins**: Every tool execution tracked
-- **Blockchain integration**: Immutable event logging
+- **Snowball integration**: Immutable event logging
 - **Session tracking**: Complete user session lifecycle
 - **LLM decision tracking**: AI reasoning and verification
 
@@ -1314,7 +1314,7 @@ impl DbusAgentExecutor {
 The orchestration and tool registry architecture demonstrates **enterprise-grade design** with:
 - **16,000+ native tools** discovered via D-Bus introspection
 - **70+ specialized agents** with D-Bus service registration
-- **Immutable audit trails** with blockchain integration
+- **Immutable audit trails** with snowball integration
 - **Pattern recognition** and workstack promotion for optimization
 - **Security-first approach** with validation and sandboxing
 - **Native implementation** eliminating all CLI dependencies
@@ -1379,7 +1379,7 @@ The orchestration and tool registry architecture demonstrates **enterprise-grade
 **2. Architectural Advantages**
 - **Native D-Bus integration**: Direct `zbus` operations vs systemd's C D-Bus bindings
 - **Database-driven configuration**: SQLite service definitions vs systemd unit files
-- **Immutable audit trail**: All service operations tracked in blockchain
+- **Immutable audit trail**: All service operations tracked in snowball
 - **API-first design**: JSON-RPC and gRPC APIs for service management
 
 **3. Enterprise Features**
@@ -1517,7 +1517,7 @@ impl ServiceManager {
 **Key Tasks**:
 - Build web-based service management UI
 - Implement real-time service monitoring
-- Create audit trail with blockchain integration
+- Create audit trail with snowball integration
 - Develop service health checking framework
 - Build alerting and notification system
 

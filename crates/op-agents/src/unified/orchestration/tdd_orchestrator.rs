@@ -8,9 +8,11 @@
 use super::base::{OrchestrationAgent, WorkflowStep};
 use simd_json::json;
 
+#[allow(dead_code)]
 pub struct TddOrchestrator(OrchestrationAgent);
 
 impl TddOrchestrator {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> OrchestrationAgent {
         OrchestrationAgent::new(
             "tdd-orchestrator",

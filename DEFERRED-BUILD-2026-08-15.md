@@ -9,7 +9,7 @@ release build is ~11–21 min).
 `crates/op-grpc-bridge/src/mutation_engine.rs` — bounded event-chain replay.
 
 - `rebuild_chain_from_disk` previously read and parsed **every** record in
-  `/var/lib/opdbus/blockchain/timing` (1,709,617 of them) into one `Vec`, then
+  `/var/lib/opdbus/snowball/timing` (1,709,617 of them) into one `Vec`, then
   replayed all of them. Measured cost: ~34 s of the boot path and **13.15 GB
   RSS**.
 - Now selects the newest `OP_EVENT_CHAIN_REPLAY_LIMIT` records (default
@@ -25,9 +25,9 @@ cargo test --release -p op-grpc-bridge --lib replay_window
 cargo build --release -p op-grpc-bridge
 sudo sv stop op-grpc-bridge
 # reseed, since the running binary writes blocks without maintaining the checkpoint
-cd /var/lib/opdbus/blockchain/timing && \
+cd /var/lib/opdbus/snowball/timing && \
   ls -U | sed -n 's/^block-0*\([0-9]\+\)\.json$/\1/p' | sort -n | tail -1 \
-  | sudo tee /var/lib/opdbus/blockchain/.block-counter
+  | sudo tee /var/lib/opdbus/snowball/.block-counter
 sudo install -m 755 -o root -g root \
   /srv/git/odbus/target/release/op-grpc-bridge /usr/local/bin/op-grpc-bridge
 sudo sv start op-grpc-bridge
@@ -44,7 +44,7 @@ Expected after deploy: `event chain rebuilt ... replayed=` drops from 1709617 to
 | `op-plugin-lint` dedupe on protobuf JSON name (`json_name_key`) | built, 11+5 tests pass |
 | `zeroclaw.rs` — 10 colliding generated fields removed (556→546) | built, installed |
 | `opblob stage-shm` / `persist`; boot script stages instead of seals | installed; staging measured **62 ms** from empty tmpfs |
-| `blockchain.rs` block-counter checkpoint + stale-checkpoint guard | built, installed, running; 32 tests pass |
+| `snowball.rs` block-counter checkpoint + stale-checkpoint guard | built, installed, running; 32 tests pass |
 
 ## Known-open
 

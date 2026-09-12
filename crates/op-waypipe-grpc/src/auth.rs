@@ -77,7 +77,23 @@ mod tests {
     use tonic::metadata::MetadataValue;
     use tonic::service::Interceptor;
 
+    static STATE_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct RestoreStateDir(Option<std::ffi::OsString>);
+
+    impl Drop for RestoreStateDir {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(previous) => std::env::set_var("OP_SHM_STATE_DIR", previous),
+                None => std::env::remove_var("OP_SHM_STATE_DIR"),
+            }
+        }
+    }
+
     fn with_test_session<F: FnOnce()>(f: F) {
+        // Both auth tests resolve through a process-global projection path.
+        // Keep that path isolated and restore it even if an assertion panics.
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("identity_sled.json");
         std::fs::write(
@@ -98,13 +114,9 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        unsafe {
-            std::env::set_var("OP_SHM_STATE_DIR", dir.path());
-        }
+        let _restore = RestoreStateDir(std::env::var_os("OP_SHM_STATE_DIR"));
+        std::env::set_var("OP_SHM_STATE_DIR", dir.path());
         f();
-        unsafe {
-            std::env::remove_var("OP_SHM_STATE_DIR");
-        }
     }
 
     #[test]
@@ -143,6 +155,10 @@ mod tests {
             let mut interceptor = IdentityInterceptor;
             let err = interceptor.call(req).unwrap_err();
             assert_eq!(err.code(), tonic::Code::PermissionDenied);
+            assert_eq!(
+                err.message(),
+                "presented genesis does not match the selected session"
+            );
         });
     }
 

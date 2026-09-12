@@ -8,7 +8,7 @@ The `op-introspection` crate exposes a total of **106** public items (modules, r
 
 | # | Item Name | Type | file:line | Impact Analysis |
 |---|:---|:---|:---|:---|
-| 1 | `DbusProjection` | `struct` | `crates/op-introspection/src/projection.rs:25` | Primary interface coordinating BTRFS state persistence and blockchain trigger events. |
+| 1 | `DbusProjection` | `struct` | `crates/op-introspection/src/projection.rs:25` | Primary interface coordinating BTRFS state persistence and snowball trigger events. |
 | 2 | `IntrospectionService` | `struct` | `crates/op-introspection/src/lib.rs:23` | High-level interface providing service discovery, cache management, and JSON-RPC bridging. |
 | 3 | `IndexerManager` | `struct` | `crates/op-introspection/src/indexer_manager.rs:11` | Handles thread-safe, non-blocking asynchronous access to the rusqlite FTS5 search indexer. |
 | 4 | `HierarchicalIntrospector` | `struct` | `crates/op-introspection/src/hierarchical.rs:163` | Executes bulk D-Bus schema discovery, recursion, and BTRFS-backed JSON caching. |

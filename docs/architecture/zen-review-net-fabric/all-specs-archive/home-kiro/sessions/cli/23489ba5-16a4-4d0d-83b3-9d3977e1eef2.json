@@ -816,7 +816,7 @@
                 },
                 {
                   "kind": "text",
-                  "data": "Here's what you were working on in that session. The key topics:\n\n1. **Navigation not working** — `No handler registered for action: navigate` errors after rebuilding the UI with json-render\n2. **gRPC StateSync/Subscribe failing** — getting 200 OK but empty response, stream closing immediately \n3. **Identity verification issue** — the auth check was changed from footprint-based to `psk + catalog_hash + timestamp` (not `wg_pubkey + catalog_hash + mutation_index`)\n4. **Sealed catalog** — needs `previous_hash` field; logic is: read hash → write as previous_hash → read new hash for comparison\n5. **Build errors** — `StateFrameKind` not exported, then you rebuilt a new json-render-only UI\n6. **Branch/merge issues** — you merged branches and were trying to bring numa and blockchain changes over, then something broke and you asked about restoring from before the merge\n\nWhere do you want to pick up? The most immediate issues seem to be:\n- The navigation handler not being registered\n- The gRPC identity auth (psk + catalog_hash + timestamp) not matching\n- Possibly a bad merge that needs reverting"
+                  "data": "Here's what you were working on in that session. The key topics:\n\n1. **Navigation not working** — `No handler registered for action: navigate` errors after rebuilding the UI with json-render\n2. **gRPC StateSync/Subscribe failing** — getting 200 OK but empty response, stream closing immediately \n3. **Identity verification issue** — the auth check was changed from footprint-based to `psk + catalog_hash + timestamp` (not `wg_pubkey + catalog_hash + mutation_index`)\n4. **Sealed catalog** — needs `previous_hash` field; logic is: read hash → write as previous_hash → read new hash for comparison\n5. **Build errors** — `StateFrameKind` not exported, then you rebuilt a new json-render-only UI\n6. **Branch/merge issues** — you merged branches and were trying to bring numa and snowball changes over, then something broke and you asked about restoring from before the merge\n\nWhere do you want to pick up? The most immediate issues seem to be:\n- The navigation handler not being registered\n- The gRPC identity auth (psk + catalog_hash + timestamp) not matching\n- Possibly a bad merge that needs reverting"
                 }
               ],
               "meta": {
@@ -2125,7 +2125,7 @@
                 },
                 {
                   "kind": "text",
-                  "data": "Both services are now running:\n\n- **op-grpc-bridge** ✓ — running (pid 24510), 409 tools loaded, blockchain resuming, mutation engine replaying\n- **op-web** ✓ — running (pid 19333)\n\nAlso installed the identity binaries (`op-identity-sled`, `op-identity-shuttle`). The plugin ID mismatch (`zeroclaw` → `tched_router`) was the issue — fixed via `OP_DBUS_SCHEMA_PLUGIN_ID` env var."
+                  "data": "Both services are now running:\n\n- **op-grpc-bridge** ✓ — running (pid 24510), 409 tools loaded, snowball resuming, mutation engine replaying\n- **op-web** ✓ — running (pid 19333)\n\nAlso installed the identity binaries (`op-identity-sled`, `op-identity-shuttle`). The plugin ID mismatch (`zeroclaw` → `tched_router`) was the issue — fixed via `OP_DBUS_SCHEMA_PLUGIN_ID` env var."
                 }
               ],
               "meta": {

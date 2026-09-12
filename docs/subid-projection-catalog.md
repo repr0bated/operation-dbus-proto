@@ -67,7 +67,7 @@ Role vocabulary is data-semantic only; concrete element resolution is projector-
 | qdrant | 3 |
 | antigravity | 2 |
 | antigravity_chat | 2 |
-| blockchain | 2 |
+| snowball | 2 |
 | compact_mcp | 2 |
 | config | 2 |
 | cozo | 2 |
@@ -141,14 +141,14 @@ Role vocabulary is data-semantic only; concrete element resolution is projector-
 | antigravity_chat | provider_route | string | False | False | mut | text-control |
 | antigravity_chat | selected_model | string | False | False | mut | text-control |
 | antigravity_chat | status | string | False | False | obs | display-value |
-| blockchain | actor_id | string | False | False | — | **GAP** |
-| blockchain | base_path | string | False | True | exp | surface |
-| blockchain | capability_id | string | False | False | — | **GAP** |
-| blockchain | retention | record | False | True | obs | record-view |
-| blockchain | snapshot_count | integer | False | True | exp | surface |
-| blockchain | snapshot_interval | string | False | True | mut | text-control |
-| blockchain | snapshots | list-record | False | True | exp | surface |
-| blockchain | status | string | False | True | obs | display-value |
+| snowball | actor_id | string | False | False | — | **GAP** |
+| snowball | base_path | string | False | True | exp | surface |
+| snowball | capability_id | string | False | False | — | **GAP** |
+| snowball | retention | record | False | True | obs | record-view |
+| snowball | snapshot_count | integer | False | True | exp | surface |
+| snowball | snapshot_interval | string | False | True | mut | text-control |
+| snowball | snapshots | list-record | False | True | exp | surface |
+| snowball | status | string | False | True | obs | display-value |
 | btrfs | config | any | False | False | obs | display-value |
 | btrfs | dr_status | any | False | False | obs | display-value |
 | btrfs | inspector_fields | record | False | False | obs | record-view |
@@ -224,7 +224,7 @@ Role vocabulary is data-semantic only; concrete element resolution is projector-
 | ctl_plane_chatbot | vector_dims | any | False | False | mut | structured-control |
 | ctl_plane_chatbot | vector_id | string | True | False | obs | display-value |
 | ctl_plane_chatbot | vectorization_enabled | boolean | False | False | mut | binary-control |
-| datastore | blockchain_count | integer | False | False | obs | display-value |
+| datastore | snowball_count | integer | False | False | obs | display-value |
 | datastore | execution_count | integer | False | False | obs | display-value |
 | datastore | namespaces | list-record | False | False | obs | collection-view |
 | datastore | object_count | integer | False | False | obs | display-value |

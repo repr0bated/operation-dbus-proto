@@ -52,7 +52,7 @@ Live audit (July 3) confirmed direction: **projection should read ONLY from blob
 
 - **~52 `gb_*` rewrites exist on disk; only ~8 wired and trusted** (7 pre-existing + `gb_adc` pilot).
 - **Factory prompt** defines 7-agent pipeline per plugin: schema location → drift guard → OSCAL subids → schemars adapter → SideEffect → x-oscal-subid → registration/retirement.
-- **Phase 1 priority:** fail2ban, persona, blockchain, json_render, openflow_obfuscation, software (CI blockers).
+- **Phase 1 priority:** fail2ban, persona, snowball, json_render, openflow_obfuscation, software (CI blockers).
 - **Constraints in effect:** `gb_*` files treated as untrusted until individually verified; skip deprecated privacy_router/privacy_routes/sessdecl; use `MIGRATION_RESEARCH_OFFICIAL_SOURCES.md` for official structured data; only references &lt;1 month old.
 - **Session progress:** fixed `gb_antigravity` (12 missing LLM-projection subids) and `gb_persona` (untyped personas golden → typed array&lt;object&gt;); pilot `gb_adc` swap verified against old plugin + Google ADC docs.
 - **Wave 1 parallel agents hit session limits** before wiring cozo, dnsresolver, btrfs, agent_config, login1, wgcf, endpoint, keyring, users, s6_systemctl.

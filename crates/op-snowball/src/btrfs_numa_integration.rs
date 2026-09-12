@@ -14,10 +14,12 @@
 use crate::snowball::StreamingSnowball;
 use crate::PluginFootprint;
 use anyhow::{Context, Result};
-use op_cache::{BtrfsCache, NumaTopology};
+use op_cache::{BtrfsCache, NumaMemoryPolicy, NumaOptimizer, NumaTopology};
 use simd_json::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -119,9 +121,36 @@ impl OptimizedSnowball {
         tokio::fs::create_dir_all(&blocks_dir).await?;
 
         let block_file = blocks_dir.join(format!("{}.json", block_hash));
-        tokio::fs::write(&block_file, simd_json::to_string_pretty(&block_data)?)
-            .await
-            .context("Failed to write block to cache")?;
+        let write_nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .context("system clock is before the Unix epoch")?
+            .as_nanos();
+        let block_tmp = blocks_dir.join(format!(
+            ".{}-{}-{}.tmp",
+            block_hash,
+            std::process::id(),
+            write_nonce
+        ));
+        let block_json = simd_json::to_string_pretty(&block_data)?;
+        let write_result: Result<()> = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&block_tmp)
+                .await?;
+            file.write_all(block_json.as_bytes()).await?;
+            file.sync_all().await?;
+            tokio::fs::rename(&block_tmp, &block_file)
+                .await
+                .context("Failed to commit block to cache")?;
+            tokio::fs::File::open(&blocks_dir).await?.sync_all().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = write_result {
+            let _ = tokio::fs::remove_file(&block_tmp).await;
+            return Err(error);
+        }
 
         debug!("Cached snowball block {} in BTRFS cache", block_hash);
         Ok(())
@@ -188,10 +217,24 @@ impl OptimizedSnowball {
                     node.memory_free_kb / 1024,
                     operation
                 );
+            }
 
-                // Use cache's NUMA methods (which use taskset/numactl)
-                // The cache already has NUMA-aware operations
-                // We just need to ensure we're using the right node
+            // Apply real CPU affinity via sched_setaffinity
+            let optimizer = NumaOptimizer::from_env();
+            if let Err(e) = optimizer.apply_cpu_affinity(optimal_node) {
+                warn!(
+                    "Failed to set CPU affinity for node {} ({}): {}",
+                    optimal_node, operation, e
+                );
+            }
+
+            // Apply default memory policy (preferred on the optimal node)
+            let mem_policy = NumaMemoryPolicy::Preferred(optimal_node);
+            if let Err(e) = NumaOptimizer::apply_memory_policy(&mem_policy) {
+                warn!(
+                    "Failed to set memory policy {:?} for {}: {}",
+                    mem_policy, operation, e
+                );
             }
         }
         Ok(())
@@ -288,10 +331,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_optimized_snowball_creation_and_caching() {
-        let temp_bc = tempdir().unwrap();
-        let temp_cache = tempdir().unwrap();
+        let snowball_parent = tempdir().unwrap();
+        let cache_parent = tempdir().unwrap();
+        let snowball_path = snowball_parent.path().join("snowball");
+        let cache_path = cache_parent.path().join("cache");
 
-        let opt_bc = OptimizedSnowball::new(temp_bc.path(), temp_cache.path()).await;
+        let opt_bc = OptimizedSnowball::new(snowball_path, cache_path).await;
         assert!(opt_bc.is_ok(), "Failed to create OptimizedSnowball");
         let opt_bc = opt_bc.unwrap();
 

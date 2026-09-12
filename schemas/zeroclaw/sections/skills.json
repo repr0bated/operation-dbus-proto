@@ -1,0 +1,240 @@
+{
+  "$defs": {
+    "ExternalRegistry": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether this registry is eligible for installs. Default: `true`.",
+          "type": "boolean"
+        },
+        "kind": {
+          "default": "git",
+          "description": "Registry protocol. Only `\"git\"` is supported today; other protocols\nare reserved for a future additive release.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Short alias used in `registry:<name>/<skill>` install specs.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Git repository URL of the registry (must expose a top-level `skills/` dir).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "type": "object"
+    },
+    "SkillCreationConfig": {
+      "description": "Autonomous skill creation configuration (`[skills.skill_creation]` section).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable automatic skill creation after successful multi-step tasks.\nDefault: `false`.",
+          "type": "boolean"
+        },
+        "max_final_answer_chars": {
+          "default": 2000,
+          "description": "Maximum characters of the final assistant answer fed into the\nreflection prompt. Bounds prompt size so a long answer cannot blow up\nthe reflection request. Default: `2000`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_skills": {
+          "default": 500,
+          "description": "Maximum number of auto-generated skills to keep.\nWhen exceeded, the oldest auto-generated skill is removed (LRU eviction).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_task_chars": {
+          "default": 1000,
+          "description": "Maximum characters of the task description fed into the reflection\nprompt. Default: `1000`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tool_trace_chars": {
+          "default": 4000,
+          "description": "Maximum characters of the rendered tool-call trace fed into the\nreflection prompt. Default: `4000`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reflection_enabled": {
+          "default": false,
+          "description": "Synthesize a canonical `SKILL.md` from the execution trace via a\nbounded model-provider reflection call instead of the deterministic\n`SKILL.toml` generator. Requires `enabled = true`. Falls back to\n`SKILL.toml` whenever the reflection call or its output is invalid, so\nturning this on never leaves a skill un-created. This is distinct from\nthe `[skills.skill_improvement]` background review fork, which patches\nexisting skills after use rather than creating new ones from a trace.\nDefault: `false`.",
+          "type": "boolean"
+        },
+        "similarity_threshold": {
+          "default": 0.85,
+          "description": "Embedding similarity threshold for deduplication.\nSkills with descriptions more similar than this value are skipped.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "SkillImprovementConfig": {
+      "description": "Skill self-improvement configuration (`[skills.skill-improvement]` section).\n\nControls the post-turn background review fork that may patch, expand, or\narchive skills based on what the conversation revealed. The fork runs in a\nrestricted toolset (only `skills_list`, `skill_view`, `skill_manage`) and\nnever touches the user-visible conversation.",
+      "properties": {
+        "cooldown_secs": {
+          "default": 3600,
+          "description": "Minimum interval (in seconds) between reviews for the same skill.\nActs as a durable rate limit on patches to any one skill. Default: `3600`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the background skill-review fork. Default: `false`.\nOpt-in: users must explicitly enable this to allow post-turn skill\nmutations.",
+          "type": "boolean"
+        },
+        "max_review_iterations": {
+          "default": 8,
+          "description": "Maximum tool-call iterations the review fork itself is allowed to make.\nCaps the fork's LLM cost. Default: `8`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nudge_interval_iterations": {
+          "default": 10,
+          "description": "Spawn a review fork once at least this many tool-call iterations have\naccumulated in the current run. `0` disables iteration-based triggering.\nDefault: `10`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SkillInstallSuggestionsConfig": {
+      "description": "Prompt-triggered skill install suggestions (`[skills.install_suggestions]` section).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable suggestions for installable skills before normal agent turns.\nDefault: `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SkillsConfig": {
+      "description": "Skills loading configuration (`[skills]` section).",
+      "properties": {
+        "allow_scripts": {
+          "default": false,
+          "description": "Allow script-like files in skills (`.sh`, `.bash`, `.ps1`, shebang shell files).\nDefault: `false` (secure by default).",
+          "type": "boolean"
+        },
+        "extra_registries": {
+          "description": "Additional user-configured skill registries, installed via\n`registry:<name>/<skill>`. Each reuses the git-clone registry path and\nis cloned to its own `extra-registry-<name>/` workspace directory.",
+          "items": {
+            "$ref": "#/$defs/ExternalRegistry"
+          },
+          "type": "array"
+        },
+        "install_suggestions": {
+          "$ref": "#/$defs/SkillInstallSuggestionsConfig",
+          "default": {
+            "enabled": false
+          },
+          "description": "Prompt-triggered install suggestions for missing skills."
+        },
+        "open_skills_dir": {
+          "default": null,
+          "description": "Optional path to a local open-skills repository.\nIf unset, defaults to `$HOME/open-skills` when enabled.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "open_skills_enabled": {
+          "default": false,
+          "description": "Enable loading and syncing the community open-skills repository.\nDefault: `false` (opt-in).",
+          "type": "boolean"
+        },
+        "prompt_injection_mode": {
+          "$ref": "#/$defs/SkillsPromptInjectionMode",
+          "default": "full",
+          "description": "Controls how skills are injected into the system prompt.\n`full` preserves legacy behavior. `compact` keeps context small and loads skills on demand."
+        },
+        "registry_url": {
+          "default": null,
+          "description": "URL of the skills registry repository for bare-name installs.\nDefault: `https://github.com/zeroclaw-labs/zeroclaw-skills`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skill_creation": {
+          "$ref": "#/$defs/SkillCreationConfig",
+          "default": {
+            "enabled": false,
+            "max_final_answer_chars": 2000,
+            "max_skills": 500,
+            "max_task_chars": 1000,
+            "max_tool_trace_chars": 4000,
+            "reflection_enabled": false,
+            "similarity_threshold": 0.85
+          },
+          "description": "Autonomous skill creation from successful multi-step task executions."
+        },
+        "skill_improvement": {
+          "$ref": "#/$defs/SkillImprovementConfig",
+          "default": {
+            "cooldown_secs": 3600,
+            "enabled": false,
+            "max_review_iterations": 8,
+            "nudge_interval_iterations": 10
+          },
+          "description": "Automatic skill self-improvement after successful skill usage."
+        }
+      },
+      "type": "object"
+    },
+    "SkillsPromptInjectionMode": {
+      "description": "Skills loading configuration (`[skills]` section).",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "Inline full skill instructions and tool metadata into the system prompt.",
+          "type": "string"
+        },
+        {
+          "const": "compact",
+          "description": "Inline only compact skill metadata (name/description/location) and load details on demand.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$ref": "#/$defs/SkillsConfig",
+  "default": {
+    "allow_scripts": false,
+    "install_suggestions": {
+      "enabled": false
+    },
+    "open_skills_dir": null,
+    "open_skills_enabled": false,
+    "prompt_injection_mode": "full",
+    "registry_url": null,
+    "skill_creation": {
+      "enabled": false,
+      "max_final_answer_chars": 2000,
+      "max_skills": 500,
+      "max_task_chars": 1000,
+      "max_tool_trace_chars": 4000,
+      "reflection_enabled": false,
+      "similarity_threshold": 0.85
+    },
+    "skill_improvement": {
+      "cooldown_secs": 3600,
+      "enabled": false,
+      "max_review_iterations": 8,
+      "nudge_interval_iterations": 10
+    }
+  },
+  "description": "Skills loading and community repository behavior (`[skills]`)."
+}

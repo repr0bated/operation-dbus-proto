@@ -1,8 +1,9 @@
 {
-  "937d6d2b-ecae-ed53-f3a2-d7bd09f544ff": {
-    "display_alias": "jeremy-laptop",
+  "0b7933b7-c8d5-1c01-814e-0c3066d19bbd": {
+    "display_alias": "jeremy-wg-f036",
     "capabilities": [
       "cap.identity.dbus.bind@v1",
+      "identity_sled.read",
       "cap.service.lifecycle.init@v1",
       "cap.service.lifecycle.run@v1",
       "cap.service.lifecycle.shutdown@v1",

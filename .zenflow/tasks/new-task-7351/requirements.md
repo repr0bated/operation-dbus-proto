@@ -24,7 +24,7 @@ All subdirectories of `crates/crates/` that contain at least one spec or design 
 | Crate | Spec Files |
 |---|---|
 | op-agents | SPEC.md |
-| op-blockchain | SPEC.md |
+| op-snowball | SPEC.md |
 | op-cache | SPEC.md |
 | op-chat | SPEC.md, DESIGN.md |
 | op-cognitive-mcp | SPEC.md |

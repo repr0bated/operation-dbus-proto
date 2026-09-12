@@ -1,0 +1,7 @@
+[mcp_servers.op-dbus-unified]
+url = "https://10.0.0.3:8090/mcp"
+enabled = true
+required = true
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+http_headers_helper = "/usr/local/bin/op-identity-headers --session f036f8d8-aabb-c5f2-49c9-18dac19f41ea"

@@ -450,6 +450,13 @@ impl OperationGrpcServer {
         self
     }
 
+    /// Supply an isolated sealed-blob catalog for embedded servers and tests.
+    /// The default constructor continues to use the host SHM catalog.
+    pub fn with_reflection_catalog(mut self, catalog: ActiveReflectionCatalog) -> Self {
+        self.active_reflection = catalog;
+        self
+    }
+
     /// Hydrate in-memory reflection from the sealed SHM blob catalog.
     ///
     /// The blob catalog IS the plugin registry: a restart must advertise the
@@ -486,8 +493,8 @@ impl OperationGrpcServer {
 
     /// Freeze all plugin method descriptors from the configured schema provider.
     ///
-    /// tonic-reflection is immutable once mounted. This must run before
-    /// `build_operation_routes` creates the reflection service.
+    /// Populate schema/authority metadata before building routes. This does
+    /// not mount handlers; the generated `add_routes` does that separately.
     pub async fn freeze_plugin_method_reflection(&self) {
         for plugin in self.plugin_provider.list_plugins().await {
             let Some((schema_json, _, _)) = self.plugin_provider.get_schema(&plugin.id).await
@@ -538,11 +545,11 @@ impl OperationGrpcServer {
         (snapshot, rx)
     }
 
-    /// Register a plugin's methods as per-method gRPC services.
+    /// Register a plugin's frozen per-method schema and authority descriptors.
     ///
-    /// This is called at D-Bus object creation time. Each method gets its own
-    /// gRPC service generated and frozen. The reflection service is updated
-    /// to include these new method services.
+    /// This is called at D-Bus object creation time. Descriptor registration
+    /// does not create an RPC route; service discovery advertises only the
+    /// generated handlers that are actually mounted for active blobs.
     pub async fn register_plugin_methods(
         &self,
         plugin_id: String,
@@ -779,7 +786,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 ///
 /// This is the SINGLE source of the backplane's service set. Every endpoint that
 /// serves the backplane — the op-dbus bridge (`run_grpc_server`, TCP `:50051`) and
-/// the zeroclaw bridge (`run_zeroclaw_server`, `:8090` + `container.sock`) — builds
+/// the tched_router bridge (`run_tched_router_server`, `:8090` + `container.sock`) — builds
 /// its routes from here, so reflection can never advertise a service that isn't
 /// actually mounted (the bug the gRPC-Web probe surfaced).
 ///
@@ -790,7 +797,7 @@ include!(concat!(env!("OUT_DIR"), "/plugin_method_routes.rs"));
 ///
 /// The caller supplies a fully-configured `OperationGrpcServer` (plugin provider /
 /// semantic shuttle already attached) and adds endpoint-specific extras
-/// afterward (e.g. the zeroclaw bridge adds `ZeroclawService`; `run_grpc_server`
+/// afterward (e.g. the tched_router bridge adds `TchedRouterService`; `run_grpc_server`
 /// adds the gRPC health service).
 ///
 /// Adding a new domain service: add one `.add_service(...)` here and it appears on
@@ -913,6 +920,7 @@ pub async fn run_grpc_server(
         Ok(count) => info!(count, "Plugin projections seeded"),
         Err(error) => warn!(%error, "Plugin projection seeding failed"),
     }
+    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(mutation_engine, provider)

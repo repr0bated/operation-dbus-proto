@@ -3,9 +3,8 @@
 //! Executes Python code with sandboxing.
 
 use async_trait::async_trait;
+use simd_json::json;
 use simd_json::prelude::*;
-use simd_json::{json, OwnedValue as Value};
-use std::collections::HashSet;
 
 use super::super::agent_trait::{
     AgentCapability, AgentCategory, AgentRequest, AgentResponse, UnifiedAgent,

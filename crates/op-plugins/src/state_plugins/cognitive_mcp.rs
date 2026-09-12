@@ -438,7 +438,31 @@ pub struct MemoryStoreInput {
     pub tags: Vec<String>,
 }
 
-/// Stable HOT workflow catalog query.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RustProOperation {
+    Check,
+    Build,
+    Test,
+    Clippy,
+    Format,
+    Run,
+}
+
+/// Always-loaded Rust workspace agent. The operation is explicit and validated
+/// before the bridge dispatches to the eagerly registered Rust Pro executor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RustProInput {
+    #[schemars(description = "Cargo operation to perform")]
+    pub operation: RustProOperation,
+    #[schemars(description = "Workspace or crate directory")]
+    pub path: String,
+    #[serde(default)]
+    #[schemars(description = "Use a release profile for build or run")]
+    pub release: bool,
+}
+
+/// Stable HOT workflow query.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkflowQueryInput {
     #[schemars(description = "Optional exact workflow id")]
@@ -462,13 +486,33 @@ pub enum ToolsetsOperation {
     Select,
 }
 
-/// Stateless HOT tool-set operation. Selection is returned to the client and
+/// Stateless HOT toolset operation. Selection is returned to the client and
 /// must be repeated in request `_meta`; it never changes server-side grants.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolsetsInput {
     pub operation: ToolsetsOperation,
     #[schemars(description = "Required only for the select operation")]
     pub toolset_id: Option<String>,
+}
+
+/// Read one exact manifest-pinned PluginSchema from the sealed blob store.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SchemaReadInput {
+    #[schemars(
+        description = "Sealed plugin id, for example openflow, oscal_subid_registry, or snowball"
+    )]
+    pub plugin_id: String,
+}
+
+/// Query OSCAL routing tags across the manifest-pinned sealed schemas.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OscalSubidsInput {
+    #[schemars(description = "Optional exact plugin id; omit to inspect every sealed plugin")]
+    pub plugin_id: Option<String>,
+    #[schemars(
+        description = "Optional exact subid prefix, for example obs.service or mut.network"
+    )]
+    pub prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -647,14 +691,59 @@ pub struct WorkflowRunOutput {
     pub accepted_at: String,
 }
 
-/// Public shape of the local tool-set response. Detailed set entries and the
+/// Public shape of the local toolset response. Detailed set entries and the
 /// canonical selector are emitted by the bridge after MutationEngine admission.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolsetsOutput {
     pub operation: String,
-    pub catalog_generation: u64,
+    pub toolset_generation: u64,
     pub relist_required: bool,
     pub result: serde_json::Value,
+}
+
+/// Exact sealed schema document returned by the bridge-owned blob reader.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SchemaReadOutput {
+    pub plugin_id: String,
+    pub uri: String,
+    pub schema_hash: String,
+    pub oscal_subid_count: usize,
+    pub oscal_subids: Vec<String>,
+    pub schema: serde_json::Value,
+}
+
+/// One sealed schema in which an OSCAL subid occurs.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OscalSubidSource {
+    pub plugin_id: String,
+    pub schema_hash: String,
+}
+
+/// Deduplicated OSCAL routing tag and its sealed-schema provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OscalSubidEntry {
+    pub subid: String,
+    pub category: String,
+    pub sources: Vec<OscalSubidSource>,
+}
+
+/// Cross-blob OSCAL routing-tag index.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OscalSubidsOutput {
+    pub plugin_count: usize,
+    pub subid_count: usize,
+    pub subids: Vec<OscalSubidEntry>,
+}
+
+/// Result from the always-loaded Rust Pro executor.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RustProOutput {
+    pub success: bool,
+    pub agent_type: String,
+    pub agent_name: String,
+    pub operation: String,
+    pub data: String,
+    pub metadata: serde_json::Value,
 }
 
 /// Output for MemoryRetrieve method
@@ -773,7 +862,10 @@ pub struct CognitiveMcpState {
 // memory_recall           → cognitive_memory query operation (HOT facade)
 // workflow_query          → workflows.query_workflows (HOT facade)
 // workflow_run            → workflows.start_workflow (HOT facade)
+// rust_pro                → eagerly registered agent_rust_pro_<operation> tool (HOT)
 // toolsets                → bridge-local deterministic projection policy (HOT)
+// schema_read             → exact manifest-pinned sealed PluginSchema (HOT)
+// oscal_subids            → cross-blob OSCAL routing-tag index (HOT)
 pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(CognitiveMcpState))
         .expect("schemars schema serializes to JSON");
@@ -910,6 +1002,16 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         ),
     );
     schema.methods.insert(
+        "rust_pro".to_string(),
+        method_decl_from_schemars_with_output::<RustProInput, RustProOutput>(
+            "rust_pro",
+            SideEffect::Mutation,
+            false,
+            "cognitive_mcp.invoke",
+            "mut.software.rust-pro.execute@v1",
+        ),
+    );
+    schema.methods.insert(
         "workflow_query".to_string(),
         method_decl_from_schemars_with_output::<WorkflowQueryInput, WorkflowQueryOutput>(
             "workflow_query",
@@ -937,6 +1039,26 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
             true,
             "cognitive_mcp.read",
             "obs.service.cognitive-mcp.toolset.project@v1",
+        ),
+    );
+    schema.methods.insert(
+        "schema_read".to_string(),
+        method_decl_from_schemars_with_output::<SchemaReadInput, SchemaReadOutput>(
+            "schema_read",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.service.cognitive-mcp.schema.read@v1",
+        ),
+    );
+    schema.methods.insert(
+        "oscal_subids".to_string(),
+        method_decl_from_schemars_with_output::<OscalSubidsInput, OscalSubidsOutput>(
+            "oscal_subids",
+            SideEffect::Read,
+            true,
+            "cognitive_mcp.read",
+            "obs.standard.oscal-subid-registry.subid.list@v1",
         ),
     );
     schema.methods.insert(
@@ -969,14 +1091,14 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         "cognitive_mcp.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "cognitive_mcp.read".to_string(),
-            description: "Grants bridge-owned cognitive reads: get_health, list_tools, memory_retrieve, memory_query, memory_list_namespaces, code_search, code_context.".to_string(),
+            description: "Grants bridge-owned cognitive reads: get_health, list_tools, memory_retrieve, memory_query, memory_list_namespaces, code_search, code_context, schema_read, oscal_subids.".to_string(),
         },
     );
     schema.capabilities.insert(
         "cognitive_mcp.invoke".to_string(),
         op_state_store::CapabilityDecl {
             id: "cognitive_mcp.invoke".to_string(),
-            description: "Grants legacy in-process cognitive invocation methods; it does not authorize projected MCP tools by itself.".to_string(),
+            description: "Grants declared bridge-owned cognitive and agent execution methods; it does not authorize the generic invoke_tool escape hatch on the MCP projection.".to_string(),
         },
     );
     schema.capabilities.insert(
@@ -997,7 +1119,7 @@ pub(crate) fn cognitive_mcp_schema() -> PluginSchema {
         "workflows.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "workflows.read".to_string(),
-            description: "Grants the HOT workflow catalog query facade.".to_string(),
+            description: "Grants the HOT workflow query facade.".to_string(),
         },
     );
     schema.capabilities.insert(
@@ -1112,9 +1234,12 @@ mod tests {
             "code_search",
             "code_index",
             "code_context",
+            "rust_pro",
             "workflow_query",
             "workflow_run",
             "toolsets",
+            "schema_read",
+            "oscal_subids",
             "gemini_query",
             "invoke_tool",
         ];
@@ -1129,6 +1254,29 @@ mod tests {
                 "bridge-owned cognitive method {method} must remain sealed"
             );
         }
+
+        let rust_pro = &schema.methods["rust_pro"];
+        assert_eq!(
+            rust_pro.required_capability.as_deref(),
+            Some("cognitive_mcp.invoke")
+        );
+        assert_eq!(rust_pro.side_effect, SideEffect::Mutation);
+
+        let schema_read = &schema.methods["schema_read"];
+        assert_eq!(
+            schema_read.required_capability.as_deref(),
+            Some("cognitive_mcp.read")
+        );
+        assert_eq!(
+            schema_read.subid,
+            "obs.service.cognitive-mcp.schema.read@v1"
+        );
+
+        let oscal_subids = &schema.methods["oscal_subids"];
+        assert_eq!(
+            oscal_subids.subid,
+            "obs.standard.oscal-subid-registry.subid.list@v1"
+        );
 
         let encoded = serde_json::to_string(&schema).expect("schema serializes");
         for retired_signal in ["3003", "50052", "netmaker", "op-cognitive-mcp"] {
@@ -1174,7 +1322,7 @@ mod tests {
 }
 
 // Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
+// (single source of registered plugins; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(CognitiveMcpPlugin::new()))
 }

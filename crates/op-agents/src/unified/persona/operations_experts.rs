@@ -4,9 +4,11 @@ use super::super::agent_trait::AgentCapability;
 use super::super::prompts::operations::{DBUS_EXPERT, KUBERNETES_EXPERT, SYSTEMD_EXPERT};
 use super::base::PersonaAgent;
 
+#[allow(dead_code)]
 pub struct KubernetesExpert(PersonaAgent);
 
 impl KubernetesExpert {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "kubernetes-expert",
@@ -26,9 +28,11 @@ impl Default for KubernetesExpert {
     }
 }
 
+#[allow(dead_code)]
 pub struct SystemdExpert(PersonaAgent);
 
 impl SystemdExpert {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "systemd-expert",
@@ -47,9 +51,11 @@ impl Default for SystemdExpert {
     }
 }
 
+#[allow(dead_code)]
 pub struct DbusExpert(PersonaAgent);
 
 impl DbusExpert {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> PersonaAgent {
         PersonaAgent::new(
             "dbus-expert",

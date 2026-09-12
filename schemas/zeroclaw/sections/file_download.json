@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "FileDownloadConfig": {
+      "description": "Standalone file download tool configuration (`[file_download]`).\n\nWhen `url` is set to a non-empty value, registers a `file_download` tool\nthat GETs a file from the configured endpoint and writes it to the agent's\nworkspace filesystem. The LLM supplies only a document identifier and a\nworkspace-relative destination path; the endpoint URL comes solely from this\nconfig and is never model-controlled. Response bytes are streamed to disk\nand never loaded into model context.\n\nWhen `url` is `None` or empty, the tool is not registered.",
+      "properties": {
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Static HTTP headers attached to every download request — typically an\n`Authorization: Bearer …` token for the upstream endpoint. Same shape as\n`[mcp.servers.*.headers]`.",
+          "type": "object",
+          "x-secret": true
+        },
+        "max_file_size_bytes": {
+          "default": 26214400,
+          "description": "Maximum download size in bytes. Enforced while streaming: the transfer\nis aborted and the partial file removed once this ceiling is exceeded,\nso an oversized or unbounded body never fully buffers in memory or lands\non disk. Default: 25 MiB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 120,
+          "description": "Request timeout in seconds. Default: 120.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "default": null,
+          "description": "Download endpoint URL. Tool is disabled when this is `None` or empty.\nThe file to fetch is selected by the `document_id` query parameter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/FileDownloadConfig",
+  "default": {
+    "headers": {},
+    "max_file_size_bytes": 26214400,
+    "timeout_secs": 120,
+    "url": null
+  },
+  "description": "Standalone file download tool configuration (`[file_download]`)."
+}

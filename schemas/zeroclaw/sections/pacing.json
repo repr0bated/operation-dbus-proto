@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "PacingConfig": {
+      "description": "Pacing controls for slow/local LLM workloads (`[pacing]` section).\n\nAll fields are optional and default to values that preserve existing\nbehavior. When set, they extend — not replace — the existing timeout\nand loop-detection subsystems.",
+      "properties": {
+        "loop_detection_enabled": {
+          "default": true,
+          "description": "Enable pattern-based loop detection (exact repeat, ping-pong,\nno-progress). Defaults to `true`.",
+          "type": "boolean"
+        },
+        "loop_detection_max_repeats": {
+          "default": 3,
+          "description": "Number of consecutive identical tool+args calls before the first\nescalation (Warning). Defaults to 3.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "loop_detection_min_elapsed_secs": {
+          "default": null,
+          "description": "Minimum elapsed seconds before loop detection activates.\nTasks completing under this threshold get aggressive loop protection;\nlonger-running tasks receive a grace period before the detector starts\ncounting. `None` means loop detection is always active (existing behavior).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "loop_detection_window_size": {
+          "default": 20,
+          "description": "Sliding window size for the pattern-based loop detector.\nDefaults to 20.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "loop_ignore_tools": {
+          "default": [],
+          "description": "Tool names excluded from identical-output / alternating-pattern loop\ndetection. Useful for browser workflows where `browser_screenshot`\nstructurally resembles a loop even when making progress.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "message_timeout_scale_max": {
+          "default": null,
+          "description": "Override for the hardcoded timeout scaling cap (default: 4).\nThe channel message timeout budget is computed as:\n  `message_timeout_secs * min(max_tool_iterations, message_timeout_scale_max)`\nRaising this value lets long multi-step tasks with slow local models\nreceive a proportionally larger budget without inflating the base timeout.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "step_timeout_secs": {
+          "default": null,
+          "description": "Per-step timeout in seconds: the maximum time allowed for a single\nLLM inference turn, independent of the total message budget.\n`None` means no per-step timeout (existing behavior).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PacingConfig",
+  "default": {
+    "loop_detection_enabled": true,
+    "loop_detection_max_repeats": 3,
+    "loop_detection_min_elapsed_secs": null,
+    "loop_detection_window_size": 20,
+    "loop_ignore_tools": [],
+    "message_timeout_scale_max": null,
+    "step_timeout_secs": null
+  },
+  "description": "Pacing controls for slow/local LLM workloads (`[pacing]`)."
+}

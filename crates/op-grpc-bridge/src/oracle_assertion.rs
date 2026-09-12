@@ -13,9 +13,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
-use op_identity::oracle_assertion::{
-    verify_signature, OracleIdentityAssertion, SignedAssertion, MAX_LIFETIME_SECS,
-};
+use op_identity::oracle_assertion::{verify_signature, SignedAssertion, MAX_LIFETIME_SECS};
 use op_identity::session::derive_principal_id;
 use thiserror::Error;
 
@@ -27,7 +25,7 @@ pub const CLOCK_LEEWAY_SECS: i64 = 30;
 
 /// How a decoy-signed assertion is bound to its transport.
 ///
-/// `TrustedDecoySignature` is the live fabric binding: WARP/Xray replace the
+/// `TrustedDecoySignature` is the live fabric binding: privacy transports replace the
 /// human inner source address, so the request is bound to the decoy signature,
 /// lifetime, one-time nonce, and registered human key — not TCP-source equality.
 /// `ExactPeerIp` is the retired Netmaker overlay check; it is opt-in only via
@@ -812,7 +810,7 @@ pub mod tests {
     use std::time::Duration;
 
     use base64::Engine as _;
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+    use ed25519_dalek::{Signer, SigningKey};
     use op_identity::oracle_assertion::{DecoyIssuer, OracleIdentityAssertion, SignedAssertion};
     use op_identity::session::{derive_principal_id, derive_session_id};
     use tonic::Code;
@@ -899,6 +897,16 @@ pub mod tests {
             assertion,
             signature,
         }
+    }
+
+    fn signed_with_signing_key(
+        signing_key: &SigningKey,
+        mut signed: SignedAssertion,
+    ) -> SignedAssertion {
+        signed.signature = signing_key
+            .sign(&signed.assertion.signing_bytes())
+            .to_bytes();
+        signed
     }
 
     pub(crate) async fn validator_with_registered(
@@ -2165,6 +2173,11 @@ pub mod tests {
     pub async fn trust_store_rotation_is_load_once_impl() {
         let issuer = test_issuer();
         let other = SigningKey::from_bytes(&[8u8; 32]);
+        let other_signing_key = SigningKey::from_bytes(&[8u8; 32]);
+        let _cozo = temp_cozo();
+        register(SAMPLE_PUBKEY_LOCAL, "rotation")
+            .await
+            .expect("register rotation principal");
         let dir = tempfile::tempdir().expect("tempdir");
         let path = write_trust_store(&dir, &issuer);
         let store_v1 = DecoyTrustStore::load_from_path(&path);
@@ -2178,50 +2191,47 @@ pub mod tests {
             [0x34; 16],
             None,
         );
-        assert_ne!(
-            validator_v1.validate(
+        validator_v1
+            .validate(
                 &signed_v1.to_wire(),
                 Some(source_at(test_ip())),
-                1_700_000_100
-            ),
-            Err(AssertionRejection::UnknownDecoyKey)
-        );
+                1_700_000_100,
+            )
+            .expect("v1 accepts its original signing key");
 
         let other_b64 =
             base64::engine::general_purpose::STANDARD.encode(other.verifying_key().to_bytes());
+        let issuer_other = DecoyIssuer::new(other, "other-key", Duration::from_secs(900));
         std::fs::write(
             &path,
             format!("{{\"decoy_keys\": {{\"other-key\": \"{}\"}}}}", other_b64),
         )
         .expect("rotate file");
-        assert_ne!(
+        let signed_v1_after_rotation = signed_with_fields(
+            &issuer,
+            SAMPLE_PUBKEY_LOCAL,
+            test_ip(),
+            1_700_000_000,
+            1_700_000_300,
+            [0x36; 16],
+            None,
+        );
+        validator_v1
+            .validate(
+                &signed_v1_after_rotation.to_wire(),
+                Some(source_at(test_ip())),
+                1_700_000_100,
+            )
+            .expect("existing validator unchanged after file rotation");
+
+        let validator_v2 = AssertionValidator::new(DecoyTrustStore::load_from_path(&path));
+        assert_eq!(
             validator_v1.validate(
                 &signed_v1.to_wire(),
                 Some(source_at(test_ip())),
                 1_700_000_100
             ),
-            Err(AssertionRejection::UnknownDecoyKey),
-            "existing validator unchanged"
-        );
-
-        let mut keys = HashMap::new();
-        keys.insert("other-key".to_string(), other.verifying_key());
-        let validator_v2 = AssertionValidator::new(DecoyTrustStore::from_decoy_keys(keys));
-        assert_eq!(
-            validator_v1
-                .validate(
-                    &signed_v1.to_wire(),
-                    Some(source_at(test_ip())),
-                    1_700_000_100
-                )
-                .err(),
-            validator_v1
-                .validate(
-                    &signed_v1.to_wire(),
-                    Some(source_at(test_ip())),
-                    1_700_000_100
-                )
-                .err()
+            Err(AssertionRejection::Replay)
         );
         assert_eq!(
             validator_v2.validate(
@@ -2231,14 +2241,25 @@ pub mod tests {
             ),
             Err(AssertionRejection::UnknownDecoyKey)
         );
-        let signed_other = signed_with_fields(
-            &DecoyIssuer::new(other, "other-key", Duration::from_secs(900)),
-            SAMPLE_PUBKEY_LOCAL,
-            test_ip(),
-            1_700_000_000,
-            1_700_000_300,
-            [0x35; 16],
-            Some("other-key"),
+        let signed_other = signed_with_signing_key(
+            &other_signing_key,
+            signed_with_fields(
+                &issuer_other,
+                SAMPLE_PUBKEY_LOCAL,
+                test_ip(),
+                1_700_000_000,
+                1_700_000_300,
+                [0x35; 16],
+                Some("other-key"),
+            ),
+        );
+        assert_eq!(
+            validator_v1.validate(
+                &signed_other.to_wire(),
+                Some(source_at(test_ip())),
+                1_700_000_100
+            ),
+            Err(AssertionRejection::UnknownDecoyKey)
         );
         validator_v2
             .validate(
@@ -2246,7 +2267,30 @@ pub mod tests {
                 Some(source_at(test_ip())),
                 1_700_000_100,
             )
-            .expect_err("unknown principal");
+            .expect("rotated validator accepts its new signing key");
+        let unknown_pubkey = pk(201);
+        let signed_unknown = signed_with_signing_key(
+            &other_signing_key,
+            signed_with_fields(
+                &issuer_other,
+                &unknown_pubkey,
+                test_ip(),
+                1_700_000_000,
+                1_700_000_300,
+                [0x37; 16],
+                Some("other-key"),
+            ),
+        );
+        assert_eq!(
+            validator_v2
+                .validate(
+                    &signed_unknown.to_wire(),
+                    Some(source_at(test_ip())),
+                    1_700_000_100,
+                )
+                .expect_err("unknown principal"),
+            AssertionRejection::UnknownPrincipal
+        );
     }
 
     pub async fn validator_state_is_per_serving_instance_impl() {

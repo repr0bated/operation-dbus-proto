@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "PeripheralBoardConfig": {
+      "description": "Configuration for a single peripheral board (e.g. STM32, RPi GPIO).",
+      "properties": {
+        "baud": {
+          "default": 115200,
+          "description": "Baud rate for serial (default: 115200)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "board": {
+          "description": "Board type: \"nucleo-f401re\", \"rpi-gpio\", \"esp32\", etc.",
+          "type": "string"
+        },
+        "path": {
+          "default": null,
+          "description": "Path for serial: \"/dev/ttyACM0\", \"/dev/ttyUSB0\"",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transport": {
+          "default": "serial",
+          "description": "Transport: \"serial\", \"native\", \"websocket\"",
+          "type": "string"
+        }
+      },
+      "required": [
+        "board"
+      ],
+      "type": "object"
+    },
+    "PeripheralsConfig": {
+      "description": "Peripheral board integration configuration (`[peripherals]` section).\n\nBoards become agent tools when enabled.",
+      "properties": {
+        "boards": {
+          "default": [],
+          "description": "Board configurations (nucleo-f401re, rpi-gpio, etc.)",
+          "items": {
+            "$ref": "#/$defs/PeripheralBoardConfig"
+          },
+          "type": "array"
+        },
+        "datasheet_dir": {
+          "default": null,
+          "description": "Path to datasheet docs (relative to workspace) for RAG retrieval.\nPlace .md/.txt files named by board (e.g. nucleo-f401re.md, rpi-gpio.md).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable peripheral support (boards become agent tools)",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PeripheralsConfig",
+  "default": {
+    "boards": [],
+    "datasheet_dir": null,
+    "enabled": false
+  },
+  "description": "Peripheral board configuration for hardware integration (`[peripherals]`)."
+}

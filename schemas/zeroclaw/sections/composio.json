@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "ComposioConfig": {
+      "description": "Composio managed OAuth tools integration (`[composio]` section).\n\nProvides access to 1000+ OAuth-connected tools via the Composio platform.",
+      "properties": {
+        "api_key": {
+          "default": null,
+          "description": "Composio API key (stored encrypted when secrets.encrypt = true)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-secret": true
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable Composio integration for 1000+ OAuth tools",
+          "type": "boolean"
+        },
+        "entity_id": {
+          "default": "default",
+          "description": "Default entity ID for multi-user setups",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/ComposioConfig",
+  "default": {
+    "api_key": null,
+    "enabled": false,
+    "entity_id": "default"
+  },
+  "description": "Composio managed OAuth tools integration (`[composio]`)."
+}

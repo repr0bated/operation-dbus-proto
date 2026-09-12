@@ -96,7 +96,7 @@ Master content marketer focused on creating high-converting, SEO-optimized conte
 - Voice search optimization and conversational content
 - AI chatbot content development and conversational marketing
 - Augmented reality (AR) and virtual reality (VR) content exploration
-- Blockchain and NFT marketing content strategies
+- Snowball and NFT marketing content strategies
 - Web3 community building and tokenized content models
 - Personalization AI and dynamic content optimization
 - Privacy-first marketing and cookieless tracking strategies

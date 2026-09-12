@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "BuiltinHooksConfig": {
+      "properties": {
+        "command_logger": {
+          "default": false,
+          "description": "Enable the command-logger hook (logs tool calls for auditing).",
+          "type": "boolean"
+        },
+        "webhook_audit": {
+          "$ref": "#/$defs/WebhookAuditConfig",
+          "default": {
+            "enabled": false,
+            "include_args": false,
+            "max_args_bytes": 4096,
+            "tool_patterns": [],
+            "url": ""
+          },
+          "description": "Configuration for the webhook-audit hook.\n\nWhen enabled, POSTs a JSON payload to `url` for every tool invocation\nthat matches one of `tool_patterns`."
+        }
+      },
+      "type": "object"
+    },
+    "HooksConfig": {
+      "properties": {
+        "builtin": {
+          "$ref": "#/$defs/BuiltinHooksConfig",
+          "default": {
+            "command_logger": false,
+            "webhook_audit": {
+              "enabled": false,
+              "include_args": false,
+              "max_args_bytes": 4096,
+              "tool_patterns": [],
+              "url": ""
+            }
+          }
+        },
+        "enabled": {
+          "default": true,
+          "description": "Enable lifecycle hook execution.\n\nHooks run in-process with the same privileges as the main runtime.\nKeep enabled hook handlers narrowly scoped and auditable.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "WebhookAuditConfig": {
+      "description": "Configuration for the webhook-audit builtin hook.\n\nSends an HTTP POST with a JSON body to an external endpoint each time\na tool call matches one of the configured patterns. Useful for\ncentralised audit logging, SIEM ingestion, or compliance pipelines.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the webhook-audit hook. Default: `false`.",
+          "type": "boolean"
+        },
+        "include_args": {
+          "default": false,
+          "description": "Include tool call arguments in the audit payload. Default: `false`.\n\nBe mindful of sensitive data — arguments may contain secrets or PII.",
+          "type": "boolean"
+        },
+        "max_args_bytes": {
+          "default": 4096,
+          "description": "Maximum size (in bytes) of serialised arguments included in a single\naudit payload. Arguments exceeding this limit are truncated.\nDefault: `4096`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_patterns": {
+          "default": [],
+          "description": "Glob patterns for tool names to audit (e.g. `[\"Bash\", \"Write\"]`).\nAn empty list means **no** tools are audited.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "url": {
+          "default": "",
+          "description": "Target URL that will receive the audit POST requests.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/HooksConfig",
+  "default": {
+    "builtin": {
+      "command_logger": false,
+      "webhook_audit": {
+        "enabled": false,
+        "include_args": false,
+        "max_args_bytes": 4096,
+        "tool_patterns": [],
+        "url": ""
+      }
+    },
+    "enabled": true
+  },
+  "description": "Hooks configuration (lifecycle hooks and built-in hook toggles)."
+}

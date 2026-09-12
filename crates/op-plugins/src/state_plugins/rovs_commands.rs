@@ -59,6 +59,25 @@ fn default_interface_type() -> String {
     "internal".to_string()
 }
 
+/// ensure_internal_port method input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EnsureInternalPortInput {
+    /// Parent bridge name
+    pub bridge_name: String,
+    /// Internal interface and port name
+    pub port_name: String,
+}
+
+/// Result of idempotently ensuring one OVS internal port.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EnsureInternalPortOutput {
+    pub bridge_name: String,
+    pub port_name: String,
+    pub interface_type: String,
+    /// True when a new Port/Interface pair was inserted; false when repaired or already present.
+    pub created: bool,
+}
+
 /// remove_port method input
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RemovePortInput {
@@ -217,6 +236,19 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
         ),
     );
     methods.insert(
+        "ensure_internal_port".to_string(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            EnsureInternalPortInput,
+            EnsureInternalPortOutput,
+        >(
+            "ensure_internal_port",
+            SideEffect::Mutation,
+            true,
+            "cap.network.ovsdb.port.ensure-internal@v1",
+            "mut.network.ovsdb.port.ensure-internal@v1",
+        ),
+    );
+    methods.insert(
         "remove_port".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             RemovePortInput,
@@ -316,6 +348,10 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
             description: "Grants: add_port.".to_string(),
         })
         .capability(op_state_store::CapabilityDecl {
+            id: "cap.network.ovsdb.port.ensure-internal@v1".to_string(),
+            description: "Grants: ensure_internal_port.".to_string(),
+        })
+        .capability(op_state_store::CapabilityDecl {
             id: "cap.network.ovsdb.port.delete@v1".to_string(),
             description: "Grants: remove_port.".to_string(),
         })
@@ -336,4 +372,31 @@ pub(crate) fn rovs_commands_schema() -> PluginSchema {
 
 inventory::submit! {
     crate::default_registry::PluginReg::new("rovs_commands", |_ctx| std::sync::Arc::new(RovsCommandsPlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simd_json::prelude::*;
+
+    #[test]
+    fn internal_port_method_is_typed_and_oscal_authorized() {
+        let schema = rovs_commands_schema();
+        let method = &schema.methods["ensure_internal_port"];
+        assert_eq!(
+            method.required_capability.as_deref(),
+            Some("cap.network.ovsdb.port.ensure-internal@v1")
+        );
+        assert_eq!(method.subid, "mut.network.ovsdb.port.ensure-internal@v1");
+        assert!(method.idempotent);
+        assert_eq!(
+            method
+                .args
+                .get("required")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(2)
+        );
+        assert!(method.returns.is_some());
+    }
 }

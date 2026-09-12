@@ -60,7 +60,7 @@ The chatbot is a **delegator, recommender, and fixer** — and that's the ceilin
 Because every action is a chained, content-addressed, searchable block, you can confront the agent in real time — *"why did you do this?"* — and it answers with **cryptographic receipts** pulled live by semantic search (chatbot on top, evidence on the bottom). If the model confabulates, the evidence pane contradicts it. **An AI you can put on the stand.**
 
 **3. The chain is the truth; the DB and graph are rebuilt views.**
-The hash-linked chain is canonical and tamper-evident. Qdrant (semantic) and Cozo (realtime graph) are **AI-reassembled projections** of it — if they're lost or corrupted, you re-derive them from the chain. Trust lives in the chain; queryability lives in the projections. (It's a blockchain *by structure* — hashed, chained blocks — kept honest by **anchoring**, not consensus, which is the right call for a single-operator compliance system.)
+The hash-linked chain is canonical and tamper-evident. Qdrant (semantic) and Cozo (realtime graph) are **AI-reassembled projections** of it — if they're lost or corrupted, you re-derive them from the chain. Trust lives in the chain; queryability lives in the projections. (It's a snowball *by structure* — hashed, chained blocks — kept honest by **anchoring**, not consensus, which is the right call for a single-operator compliance system.)
 
 **4. One dial: Snowden ↔ Big Brother.**
 Same mesh, same chain, same confrontable AI — **only the identity-linkage layer changes**, at deploy time:
@@ -109,7 +109,7 @@ So in the meeting: if any of it is interesting, we'll happily go deeper. If not 
 
 ### Appendix — quick FAQ
 
-- **"Is it really a blockchain if it's not distributed?"** It's a blockchain *by structure* (hashed, chained blocks). Distribution buys trustless multi-party consensus; we don't need that — we get operator-tamper-resistance by **anchoring** the chain head externally. Correct tool for a single-operator compliance ledger.
+- **"Is it really a snowball if it's not distributed?"** It's a snowball *by structure* (hashed, chained blocks). Distribution buys trustless multi-party consensus; we don't need that — we get operator-tamper-resistance by **anchoring** the chain head externally. Correct tool for a single-operator compliance ledger.
 - **"What stops the AI going rogue?"** It has no hands — no internet, no execution rights. It recommends; the governed layer executes. Hallucination has no reach.
 - **"Why Rust / why these components?"** Selection principle: **schema-native from the ground up** (e.g. zeroclaw) and **safe by construction** (Rust — memory-safe, race-free, single static binaries). The governance holds at every layer because nothing was bolted on.
 - **"What do you actually want from us?"** Nothing, really — this is a heads-up, not a request. We built the pattern around what's available today and want the people who built the layer it stands on to be the first to see it.

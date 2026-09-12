@@ -154,11 +154,11 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 - **Gemma:** Declared as classifier in ZeroclawPlugin, not implemented.
 - **ZeroClaw:** Declared as router/enforcer, not implemented.
 
-### Blockchain/Vectorization Layer
+### Snowball/Vectorization Layer
 - **Event Chain:** In-memory Merkle tree with Blake3 hashes in `op-state-store`.
 - **Vector DB:** Qdrant with Voyage embeddings (`RagPipeline` in `op-cognitive-mcp`).
 - **Graph DB:** CozoDB (relational-graph-vector) in `op-cognitive-mcp::CozoGraphShuttle`.
-- **Blockchain:** Referenced but no clear blockchain write implementation found.
+- **Snowball:** Referenced but no clear snowball write implementation found.
 
 ### UI Schema Rendering Layer
 - **Framework:** React + Tailwind + shadcn/ui.
@@ -185,7 +185,7 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 | 11. ZeroClaw enforcement | Not Implemented | No | No | No | No | No | No | No | No | ZeroClaw is a config plugin |
 | 12. D-Bus/gRPC/socket route | Implemented | Partial | Partial | Partial | No | Partial | Yes | Yes | No | OSCAL missing |
 | 13. Xray tag routing | Implemented | No | No | Partial | No | No | No | No | No | Xray config is raw JSON string |
-| 14. Blockchain/audit pipeline | Partial | Partial | Partial | Partial | No | Partial | Partial | Partial | No | Event chain exists; blockchain unclear |
+| 14. Snowball/audit pipeline | Partial | Partial | Partial | Partial | No | Partial | Partial | Partial | No | Event chain exists; snowball unclear |
 | 15. Evidence object | Partial | Partial | Partial | Partial | No | Partial | Partial | Partial | No | Evidence = ChainEvent proto |
 | 16. Vectorization | Implemented | Yes | Partial | Partial | No | No | No | Yes | Yes | Qdrant upsert has payload metadata |
 | 17. UI schema render | Partial | No | No | No | No | No | No | Yes | No | UI uses hardcoded schema, not canonical |
@@ -342,8 +342,8 @@ The implementation is **architecturally coherent in intent but fragmented in exe
 20. **Interceptor Chain:** Reorder gRPC interceptor chain to: `CORS` -> `RateLimit` -> `GhostbridgeIdentity` -> `ZeroClawPolicy` -> `Handler`.
 21. **Fail-Closed:** Any error in `ZeroClawPolicy` (missing policy, rule evaluation failure, model timeout) returns `PERMISSION_DENIED`.
 
-### Phase 10: Complete Blockchain/Vectorization/Evidence Pipeline (Weeks 10-11)
-22. **Blockchain Writer:** Implement a `BlockchainWriter` trait with a default Btrfs-backed append-only log. Attach the Merkle root of each event batch to the sled.
+### Phase 10: Complete Snowball/Vectorization/Evidence Pipeline (Weeks 10-11)
+22. **Snowball Writer:** Implement a `SnowballWriter` trait with a default Btrfs-backed append-only log. Attach the Merkle root of each event batch to the sled.
 23. **Vectorize Events:** Upsert every `ChainEvent` into Qdrant with the full metadata payload so semantic search can find audit entries.
 
 ### Phase 11: Generate UI Schema Components from Canonical Schema (Week 11)

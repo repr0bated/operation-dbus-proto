@@ -187,6 +187,14 @@ impl CozoGraphShuttle {
 
     fn seed_schema(&self) -> Result<()> {
         let relations = [
+            // Migration markers survive empty catalogs; row count is not a
+            // migration version and must never resurrect retired identities.
+            r#":create schema_migrations { name: String => completed: Bool }"#,
+            // Private project catalog. Document stores reside in each project's
+            // own persistent mount, not in this control-plane catalog.
+            r#":create project_catalog { project_id: String => document: String }"#,
+            r#":create project_documents { collection: String, document_id: String => document: String }"#,
+            r#":create notebooklm_selection { session_id: String => notebook_id: String }"#,
             // plugin × op → action(Deny/Allow) + reason + control_ref
             r#":create compliance_rule {
                 plugin: String, op: String, action: String
@@ -440,13 +448,23 @@ impl CozoGraphShuttle {
             }
         }
 
-        // One-way, idempotent migration from the pre-v3 relation. Fresh
-        // stores never create this legacy relation; existing rows are copied
-        // into the session-genesis schema and all runtime reads/writes use the
-        // new relation immediately. A missing legacy relation is expected.
-        let _ = cozo_run(
-            &self.db,
-            r#"
+        // One-way copy from the pre-v3 `identity_sleds` relation. This must not
+        // `:put` over `identity_sessions` that already exist — every process
+        // open used to replay stale host-only rows and wipe bound instance/btrfs
+        // JSON written while the bridge was down.
+        let migration_done = !cozo_run(&self.db,
+            "?[name] := *schema_migrations{name, completed}, name = 'identity-sessions-v3', completed = true",
+            BTreeMap::new())?.rows.is_empty();
+        let sessions_already_present = !self.list_identity_sessions()?.is_empty();
+        let relations = cozo_run(&self.db, "::relations", BTreeMap::new())?;
+        let legacy_exists = relations
+            .rows
+            .iter()
+            .any(|row| row.first().and_then(dv_as_str) == Some("identity_sleds"));
+        if !migration_done && !sessions_already_present && legacy_exists {
+            cozo_run(
+                &self.db,
+                r#"
                 ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
                   session_genesis, trace_id, schema_version, vector_id, sealed_id,
                   btrfs_device_json, instance_json, session_started_at, last_seen_at,
@@ -463,8 +481,14 @@ impl CozoGraphShuttle {
                     active, expires_at
                 }
             "#,
-            BTreeMap::new(),
-        );
+                BTreeMap::new(),
+            )?;
+        }
+        if !migration_done {
+            cozo_run(&self.db,
+                "?[name, completed] <- [['identity-sessions-v3', true]] :put schema_migrations {name => completed}",
+                BTreeMap::new())?;
+        }
 
         info!("CozoDB schema ready");
         Ok(())
@@ -1521,7 +1545,9 @@ impl CozoGraphShuttle {
             p,
         )
         .map_err(|e| CozoError::Other(format!("get identity sled: {e}")))?;
-        Ok(r.rows.first().map(|r| row_to_identity_sled(r)))
+        Ok(r.rows
+            .first()
+            .map(|row| row_to_identity_sled(&r.headers, row)))
     }
 
     /// List every persisted identity sled (used to warm the dispatch cache on
@@ -1542,7 +1568,10 @@ impl CozoGraphShuttle {
             BTreeMap::new(),
         )
         .map_err(|e| CozoError::Other(format!("list identity sleds: {e}")))?;
-        Ok(r.rows.iter().map(|r| row_to_identity_sled(r)).collect())
+        Ok(r.rows
+            .iter()
+            .map(|row| row_to_identity_sled(&r.headers, row))
+            .collect())
     }
 
     /// Atomically bump only `last_seen_at`/`active` on an identity sled — an
@@ -1565,6 +1594,41 @@ impl CozoGraphShuttle {
             p,
         )
         .map_err(|e| CozoError::Other(format!("touch identity sled: {e}")))?;
+        Ok(())
+    }
+
+    /// Remove one identity sled and its genesis/snowball archive rows.
+    pub fn delete_identity_sled(&self, session_id: &str) -> std::result::Result<(), CozoError> {
+        let mut p: Params = BTreeMap::new();
+        p.insert("sid".into(), DataValue::Str(session_id.into()));
+        cozo_run(
+            &self.db,
+            r#"
+                ?[session_id] <- [[$sid]]
+                :rm identity_sessions { session_id }
+            "#,
+            p.clone(),
+        )
+        .map_err(|e| CozoError::Other(format!("delete identity sled: {e}")))?;
+        cozo_run(
+            &self.db,
+            r#"
+                ?[session_id] <- [[$sid]]
+                :rm identity_genesis { session_id }
+            "#,
+            p.clone(),
+        )
+        .map_err(|e| CozoError::Other(format!("delete identity genesis: {e}")))?;
+        cozo_run(
+            &self.db,
+            r#"
+                doomed[session_id, seq] := *session_events[session_id, seq, kind, subid, content, created_at], session_id = $sid
+                ?[session_id, seq] := doomed[session_id, seq]
+                :rm session_events { session_id, seq }
+            "#,
+            p,
+        )
+        .map_err(|e| CozoError::Other(format!("delete session events: {e}")))?;
         Ok(())
     }
 
@@ -1842,6 +1906,32 @@ fn dv_int(i: i64) -> DataValue {
     DataValue::Num(cozo::Num::Int(i))
 }
 
+fn dv_as_text(dv: &DataValue) -> String {
+    match dv {
+        DataValue::Str(s) => s.as_str().to_string(),
+        DataValue::Json(_) => {
+            let rendered = format!("{dv}");
+            rendered
+                .strip_prefix("json(")
+                .and_then(|inner| inner.strip_suffix(')'))
+                .unwrap_or(rendered.as_str())
+                .to_string()
+        }
+        DataValue::List(_) => match dv_to_json(dv) {
+            Value::String(s) => s,
+            Value::Null => String::new(),
+            other => other.to_string(),
+        },
+        DataValue::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        DataValue::Null => String::new(),
+        other => match dv_to_json(other) {
+            Value::String(s) => s,
+            Value::Null => String::new(),
+            v => v.to_string(),
+        },
+    }
+}
+
 fn dv_as_str(dv: &DataValue) -> Option<&str> {
     if let DataValue::Str(s) = dv {
         Some(s.as_str())
@@ -1895,25 +1985,56 @@ fn row_to_wg_session(row: &[DataValue]) -> WgSessionRecord {
     }
 }
 
-fn row_to_identity_sled(row: &[DataValue]) -> IdentitySledRecord {
-    let s = |i: usize| dv_as_str(&row[i]).unwrap_or("").to_string();
+fn row_cell<'a>(headers: &[String], row: &'a [DataValue], name: &str) -> Option<&'a DataValue> {
+    headers
+        .iter()
+        .position(|header| header == name)
+        .and_then(|idx| row.get(idx))
+}
+
+fn row_text(headers: &[String], row: &[DataValue], name: &str) -> String {
+    row_cell(headers, row, name)
+        .map(dv_as_text)
+        .unwrap_or_default()
+}
+
+fn row_str(headers: &[String], row: &[DataValue], name: &str) -> String {
+    row_cell(headers, row, name)
+        .and_then(dv_as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn row_to_identity_sled(headers: &[String], row: &[DataValue]) -> IdentitySledRecord {
     IdentitySledRecord {
-        session_id: s(0),
-        wireguard_pubkey: s(1),
-        interface: s(2),
-        peer_ip: s(3),
-        mutation_index: dv_as_int(&row[4]),
-        session_genesis: s(5),
-        trace_id: s(6),
-        schema_version: dv_as_int(&row[7]),
-        vector_id: s(8),
-        sealed_id: s(9),
-        btrfs_device_json: s(10),
-        instance_json: s(11),
-        session_started_at: dv_as_int(&row[12]),
-        last_seen_at: dv_as_int(&row[13]),
-        active: dv_as_bool(&row[14]),
-        expires_at: dv_as_int(&row[15]),
+        session_id: row_str(headers, row, "session_id"),
+        wireguard_pubkey: row_str(headers, row, "wireguard_pubkey"),
+        interface: row_str(headers, row, "interface"),
+        peer_ip: row_str(headers, row, "peer_ip"),
+        mutation_index: row_cell(headers, row, "mutation_index")
+            .map(dv_as_int)
+            .unwrap_or(0),
+        session_genesis: row_str(headers, row, "session_genesis"),
+        trace_id: row_str(headers, row, "trace_id"),
+        schema_version: row_cell(headers, row, "schema_version")
+            .map(dv_as_int)
+            .unwrap_or(0),
+        vector_id: row_str(headers, row, "vector_id"),
+        sealed_id: row_str(headers, row, "sealed_id"),
+        btrfs_device_json: row_text(headers, row, "btrfs_device_json"),
+        instance_json: row_text(headers, row, "instance_json"),
+        session_started_at: row_cell(headers, row, "session_started_at")
+            .map(dv_as_int)
+            .unwrap_or(0),
+        last_seen_at: row_cell(headers, row, "last_seen_at")
+            .map(dv_as_int)
+            .unwrap_or(0),
+        active: row_cell(headers, row, "active")
+            .map(dv_as_bool)
+            .unwrap_or(false),
+        expires_at: row_cell(headers, row, "expires_at")
+            .map(dv_as_int)
+            .unwrap_or(0),
     }
 }
 
@@ -1994,7 +2115,15 @@ fn dv_to_json(dv: &DataValue) -> Value {
             .unwrap_or(Value::Null),
         DataValue::Str(s) => Value::String(s.to_string()),
         DataValue::List(list) => Value::Array(list.iter().map(dv_to_json).collect()),
-        other => Value::String(format!("{other:?}")),
+        DataValue::Json(_) => {
+            let rendered = format!("{dv}");
+            let trimmed = rendered
+                .strip_prefix("json(")
+                .and_then(|inner| inner.strip_suffix(')'))
+                .unwrap_or(rendered.as_str());
+            serde_json::from_str(trimmed).unwrap_or(Value::String(rendered))
+        }
+        other => Value::String(format!("{other}")),
     }
 }
 
@@ -2064,6 +2193,96 @@ mod identity_sled_tests {
         assert_eq!(
             row.btrfs_device_json,
             sample("chatbot-first").btrfs_device_json
+        );
+        assert_eq!(row.instance_json, sample("chatbot-first").instance_json);
+    }
+
+    #[test]
+    fn identity_sled_reopen_keeps_overlay_sized_instance_json() {
+        let overlay = r#"{"name":"bea37ecb-92be-197c-660f-09e806f1a34f","status":"Stopped","type":"container","profiles":["identity"],"storage_pool":"3tched-storage","config":{"boot.autostart":"false","user.opdbus.role":"chatbot"},"devices":[{"name":"ghostbridge-socket","device":{"type":"disk","path":"/opt/run-mounts/ghostbridge","source":"/run/ghostbridge"}},{"name":"identity","device":{"type":"disk","path":"/opt/run-mounts/identity","source":"/var/lib/opdbus-runtime/identities/chatbot","readonly":"true"}},{"name":"persist","device":{"type":"disk","path":"/opt/run-mounts/persist","source":"/var/lib/opdbus-runtime/identities/chatbot/persist"}},{"name":"root","device":{"type":"disk","path":"/","pool":"3tched-storage"}}]}"#;
+        let btrfs = r#"{"device_path":"/var/lib/opdbus-runtime/identities/chatbot/fstorage.img","mount_point":"/var/lib/opdbus-runtime/identities/chatbot/persist","btrfs_uuid":"cb63f57a-194e-4547-93cb-31bb8b8da50c","cozo_id":"cb63f57a-194e-4547-93cb-31bb8b8da50c","attached":true}"#;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identity-rocksdb");
+        let mut rec = sample("bea37ecb-92be-197c-660f-09e806f1a34f");
+        rec.instance_json = overlay.to_string();
+        rec.btrfs_device_json = btrfs.to_string();
+        {
+            let store = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
+            store.put_identity_sled(&rec).unwrap();
+        }
+        let reopened = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
+        let row = reopened
+            .get_identity_sled(&rec.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.instance_json, overlay);
+        assert_eq!(row.btrfs_device_json, btrfs);
+        let parsed: serde_json::Value = serde_json::from_str(&row.instance_json).unwrap();
+        assert_eq!(parsed["devices"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn identity_sessions_survive_reopen_when_legacy_identity_sleds_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identity-rocksdb");
+        let mut rec = sample("bea37ecb-92be-197c-660f-09e806f1a34f");
+        rec.instance_json = r#"{"name":"bea37ecb-92be-197c-660f-09e806f1a34f","status":"Stopped","type":"container"}"#.to_string();
+        rec.btrfs_device_json = r#"{"device_path":"/dev/loop0","attached":true}"#.to_string();
+        {
+            let store = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
+            store.put_identity_sled(&rec).unwrap();
+            let _ = store.run_query(
+                r#":create identity_sleds {
+                    session_id: String
+                    =>
+                    wireguard_pubkey: String,
+                    interface: String default "",
+                    peer_ip: String default "",
+                    mutation_index: Int default 0,
+                    hashed_footprint: String default "",
+                    trace_id: String default "",
+                    schema_version: Int default 0,
+                    vector_id: String default "",
+                    sealed_id: String default "",
+                    btrfs_device_json: String default "",
+                    instance_json: String default "",
+                    session_started_at: Int default 0,
+                    last_seen_at: Int default 0,
+                    active: Bool default false,
+                    expires_at: Int default 0
+                }"#,
+                None,
+            );
+            let _ = store.run_query(
+                r#"
+                ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
+                  hashed_footprint, trace_id, schema_version, vector_id, sealed_id,
+                  btrfs_device_json, instance_json, session_started_at, last_seen_at,
+                  active, expires_at] <- [[$sid, 'old', '', '', 0, 'legacy', '', 0, '', '',
+                    '', '', 0, 0, false, 0]]
+                :put identity_sleds {
+                    session_id => wireguard_pubkey, interface, peer_ip, mutation_index,
+                    hashed_footprint, trace_id, schema_version, vector_id, sealed_id,
+                    btrfs_device_json, instance_json, session_started_at, last_seen_at,
+                    active, expires_at
+                }
+                "#,
+                Some(serde_json::json!({"sid": rec.session_id})),
+            );
+        }
+        let reopened = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
+        let row = reopened
+            .get_identity_sled(&rec.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.instance_json, rec.instance_json);
+        assert_eq!(row.btrfs_device_json, rec.btrfs_device_json);
+        reopened.delete_identity_sled(&rec.session_id).unwrap();
+        drop(reopened);
+        let empty = CozoGraphShuttle::new_persistent(db_path).unwrap();
+        assert!(
+            empty.list_identity_sessions().unwrap().is_empty(),
+            "an intentionally emptied catalog must not resurrect legacy ghost rows"
         );
     }
 

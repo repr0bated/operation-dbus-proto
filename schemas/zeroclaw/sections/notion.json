@@ -1,0 +1,64 @@
+{
+  "$defs": {
+    "NotionConfig": {
+      "description": "Notion integration configuration (`[notion]`).\n\nWhen `enabled = true`, the agent polls a Notion database for pending tasks\nand exposes a `notion` tool for querying, reading, creating, and updating pages.\nRequires `api_key` (or the `NOTION_API_KEY` env var) and `database_id`.",
+      "properties": {
+        "api_key": {
+          "default": "",
+          "type": "string",
+          "x-secret": true
+        },
+        "database_id": {
+          "default": "",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "input_property": {
+          "default": "Input",
+          "type": "string"
+        },
+        "max_concurrent": {
+          "default": 4,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "poll_interval_secs": {
+          "default": 5,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recover_stale": {
+          "default": true,
+          "type": "boolean"
+        },
+        "result_property": {
+          "default": "Result",
+          "type": "string"
+        },
+        "status_property": {
+          "default": "Status",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/NotionConfig",
+  "default": {
+    "api_key": "",
+    "database_id": "",
+    "enabled": false,
+    "input_property": "Input",
+    "max_concurrent": 4,
+    "poll_interval_secs": 5,
+    "recover_stale": true,
+    "result_property": "Result",
+    "status_property": "Status"
+  },
+  "description": "Notion integration configuration (`[notion]`)."
+}

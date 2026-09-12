@@ -18,7 +18,7 @@ import { Send, Loader2, RefreshCw, Bot, User } from 'lucide-react';
 
 // Plugin catalog for quick selection
 const PLUGIN_CATALOG = [
-  'adc', 'agentConfig', 'antigravity', 'blockchain', 'btrfs',
+  'adc', 'agentConfig', 'antigravity', 'snowball', 'btrfs',
   'cognitiveMcp', 'compactMcp', 'config', 'cron', 'ctlPlaneChatbot',
   'datastore', 'dnsresolver', 'embeddingModel', 'emqx', 'endpoint',
   'factory', 'fail2ban', 'freedesktop', 'fullSystem', 'gcloudAdc',

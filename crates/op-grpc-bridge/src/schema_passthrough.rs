@@ -140,11 +140,11 @@ impl SchemaPassthroughService {
         self.router.list_plugin_ids().await
     }
 
-    /// Build the read-only `ZeroclawProjection` proto for the `"zeroclaw"`
+    /// Build the read-only `TchedRouterProjection` proto for the `"tched_router"`
     /// plugin from the in-memory `TchedRouterState` (never a `/dev/shm` re-read).
     /// Returns `None` for any other plugin name.
-    /// subid: `exp.service.zeroclaw-bridge.grpc-stream@v1`.
-    pub fn zeroclaw_projection(plugin_name: &str) -> Option<crate::proto::ZeroclawProjection> {
+    /// subid: `exp.service.3tched-router-bridge.grpc-stream@v1`.
+    pub fn tched_router_projection(plugin_name: &str) -> Option<crate::proto::TchedRouterProjection> {
         if plugin_name != "tched_router" {
             return None;
         }
@@ -174,7 +174,7 @@ impl SchemaPassthroughService {
                 kind: p.kind.clone(),
             })
             .collect();
-        Some(crate::proto::ZeroclawProjection {
+        Some(crate::proto::TchedRouterProjection {
             schema_json,
             model_routes,
             providers,

@@ -17,14 +17,14 @@ Feature name: `session-genesis-identity`
 
 ## 1 · The problem, in one paragraph
 
-The identity value carried in the per-request header is **recomputed on every mutation**, so it is stale before the client can present it. A.N.N.A. Scribe therefore rejects live callers with "Temporal Hash Mismatch". Two unrelated things are both called "footprint" — the identity anchor and the blockchain record — and the collision is why neither works: the identity anchor chases a moving global counter, and the chain record carries no session identity at all, so the chain cannot be sliced or verified per session.
+The identity value carried in the per-request header is **recomputed on every mutation**, so it is stale before the client can present it. A.N.N.A. Scribe therefore rejects live callers with "Temporal Hash Mismatch". Two unrelated things are both called "footprint" — the identity anchor and the snowball record — and the collision is why neither works: the identity anchor chases a moving global counter, and the chain record carries no session identity at all, so the chain cannot be sliced or verified per session.
 
 ## 2 · Verified live evidence (verified 2026-08-15/16 against the running host, not inferred from docs)
 
 | Fact | Evidence |
 |---|---|
 | The SHM sled is ONE file, 152 bytes, last-write-wins, shared by all sessions | /dev/shm/plugin_schema.dat; SHM_SLED_PATH at op-identity/src/schema_bridge.rs:22 |
-| Its mutation_index is a global counter near 1.9M and moves constantly | live sled dump; blockchain counter 1,822,084 |
+| Its mutation_index is a global counter near 1.9M and moves constantly | live sled dump; snowball counter 1,822,084 |
 | The identity anchor is derived from that counter | etch_footprint, op-identity/src/schema_bridge.rs:1121 — blake3(pubkey ‖ catalog_hash ‖ mutation_index ‖ source_port) |
 | source_port is structurally zero on this host | no wg0; interfaces are wgcf-egress, wgcf-uiStream (WARP), netmaker |
 | The per-session store disagrees with SHM | /dev/shm/opdbus/state/identity_sled.json — record for live container bea37ecb-92be-197c-660f-09e806f1a34f has hashed_footprint "" and mutation_index 0, while SHM holds a real footprint for the same pubkey |
@@ -51,7 +51,7 @@ The identity value carried in the per-request header is **recomputed on every mu
 
   Identity, state-at-arrival, contract-at-arrival, moment. The chain head is a commitment to all prior mutations by hash linkage, so it *is* the current mutation state without walking anything. The arrival timestamp is the uniqueness term that separates two logins landing at the same head; unlike the head timestamp it cannot be re-derived, so it must be **stored** to stay checkable.
 
-- **Footprint** — goes back to meaning the blockchain record (PluginFootprint, op-blockchain/src/footprint.rs:54). One per mutation, delivered by the session, carrying the genesis as its session stamp, free to grow (including vector_features, currently always empty).
+- **Footprint** — goes back to meaning the snowball record (PluginFootprint, op-snowball/src/footprint.rs:54). One per mutation, delivered by the session, carrying the genesis as its session stamp, free to grow (including vector_features, currently always empty).
 
 **The header is on every packet.** Constant for the life of the session, verified with a single equality against the session record. This is the point of the whole design, not an implementation detail. When it is absent the request must **fail closed** — the zeros sentinel is the same as having no gate.
 

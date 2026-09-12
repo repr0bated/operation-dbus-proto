@@ -52,7 +52,16 @@ async fn start_tls_server() -> (SocketAddr, String) {
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(event_chain, ovsdb));
-    let server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine);
+    let blobs = tempfile::tempdir().expect("isolated sealed blob catalog");
+    op_blob::BlobStore::open(blobs.path())
+        .unwrap()
+        .write(&op_grpc_bridge::tched_router_object_blob::from_plugin_schema())
+        .unwrap();
+    let catalog = op_grpc_bridge::dynamic_reflection::ActiveReflectionCatalog::with_dir(
+        blobs.path().to_path_buf(),
+    );
+    let server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine)
+        .with_reflection_catalog(catalog);
 
     // Health reporter — mirrors run_grpc_server's health surface.
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -69,6 +78,7 @@ async fn start_tls_server() -> (SocketAddr, String) {
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
     tokio::spawn(async move {
+        let _blobs = blobs;
         tonic::transport::Server::builder()
             .tls_config(tls_config)
             .expect("valid TLS config")
@@ -159,9 +169,8 @@ async fn tls_handshake_rejects_unknown_ca() {
 ///
 /// The `DynamicReflectionService` only lists services from active plugin
 /// object blobs (SHM catalog) plus `grpc.reflection.v1.ServerReflection`.
-/// In tests there are no SHM blobs, so core services (StateSync, etc.)
-/// are not listed — but build-time plugin method services and the
-/// reflection service itself are always present.
+/// The fixture seals one plugin in an isolated catalog; only its mounted
+/// generated service and the reflection service should be advertised.
 #[tokio::test]
 async fn reflection_list_services_over_tls() {
     let (addr, ca_pem) = start_tls_server().await;
@@ -225,13 +234,30 @@ async fn reflection_list_services_over_tls() {
         "grpc.reflection.v1.ServerReflection should always be listed. Got: {services:?}"
     );
 
-    // Build-time plugin method services should be listed (they come from the
-    // static FILE_DESCRIPTOR_SET, not from SHM blobs).
-    let has_plugin_method_services = services.iter().any(|s| s.starts_with("operation.method."));
-    assert!(
-        has_plugin_method_services,
-        "expected at least one operation.method.* service from build-time plugin schemas. Got: {services:?}"
+    assert_eq!(
+        services,
+        [
+            "grpc.reflection.v1.ServerReflection",
+            "operation.plugin.v1.TchedRouterPluginMethods",
+        ],
+        "only mounted services backed by this fixture's blob are discoverable"
     );
+}
+
+/// A discovered generated service must reach its authentication handler,
+/// not return UNIMPLEMENTED as an unmounted descriptor-only service would.
+#[tokio::test]
+async fn advertised_plugin_route_is_mounted_over_tls() {
+    let (addr, ca_pem) = start_tls_server().await;
+    let channel = tls_channel(addr, &ca_pem).await;
+    let mut client = op_grpc_bridge::proto::plugin_methods::tched_router_plugin_methods_client::TchedRouterPluginMethodsClient::new(channel);
+    let status = client
+        .get_agents_config(
+            op_grpc_bridge::proto::plugin_methods::TchedRouterGetAgentsConfigRequest::default(),
+        )
+        .await
+        .expect_err("missing identity must fail at the mounted route's auth gate");
+    assert_eq!(status.code(), tonic::Code::Unauthenticated);
 }
 
 /// gRPC reflection can retrieve a file descriptor for a known service over TLS.

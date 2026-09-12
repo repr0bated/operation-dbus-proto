@@ -130,7 +130,7 @@ From the analysis:
 ### Security Model
 - **IP-based access zones** (localhost, trusted mesh, private, public)
 - **Security levels** (public, standard, elevated, restricted)
-- **Execution tracking** with blockchain anchoring
+- **Execution tracking** with snowball anchoring
 
 ### State Management
 - **Plugin architecture** for extensibility

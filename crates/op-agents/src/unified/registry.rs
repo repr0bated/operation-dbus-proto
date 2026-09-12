@@ -3,7 +3,6 @@
 //! Single registry for all agent types with lazy loading.
 
 use parking_lot::RwLock;
-use simd_json::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 

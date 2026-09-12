@@ -110,5 +110,5 @@ reboot clears.
 - Don't say works/done/verified without a live test + pasted output.
 - Don't `incus stop --force` ERROR containers (deepens the global-lock hang).
 - Don't blind-reboot before fixing root cause #1 (else it re-wedges). Now fixed → reboot OK.
-- Snapshots are TRANSPORT/CACHE machinery (btrfs send delta), NOT DR. DR = blockchain + qdrant
+- Snapshots are TRANSPORT/CACHE machinery (btrfs send delta), NOT DR. DR = snowball + qdrant
   + graph + JSON of original snapshot FS. **Do not prune snapshots.**

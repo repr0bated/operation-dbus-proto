@@ -1,0 +1,37 @@
+{
+  "$defs": {
+    "PipelineConfig": {
+      "description": "Pipeline tool configuration (`[pipeline]` section).",
+      "properties": {
+        "allowed_tools": {
+          "default": [],
+          "description": "Tools allowed in pipeline steps. Steps referencing tools not on this\nlist are rejected before execution.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable the `execute_pipeline` meta-tool.\nDefault: `false`.",
+          "type": "boolean"
+        },
+        "max_steps": {
+          "default": 20,
+          "description": "Maximum number of steps allowed in a single pipeline invocation.\nDefault: `20`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/PipelineConfig",
+  "default": {
+    "allowed_tools": [],
+    "enabled": false,
+    "max_steps": 20
+  },
+  "description": "Pipeline tool configuration (`[pipeline]`)."
+}

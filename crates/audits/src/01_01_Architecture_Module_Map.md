@@ -11,7 +11,7 @@ This audit covers the modular architecture and dependency graph of `OP-DBUS`, a 
 ## Architecture & Module Map
 
 ### Overview
-`OP-DBUS` is architected as a highly modular Rust workspace containing 34 internal crates. The central coordinator is the `op-dbus` binary target, which acts as the control-plane entry point. Sub-components are grouped by layer: system interfaces (D-Bus, networking, gateway), cognitive interfaces (MCP, agent executors, LLM integrations), state/ledger layers (blockchain, SQL storage, vector search, graph storage), and verification blocks (compliance engines, trackers).
+`OP-DBUS` is architected as a highly modular Rust workspace containing 34 internal crates. The central coordinator is the `op-dbus` binary target, which acts as the control-plane entry point. Sub-components are grouped by layer: system interfaces (D-Bus, networking, gateway), cognitive interfaces (MCP, agent executors, LLM integrations), state/ledger layers (snowball, SQL storage, vector search, graph storage), and verification blocks (compliance engines, trackers).
 
 ### Module Tree
 The workspace layout, defined in `Cargo.toml:4-37`, maps to the following functional module tree:
@@ -42,7 +42,7 @@ op-dbus-workspace (Root)
  │    ├── op-state-store (Distributed state database using Redis/SQLx)
  │    ├── op-cozo-store (Datalog relational-graph-vector DB integration)
  │    ├── op-cache (Protobuf-backed persistent storage using SQLite)
- │    └── op-blockchain (Control-plane deterministic transaction ledger)
+ │    └── op-snowball (Control-plane deterministic transaction ledger)
  ├── Extensibility & Loaders
  │    ├── op-plugins (Hot-pluggable agent/network extensions)
  │    └── op-dynamic-loader (On-demand dynamic module runtime loader)
@@ -69,7 +69,7 @@ All module contracts in this workspace are declared as individual workspace pack
 *   **Severity:** High
 *   **Citation:** `Cargo.toml:163`
 *   **Description:**
-    The workspace declares `md5 = "0.7"` as a common dependency available to all workspace crates. MD5 is highly vulnerable to cryptographic collision attacks. Within a system control plane that manages deterministic state, blockchain ledger state, and network routing policies, any use of MD5 to verify file integrity, binary hashes, or transaction states can allow an attacker to bypass integrity checks via pre-image or collision generation.
+    The workspace declares `md5 = "0.7"` as a common dependency available to all workspace crates. MD5 is highly vulnerable to cryptographic collision attacks. Within a system control plane that manages deterministic state, snowball ledger state, and network routing policies, any use of MD5 to verify file integrity, binary hashes, or transaction states can allow an attacker to bypass integrity checks via pre-image or collision generation.
 *   **Impact:**
     If internal modules (such as `op-state`, `op-identity`, or `op-plugins`) use MD5 for fast validation of plugin binaries or state proofs, an attacker could supply a malicious payload that produces a matching MD5 hash, leading to arbitrary code execution or invalid state validation.
 *   **Remediation:**

@@ -18,7 +18,7 @@ import { streamChat } from '@/api/client';
 
 // Plugin catalog for quick selection
 const PLUGIN_CATALOG = [
-  'adc', 'agentConfig', 'antigravity', 'blockchain', 'btrfs',
+  'adc', 'agentConfig', 'antigravity', 'snowball', 'btrfs',
   'cognitiveMcp', 'compactMcp', 'config', 'cron', 'ctlPlaneChatbot',
   'datastore', 'dnsresolver', 'embeddingModel', 'emqx', 'endpoint',
   'factory', 'fail2ban', 'freedesktop', 'fullSystem', 'gcloudAdc',

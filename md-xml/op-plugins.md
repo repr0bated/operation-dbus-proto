@@ -2103,8 +2103,8 @@ pub struct FullSystemPlugin {
     /// Cached current state
     state_cache: Arc<RwLock<Option<FullSystemState>>>,
     
-    /// Sender for blockchain footprints
-    blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<op_blockchain::PluginFootprint>>,
+    /// Sender for snowball footprints
+    snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<op_snowball::PluginFootprint>>,
 }
 
 impl Default for FullSystemPlugin {
@@ -2117,17 +2117,17 @@ impl FullSystemPlugin {
     pub fn new() -> Self {
         Self {
             state_cache: Arc::new(RwLock::new(None)),
-            blockchain_sender: None,
+            snowball_sender: None,
         }
     }
 
-    /// Create with blockchain sender for change tracking
-    pub fn with_blockchain(
-        sender: tokio::sync::mpsc::UnboundedSender<op_blockchain::PluginFootprint>,
+    /// Create with snowball sender for change tracking
+    pub fn with_snowball(
+        sender: tokio::sync::mpsc::UnboundedSender<op_snowball::PluginFootprint>,
     ) -> Self {
         Self {
             state_cache: Arc::new(RwLock::new(None)),
-            blockchain_sender: Some(sender),
+            snowball_sender: Some(sender),
         }
     }
 
@@ -6423,7 +6423,7 @@ pub use ctl_plane_chatbot::CtlPlaneChatbotPlugin;
 // Net state plugin - authoritative OVS state management via D-Bus
 // Handles: interfaces, bridges, IPs, basic connectivity via plugin schema
 // Integrates with systemd-networkd as subordinate service for L3 configuration
-use op_blockchain::PluginFootprint;
+use op_snowball::PluginFootprint;
 
 // Use D-Bus introspection instead of CLI commands
 use anyhow::{Context, Result};
@@ -6458,13 +6458,13 @@ pub struct InterfaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub driver: Option<String>,
 
-    // TUNABLE - Configuration that can change (blockchain tracks all changes)
+    // TUNABLE - Configuration that can change (snowball tracks all changes)
     /// All tunable configuration in a single object
     #[serde(flatten)]
     pub tunable: TunableConfig,
 }
 
-/// Tunable configuration - can be changed, each change tracked in blockchain
+/// Tunable configuration - can be changed, each change tracked in snowball
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunableConfig {
     /// Ports attached to this interface
@@ -6539,23 +6539,23 @@ pub struct AddressConfig {
 /// Net state plugin implementation - authoritative OVS state via D-Bus
 pub struct NetStatePlugin {
     #[allow(dead_code)]
-    blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
+    snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
 }
 
 #[allow(dead_code)]
 impl NetStatePlugin {
     pub fn new() -> Self {
         Self {
-            blockchain_sender: None,
+            snowball_sender: None,
         }
     }
 
     #[allow(dead_code)]
-    pub fn with_blockchain_sender(
-        blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
+    pub fn with_snowball_sender(
+        snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
     ) -> Self {
         Self {
-            blockchain_sender: Some(blockchain_sender),
+            snowball_sender: Some(snowball_sender),
         }
     }
 
@@ -18440,14 +18440,14 @@ impl StatePlugin for UsersPlugin {
 //!
 //! Follows the 3-section plugin pattern:
 //! - SECTION 1: Immutable Identity (set once, never changes)
-//! - SECTION 2: Tunable Config (can change, blockchain tracks all changes)
+//! - SECTION 2: Tunable Config (can change, snowball tracks all changes)
 //! - SECTION 3: Capabilities (what this plugin can do)
 //!
 //! Uses op-identity crate for WireGuard-based authentication.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use op_blockchain::PluginFootprint;
+use op_snowball::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
@@ -18483,10 +18483,10 @@ impl Default for WebUiIdentity {
 }
 
 // ============================================================================
-// SECTION 2: TUNABLE CONFIG (can change, blockchain tracks all changes)
+// SECTION 2: TUNABLE CONFIG (can change, snowball tracks all changes)
 // ============================================================================
 
-/// Tunable configuration - changes tracked in blockchain
+/// Tunable configuration - changes tracked in snowball
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebUiTunables {
     /// Whether UI serving is enabled
@@ -18659,13 +18659,13 @@ impl WebUiIdentity {
 }
 
 impl WebUiTunables {
-    /// JSON Schema for Tunables (mutable, blockchain-tracked)
+    /// JSON Schema for Tunables (mutable, snowball-tracked)
     pub fn schema() -> Value {
         simd_json::json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": "https://op-dbus.local/schemas/web-ui/tunables.json",
             "title": "WebUiTunables",
-            "description": "Tunable configuration for Web UI plugin (changes tracked in blockchain)",
+            "description": "Tunable configuration for Web UI plugin (changes tracked in snowball)",
             "type": "object",
             "properties": {
                 "enabled": {
@@ -18793,7 +18793,7 @@ pub struct WebUiPlugin {
     tunables: WebUiTunables,
     capabilities: WebUiCapabilities,
     #[allow(dead_code)]
-    blockchain_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
+    snowball_sender: Option<tokio::sync::mpsc::UnboundedSender<PluginFootprint>>,
 }
 
 impl WebUiPlugin {
@@ -18802,18 +18802,18 @@ impl WebUiPlugin {
             identity: WebUiIdentity::default(),
             tunables: WebUiTunables::default(),
             capabilities: WebUiCapabilities::default(),
-            blockchain_sender: None,
+            snowball_sender: None,
         }
     }
 
-    pub fn with_blockchain_sender(
-        blockchain_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
+    pub fn with_snowball_sender(
+        snowball_sender: tokio::sync::mpsc::UnboundedSender<PluginFootprint>,
     ) -> Self {
         Self {
             identity: WebUiIdentity::default(),
             tunables: WebUiTunables::default(),
             capabilities: WebUiCapabilities::default(),
-            blockchain_sender: Some(blockchain_sender),
+            snowball_sender: Some(snowball_sender),
         }
     }
 
@@ -20191,13 +20191,13 @@ impl Default for DynamicLoadingPlugin {
 <file path="src/lib.rs">
 #![recursion_limit = "512"]
 
-//! op-plugins: Plugin system with state management and blockchain footprints
+//! op-plugins: Plugin system with state management and snowball footprints
 //!
 //! Features:
 //! - Plugin trait with desired state management
 //! - State plugins for network, LXC, systemd, OpenFlow, etc.
 //! - BTRFS subvolume storage per plugin
-//! - Automatic hash footprints for blockchain audit trail
+//! - Automatic hash footprints for snowball audit trail
 //! - Auto-creation of missing plugins
 //! - Lifecycle hooks
 //! - Canonical plugin-document persistence into the schema catalog
@@ -20424,7 +20424,7 @@ pub trait Plugin: Send + Sync {
         Ok(())
     }
 
-    /// Get hash of current state for blockchain footprint
+    /// Get hash of current state for snowball footprint
     fn state_hash(&self) -> String {
         use sha2::{Digest, Sha256};
         // Default implementation - plugins should override for accuracy
@@ -21243,7 +21243,7 @@ pub struct StateChange {
     pub new_value: Option<Value>,
     /// Human-readable description
     pub description: String,
-    /// Hash of this change for blockchain
+    /// Hash of this change for snowball
     pub hash: String,
     /// Timestamp of the change
     pub timestamp: DateTime<Utc>,
@@ -21435,14 +21435,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Plugin system with state management, domain plugins, and blockchain footprints"
+description = "Plugin system with state management, domain plugins, and snowball footprints"
 
 [dependencies]
 op-core = { path = "../op-core" }
 op-dbus-model = { workspace = true }
 op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-network = { path = "../op-network" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
@@ -21493,8 +21493,8 @@ tempfile = { workspace = true }
 
 ## Current Implementation Overview
 
-- Plugin system with state management, domain plugins, and blockchain footprints
-- Internal crate integrations: op-core, op-dbus-model, op-state, op-state-store, op-blockchain, op-network, op-dynamic-loader, op-execution-tracker.
+- Plugin system with state management, domain plugins, and snowball footprints
+- Internal crate integrations: op-core, op-dbus-model, op-state, op-state-store, op-snowball, op-network, op-dynamic-loader, op-execution-tracker.
 
 ## Module / File Comparison
 
@@ -21544,7 +21544,7 @@ tempfile = { workspace = true }
 - `op-dbus-model` - not listed in SPEC dependency block
 - `op-state` - documented in SPEC
 - `op-state-store` - documented in SPEC
-- `op-blockchain` - documented in SPEC
+- `op-snowball` - documented in SPEC
 - `op-network` - documented in SPEC
 - `op-dynamic-loader` - documented in SPEC
 - `op-execution-tracker` - documented in SPEC
@@ -21778,7 +21778,7 @@ authority and those mutations are either untracked or buried in other plugins' `
 
 | Missing Plugin | Domain | Why Needed |
 |---|---|---|
-| `mutation_footprint` | Audit trail | **The blockchain plugin being designed** — no mutations tracked |
+| `mutation_footprint` | Audit trail | **The snowball plugin being designed** — no mutations tracked |
 | `firewall` / `nftables` | Firewall rules | No schema for firewall policy changes |
 | `certificate` / `pki` | TLS certificates | Cert lifecycle untracked; `keypair` is insufficient |
 | `vault` / `secrets_backend` | Secret management | No authoritative schema for secret storage backends |
@@ -21789,7 +21789,7 @@ authority and those mutations are either untracked or buried in other plugins' `
 |---|---|---|
 | `dns_zone` | Authoritative DNS | DNS zone records not managed declaratively |
 | `ntp` / `chrony` | Time sync | Time sync config untracked |
-| `btrfs` | Storage subvolumes | `op-blockchain`'s subvolumes have no plugin schema |
+| `btrfs` | Storage subvolumes | `op-snowball`'s subvolumes have no plugin schema |
 | `journal` / `logging` | Log management | Log retention/forwarding unschematized |
 | `ssh_authorized_keys` | SSH access | SSH keys not declaratively managed |
 | `vlan` | VLAN management | VLAN config buried in `net` as `Any` |
@@ -21873,7 +21873,7 @@ and LLM tools that use the schema for context.
    This unblocks catalog recognition with zero field changes.
 
 2. Add `mutation_footprint` plugin — this is the audit system that tracks all other mutations.
-   See `crates/op-blockchain/REQUIREMENTS.md` and `crates/op-blockchain/DESIGN.md`.
+   See `crates/op-snowball/REQUIREMENTS.md` and `crates/op-snowball/DESIGN.md`.
 
 ### Short Term (schema quality)
 
@@ -21964,7 +21964,7 @@ op-plugins/src/state_plugins/openflow_obfuscation.rs
 op-core = { path = "../op-core" }
 op-state = { path = "../op-state" }
 op-state-store = { path = "../op-state-store" }
-op-blockchain = { path = "../op-blockchain" }
+op-snowball = { path = "../op-snowball" }
 op-network = { path = "../op-network" }
 op-dynamic-loader = { path = "../op-dynamic-loader" }
 op-execution-tracker = { path = "../op-execution-tracker" }
@@ -22011,7 +22011,7 @@ systemd
 default_registry
 
 ## Purpose
-Plugin system with state management, domain plugins, and blockchain footprints
+Plugin system with state management, domain plugins, and snowball footprints
 
 ## Build Information
 - **Edition**: edition.workspace = true
@@ -22023,7 +22023,7 @@ Internal dependencies:
 - op-core
 - op-state
 - op-state-store
-- op-blockchain
+- op-snowball
 - op-network
 - op-dynamic-loader
 - op-execution-tracker

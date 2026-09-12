@@ -1,0 +1,38 @@
+{
+  "$defs": {
+    "MediaPipelineConfig": {
+      "description": "Automatic media understanding pipeline configuration (`[media_pipeline]`).\n\nWhen enabled, inbound channel messages with media attachments are\npre-processed before reaching the agent: audio is transcribed, images are\nannotated, and videos are summarised.",
+      "properties": {
+        "describe_images": {
+          "default": true,
+          "description": "Add image descriptions when a vision-capable model is active.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Master toggle for the media pipeline (default: false).",
+          "type": "boolean"
+        },
+        "summarize_video": {
+          "default": true,
+          "description": "Summarize video attachments (placeholder — requires external API).",
+          "type": "boolean"
+        },
+        "transcribe_audio": {
+          "default": true,
+          "description": "Transcribe audio attachments using the configured transcription model_provider.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/MediaPipelineConfig",
+  "default": {
+    "describe_images": true,
+    "enabled": false,
+    "summarize_video": true,
+    "transcribe_audio": true
+  },
+  "description": "Automatic media understanding pipeline (`[media_pipeline]`)."
+}

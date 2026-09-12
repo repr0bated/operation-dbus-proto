@@ -1,0 +1,54 @@
+{
+  "$defs": {
+    "CodexCliConfig": {
+      "description": "Codex CLI tool configuration (`[codex_cli]` section).\n\nDelegates coding tasks to the `codex exec` CLI. Authentication uses the\nbinary's own session by default — no API key needed unless\n`env_passthrough` includes `OPENAI_API_KEY`.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable the `codex_cli` tool",
+          "type": "boolean"
+        },
+        "env_passthrough": {
+          "default": [],
+          "description": "Extra env vars passed to the codex subprocess (e.g. OPENAI_API_KEY)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "extra_args": {
+          "default": [],
+          "description": "Extra CLI arguments appended to `codex exec` before the prompt.\n\nValues come from operator-controlled config (same trust level as\n`env_passthrough`) and are not validated — the operator is responsible\nfor understanding the implications of flags passed here.\n\n**Warning:** `--sandbox=danger-full-access` disables Codex's bubblewrap\nisolation; only use in environments where the container itself provides\nisolation (e.g. Kubernetes pods with restricted PSS).\n\nExample: `[\"--sandbox=danger-full-access\", \"--skip-git-repo-check\"]`",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_output_bytes": {
+          "default": 2097152,
+          "description": "Maximum output size in bytes (2MB default)",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_secs": {
+          "default": 600,
+          "description": "Maximum execution time in seconds (coding tasks can be long)",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/CodexCliConfig",
+  "default": {
+    "enabled": false,
+    "env_passthrough": [],
+    "extra_args": [],
+    "max_output_bytes": 2097152,
+    "timeout_secs": 600
+  },
+  "description": "Codex CLI tool configuration (`[codex_cli]`)."
+}

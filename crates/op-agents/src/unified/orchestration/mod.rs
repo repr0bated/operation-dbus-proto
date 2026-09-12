@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// All available orchestration agents
+#[allow(clippy::type_complexity)]
 pub static ORCHESTRATION_AGENTS: LazyLock<
     HashMap<&'static str, fn() -> Box<dyn super::UnifiedAgent>>,
 > = LazyLock::new(|| {

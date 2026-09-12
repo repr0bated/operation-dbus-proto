@@ -3,7 +3,6 @@ mail-port-fabric
 op-grpc-bridge
 op-runit-systemctl
 emqx
-notebooklm-mcp
 mongodb-mcp-server
 op-web
 op-of-controller
@@ -11,5 +10,6 @@ sshd
 xray-config-mount
 incus-ct-xray
 decoy-admin-reverse-ssh
+mkdrt
 fwd-443
 opdbus-grants

@@ -15,7 +15,7 @@
 3. **Decoy Perimeter & Assertion Handoff**: Human WireGuard terminates exclusively at the external Oracle Decoy node. The decoy mints Ed25519 `OIA1` assertions carried as gRPC metadata (`x-oracle-identity-assertion-bin`) inside TLS across the NetMaker tunnel (`100.69.0.0/16` on `wg0`). The main host never runs human WireGuard (`no wg-lan`).
 4. **OpenFlow In-Band Datapath Safety**: OVS `ovsbr0` runs `fail_mode=standalone` with in-band control. `priority=0,actions=NORMAL` (cookie `0x3344434800000001`) is pre-seeded before controller connection to prevent host blackholing.
 5. **Physical MAC Pinning**: Uplink hardware MAC is cloned strictly onto internal port `pub0`, never on `ovsbr0`.
-6. **Strict Separation of Planes**: Network Fabric (L1–L7 Transport) moves packets and secures TLS channels; Application Policy Layer (L7 Authorization) evaluates capability grants, identity assertions, mutation engine state, and blockchain logs.
+6. **Strict Separation of Planes**: Network Fabric (L1–L7 Transport) moves packets and secures TLS channels; Application Policy Layer (L7 Authorization) evaluates capability grants, identity assertions, mutation engine state, and snowball logs.
 
 ---
 

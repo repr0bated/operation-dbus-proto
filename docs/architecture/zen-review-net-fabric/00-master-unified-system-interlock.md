@@ -1,7 +1,7 @@
 # Master Architecture: The Unified Interlocking System & Threat Surface
 
 **Document Location**: [`/srv/git/odbus/docs/architecture/zen-review-net-fabric/00-master-unified-system-interlock.md`](file:///srv/git/odbus/docs/architecture/zen-review-net-fabric/00-master-unified-system-interlock.md)  
-**System Scope**: Full Stack — Underlay NIC, OVS Datapath, NetMaker Mesh, Zero-Trust TLS, Oracle Decoy Assertions, Capability Grants, Schema Blobs, Mutation Engine, Blockchain Audit, Runit Supervision, and Declarative UI.
+**System Scope**: Full Stack — Underlay NIC, OVS Datapath, NetMaker Mesh, Zero-Trust TLS, Oracle Decoy Assertions, Capability Grants, Schema Blobs, Mutation Engine, Snowball Audit, Runit Supervision, and Declarative UI.
 
 ---
 
@@ -48,7 +48,7 @@ graph TD
 
     subgraph 8. Authoritative State & Audit
         L8[PluginSchema Blobs + MutationEngine + EventChain]
-        L8_INV[OPBLOB01 SHM Blobs + Blockchain /var/lib/opdbus/blockchain]
+        L8_INV[OPBLOB01 SHM Blobs + Snowball /var/lib/opdbus/snowball]
     end
 
     subgraph 9. Declarative Interface & Supervision
@@ -89,5 +89,5 @@ graph TD
 1. **Zero Plaintext on Wire**: Unencrypted IPC is restricted strictly to local Unix Domain Sockets (`/run/opdbus/grpc.sock`, `/run/ghostbridge/container.sock`) protected by filesystem DAC (`0660`). All TCP traffic is encrypted with TLS 1.3/1.2.
 2. **The Plugin IS the Schema**: Protobuf descriptors, D-Bus interfaces (`/org/opdbus/v1/plugins/*`), and UI forms originate solely from Rust structs deriving `schemars::JsonSchema`.
 3. **No Direct Control-Plane Ingress**: Cloudflare serves public web traffic; human WireGuard terminates at the Oracle Decoy; NetMaker acts purely as encrypted transit.
-4. **Authoritative Mutation Engine**: No gRPC service or D-Bus method bypasses the `MutationEngine`. Every state mutation appends a linear `StateChange` record to `EventChain` and replicates to `/var/lib/opdbus/blockchain`.
+4. **Authoritative Mutation Engine**: No gRPC service or D-Bus method bypasses the `MutationEngine`. Every state mutation appends a linear `StateChange` record to `EventChain` and replicates to `/var/lib/opdbus/snowball`.
 5. **Fail-Closed by Design**: If TLS certs are missing, if assertions are malformed, or if capabilities are undeclared, the system rejects the operation cleanly with structured diagnostics rather than degrading insecurely.

@@ -18,7 +18,7 @@ The following table inventories all direct dependencies of `crates/op-state/Carg
 | :--- | :--- | :--- | :--- |
 | `parking_lot` | `0.12.5` | Inherited from workspace (default) | Excellent. Standard replacement for standard library `Mutex`/`RwLock` to avoid poisoning and improve lock speed. |
 | `op-core` | Path | N/A | Internal core dependency. |
-| `op-blockchain` | Path | N/A | Internal blockchain interface dependency. |
+| `op-snowball` | Path | N/A | Internal snowball interface dependency. |
 | `op-jsonrpc` | Path | N/A | Internal JSON-RPC client/server protocol package. |
 | `op-state-store`| Path | N/A | Internal storage manager. Contains SQLx/SQLite interfaces. |
 | `op-network` | Path | N/A | Internal system network driver. |
@@ -98,7 +98,7 @@ The codebase implements a declarative state mechanism, but diverges significantl
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
     ```
-    These footprints are written directly to system logs or blockchain networks without validation against a strict schema.
+    These footprints are written directly to system logs or snowball networks without validation against a strict schema.
 
 ---
 

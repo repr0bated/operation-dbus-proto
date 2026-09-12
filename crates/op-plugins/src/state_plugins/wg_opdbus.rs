@@ -341,7 +341,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anna_scribe_service_persona_is_canonical_and_immutable() {
+    fn canonical_service_persona_is_canonical_and_immutable() {
         let identity = serde_json::to_value(AnnaScribeServicePersona::default())
             .expect("service persona serializes");
         assert_eq!(identity["principal_id"], ANNA_SCRIBE_PRINCIPAL_ID);
@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn wg_opdbus_schema_projects_anna_scribe_identity() {
+    fn wg_opdbus_schema_projects_service_identity() {
         let schema = wg_opdbus_schema();
         assert_eq!(schema.immutable_paths, vec!["/service_persona"]);
         let example = schema.example.expect("wg_opdbus schema has an example");

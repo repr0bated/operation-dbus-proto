@@ -90,7 +90,7 @@ docs/
 | Crate | Purpose | Spec | Design |
 |-------|---------|------|--------|
 | **op-deployment** | Deployment automation | [spec](specs/op-deployment.md) | [design](designs/op-deployment.md) |
-| **op-blockchain** | Blockchain audit trail | [spec](specs/op-blockchain.md) | [design](designs/op-blockchain.md) |
+| **op-snowball** | Snowball audit trail | [spec](specs/op-snowball.md) | [design](designs/op-snowball.md) |
 | **op-identity** | Identity and authentication | [spec](specs/op-identity.md) | [design](designs/op-identity.md) |
 | **op-dynamic-loader** | Dynamic plugin loading | [spec](specs/op-dynamic-loader.md) | [design](designs/op-dynamic-loader.md) |
 | **op-inspector** | System inspection and diagnostics | [spec](specs/op-inspector.md) | [design](designs/op-inspector.md) |
@@ -129,7 +129,7 @@ Direct D-Bus protocol integration without CLI wrappers for systemd, NetworkManag
 Extensible plugin system for state management with automatic discovery and validation.
 
 ### 5. Execution Tracking
-Comprehensive audit trail for all tool and agent executions with blockchain anchoring.
+Comprehensive audit trail for all tool and agent executions with snowball anchoring.
 
 ### 6. MCP Integration
 Full Model Context Protocol support for LLM tool integration and agent communication.

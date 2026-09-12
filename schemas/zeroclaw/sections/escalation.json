@@ -1,0 +1,23 @@
+{
+  "$defs": {
+    "EscalationConfig": {
+      "description": "Escalation routing configuration (`[escalation]` section).\n\nControls which channels receive alert notifications when\n`escalate_to_human` is called with high or critical urgency.\nChannels are identified by name (e.g. `\"telegram\"`, `\"slack\"`).\nAlerts are sent best-effort and do not block the escalation.",
+      "properties": {
+        "alert_channels": {
+          "default": [],
+          "description": "Channel names to alert on high/critical escalations (default: empty).\n\nEach name must match a configured channel. Unrecognised names are\nlogged at WARN level and skipped.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/EscalationConfig",
+  "default": {
+    "alert_channels": []
+  },
+  "description": "Escalation routing configuration (`[escalation]`)."
+}

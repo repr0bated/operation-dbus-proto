@@ -59,7 +59,7 @@ The codebase contains several instances where data contracts are expressed as ad
 ### [High] Insecure Cryptographic Hashing for Compliance Event Chain
 *   **File:Line**: `crates/op-state-store/src/event_chain.rs:493`
 *   **File:Line**: `crates/op-state-store/src/disaster_recovery.rs:113`
-*   **Description**: The "blockchain-style" audit ledger uses **MD5** (`md5::compute`) to calculate previous-block linkages, block hashes, and state hashes. MD5 is also used to generate disaster recovery checksums.
+*   **Description**: The "snowball-style" audit ledger uses **MD5** (`md5::compute`) to calculate previous-block linkages, block hashes, and state hashes. MD5 is also used to generate disaster recovery checksums.
 *   **Impact**: MD5 is cryptographically broken and vulnerable to collision attacks. An adversary with local privileges could modify a past state transition event (for example, to hide an unauthorized change) and construct a colliding event that results in the same MD5 hash. This completely invalidates the tamper-evidence guarantees of the event chain and the integrity verification of DR exports.
 *   **Remediation**: Replace `md5::compute` with a secure hashing algorithm, such as SHA-256 (`sha2` crate, which is already present in the workspace dependencies).
 

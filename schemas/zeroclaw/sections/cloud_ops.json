@@ -1,0 +1,76 @@
+{
+  "$defs": {
+    "CloudOpsConfig": {
+      "description": "Controls the read-only cloud transformation analysis tools:\nIaC review, migration assessment, cost analysis, and architecture review.",
+      "properties": {
+        "cost_threshold_monthly_usd": {
+          "default": 100.0,
+          "description": "Monthly USD threshold to flag cost items. Default: 100.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "default_cloud": {
+          "default": "aws",
+          "description": "Default cloud model_provider for analysis context. Default: \"aws\".",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Enable cloud operations tools. Default: false.",
+          "type": "boolean"
+        },
+        "iac_tools": {
+          "default": [
+            "terraform"
+          ],
+          "description": "Supported IaC tools for review. Default: \\[`terraform`\\].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supported_clouds": {
+          "default": [
+            "aws",
+            "azure",
+            "gcp"
+          ],
+          "description": "Supported cloud model_providers. Default: [`aws`, `azure`, `gcp`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "well_architected_frameworks": {
+          "default": [
+            "aws-waf"
+          ],
+          "description": "Well-Architected Frameworks to check against. Default: \\[`aws-waf`\\].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/CloudOpsConfig",
+  "default": {
+    "cost_threshold_monthly_usd": 100.0,
+    "default_cloud": "aws",
+    "enabled": false,
+    "iac_tools": [
+      "terraform"
+    ],
+    "supported_clouds": [
+      "aws",
+      "azure",
+      "gcp"
+    ],
+    "well_architected_frameworks": [
+      "aws-waf"
+    ]
+  },
+  "description": "Cloud transformation accelerator configuration (`[cloud_ops]`)."
+}

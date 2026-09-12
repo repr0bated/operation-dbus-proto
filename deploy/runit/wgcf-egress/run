@@ -11,9 +11,9 @@
 # Table=51820 keeps AllowedIPs out of `main`, so unmarked traffic stays on pub0
 # and this tunnel is fail-closed: if nothing sets the mark, nothing uses WARP.
 #
-# Has its OWN Cloudflare device -- do not share a key with wgcf-uiStream or the
-# decoy's wgcf-ingress. One key is ONE peer to Cloudflare, which tracks a single
-# endpoint per peer, so tunnels sharing a key fight over return traffic.
+# Has its OWN Cloudflare device -- do not share a key with the decoy's
+# wgcf-ingress. One key is ONE peer to Cloudflare, which tracks a single endpoint
+# per peer, so tunnels sharing a key fight over return traffic.
 exec 2>&1
 wg-quick down wgcf-egress 2>/dev/null || true
 wg-quick up wgcf-egress || exit 1

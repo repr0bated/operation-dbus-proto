@@ -52,7 +52,7 @@
       md5::compute(simd_json::to_string(&state).unwrap_or_default())
   );
   ```
-* **Impact:** **State Integrity Bypass.** MD5 is cryptographically broken and highly vulnerable to hash collision attacks. If this hash is signed, recorded on the blockchain (via footprints), or used to verify that state updates have not been altered, a malicious actor could construct a colliding state payload containing rogue directives (e.g., malicious openflow routing policies) that yield the exact same MD5 digest, bypassing security checks.
+* **Impact:** **State Integrity Bypass.** MD5 is cryptographically broken and highly vulnerable to hash collision attacks. If this hash is signed, recorded on the snowball (via footprints), or used to verify that state updates have not been altered, a malicious actor could construct a colliding state payload containing rogue directives (e.g., malicious openflow routing policies) that yield the exact same MD5 digest, bypassing security checks.
 * **Remediation:** Replace MD5 with a secure hashing algorithm such as SHA-256 (e.g., using the `sha2` crate already available in the workspace).
 
 ---

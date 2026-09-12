@@ -1,6 +1,6 @@
 // 🟢 🛡️ Ghostbridge Trace Middleware
 // Stamps X-Ghostbridge-Genesis and X-Ghostbridge-Trace-ID on every HTTP/gRPC
-// response. Operates inside the zeroclaw Axum host (the gRPC/gRPC-Web side of
+// response. Operates inside the tched_router Axum host (the gRPC/gRPC-Web side of
 // The Shuttle). Mirrors the accountability loop enforced by the tonic
 // interceptor on the native-gRPC side.
 
@@ -126,8 +126,10 @@ where
             let _enter = span.enter();
             let mut response = inner.call(req).await?;
 
-            if let Ok(value) = context.session_genesis.parse::<axum::http::HeaderValue>() {
-                response.headers_mut().insert(GENESIS_HEADER, value);
+            if !context.session_genesis.is_empty() {
+                if let Ok(value) = context.session_genesis.parse::<axum::http::HeaderValue>() {
+                    response.headers_mut().insert(GENESIS_HEADER, value);
+                }
             }
             if let Ok(value) = context.trace_id.parse() {
                 response.headers_mut().insert(TRACE_ID_HEADER, value);

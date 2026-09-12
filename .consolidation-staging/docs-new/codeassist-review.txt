@@ -256,7 +256,7 @@ op-state, op-plugins, op-services: System state tracking and native Linux plugin
 op-network: Netlink serialization and Open vSwitch management. (Read-only works; mutators are stubbed)
 op-web: Axum HTTP API and WebSocket handlers serving the frontend. (Heavy stubbing in actual data fetch routines)
 Frontend UI (crates/src/pages): React + Tailwind + Shadcn dashboard. (Mock-driven prototype)
-(Note: Crates like op-blockchain, op-ml, op-cache, and op-deployment appear to be early-stage scaffolding denoting future intent rather than currently viable features).
+(Note: Crates like op-snowball, op-ml, op-cache, and op-deployment appear to be early-stage scaffolding denoting future intent rather than currently viable features).
 
 3. Implemented Feature Set
 Feature	Intended Role	Actual Implementation	Completion Status

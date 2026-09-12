@@ -21,6 +21,7 @@
 //! IS the identity. The legacy global 152-byte sled at
 //! The retired process-global raw identity file is not written or consulted.
 
+use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -46,6 +47,7 @@ const MAX_EVENTS_IN_STATE: usize = 256;
 /// Default Cozo path for the identity sled store. Own path — the sled engine
 /// is single-process, and `/var/lib/op-dbus/users-cozo` (op-web-server) and
 /// the cognitive-mcp store are already held by other processes.
+#[cfg(not(test))]
 const DEFAULT_SLED_COZO_PATH: &str = "/var/lib/op-dbus/identity-cozo";
 
 /// Narrow lifecycle seam for identity containers. Production uses Incus's
@@ -106,6 +108,15 @@ fn prepare_identity_store(path: &Path) -> anyhow::Result<()> {
     harden_identity_store_tree(path)
 }
 
+#[cfg(test)]
+fn test_identity_store_path() -> PathBuf {
+    static SANDBOX: OnceLock<tempfile::TempDir> = OnceLock::new();
+    SANDBOX
+        .get_or_init(|| tempfile::tempdir().expect("identity sled test tempdir"))
+        .path()
+        .join("identity-cozo")
+}
+
 /// In-state snowball ledger key inside the plugin state cache entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct SledCacheState {
@@ -129,15 +140,21 @@ impl IdentityStatePublisher for MutationEngineStatePublisher {
     }
 }
 
-/// Lazily opened durable store; `None` (with one warning) when the path can't
-/// be opened — dispatch then runs cache-only, as before.
-fn sled_cozo() -> Option<&'static CozoGraphShuttle> {
+/// Lazily opened durable store; `None` when the path cannot be opened.
+/// Identity authoring fails closed without it; cache is not durable authority.
+pub(crate) fn sled_cozo() -> Option<&'static CozoGraphShuttle> {
     static SLED_COZO: OnceLock<Option<CozoGraphShuttle>> = OnceLock::new();
     SLED_COZO
         .get_or_init(|| {
+            #[cfg(test)]
+            let path_buf = test_identity_store_path();
+            #[cfg(not(test))]
             let path = std::env::var("IDENTITY_SLED_COZO_DB_PATH")
                 .unwrap_or_else(|_| DEFAULT_SLED_COZO_PATH.to_string());
+            #[cfg(not(test))]
             let path_buf = PathBuf::from(&path);
+            #[cfg(test)]
+            let path = path_buf.display().to_string();
             if let Err(error) = prepare_identity_store(&path_buf) {
                 tracing::error!(%path, %error, "identity sled store permissions rejected");
                 return None;
@@ -186,7 +203,20 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
         instance_json: sled
             .instance
             .as_ref()
-            .and_then(|i| serde_json::to_string(i).ok())
+            .and_then(|instance| {
+                let mut instance = instance.clone();
+                if let Some(kind) = sled
+                    .principal_kind
+                    .as_deref()
+                    .filter(|kind| matches!(*kind, "human" | "service"))
+                {
+                    instance
+                        .config
+                        .get_or_insert_with(Default::default)
+                        .insert("user.opdbus.actor_class".into(), kind.into());
+                }
+                serde_json::to_string(&instance).ok()
+            })
             .unwrap_or_default(),
         session_started_at: sled.session_started_at,
         last_seen_at: sled.last_seen_at,
@@ -198,23 +228,28 @@ fn sled_to_record(sled: &ContainerIdentitySled) -> IdentitySledRecord {
     }
 }
 
+fn parse_sled_json<T: serde::de::DeserializeOwned>(
+    label: &str,
+    session_id: &str,
+    json: &str,
+) -> Option<T> {
+    if json.is_empty() {
+        return None;
+    }
+    match serde_json::from_str(json) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!(
+                session_id,
+                error = %e,
+                "dropping corrupt {label} on identity sled row"
+            );
+            None
+        }
+    }
+}
+
 fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
-    let parse_json = |label: &str, json: &str| -> Option<serde_json::Value> {
-        if json.is_empty() {
-            return None;
-        }
-        match serde_json::from_str(json) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::warn!(
-                    session_id = %rec.session_id,
-                    error = %e,
-                    "dropping corrupt {label} on identity sled row"
-                );
-                None
-            }
-        }
-    };
     ContainerIdentitySled {
         session_id: rec.session_id.clone(),
         wireguard_pubkey: rec.wireguard_pubkey.clone(),
@@ -226,10 +261,9 @@ fn record_to_sled(rec: &IdentitySledRecord) -> ContainerIdentitySled {
         schema_version: rec.schema_version.max(0) as u32,
         vector_id: rec.vector_id.clone(),
         sealed_id: (!rec.sealed_id.is_empty()).then(|| rec.sealed_id.clone()),
-        btrfs_device: parse_json("btrfs_device", &rec.btrfs_device_json)
-            .and_then(|v| serde_json::from_value(v).ok()),
-        instance: parse_json("instance", &rec.instance_json)
-            .and_then(|v| serde_json::from_value(v).ok()),
+        principal_kind: None,
+        btrfs_device: parse_sled_json("btrfs_device", &rec.session_id, &rec.btrfs_device_json),
+        instance: parse_sled_json("instance", &rec.session_id, &rec.instance_json),
         session_started_at: rec.session_started_at,
         last_seen_at: rec.last_seen_at,
         active: rec.active,
@@ -256,7 +290,7 @@ async fn ensure_hydrated(engine: &MutationEngine) {
                 Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
             })
             .await;
-            let (mut rows, genesis_rows) = match rows {
+            let (rows, genesis_rows) = match rows {
                 Ok(Ok(rows)) => rows,
                 Ok(Err(e)) => {
                     tracing::warn!(error = %e, "identity sled hydration read failed");
@@ -282,6 +316,115 @@ async fn ensure_hydrated(engine: &MutationEngine) {
             }
         })
         .await;
+}
+
+fn configured_identity_session_ids() -> HashSet<String> {
+    [
+        "OP_CONTROL_PLANE_CHATBOT_SESSION_ID",
+        "OP_LOCAL_HUMAN_SESSION_ID",
+    ]
+    .into_iter()
+    .filter_map(|var| {
+        std::env::var(var)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+    .collect()
+}
+
+/// Overlay the in-process identity cache from Cozo. Replay and SHM seed can
+/// resurrect deleted host-only rows; Cozo is the restart-warm authority for
+/// which containers are sleds. Rows with no Incus instance are ghosts unless
+/// they are a configured chatbot or local-human session. The leftover
+/// `/etc/op-dbus/host-session-id` value is not a sled.
+pub(crate) async fn replace_cache_from_cozo(engine: &MutationEngine) {
+    let Some(cozo) = sled_cozo() else { return };
+    let keep = configured_identity_session_ids();
+    let cozo = cozo.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        let sleds = cozo.list_identity_sessions()?;
+        let genesis = cozo.list_identity_genesis()?;
+        Ok::<_, op_cozo_store::CozoError>((sleds, genesis))
+    })
+    .await;
+    let (rows, genesis_rows) = match rows {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "identity sled Cozo replace read failed");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "identity sled Cozo replace task failed");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let mut ghosts = Vec::new();
+    let mut sleds = Vec::new();
+    for rec in &rows {
+        tracing::info!(
+            session_id = %rec.session_id,
+            instance_len = rec.instance_json.len(),
+            btrfs_len = rec.btrfs_device_json.len(),
+            "identity sled Cozo row before hydrate"
+        );
+        let sled = record_to_sled(rec);
+        if sled.instance.is_some() || keep.contains(&sled.session_id) {
+            sleds.push(sled);
+        } else {
+            ghosts.push(rec.session_id.clone());
+        }
+    }
+    if !ghosts.is_empty() {
+        let Some(cozo) = sled_cozo() else { return };
+        let cozo = cozo.clone();
+        let to_drop = ghosts.clone();
+        match tokio::task::spawn_blocking(move || {
+            for session_id in &to_drop {
+                cozo.delete_identity_sled(session_id)?;
+            }
+            Ok::<_, op_cozo_store::CozoError>(())
+        })
+        .await
+        {
+            Ok(Ok(())) => tracing::info!(
+                dropped = ghosts.len(),
+                "dropped host-only identity sled ghosts from Cozo"
+            ),
+            Ok(Err(e)) => tracing::warn!(error = %e, "identity sled ghost delete failed"),
+            Err(e) => tracing::warn!(error = %e, "identity sled ghost delete task failed"),
+        }
+    }
+    if sleds.is_empty() {
+        return;
+    }
+    let mut cache = SledCacheState {
+        sleds,
+        events: Vec::new(),
+    };
+    join_genesis_inputs(&mut cache.sleds, &genesis_rows);
+    cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    if let Err(e) = write_cache(engine, &cache).await {
+        tracing::warn!(error = %e, "identity sled Cozo replace cache write failed");
+        return;
+    }
+    tracing::info!(
+        sleds = cache.sleds.len(),
+        with_instance = cache
+            .sleds
+            .iter()
+            .filter(|sled| sled.instance.is_some())
+            .count(),
+        with_btrfs = cache
+            .sleds
+            .iter()
+            .filter(|sled| sled.btrfs_device.is_some())
+            .count(),
+        "identity sled cache replaced from Cozo"
+    );
 }
 
 fn sled_to_genesis_inputs(sled: &ContainerIdentitySled) -> GenesisInputsRecord {
@@ -322,29 +465,46 @@ fn join_genesis_inputs(sleds: &mut [ContainerIdentitySled], inputs: &[GenesisInp
 /// Persist one sled row to Cozo; failure is logged, not fatal — the event
 /// chain already notarized the mutation.
 async fn persist_sled(sled: &ContainerIdentitySled) {
-    let Some(cozo) = sled_cozo() else { return };
+    if let Err(error) = persist_sled_required(sled).await {
+        tracing::error!(%error, "identity sled persistence failed");
+    }
+}
+
+/// Credential creation cannot succeed on cache-only durability.
+async fn persist_sled_required(sled: &ContainerIdentitySled) -> anyhow::Result<()> {
+    let cozo =
+        sled_cozo().ok_or_else(|| anyhow::anyhow!("durable identity store is unavailable"))?;
     let cozo = cozo.clone();
-    let rec = sled_to_record(sled);
+    let mut classified = sled.clone();
+    assign_actor_class(&mut classified);
+    let mut rec = sled_to_record(&classified);
     let inputs = (sled.arrival_timestamp != 0).then(|| sled_to_genesis_inputs(sled));
-    match tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
+        if rec.instance_json.is_empty() || rec.btrfs_device_json.is_empty() {
+            if let Ok(Some(existing)) = cozo.get_identity_sled(&rec.session_id) {
+                if rec.instance_json.is_empty() {
+                    rec.instance_json = existing.instance_json;
+                }
+                if rec.btrfs_device_json.is_empty() {
+                    rec.btrfs_device_json = existing.btrfs_device_json;
+                }
+            }
+        }
         cozo.put_identity_sled(&rec)?;
         if let Some(inputs) = inputs {
             cozo.put_identity_genesis(&inputs)?;
         }
         Ok::<_, op_cozo_store::CozoError>(())
     })
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "identity sled Cozo persist failed"),
-        Err(e) => tracing::warn!(error = %e, "identity sled Cozo persist task failed"),
-    }
+    .await??;
+    Ok(())
 }
 
 /// The genesis already stored for `session_id`, if the session has arrived.
 ///
 /// One read of the authoritative store (the in-process state cache behind the
 /// SHM projection) — no hashing, no Cozo query, no second store consulted.
+#[allow(dead_code)] // infrastructure for identity-gated dispatch
 pub(crate) async fn stored_genesis(engine: &MutationEngine, session_id: &str) -> Option<String> {
     ensure_hydrated(engine).await;
     read_cache(engine)
@@ -369,6 +529,68 @@ pub(crate) async fn stored_session(
         .sleds
         .into_iter()
         .find(|sled| sled.session_id == session_id)
+}
+
+/// Verify raw SID1 bytes against the authoritative sled. Parked (inactive)
+/// containers remain valid identities; `active` is Incus power policy, not
+/// whether SID1 may authenticate.
+pub(crate) async fn authenticate_sid1_wire(
+    engine: &MutationEngine,
+    wire: &[u8],
+    transport: &str,
+) -> Result<op_identity::sealed_id::SealedId, String> {
+    let claims = op_identity::sealed_id::SealedId::open(wire).map_err(|error| error.to_string())?;
+    if claims.principal_kind != "wireguard-principal"
+        || !claims
+            .transport_scope
+            .split(',')
+            .any(|scope| scope.trim() == transport)
+    {
+        return Err(format!(
+            "sealed identity is not valid for the {transport} transport"
+        ));
+    }
+    if op_identity::session::derive_session_id(&claims.wireguard_pubkey) != claims.session_id
+        || op_identity::session::derive_principal_id(&claims.wireguard_pubkey)
+            != claims.principal_id
+    {
+        return Err("sealed identity identifiers do not match its WireGuard identity".into());
+    }
+    let sled = stored_session(engine, &claims.session_id)
+        .await
+        .ok_or_else(|| "sealed identity session was not found".to_string())?;
+    let now = chrono::Utc::now().timestamp();
+    if !sled.instance.as_ref().is_some_and(|instance| {
+        instance.name == sled.session_id && instance.instance_type == "container"
+    }) {
+        return Err("sealed identity has no matching provisioned container binding".into());
+    }
+    if !sled.is_anchored() {
+        return Err("sealed identity session is not anchored".into());
+    }
+    if sled
+        .expires_at
+        .is_some_and(|expires_at| expires_at != 0 && expires_at <= now)
+    {
+        return Err("sealed identity session has expired".into());
+    }
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(wire);
+    let inline = format!("{}{}", op_identity::sealed_id::INLINE_PREFIX, encoded);
+    if sled.sealed_id.as_deref() != Some(inline.as_str())
+        || sled.wireguard_pubkey != claims.wireguard_pubkey
+        || sled.genesis.as_deref() != Some(claims.session_genesis.as_str())
+        || sled.trace_id != claims.trace_id
+        || sled.schema_version != claims.schema_version
+        || sled.expires_at.unwrap_or(0) != claims.expires_at
+        || sled.arrival_timestamp != claims.arrival_timestamp
+        || claims.issued_at != claims.arrival_timestamp
+        || sled.chain_head_at_arrival != claims.chain_head_at_arrival
+        || sled.catalog_hash_at_arrival != claims.catalog_hash_at_arrival
+        || sled.head_timestamp_at_arrival != claims.head_timestamp_at_arrival
+    {
+        return Err("sealed identity does not match the authoritative sled".into());
+    }
+    Ok(claims)
 }
 
 /// The session record a caller's handle names, whichever handle it holds.
@@ -420,13 +642,19 @@ pub(crate) async fn store_genesis(
     }
     ensure_hydrated(engine).await;
     let mut cache = read_cache(engine).await;
-    let ts = now();
     let record = match cache
         .sleds
         .iter_mut()
         .find(|sled| sled.session_id == stamp.session_id)
     {
         Some(sled) => {
+            if !sled
+                .instance
+                .as_ref()
+                .is_some_and(|instance| instance.name == stamp.session_id)
+            {
+                anyhow::bail!("genesis requires a provisioned identity container");
+            }
             // An anchored account is never re-anchored. A record that merely
             // carries a v2 `session_genesis` in `genesis` is NOT anchored —
             // see `ContainerIdentitySled::is_anchored` — so it gets minted
@@ -479,41 +707,12 @@ pub(crate) async fn store_genesis(
             }
         }
         None => {
-            // Arrival of a session that has no record yet: the arrival IS the
-            // record's creation, so the stream path has not run and the
-            // liveness fields start from this moment.
-            let sled = ContainerIdentitySled {
-                session_id: stamp.session_id.clone(),
-                wireguard_pubkey: stamp.wireguard_pubkey.clone(),
-                interface: String::new(),
-                peer_ip: None,
-                mutation_index: 0,
-                genesis: Some(stamp.genesis_hex.clone()),
-                trace_id: stamp.trace_id.clone(),
-                schema_version: RECORD_FORMAT,
-                vector_id: String::new(),
-                sealed_id: Some(stamp.sealed_id.clone()),
-                btrfs_device: None,
-                instance: None,
-                session_started_at: ts,
-                last_seen_at: ts,
-                active: true,
-                expires_at: None,
-                arrival_timestamp: stamp.arrival_timestamp,
-                chain_head_at_arrival: stamp.chain_head_at_arrival.clone(),
-                catalog_hash_at_arrival: stamp.catalog_hash_at_arrival.clone(),
-                head_timestamp_at_arrival: stamp.head_timestamp_at_arrival,
-            };
-            cache.sleds.push(sled.clone());
-            cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-            sled
+            anyhow::bail!("genesis cannot create an identity sled; provision its container first");
         }
     };
+    // Publish only after the irreproducible genesis inputs are durable.
+    persist_sled_required(&record).await?;
     write_cache(engine, &cache).await?;
-    // Inline, awaited: `arrival_timestamp` is irreproducible, so a session
-    // whose genesis never reached Cozo is permanently unverifiable after a
-    // restart. A failed write is a warning, not a rejected first request.
-    persist_sled(&record).await;
     Ok(stamp.genesis_hex.clone())
 }
 
@@ -551,8 +750,60 @@ async fn read_cache(engine: &MutationEngine) -> SledCacheState {
     simd_json::serde::from_owned_value(state).unwrap_or_default()
 }
 
+fn env_session_id(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Label the sled's actor class. Never written into SID1.
+fn assign_actor_class(sled: &mut ContainerIdentitySled) {
+    if env_session_id("OP_CONTROL_PLANE_CHATBOT_SESSION_ID").as_deref()
+        == Some(sled.session_id.as_str())
+    {
+        sled.principal_kind =
+            Some(op_identity::session_projection::PRINCIPAL_KIND_SERVICE.to_string());
+        return;
+    }
+    if env_session_id("OP_LOCAL_HUMAN_SESSION_ID").as_deref() == Some(sled.session_id.as_str()) {
+        sled.principal_kind =
+            Some(op_identity::session_projection::PRINCIPAL_KIND_HUMAN.to_string());
+        return;
+    }
+    if let Some(kind) = sled
+        .instance
+        .as_ref()
+        .and_then(|instance| instance.config.as_ref())
+        .and_then(|config| config.get("user.opdbus.actor_class"))
+        .filter(|kind| matches!(kind.as_str(), "human" | "service"))
+    {
+        sled.principal_kind = Some(kind.clone());
+        return;
+    }
+    let role = sled
+        .instance
+        .as_ref()
+        .and_then(|instance| instance.config.as_ref())
+        .and_then(|config| config.get("user.opdbus.role"))
+        .map(String::as_str);
+    sled.principal_kind = match role {
+        Some("chatbot") => {
+            Some(op_identity::session_projection::PRINCIPAL_KIND_SERVICE.to_string())
+        }
+        Some("human" | "jeremy") => {
+            Some(op_identity::session_projection::PRINCIPAL_KIND_HUMAN.to_string())
+        }
+        _ => sled.principal_kind.clone(),
+    };
+}
+
 async fn write_cache(engine: &MutationEngine, cache: &SledCacheState) -> anyhow::Result<()> {
-    let owned = simd_json::serde::to_owned_value(cache)?;
+    let mut labeled = cache.clone();
+    for sled in &mut labeled.sleds {
+        assign_actor_class(sled);
+    }
+    let owned = simd_json::serde::to_owned_value(&labeled)?;
     engine
         .update_state_cache("identity_sled".to_string(), owned)
         .await;
@@ -608,21 +859,14 @@ fn arg_i64(args: &JsonValue, key: &str) -> Option<i64> {
         .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
 }
 
-/// Derive the session id (= container name) from the supplied pubkey, using
-/// the provision-time PSK when present. Never trusts a supplied session_id.
+/// There is exactly one identity derivation. Retired PSK inputs fail loudly.
 fn derive_session_id(args: &JsonValue, pubkey: &str) -> anyhow::Result<String> {
-    if let Some(psk_b64) = args
-        .get("psk")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        let psk = base64::engine::general_purpose::STANDARD
-            .decode(psk_b64.trim())
-            .map_err(|e| anyhow::anyhow!("invalid psk base64: {e}"))?;
-        op_identity::session::derive_session_id_from_psk(pubkey, &psk)
-    } else {
-        Ok(op_identity::session::derive_session_id(pubkey))
+    if args.get("psk").is_some() {
+        anyhow::bail!(
+            "PSK session derivation is retired; identity derives from the WireGuard public key"
+        );
     }
+    Ok(op_identity::session::derive_session_id(pubkey))
 }
 
 /// Apply the non-negotiable identity-container lifecycle policy to a
@@ -940,7 +1184,7 @@ pub async fn dispatch_identity_sled_method(
             if pubkey.is_empty() {
                 anyhow::bail!("write_identity requires wireguard_pubkey");
             }
-            // session_id is DERIVED from PSK + pubkey when PSK is supplied at provision time.
+            // Session identity is always the canonical WireGuard-public-key derivation.
             let session_id = derive_session_id(args, &pubkey)?;
             let interface = arg_str(args, "interface");
             let peer_ip = args
@@ -963,6 +1207,13 @@ pub async fn dispatch_identity_sled_method(
             let existing = cache.sleds.iter_mut().find(|s| s.session_id == session_id);
             let identity = match existing {
                 Some(sled) => {
+                    if !sled
+                        .instance
+                        .as_ref()
+                        .is_some_and(|instance| instance.name == session_id)
+                    {
+                        anyhow::bail!("write_identity requires a provisioned identity container");
+                    }
                     sled.wireguard_pubkey = pubkey.clone();
                     if !interface.is_empty() {
                         sled.interface = interface;
@@ -975,75 +1226,33 @@ pub async fn dispatch_identity_sled_method(
                     }
                     sled.mutation_index += 1;
                     sled.last_seen_at = ts;
-                    sled.active = true;
-                    // Only an explicit ttl_seconds renews the term. A lifelong
-                    // account's caller passes this on every heartbeat to keep
-                    // renewing it; a bare re-registration with no ttl leaves
-                    // an already-set expiry (temporary identity) untouched.
+                    // Authentication metadata cannot start a container or
+                    // claim it started. Only the lifecycle path owns active.
                     if let Some(ttl) = ttl_seconds {
+                        if sled.is_anchored() {
+                            anyhow::bail!("write_identity cannot change the term sealed into SID1");
+                        }
                         sled.expires_at = Some(ts + ttl);
                     }
                     sled.clone()
                 }
                 None => {
-                    // A brand-new record gets a trace_id now, at creation,
-                    // rather than staying blank forever. The identity anchor
-                    // is NOT minted here: the genesis belongs to a session
-                    // arrival, which needs the chain head, so it is minted
-                    // below (once the record exists) by the mutation engine.
-                    let trace_id = hex::encode(uuid::Uuid::new_v4().as_bytes());
-
-                    let sled = ContainerIdentitySled {
-                        session_id: session_id.clone(),
-                        wireguard_pubkey: pubkey.clone(),
-                        interface,
-                        peer_ip,
-                        mutation_index: 0,
-                        genesis: None,
-                        trace_id,
-                        schema_version: RECORD_FORMAT,
-                        vector_id: String::new(),
-                        sealed_id: None,
-                        btrfs_device,
-                        instance: None,
-                        session_started_at: ts,
-                        last_seen_at: ts,
-                        active: true,
-                        expires_at: ttl_seconds.map(|ttl| ts + ttl),
-                        arrival_timestamp: 0,
-                        chain_head_at_arrival: String::new(),
-                        catalog_hash_at_arrival: String::new(),
-                        head_timestamp_at_arrival: 0,
-                    };
-                    cache.sleds.push(sled.clone());
-                    cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-                    sled
+                    anyhow::bail!("write_identity cannot create a containerless sled; use provision_container");
                 }
             };
+            persist_sled_required(&identity).await?;
             write_cache(engine, &cache).await?;
-            persist_sled(&identity).await;
 
             // Provisioning IS arrival for this session: mint the genesis
             // against the real chain head now, so the record the caller is
             // handed already carries the anchor it must present. One author
             // (`mint_genesis`, reached through the engine), one write.
-            let identity = match engine
+            engine
                 .mint_and_store_genesis(&identity.session_id, &pubkey)
+                .await?;
+            let identity = stored_session(engine, &identity.session_id)
                 .await
-            {
-                Ok(_) => stored_session(engine, &identity.session_id)
-                    .await
-                    .unwrap_or(identity),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        session_id = %identity.session_id,
-                        "session anchor not minted at provisioning; the next \
-                         authenticated request will mint it"
-                    );
-                    identity
-                }
-            };
+                .ok_or_else(|| anyhow::anyhow!("authored identity disappeared"))?;
 
             Ok(serde_json::json!({ "identity": identity }))
         }
@@ -1119,6 +1328,7 @@ pub async fn dispatch_identity_sled_method(
                 schema_version: RECORD_FORMAT,
                 vector_id: String::new(),
                 sealed_id: None,
+                principal_kind: None,
                 btrfs_device,
                 instance: Some(instance),
                 session_started_at: ts,
@@ -1134,24 +1344,16 @@ pub async fn dispatch_identity_sled_method(
             cache.sleds.retain(|s| s.session_id != session_id);
             cache.sleds.push(sled.clone());
             cache.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+            persist_sled_required(&sled).await?;
             write_cache(engine, &cache).await?;
-            persist_sled(&sled).await;
 
             // Provisioning IS arrival, here as in `write_identity`: the
             // container the caller was just handed carries the anchor it must
             // present, minted against the real chain head by the one author.
-            let sled = match engine.mint_and_store_genesis(&session_id, &pubkey).await {
-                Ok(_) => stored_session(engine, &session_id).await.unwrap_or(sled),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        %session_id,
-                        "session anchor not minted at provisioning; the next \
-                         authenticated request will mint it"
-                    );
-                    sled
-                }
-            };
+            engine.mint_and_store_genesis(&session_id, &pubkey).await?;
+            let sled = stored_session(engine, &session_id)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("provisioned identity disappeared"))?;
 
             Ok(serde_json::json!({ "identity": sled }))
         }
@@ -1180,9 +1382,12 @@ pub async fn dispatch_identity_sled_method(
 
             let dev = PathBuf::from(&device.device_path);
             let mount = PathBuf::from(&device.mount_point);
-            tokio::task::spawn_blocking(move || op_network::btrfs::device_add(&dev, &mount))
-                .await
-                .map_err(|e| anyhow::anyhow!("btrfs device add task failed: {e}"))??;
+            let registered_uuid = device.btrfs_uuid.clone();
+            tokio::task::spawn_blocking(move || {
+                op_network::btrfs::verify_dedicated_mount(&dev, &mount, &registered_uuid)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("btrfs mount verification task failed: {e}"))??;
 
             if let Some(d) = sled.btrfs_device.as_mut() {
                 d.attached = true;
@@ -1426,6 +1631,7 @@ pub(crate) mod tests {
 
     /// Simulate the §5.2 crash window: the record survives but its anchor
     /// never reached Cozo, so hydration produced `genesis: None`.
+    #[allow(dead_code)] // test helper for §5.2 crash-window simulation
     pub(crate) async fn clear_genesis(engine: &MutationEngine, session_id: &str) {
         let mut cache = read_cache(engine).await;
         if let Some(sled) = cache
@@ -1446,6 +1652,21 @@ pub(crate) mod tests {
         engine: &MutationEngine,
         pubkey: &str,
     ) -> anyhow::Result<ContainerIdentitySled> {
+        // Unit fixture: seed the result of successful Incus provisioning. The
+        // production write_identity method must never create this binding.
+        let id = op_identity::session::derive_session_id(pubkey);
+        let mut cache = read_cache(engine).await;
+        if !cache.sleds.iter().any(|sled| sled.session_id == id) {
+            let mut fixture: ContainerIdentitySled = serde_json::from_value(serde_json::json!({
+                "session_id":id, "wireguard_pubkey":pubkey, "interface":"", "principal_kind":"human",
+                "instance": {"name":id, "status":"Stopped", "type":"container"},
+                "active": false, "schema_version":RECORD_FORMAT
+            }))?;
+            fixture.session_started_at = now();
+            fixture.last_seen_at = now();
+            cache.sleds.push(fixture);
+            write_cache(engine, &cache).await?;
+        }
         let out = dispatch_identity_sled_method(
             engine,
             "write_identity",
@@ -1484,6 +1705,67 @@ pub(crate) mod tests {
                 .map(String::as_str),
             Some("false")
         );
+    }
+
+    #[test]
+    fn chatbot_instance_role_labels_service_actor_class() {
+        let mut sled: ContainerIdentitySled = serde_json::from_value(serde_json::json!({
+            "session_id": "any",
+            "wireguard_pubkey": "k",
+            "instance": {
+                "name": "any",
+                "status": "Stopped",
+                "type": "container",
+                "config": { "user.opdbus.role": "chatbot" }
+            }
+        }))
+        .expect("sled");
+        assign_actor_class(&mut sled);
+        assert_eq!(
+            sled.principal_kind.as_deref(),
+            Some(op_identity::session_projection::PRINCIPAL_KIND_SERVICE)
+        );
+    }
+
+    fn inline_sid1_wire(sealed_id: &str) -> Vec<u8> {
+        let encoded = sealed_id
+            .strip_prefix(op_identity::sealed_id::INLINE_PREFIX)
+            .expect("sid1 prefix");
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.as_bytes())
+            .expect("sid1 b64")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn parked_anchored_sled_authenticates_sid1() {
+        let (engine, _shm) = sled_engine();
+        let identity = write_identity(&engine, &pk(0x71)).await.expect("write");
+        let session_id = identity.session_id.clone();
+        let sealed = identity.sealed_id.clone().expect("sid1");
+        let claims = op_identity::sealed_id::SealedId::from_inline_ref(&sealed).expect("open");
+        assert_eq!(claims.principal_kind, "wireguard-principal");
+        {
+            let mut cache = read_cache(engine.as_ref()).await;
+            let sled = cache
+                .sleds
+                .iter_mut()
+                .find(|sled| sled.session_id == session_id)
+                .expect("sled");
+            sled.active = false;
+            write_cache(engine.as_ref(), &cache)
+                .await
+                .expect("park cache");
+        }
+        let wire = inline_sid1_wire(&sealed);
+        authenticate_sid1_wire(engine.as_ref(), &wire, "mcp")
+            .await
+            .expect("parked mcp sid1");
+        authenticate_sid1_wire(engine.as_ref(), &wire, "dbus")
+            .await
+            .expect("parked dbus sid1");
+        authenticate_sid1_wire(engine.as_ref(), &wire, "grpc")
+            .await
+            .expect("parked grpc sid1");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1690,6 +1972,15 @@ pub(crate) mod tests {
         instance.status = "Running".to_string();
         container_sled.instance = Some(instance);
         container_sled.active = true;
+        // An old host-only row can be encountered during recovery, but it
+        // cannot authenticate or be created through write_identity anymore.
+        let host_sled = cache
+            .sleds
+            .iter_mut()
+            .find(|sled| sled.session_id == host.session_id)
+            .unwrap();
+        host_sled.instance = None;
+        host_sled.active = true;
         write_cache(engine.as_ref(), &cache)
             .await
             .expect("startup fixture cache");
@@ -1774,6 +2065,45 @@ pub(crate) mod tests {
         assert!(provision.is_err());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn write_cannot_create_containerless_identity_or_accept_psk() {
+        let (engine, _shm) = sled_engine();
+        let pubkey = pk(0x79);
+        let args = serde_json::json!({"wireguard_pubkey":pubkey});
+        assert!(
+            dispatch_identity_sled_method(&engine, "write_identity", &args)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("containerless")
+        );
+        assert!(
+            stored_session(&engine, &op_identity::session::derive_session_id(&pubkey))
+                .await
+                .is_none()
+        );
+        assert!(derive_session_id(&serde_json::json!({"psk":"old"}), &pubkey).is_err());
+    }
+
+    #[test]
+    fn persisted_actor_class_survives_projection_and_unknown_roles_stay_unclassified() {
+        let mut sled: ContainerIdentitySled = serde_json::from_value(serde_json::json!({
+            "session_id":"test", "wireguard_pubkey":"test", "principal_kind":"service",
+            "instance":{"name":"test", "type":"container", "status":"Stopped"}
+        }))
+        .unwrap();
+        let mut restored = record_to_sled(&sled_to_record(&sled));
+        assign_actor_class(&mut restored);
+        assert_eq!(restored.principal_kind.as_deref(), Some("service"));
+        sled.principal_kind = None;
+        sled.instance.as_mut().unwrap().config = Some(std::collections::HashMap::from([(
+            "user.opdbus.role".into(),
+            "project".into(),
+        )]));
+        assign_actor_class(&mut sled);
+        assert_eq!(sled.principal_kind, None);
+    }
+
     /// VAL-SLED-GEN-003 (`mutation_does_not_overwrite_liveness`): the mutation
     /// path owns `mutation_index` + `genesis` and touches nothing the stream
     /// path owns (FR-6 field disjointness).
@@ -1826,10 +2156,11 @@ pub(crate) mod tests {
             .await
             .expect("advance");
 
-        dispatch_identity_sled_method(
+        set_session_active_with(
             engine.as_ref(),
-            "touch_session",
-            &serde_json::json!({ "session_id": session_id }),
+            &session_id,
+            true,
+            &RecordingLifecycle::default(),
         )
         .await
         .expect("touch");

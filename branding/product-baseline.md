@@ -11,22 +11,22 @@ It covers the full platform, all major components, and three primary market angl
 It replaces entire legacy infrastructure stacks — systemd, NetworkManager, Active Directory,
 Docker, LVM — with a unified, database-driven, privacy-first orchestration layer.
 
-Every action is etched: recorded on Chronicle, the platform's distributed blockchain.
+Every action is etched: recorded on Chronicle, the platform's distributed snowball.
 Every capability is discoverable: 16,000+ system tools indexed natively from D-Bus.
 Every component is replaceable: 40+ state plugins cover network, identity, storage, containers,
 services, and compliance — each independently swappable.
 
 **Underlying tech in one line**: D-Bus introspection + WireGuard networking + gRPC control
-plane + Sled/BTRFS state store + 70+ AI agents + distributed blockchain — pure Rust,
+plane + Sled/BTRFS state store + 70+ AI agents + distributed snowball — pure Rust,
 no external tool registries, no framework lock-in.
 
 ---
 
-## Chronicle (Crates: op-blockchain + op-state-store)
+## Chronicle (Crates: op-snowball + op-state-store)
 
 **Chronicle** is 3tched's audit system. It has two components with distinct roles:
 
-**op-blockchain** — the event recording layer:
+**op-snowball** — the event recording layer:
 Every event on the system — tool execution, state change, policy decision, login — is
 appended to an on-disk log as a time-stamped, self-hashing block stored on BTRFS.
 Each `BlockEvent` carries a SHA256 hash of its own content (`timestamp:category:action:data`).
@@ -41,7 +41,7 @@ breaking every hash that follows. Additional fields: `actor_id`, `capability_id`
 `result_effective_hash`. Merkle tree batching for scale; tag-scoped proofs for compliance.
 This is the tamper-proof chain auditors rely on.
 
-**Current crate names**: `op-blockchain` (event log), `op-state-store` (chain + compliance).
+**Current crate names**: `op-snowball` (event log), `op-state-store` (chain + compliance).
 The product-facing name for the combined system is Chronicle.
 
 ### The two layers
@@ -53,9 +53,9 @@ The product-facing name for the combined system is Chronicle.
 
 ### Tagline candidates
 - "Every event. Chained. Proven."
-- "The blockchain your system runs on."
+- "The snowball your system runs on."
 - "Immutable by math, not policy."
-- "3tched's blockchain. Your proof."
+- "3tched's snowball. Your proof."
 
 ---
 
@@ -173,7 +173,7 @@ Optional ONNX vector embeddings for semantic similarity.
 **Who benefits**:
 - DevOps teams: reproducible multi-step pipelines with immutable causality records
 - Researchers: notebook-style workflows with full execution history on Chronicle
-- Compliance: every step of every workflow is on the blockchain
+- Compliance: every step of every workflow is on the snowball
 
 **Tagline candidates**:
 - "Workflows that remember. Results that scale."
@@ -239,7 +239,7 @@ Authentication is a WireGuard public key — no passwords, no LDAP queries, no A
 | **Active Directory / LDAP** | op-identity | WireGuard pubkey identity; in-memory session store (DashMap); magic link provisioning |
 | **Docker / Podman** | op-plugins (incus/lxc state plugins) + op-network (container networking) | 5-10% overhead vs Docker's 20-30%; per-user WireGuard tunnels built in |
 | **LVM / mdadm** | op-cache (BTRFS subvolumes) | Subvolume management, snapshots, incremental replication, retention policy with auto-pruning |
-| **5 separate audit logs** | op-blockchain (Chronicle) | One blockchain, one query, every component |
+| **5 separate audit logs** | op-snowball (Chronicle) | One snowball, one query, every component |
 
 **The pitch**: One platform, one binary, one audit trail — instead of five different tools
 with five different log formats and five different permission models.
@@ -385,10 +385,10 @@ agent status; service health indicators.
 
 **Primary buyer**: CISOs, compliance officers, FedRAMP teams, regulated industries
 **Primary pain**: Audit burden; reconstructing timelines from logs; policy that can't be enforced pre-execution
-**Core promise**: Chronicle — your distributed blockchain, your continuous proof
+**Core promise**: Chronicle — your distributed snowball, your continuous proof
 
 #### How Chronicle Works (compliance context)
-- D-Bus nodes generate events; op-blockchain records them as append-only BTRFS blocks
+- D-Bus nodes generate events; op-snowball records them as append-only BTRFS blocks
 - op-state-store::ChainEvent links each event to the previous via prev_hash — chain cannot be altered without breaking subsequent hashes
 - OSCAL compliance mappings connect Chronicle events to regulatory controls automatically
 - Schema validation engine (op-compliance) gates plugin registration: OSCAL, GDPR, EU AI Act, OPA validators run in sequence; registration blocked on any failure
@@ -397,12 +397,12 @@ agent status; service health indicators.
 #### Core Features
 | Feature | What It Means |
 |---|---|
-| Chronicle — distributed audit system | op-blockchain: append-only BTRFS event log; op-state-store: hash-linked compliance chain (prev_hash) |
+| Chronicle — distributed audit system | op-snowball: append-only BTRFS event log; op-state-store: hash-linked compliance chain (prev_hash) |
 | Schema validation engine (op-compliance) | OSCAL, GDPR, EU AI Act, OPA validators gate plugin registration |
 | OSCAL-native compliance mapping | FedRAMP, NIST 800-53 controls tracked automatically |
 | Change tracking across 40+ state domains | Network, identity, storage, containers, services |
 | gRPC event streaming | Real-time Chronicle events to SIEM or assessor portal |
-| Chronicle recall via Qdrant *(roadmap)* | Plain-language query of blockchain history |
+| Chronicle recall via Qdrant *(roadmap)* | Plain-language query of snowball history |
 
 #### Target Personas
 - **CISOs and compliance officers**: audit-ready evidence without manual log wrangling
@@ -411,7 +411,7 @@ agent status; service health indicators.
 - **DevSecOps engineers**: compliance guardrails in infrastructure, not bolted on
 
 #### Key Differentiators
-- **vs. Splunk/SIEM**: Chronicle generates structured blockchain events at the source — not scraped log noise
+- **vs. Splunk/SIEM**: Chronicle generates structured snowball events at the source — not scraped log noise
 - **vs. HashiCorp Vault + Terraform**: replaces the whole stack, not a collection of tools
 - **vs. Chef InSpec / OpenSCAP**: prevents non-compliant states; doesn't just scan for them
 - **vs. Manual audits**: Chronicle is machine-readable — ready for automated assessor review
@@ -420,13 +420,13 @@ agent status; service health indicators.
 - "Compliance isn't a report. It's a system property."
 - "Every action. Every change. Every violation. In Chronicle."
 - "Built for auditors. Run by engineers."
-- "3tched's blockchain. Distributed. Proven. Yours."
+- "3tched's snowball. Distributed. Proven. Yours."
 - "Don't detect policy violations. Prevent them."
 
 #### Use Case Scenarios
 - FedRAMP contractor: 3tched streams OSCAL-mapped Chronicle events to assessor portal automatically
 - Healthcare breach: Chronicle's hash-linked compliance chain (op-state-store::ChainEvent) provides cryptographic proof of every state transition, exact order
-- Financial firm: op-compliance validators gate every plugin registration against OSCAL/GDPR/OPA rules; every violation is on the blockchain
+- Financial firm: op-compliance validators gate every plugin registration against OSCAL/GDPR/OPA rules; every violation is on the snowball
 
 ---
 
@@ -449,7 +449,7 @@ agent status; service health indicators.
 | Ghostbridge container | Private network namespace per workspace |
 | 70+ specialized AI agents | Domain experts on demand, sandboxed, full system access |
 | Semantic memory architecture | CozoDB + Qdrant designed for cross-session context |
-| Chronicle blockchain trail | Every workspace action on the distributed blockchain |
+| Chronicle snowball trail | Every workspace action on the distributed snowball |
 | BTRFS subvolume per workspace | Isolated, snapshotted, rollback-ready (via op-cache) |
 | DAG workflow orchestration | Multi-step tasks in parallel, automatically |
 | Multi-protocol access | Browser, gRPC, MCP, CLI |
@@ -480,8 +480,8 @@ agent status; service health indicators.
 | **Primary buyer** | Security architect | CISO / compliance officer | Developer / power user |
 | **Primary pain** | Network exposure | Audit burden | Tool fragmentation |
 | **Core promise** | Kernel isolation | Continuous proof | Persistent intelligence |
-| **Key proof point** | Per-user WireGuard namespaces | Chronicle distributed blockchain | 70 agents + D-Bus tool surface |
-| **Moat** | OS-level, no userspace attack surface | Prevention + blockchain proof | 16,000 tools, local-first AI |
+| **Key proof point** | Per-user WireGuard namespaces | Chronicle distributed snowball | 70 agents + D-Bus tool surface |
+| **Moat** | OS-level, no userspace attack surface | Prevention + snowball proof | 16,000 tools, local-first AI |
 
 ## The Replacement Stack Pitch
 
@@ -494,19 +494,19 @@ For enterprise and infrastructure buyers who respond to "replace" messaging:
 | Active Directory / LDAP | op-identity (WireGuard pubkey) | Zero-password, no central server to breach |
 | Docker / Podman | op-plugins (incus/lxc) + op-network | 5-10% overhead vs 20-30%; privacy networking built in |
 | LVM / mdadm | op-cache (BTRFS subvolumes) | Snapshots, incremental replication, retention policy |
-| 5 separate audit logs | op-blockchain (Chronicle) | One blockchain, one query, every component |
+| 5 separate audit logs | op-snowball (Chronicle) | One snowball, one query, every component |
 
 ## Brand Voice Notes
 
 - **Tone**: Precise. Confident. No hype. Engineers respect specificity — use it.
 - **Avoid**: "revolutionary", "game-changing", "seamless", "next-gen"
 - **Use**: Product names (Chronicle, Ghostbridge), concrete numbers (16,000+ tools, 70+ agents,
-  40+ plugins), mechanism descriptions ("kernel namespace", "distributed blockchain",
+  40+ plugins), mechanism descriptions ("kernel namespace", "distributed snowball",
   "native netlink"), outcome framing ("prove isolation, don't claim it")
-- **Chronicle**: It IS a blockchain — hash-linked, append-only. Replication between nodes
+- **Chronicle**: It IS a snowball — hash-linked, append-only. Replication between nodes
   uses BTRFS snapshot streaming (`btrfs send | ssh ... btrfs receive`); gRPC provides local
   event subscription (EventChainService), not chain replication. Own the term. Crates:
-  `op-blockchain` (event log) + `op-state-store` (hash-linked chain).
+  `op-snowball` (event log) + `op-state-store` (hash-linked chain).
 - **Ghostbridge**: The bridge no one can see — private paths that leave no visible trace.
 - **3tched name**: Etched as in permanent (Chronicle), etched as in integrated (OS-level).
 - **Replacement framing**: "replaces" is a strong word — use it deliberately for the stack
@@ -519,7 +519,7 @@ When using this document to generate marketing copy:
 **Grounding rules**:
 - All claims must come from this document — no invented capabilities
 - Concrete numbers: 16,000+ tools (D-Bus auto-discovery), 70+ agents (op-agents), 40+ plugins (op-plugins)
-- Chronicle IS a blockchain — use the term. Two crates: `op-blockchain` (append-only event log, per-event SHA256) and `op-state-store` (hash-linked chain via `ChainEvent`, `prev_hash` field). The hash-linked tamper-proof property comes from `op-state-store::ChainEvent`, not `op-blockchain`.
+- Chronicle IS a snowball — use the term. Two crates: `op-snowball` (append-only event log, per-event SHA256) and `op-state-store` (hash-linked chain via `ChainEvent`, `prev_hash` field). The hash-linked tamper-proof property comes from `op-state-store::ChainEvent`, not `op-snowball`.
 - **Do not claim Qdrant plain-language recall as shipped** — it is in active development; use
   "designed to", "in development", or "roadmap" framing
 - **Do not claim "no external calls" for LLM** — providers are configurable (Gemini, Anthropic,
@@ -527,19 +527,19 @@ When using this document to generate marketing copy:
 
 **Angle guidance**:
 - Ghostbridge: security product voice — kernel-level, precise, no consumer privacy app tone
-- 3tched compliance: speak to auditors and regulators, not just engineers — "proof", "evidence", "blockchain"
+- 3tched compliance: speak to auditors and regulators, not just engineers — "proof", "evidence", "snowball"
 - Workspace: warmer and more personal — it's the human-facing layer
 - Replacement stack: enterprise infrastructure voice — "replaces", "native", "zero dependencies"
 - All angles share one theme: **OS-level guarantees, not application-layer promises**
 
 **Component reference** (actual crate names):
 - D-Bus engine → op-introspection / op-inspector
-- Blockchain / Chronicle → op-blockchain
+- Snowball / Chronicle → op-snowball
 - Privacy network / Ghostbridge → op-network
 - Identity → op-identity
 - Agents → op-agents (70+)
 - Workflows → op-workflows + workstacks
-- Compliance → op-compliance + CozoDB + op-blockchain
+- Compliance → op-compliance + CozoDB + op-snowball
 - Plugins → op-plugins (40+)
 - Container support → op-plugins (incus/lxc plugins) + op-network
 - Storage/BTRFS → op-cache
