@@ -148,9 +148,11 @@ impl SessionIdentity {
     }
 
     /// Whether this session may currently authenticate a new request.
+    ///
+    /// `active` is Incus power policy (parked vs running), not identity.
+    /// Parked anchored sleds remain authenticatable until the term expires.
     pub fn is_current_at(&self, now: i64) -> bool {
         self.is_anchored()
-            && self.active
             && self
                 .expires_at
                 .is_none_or(|expires_at| expires_at == 0 || expires_at > now)
@@ -192,6 +194,7 @@ pub enum SessionProjectionError {
     NotFound(String),
     #[error("identity session '{0}' has no anchored genesis")]
     Unanchored(String),
+    /// Parked (Incus stopped) is not this error. `active` is power policy.
     #[error("identity session '{0}' is inactive")]
     Inactive(String),
     #[error("identity session '{0}' has expired")]
@@ -295,9 +298,6 @@ fn resolve_from_sessions(
         if !record.is_anchored() {
             return Err(SessionProjectionError::Unanchored(record.session_id));
         }
-        if !record.active {
-            return Err(SessionProjectionError::Inactive(record.session_id));
-        }
         if !record.is_current() {
             return Err(SessionProjectionError::Expired(record.session_id));
         }
@@ -386,12 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn current_requires_active_unexpired_term() {
+    fn current_is_anchored_and_unexpired_regardless_of_power() {
         let mut record = anchored("session-a");
-        assert!(record.is_current_at(100));
         record.active = false;
-        assert!(!record.is_current_at(100));
-        record.active = true;
+        assert!(record.is_current_at(100));
         record.expires_at = Some(100);
         assert!(!record.is_current_at(100));
         record.expires_at = Some(101);
@@ -469,10 +467,37 @@ mod tests {
     }
 
     #[test]
-    fn no_current_sessions_still_reports_not_found() {
-        // An empty projection must not be reported as "only service principals".
+    fn named_parked_sled_resolves_for_authentication() {
         let mut record = human("human-session");
         record.active = false;
+        let resolved = resolve_from_sessions(vec![record], Some("human-session"))
+            .expect("parked named sled remains authenticatable");
+        assert_eq!(resolved.session_id, "human-session");
+        assert!(!resolved.active);
+    }
+
+    #[test]
+    fn parked_human_is_adopted_without_a_selector() {
+        let mut record = human("human-session");
+        record.active = false;
+        let resolved = resolve_from_sessions(vec![record], None)
+            .expect("parked human remains the implicit identity");
+        assert_eq!(resolved.session_id, "human-session");
+    }
+
+    #[test]
+    fn no_current_sessions_still_reports_not_found() {
+        // An empty projection must not be reported as "only service principals".
+        assert!(matches!(
+            resolve_from_sessions(vec![], None),
+            Err(SessionProjectionError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn expired_human_is_not_adopted_implicitly() {
+        let mut record = human("human-session");
+        record.expires_at = Some(1);
         assert!(matches!(
             resolve_from_sessions(vec![record], None),
             Err(SessionProjectionError::NotFound(_))

@@ -238,20 +238,28 @@ impl InputValidator {
         let schema_key = format!("{}:{}", tool_name, serde_json::to_string(schema)?);
 
         // Get or create compiled schema
-        let compiled_schema = {
+        // Keep the read lock scoped to the lookup. On a cache miss, compiling
+        // and acquiring the write lock while a read guard is alive deadlocks
+        // every caller waiting for the same schema.
+        let cached_schema = {
             let cache = self.schema_cache.read().await;
-            if let Some(schema) = cache.get(&schema_key) {
-                schema.clone()
-            } else {
-                // Compile and cache the schema
-                let compiled = jsonschema::validator_for(schema)
-                    .map_err(|e| anyhow!("Failed to compile schema for {}: {}", tool_name, e))?;
-                let arc_schema = Arc::new(compiled);
+            cache.get(&schema_key).cloned()
+        };
 
-                let mut cache = self.schema_cache.write().await;
-                cache.insert(schema_key, arc_schema.clone());
-                arc_schema
-            }
+        let compiled_schema = if let Some(schema) = cached_schema {
+            schema
+        } else {
+            // Compile outside the lock, then publish exactly one shared schema
+            // for concurrent first-use callers.
+            let compiled = jsonschema::validator_for(schema)
+                .map_err(|e| anyhow!("Failed to compile schema for {}: {}", tool_name, e))?;
+            let arc_schema = Arc::new(compiled);
+
+            let mut cache = self.schema_cache.write().await;
+            cache
+                .entry(schema_key)
+                .or_insert_with(|| arc_schema.clone())
+                .clone()
         };
 
         // Validate against schema. jsonschema >= 0.20 returns a single error from
@@ -563,7 +571,9 @@ mod tests {
             .validate_input("shell_tool", &input, &schema, Some("anonymous"))
             .await;
 
-        assert!(result.is_err());
+        let result = result.unwrap();
+        assert!(!result.is_valid);
+        assert!(!result.should_proceed());
 
         // But allowed for trusted session
         let result = validator
@@ -585,7 +595,9 @@ mod tests {
             .validate_input("file_tool", &input, &schema, Some("anonymous"))
             .await;
 
-        assert!(result.is_err());
+        let result = result.unwrap();
+        assert!(!result.is_valid);
+        assert!(!result.should_proceed());
 
         // But allowed for trusted session
         let result = validator
@@ -594,6 +606,69 @@ mod tests {
             .unwrap();
 
         assert!(result.should_proceed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_schema_cache_concurrent_miss_warm_hit_and_invalid_payload() {
+        let validator = std::sync::Arc::new(InputValidator::new());
+        let schema = json!({
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"]
+        });
+        let valid = json!({"name": "concurrent"});
+
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(4));
+        let mut tasks = Vec::new();
+        for _ in 0..4 {
+            let validator = validator.clone();
+            let schema = schema.clone();
+            let valid = valid.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                validator
+                    .validate_input("cache_test", &valid, &schema, Some("anonymous"))
+                    .await
+            }));
+        }
+
+        let concurrent = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut results = Vec::new();
+            for task in tasks {
+                results.push(task.await.expect("validation task must not panic")?);
+            }
+            Ok::<_, anyhow::Error>(results)
+        })
+        .await
+        .expect("concurrent schema cache misses must not deadlock")
+        .expect("concurrent validation must succeed");
+        assert!(concurrent.iter().all(ValidatedInput::should_proceed));
+        assert_eq!(validator.schema_cache.read().await.len(), 1);
+
+        let warm = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            validator.validate_input("cache_test", &valid, &schema, Some("anonymous")),
+        )
+        .await
+        .expect("warm schema cache hit must complete")
+        .unwrap();
+        assert!(warm.should_proceed());
+
+        let invalid = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            validator.validate_input(
+                "cache_test",
+                &json!({"name": 42}),
+                &schema,
+                Some("anonymous"),
+            ),
+        )
+        .await
+        .expect("invalid payload validation must complete")
+        .unwrap();
+        assert!(!invalid.should_proceed());
+        assert!(!invalid.validation_errors.is_empty());
     }
 }
 

@@ -33,9 +33,13 @@ Release is a snapshot sent to the target — defined by `deploy/btrfs-layout.sh`
 
 ```sh
 CXXFLAGS="-include cstdint" cargo build --workspace --release
+sudo target/release/opblob seal-shm            # explicitly reseal after the build
+sudo target/release/opblob persist             # retain the catalog across reboot
 sudo deploy/runit/build-golden.sh             # golden subvolume + live install
 sudo deploy/runit/build-golden.sh --dry-run   # review first
 ```
+
+After builds, explicitly run the freshly built `opblob seal-shm`; the bridge's startup refresh is not a substitute for this step. Use the service's schema-shaping environment when sealing: on this host, `sudo env COGNITIVE_MCP_QDRANT_URL=http://10.200.0.2:6334 target/release/opblob seal-shm` matches `deploy/runit/op-grpc-bridge/run`. Verify the live and persisted catalogs match after restart. Review catalog removals and keep a recoverable copy before a full reseal, which sweeps plugin IDs absent from the build.
 
 `--golden-only` skips the running host; `--live-only` skips the subvolume. Network-critical services (OVS, uplink, DHCP, session bus) are never auto-restarted — the script reports them for deliberate console action.
 

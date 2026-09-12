@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Once, OnceLock};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::Duration;
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
@@ -33,6 +33,10 @@ use op_identity::oracle_assertion::{
     verify_signature, DecoyIssuer, OracleIdentityAssertion, SignedAssertion,
 };
 use op_identity::session::{derive_principal_id, derive_session_id};
+use op_plugins::state_plugins::identity_sled::{
+    ContainerIdentitySled, IdentitySledState, SledBtrfsDevice, RECORD_FORMAT,
+};
+use op_plugins::state_plugins::incus::IncusInstance;
 use op_state::StatePlugin;
 use op_state_store::{ChainConfig, EventChain};
 use prost_types::value::Kind;
@@ -223,6 +227,8 @@ struct TestEnv {
     _root: TempDir,
     _cozo: TempDir,
     issuer: DecoyIssuer,
+    engine: Mutex<Option<Arc<MutationEngine>>>,
+    fixture_sleds: Mutex<BTreeMap<String, ContainerIdentitySled>>,
 }
 
 impl TestEnv {
@@ -263,6 +269,16 @@ impl TestEnv {
         }
         let cozo = tempfile::tempdir().expect("cozo");
         std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", cozo.path().join("cozo"));
+        // Identity sleds have a distinct durable Cozo relation from the human
+        // principal registry.  Keep one process-wide sandbox because the
+        // identity dispatcher intentionally opens its store once per process.
+        static IDENTITY_COZO: OnceLock<TempDir> = OnceLock::new();
+        let identity_cozo =
+            IDENTITY_COZO.get_or_init(|| tempfile::tempdir().expect("identity cozo"));
+        std::env::set_var(
+            "IDENTITY_SLED_COZO_DB_PATH",
+            identity_cozo.path().join("identity-cozo"),
+        );
         std::env::set_var("OP_AUTH_REPLAY_DB_PATH", root.path().join("auth-replay.db"));
         let grants_path = root.path().join("capability-grants.json");
         write_grants(&grants_path, &empty_grants());
@@ -273,6 +289,127 @@ impl TestEnv {
             _root: root,
             _cozo: cozo,
             issuer,
+            engine: Mutex::new(None),
+            fixture_sleds: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    async fn bind_engine(&self, engine: Arc<MutationEngine>) {
+        let fixture_sleds: Vec<_> = self
+            .fixture_sleds
+            .lock()
+            .expect("fixture sled lock")
+            .values()
+            .cloned()
+            .collect();
+        if !fixture_sleds.is_empty() {
+            engine
+                .update_state_cache(
+                    "identity_sled".to_string(),
+                    simd_json::serde::to_owned_value(IdentitySledState {
+                        sleds: fixture_sleds,
+                    })
+                    .expect("identity fixture state value"),
+                )
+                .await;
+        }
+        *self.engine.lock().expect("test engine lock") = Some(engine);
+    }
+
+    /// Seed the result of a successful identity-container provision through
+    /// the same authoritative cache/Cozo/genesis path used by production.
+    /// The E2E process does not create real Incus containers, so this supplies
+    /// only the isolated provision record; authentication still exercises the
+    /// production validator and SID1/genesis checks unchanged.
+    async fn provision_identity(&self, pubkey: &str) {
+        let engine = self
+            .engine
+            .lock()
+            .expect("test engine lock")
+            .clone()
+            .expect("test engine bound");
+        let session_id = derive_session_id(pubkey);
+        let mut state: IdentitySledState = engine
+            .get_state("identity_sled")
+            .await
+            .map(|value| simd_json::serde::from_owned_value(value).expect("identity state"))
+            .unwrap_or_default();
+        if state
+            .sleds
+            .iter()
+            .any(|sled: &ContainerIdentitySled| sled.session_id == session_id)
+        {
+            return;
+        }
+        let now = chrono::Utc::now().timestamp();
+        let btrfs_root = self._root.path().join("identity-btrfs");
+        std::fs::create_dir_all(&btrfs_root).expect("identity btrfs fixture root");
+        state.sleds.push(ContainerIdentitySled {
+            session_id: session_id.clone(),
+            wireguard_pubkey: pubkey.to_string(),
+            interface: String::new(),
+            peer_ip: None,
+            mutation_index: 0,
+            genesis: None,
+            trace_id: String::new(),
+            schema_version: RECORD_FORMAT,
+            vector_id: String::new(),
+            sealed_id: None,
+            principal_kind: Some("human".to_string()),
+            btrfs_device: Some(SledBtrfsDevice {
+                device_path: btrfs_root.join("fstorage.img").display().to_string(),
+                mount_point: btrfs_root.join("mount").display().to_string(),
+                btrfs_uuid: "00000000-0000-0000-0000-000000000001".to_string(),
+                cozo_id: session_id.clone(),
+                attached: false,
+            }),
+            instance: Some(IncusInstance {
+                name: session_id.clone(),
+                status: "Stopped".to_string(),
+                instance_type: "container".to_string(),
+                profiles: vec!["identity".to_string()],
+                config: Some(std::collections::HashMap::from([(
+                    "boot.autostart".to_string(),
+                    "false".to_string(),
+                )])),
+                ..Default::default()
+            }),
+            session_started_at: now,
+            last_seen_at: now,
+            active: false,
+            expires_at: None,
+            arrival_timestamp: 0,
+            chain_head_at_arrival: String::new(),
+            catalog_hash_at_arrival: String::new(),
+            head_timestamp_at_arrival: 0,
+        });
+        state.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        engine
+            .update_state_cache(
+                "identity_sled".to_string(),
+                simd_json::serde::to_owned_value(state).expect("identity state value"),
+            )
+            .await;
+        engine
+            .mint_and_store_genesis(&session_id, pubkey)
+            .await
+            .expect("fixture identity genesis");
+        let anchored_state: IdentitySledState = engine
+            .get_state("identity_sled")
+            .await
+            .map(|value| {
+                simd_json::serde::from_owned_value(value).expect("anchored identity state")
+            })
+            .expect("anchored identity fixture state");
+        if let Some(sled) = anchored_state
+            .sleds
+            .into_iter()
+            .find(|sled| sled.session_id == session_id)
+        {
+            self.fixture_sleds
+                .lock()
+                .expect("fixture sled lock")
+                .insert(session_id, sled);
         }
     }
 
@@ -394,6 +531,7 @@ async fn start_server_with_binding(
     let identity = Identity::from_pem(ck.cert.pem(), ck.key_pair.serialize_pem());
 
     let server = OperationGrpcServer::new(engine.clone());
+    env.bind_engine(engine.clone()).await;
     let mut validator = AssertionValidator::from_env(DecoyTrustStore::load());
     if let Some(binding) = source_binding {
         validator = validator.with_source_binding(binding);
@@ -582,6 +720,7 @@ async fn register_human(
     alias: &str,
     nonce: [u8; 16],
 ) {
+    env.provision_identity(pubkey).await;
     env.grant_human(pubkey, &["human_principal.write", "human_principal.read"]);
     let args = prost_struct(BTreeMap::from([
         ("human_pubkey".to_string(), prost_str(pubkey)),
@@ -635,6 +774,7 @@ async fn provision_container_identity(
     pubkey: &str,
     nonce: [u8; 16],
 ) -> (String, String) {
+    env.provision_identity(pubkey).await;
     let operator = pk(240u8.wrapping_add(nonce[0]));
     register_human(channel.clone(), env, &operator, "identity-operator", nonce).await;
     env.grant_human(&operator, &["identity_sled.write"]);
@@ -1449,6 +1589,7 @@ async fn registration_bootstrap_requires_grant() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(21);
+    env.provision_identity(&pubkey).await;
     env.grant_human(&pubkey, &["human_principal.write"]);
     let args = prost_struct(BTreeMap::from([
         ("human_pubkey".to_string(), prost_str(&pubkey)),
@@ -1471,6 +1612,7 @@ async fn registration_bootstrap_requires_grant() {
         .await,
     );
     let pubkey2 = pk(22);
+    env.provision_identity(&pubkey2).await;
     env.set_grants(&empty_grants());
     assert_permission_denied(
         call_method(
@@ -1499,6 +1641,7 @@ async fn registration_bootstrap_cannot_register_another_humans_key() {
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let attacker = pk(61);
     let victim = pk(62);
+    env.provision_identity(&attacker).await;
     env.grant_human(&attacker, &["human_principal.write"]);
 
     assert_permission_denied(
@@ -1602,6 +1745,7 @@ async fn e2e_full_trust_chain_generated_surface() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(31);
+    env.provision_identity(&pubkey).await;
     env.grant_human(&pubkey, &["human_principal.write", "human_principal.read"]);
     let reg_args = prost_struct(BTreeMap::from([
         ("human_pubkey".to_string(), prost_str(&pubkey)),

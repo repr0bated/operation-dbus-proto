@@ -187,6 +187,14 @@ impl CozoGraphShuttle {
 
     fn seed_schema(&self) -> Result<()> {
         let relations = [
+            // Migration markers survive empty catalogs; row count is not a
+            // migration version and must never resurrect retired identities.
+            r#":create schema_migrations { name: String => completed: Bool }"#,
+            // Private project catalog. Document stores reside in each project's
+            // own persistent mount, not in this control-plane catalog.
+            r#":create project_catalog { project_id: String => document: String }"#,
+            r#":create project_documents { collection: String, document_id: String => document: String }"#,
+            r#":create notebooklm_selection { session_id: String => notebook_id: String }"#,
             // plugin × op → action(Deny/Allow) + reason + control_ref
             r#":create compliance_rule {
                 plugin: String, op: String, action: String
@@ -444,12 +452,17 @@ impl CozoGraphShuttle {
         // `:put` over `identity_sessions` that already exist — every process
         // open used to replay stale host-only rows and wipe bound instance/btrfs
         // JSON written while the bridge was down.
-        let sessions_already_present = self
-            .list_identity_sessions()
-            .map(|rows| !rows.is_empty())
-            .unwrap_or(false);
-        if !sessions_already_present {
-            let _ = cozo_run(
+        let migration_done = !cozo_run(&self.db,
+            "?[name] := *schema_migrations{name, completed}, name = 'identity-sessions-v3', completed = true",
+            BTreeMap::new())?.rows.is_empty();
+        let sessions_already_present = !self.list_identity_sessions()?.is_empty();
+        let relations = cozo_run(&self.db, "::relations", BTreeMap::new())?;
+        let legacy_exists = relations
+            .rows
+            .iter()
+            .any(|row| row.first().and_then(dv_as_str) == Some("identity_sleds"));
+        if !migration_done && !sessions_already_present && legacy_exists {
+            cozo_run(
                 &self.db,
                 r#"
                 ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
@@ -469,7 +482,12 @@ impl CozoGraphShuttle {
                 }
             "#,
                 BTreeMap::new(),
-            );
+            )?;
+        }
+        if !migration_done {
+            cozo_run(&self.db,
+                "?[name, completed] <- [['identity-sessions-v3', true]] :put schema_migrations {name => completed}",
+                BTreeMap::new())?;
         }
 
         info!("CozoDB schema ready");
@@ -2192,7 +2210,7 @@ mod identity_sled_tests {
             let store = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
             store.put_identity_sled(&rec).unwrap();
         }
-        let reopened = CozoGraphShuttle::new_persistent(db_path).unwrap();
+        let reopened = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
         let row = reopened
             .get_identity_sled(&rec.session_id)
             .unwrap()
@@ -2252,13 +2270,20 @@ mod identity_sled_tests {
                 Some(serde_json::json!({"sid": rec.session_id})),
             );
         }
-        let reopened = CozoGraphShuttle::new_persistent(db_path).unwrap();
+        let reopened = CozoGraphShuttle::new_persistent(db_path.clone()).unwrap();
         let row = reopened
             .get_identity_sled(&rec.session_id)
             .unwrap()
             .unwrap();
         assert_eq!(row.instance_json, rec.instance_json);
         assert_eq!(row.btrfs_device_json, rec.btrfs_device_json);
+        reopened.delete_identity_sled(&rec.session_id).unwrap();
+        drop(reopened);
+        let empty = CozoGraphShuttle::new_persistent(db_path).unwrap();
+        assert!(
+            empty.list_identity_sessions().unwrap().is_empty(),
+            "an intentionally emptied catalog must not resurrect legacy ghost rows"
+        );
     }
 
     #[test]

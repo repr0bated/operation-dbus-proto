@@ -723,7 +723,6 @@ impl MutationEngine {
         {
             let now = chrono::Utc::now().timestamp();
             let current = record.is_anchored()
-                && record.active
                 && record.wireguard_pubkey == wireguard_pubkey
                 && record
                     .expires_at
@@ -731,7 +730,7 @@ impl MutationEngine {
             if !current {
                 tracing::warn!(
                     %session_id,
-                    "verified identity has an inactive, expired, or mismatched authoritative sled"
+                    "verified identity has an expired or mismatched authoritative sled"
                 );
                 return None;
             }
@@ -1677,7 +1676,9 @@ impl MutationEngine {
         // and op-web's state_tree read from. The `{"data","_introspection"}`
         // composite existed only for the deleted projection server's child-path
         // derivation; readers expect the raw state object.
-        if change_type != ChangeType::ObjectRemoved {
+        // A signal is an observation, not a replacement state document. In
+        // particular, broker callbacks must not overwrite the EMQX projection.
+        if !matches!(change_type, ChangeType::ObjectRemoved | ChangeType::Signal) {
             match simd_json::to_string(&new_value) {
                 Ok(json) => {
                     if let Err(e) = write_plugin_projection(&plugin_id, json.as_bytes()) {
@@ -2123,6 +2124,19 @@ impl MutationEngine {
             anyhow::bail!("sealed_id is MutationEngine-authored and cannot be supplied");
         }
 
+        // Tenant data must not leak through the global chain/change streams.
+        // Notarize a digest, while dispatch still receives the original input.
+        let audit_json = if plugin_id == "project" {
+            serde_json::json!({"arguments_redacted": true,
+                "request_hash": blake3::hash(json_args.as_bytes()).to_hex().to_string()})
+            .to_string()
+        } else {
+            json_args.to_string()
+        };
+        let audit_value = simd_json::serde::to_owned_value(serde_json::from_str::<
+            serde_json::Value,
+        >(&audit_json)?)?;
+
         // Record the immutable event with the full accountability surface.
         // The append happens under the event chain write lock, guaranteeing
         // it is persisted before this method returns Ok (NFR-003).
@@ -2135,7 +2149,7 @@ impl MutationEngine {
                 plugin_id.to_string(),
                 method.to_string(),
                 capability_id.map(|s| s.to_string()),
-                json_args,
+                &audit_json,
             );
             (
                 event.event_id,
@@ -2160,7 +2174,7 @@ impl MutationEngine {
             change_type: ChangeType::MethodCall,
             member_name: Some(method.to_string()),
             old_value: None,
-            new_value: parsed_value.clone(),
+            new_value: audit_value,
             tags_touched: vec![],
             event_hash: event_summary.1.clone(),
             timestamp: event_summary.2,
@@ -2201,6 +2215,17 @@ impl MutationEngine {
                 let args = serde_json::to_value(&parsed_value)?;
                 crate::human_principal_dispatch::dispatch_human_principal_method(method, &args)
                     .await?
+            }
+            "project" => {
+                crate::project_dispatch::dispatch(
+                    self,
+                    method,
+                    &serde_json::to_value(&parsed_value)?,
+                    actor_id,
+                    session_id,
+                    session_genesis,
+                )
+                .await?
             }
             "persona" => {
                 let args = serde_json::to_value(&parsed_value)?;
@@ -2300,7 +2325,14 @@ impl MutationEngine {
                 self.dispatch_cognitive_mcp_method(method, &args).await?
             }
             "notebooklm" => {
-                self.dispatch_notebooklm_method(method, &parsed_value)
+                let verified_session = crate::project_dispatch::verified_session(
+                    self,
+                    actor_id,
+                    session_id,
+                    session_genesis,
+                )
+                .await?;
+                self.dispatch_notebooklm_method(method, &parsed_value, &verified_session)
                     .await?
             }
             "mongodb_mcp" => {
@@ -2397,33 +2429,36 @@ impl MutationEngine {
         &self,
         method: &str,
         parsed_value: &simd_json::OwnedValue,
+        session_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let args = serde_json::to_value(parsed_value)?;
-        let mut state = self
-            .projected_state::<op_plugins::state_plugins::notebooklm::NotebookLmState>("notebooklm")
-            .await
-            .unwrap_or_else(op_plugins::state_plugins::notebooklm::NotebookLmPlugin::current_state);
-        let selected = state.selected_notebook_id.clone();
+        let store = crate::identity_sled_dispatch::sled_cozo()
+            .ok_or_else(|| anyhow::anyhow!("durable NotebookLM selection store is unavailable"))?
+            .clone();
+        let selection_store = store.clone();
+        let selector = session_id.to_string();
+        let rows = tokio::task::spawn_blocking(move || selection_store.run_query(
+            "?[notebook_id] := *notebooklm_selection{session_id, notebook_id}, session_id = $session",
+            Some(serde_json::json!({"session":selector})))).await??;
+        let selected = rows
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["notebook_id"].as_str())
+            .map(str::to_string);
         match crate::nlm_cli::notebooklm_dispatch(method, &args, selected.as_deref())? {
             crate::nlm_cli::NotebooklmDispatch::LocalSelect { notebook_id } => {
-                state.selected_notebook_id = Some(notebook_id.clone());
-                let mut bytes = serde_json::to_vec(&state)?;
-                let owned = simd_json::to_owned_value(&mut bytes)?;
-                self.update_state_cache("notebooklm".to_string(), owned)
-                    .await;
-                if let Err(error) = self
-                    .publish_plugin_projection_from_cache("notebooklm", ChangeType::PropertySet)
-                    .await
-                {
-                    tracing::warn!(%error, "could not project NotebookLM selected notebook");
-                }
+                let selector = session_id.to_string();
+                let selected_id = notebook_id.clone();
+                tokio::task::spawn_blocking(move || store.run_query(
+                    "?[session_id, notebook_id] <- [[$session, $notebook]] :put notebooklm_selection {session_id => notebook_id}",
+                    Some(serde_json::json!({"session":selector, "notebook":selected_id})))).await??;
                 Ok(serde_json::json!({
                     "selected_notebook_id": notebook_id,
-                    "success": true
+                    "session_id": session_id
                 }))
             }
             crate::nlm_cli::NotebooklmDispatch::Cli(invocation) => {
-                let mut result = crate::nlm_cli::run_nlm(&invocation).await?;
+                let mut result = crate::nlm_cli::run_notebooklm_method(method, &invocation).await?;
                 if matches!(
                     method,
                     "get_health"

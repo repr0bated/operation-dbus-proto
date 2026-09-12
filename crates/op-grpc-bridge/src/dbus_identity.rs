@@ -1,9 +1,10 @@
 //! Authoritative D-Bus sender-to-session identity binding.
 //!
 //! D-Bus does not traverse the gRPC interceptor. A caller therefore registers
-//! its current, bus-assigned unique name with a fresh OIA1 proof before it can
-//! use `PluginV1.Call`. The registration never accepts a caller-selected
-//! principal, session, sender, UID, GID, PID, or genesis value.
+//! its current, bus-assigned unique name with a SID1 sealed envelope (local)
+//! or a fresh OIA1 proof (remote human) before it can use `PluginV1.Call`.
+//! The registration never accepts a caller-selected principal, session,
+//! sender, UID, GID, PID, or genesis value.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -158,8 +159,8 @@ impl DbusIdentityResolver {
     }
 
     /// Bind only the sender named by this message header. The opaque proof is
-    /// a fresh OIA1 envelope; all identity/session values are resolved by the
-    /// existing validator and MutationEngine.
+    /// a SID1 sealed envelope or a fresh OIA1 envelope; all identity/session
+    /// values are resolved by the existing validator and MutationEngine.
     pub async fn register_current_sender(
         &self,
         header: &Header<'_>,
@@ -171,6 +172,11 @@ impl DbusIdentityResolver {
         if registration_proof.is_empty() || registration_proof.len() > MAX_REGISTRATION_PROOF_BYTES
         {
             return Err(DbusIdentityError::RegistrationProofRejected);
+        }
+        if registration_proof.starts_with(b"SID1") {
+            return self
+                .register_current_sender_sid1(header, registration_proof)
+                .await;
         }
 
         let sender = sender_from_header(header)?;
@@ -296,6 +302,116 @@ impl DbusIdentityResolver {
             principal_id = %resolved.principal_id,
             session_id = %resolved.session_id,
             "registered current D-Bus sender identity"
+        );
+        Ok(resolved)
+    }
+
+    async fn register_current_sender_sid1(
+        &self,
+        header: &Header<'_>,
+        registration_proof: &[u8],
+    ) -> Result<GhostbridgeIdentity, DbusIdentityError> {
+        let sender = sender_from_header(header)?;
+        let initial_peer = self.read_peer_credentials(&sender).await?;
+        let now = chrono::Utc::now().timestamp();
+        let claims = crate::identity_sled_dispatch::authenticate_sid1_wire(
+            self.engine.as_ref(),
+            registration_proof,
+            "dbus",
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, sender, "D-Bus registration SID1 rejected");
+            DbusIdentityError::RegistrationProofRejected
+        })?;
+
+        if !load_capability_grants(&claims.principal_id).contains(DBUS_BIND_CAPABILITY) {
+            return Err(DbusIdentityError::CapabilityDenied);
+        }
+
+        self.authoritative_identity(&claims.principal_id, &claims.session_id, false)
+            .await?;
+
+        let current_peer = self.read_peer_credentials(&sender).await?;
+        if current_peer != initial_peer {
+            return Err(DbusIdentityError::StaleBinding);
+        }
+
+        let _transition = self.lifecycle_transition.lock().await;
+        {
+            let bindings = self.bindings.read().await;
+            if bindings
+                .get(&sender)
+                .is_some_and(|binding| binding.session_id != claims.session_id)
+            {
+                return Err(DbusIdentityError::StaleBinding);
+            }
+        }
+        let first_binding = !self
+            .bindings
+            .read()
+            .await
+            .values()
+            .any(|binding| binding.session_id == claims.session_id);
+        crate::identity_sled_dispatch::activate_session(self.engine.as_ref(), &claims.session_id)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, session_id = %claims.session_id, "authenticated session activation failed");
+                DbusIdentityError::SessionUnavailable
+            })?;
+        let resolved = match self
+            .authoritative_identity(&claims.principal_id, &claims.session_id, true)
+            .await
+        {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                if first_binding {
+                    let _ = crate::identity_sled_dispatch::deactivate_session(
+                        self.engine.as_ref(),
+                        &claims.session_id,
+                    )
+                    .await;
+                }
+                return Err(error);
+            }
+        };
+
+        self.bindings.write().await.insert(
+            sender.clone(),
+            DbusBinding {
+                unique_name: sender.clone(),
+                peer: current_peer.clone(),
+                principal_id: resolved.principal_id.clone(),
+                session_id: resolved.session_id.clone(),
+                session_genesis: resolved.session_genesis.clone(),
+                registered_at: now,
+            },
+        );
+        drop(_transition);
+
+        if !matches!(
+            self.read_peer_credentials(&sender).await,
+            Ok(peer) if peer == current_peer
+        ) {
+            if let Err(error) = self.revoke_sender(&sender).await {
+                tracing::error!(%error, sender, "failed to park stale D-Bus identity session");
+            }
+            return Err(DbusIdentityError::StaleBinding);
+        }
+
+        self.engine
+            .register_session_context(crate::mutation_engine::SessionContext {
+                genesis_hex: resolved.session_genesis.clone(),
+                session_id: resolved.session_id.clone(),
+                wireguard_pubkey: claims.wireguard_pubkey,
+            })
+            .await;
+
+        tracing::info!(
+            sender,
+            principal_id = %resolved.principal_id,
+            session_id = %resolved.session_id,
+            "registered current D-Bus sender identity from SID1"
         );
         Ok(resolved)
     }
@@ -661,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn pid_reuse_changes_the_bound_peer_identity() {
+    fn pid_reuse_invalidates_bound_process_credentials() {
         assert_ne!(peer(4242, 100), peer(4242, 101));
     }
 

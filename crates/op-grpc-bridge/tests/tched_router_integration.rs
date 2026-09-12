@@ -10,11 +10,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use op_grpc_bridge::mcp_policy::{
+    parse_audience_policy, parse_toolset_manifest, McpProjectionPolicy,
+};
 use op_grpc_bridge::proto::tched_router::{
     tched_router_service_client::TchedRouterServiceClient, GetSchemaRequest, WatchSchemaRequest,
 };
 use op_grpc_bridge::schema_loader::SchemaLoader;
-use op_grpc_bridge::server::build_axum_app;
+use op_grpc_bridge::server::build_axum_app_with_policy;
 use serde_json::json;
 use tokio::time::timeout;
 use tonic::metadata::MetadataValue;
@@ -27,6 +30,20 @@ fn write_schema(path: &PathBuf, value: &serde_json::Value) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, serde_json::to_string(value).unwrap()).unwrap();
+}
+
+fn test_mcp_policy() -> McpProjectionPolicy {
+    let audience = parse_audience_policy(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../deploy/config/mcp-audience-policy.json"
+    )))
+    .unwrap();
+    let toolsets = parse_toolset_manifest(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../deploy/config/mcp-toolsets.json"
+    )))
+    .unwrap();
+    McpProjectionPolicy { audience, toolsets }
 }
 
 async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
@@ -51,12 +68,16 @@ async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(op_grpc_bridge::MutationEngine::new(event_chain, ovsdb));
     let operation_server = op_grpc_bridge::grpc_server::OperationGrpcServer::new(mutation_engine);
-    let app = build_axum_app(loader.clone(), operation_server);
+    let app = build_axum_app_with_policy(loader.clone(), operation_server, test_mcp_policy());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
+        // Keep the fixture directory alive for the server and the caller's
+        // reload path. Dropping TempDir here would remove the schema before
+        // the watch test rewrites it.
+        let _dir = dir;
         axum::serve(listener, app).await.unwrap();
     });
 
@@ -122,7 +143,7 @@ async fn should_stream_reload_on_sighup() {
         "kind": "llm",
         "description": "reloaded schema"
     });
-    write_schema(&path, &updated);
+    write_schema(&path, &json!({ "tched_router": [updated] }));
     loader.load().unwrap();
     let _ = loader
         .reload_tx()

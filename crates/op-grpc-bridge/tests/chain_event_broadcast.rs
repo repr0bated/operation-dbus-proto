@@ -35,19 +35,21 @@ async fn dispatched_method_call_reaches_chain_subscribers() {
 
     engine
         .dispatch_method_call(
-            "cognitive_mcp",
-            "get_health",
-            "{\"probe\":1}",
-            Some("cognitive.read"),
+            // A real engine-local read: cognitive health requires a separately
+            // published runtime projection that this isolated fixture lacks.
+            "snowball",
+            "verify_chain",
+            "{}",
+            Some("snowball.read"),
             "test-actor",
         )
         .await
         .expect("dispatch records an event");
 
     let event = next_event(&mut rx).await;
-    assert_eq!(event.plugin_id, "cognitive_mcp");
+    assert_eq!(event.plugin_id, "snowball");
     assert_eq!(event.actor_id, "test-actor");
-    assert_eq!(event.capability_id.as_deref(), Some("cognitive.read"));
+    assert_eq!(event.capability_id.as_deref(), Some("snowball.read"));
     assert!(!event.event_hash.is_empty());
 
     // The broadcast event is the same one GetEvents serves, not a reconstruction.

@@ -294,7 +294,7 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(manifest.hot.as_slice(), HOT_TOOL_NAMES);
-        assert_eq!(manifest.generation, 6);
+        assert_eq!(manifest.generation, 7);
         for id in [
             "context_code",
             "context_knowledge",
@@ -334,5 +334,50 @@ mod tests {
         assert!(policy.is_hot_tool("plugin.cognitive_mcp.code_context"));
         assert!(policy.is_hot_tool("plugin.notebooklm.notebook_query"));
         assert!(!policy.is_hot_tool("plugin.mongodb_mcp.find"));
+    }
+
+    #[test]
+    fn identity_inspection_is_read_only_and_granted_only_to_the_human() {
+        let manifest = parse_toolset_manifest(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../deploy/config/mcp-toolsets.json"
+        )))
+        .unwrap();
+        let set = manifest
+            .sets
+            .iter()
+            .find(|set| set.id == "identity_read")
+            .unwrap();
+        assert_eq!(set.temperature, ToolTemperature::Warm);
+        assert!(!set.requires_provider_health);
+        assert_eq!(
+            set.tools,
+            [
+                "plugin.identity_sled.get_identity",
+                "plugin.identity_sled.get_session_history",
+            ]
+        );
+        let grants: serde_json::Value = serde_json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../deploy/security/capability-grants.json"
+        )))
+        .unwrap();
+        let human = &grants["0b7933b7-c8d5-1c01-814e-0c3066d19bbd"]["capabilities"];
+        let service = &grants["87b0decc-8464-5abf-05d8-b52ec88ff9f1"]["capabilities"];
+        assert!(human
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "identity_sled.read"));
+        assert!(!human
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "identity_sled.write"));
+        assert!(!service
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "identity_sled.read"));
     }
 }

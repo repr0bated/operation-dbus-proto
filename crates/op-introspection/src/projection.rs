@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_bus_type_display() {
-        assert_eq!(format!("{:?}", BusType::System), "system");
-        assert_eq!(format!("{:?}", BusType::Session), "session");
+        assert_eq!(format!("{}", BusType::System), "system");
+        assert_eq!(format!("{}", BusType::Session), "session");
     }
 }

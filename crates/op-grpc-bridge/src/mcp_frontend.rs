@@ -242,60 +242,13 @@ impl OracleHttpAuthenticator {
                 "sealed identity is not canonical base64url".into(),
             ));
         }
-        let claims = op_identity::sealed_id::SealedId::open(&wire)
-            .map_err(|error| McpAuthError(error.to_string()))?;
-        if claims.principal_kind != "wireguard-principal"
-            || !claims
-                .transport_scope
-                .split(',')
-                .any(|scope| scope.trim() == "mcp")
-        {
-            return Err(McpAuthError(
-                "sealed identity is not valid for the MCP transport".into(),
-            ));
-        }
-        if op_identity::session::derive_session_id(&claims.wireguard_pubkey) != claims.session_id
-            || op_identity::session::derive_principal_id(&claims.wireguard_pubkey)
-                != claims.principal_id
-        {
-            return Err(McpAuthError(
-                "sealed identity identifiers do not match its WireGuard identity".into(),
-            ));
-        }
-
-        let sled =
-            crate::identity_sled_dispatch::stored_session(self.engine.as_ref(), &claims.session_id)
-                .await
-                .ok_or_else(|| McpAuthError("sealed identity session was not found".into()))?;
-        let now = chrono::Utc::now().timestamp();
-        if !sled.is_anchored() || !sled.active {
-            return Err(McpAuthError(
-                "sealed identity session is not active and anchored".into(),
-            ));
-        }
-        if sled
-            .expires_at
-            .is_some_and(|expires_at| expires_at != 0 && expires_at <= now)
-        {
-            return Err(McpAuthError("sealed identity session has expired".into()));
-        }
-        let inline = format!("{}{}", op_identity::sealed_id::INLINE_PREFIX, encoded);
-        if sled.sealed_id.as_deref() != Some(inline.as_str())
-            || sled.wireguard_pubkey != claims.wireguard_pubkey
-            || sled.genesis.as_deref() != Some(claims.session_genesis.as_str())
-            || sled.trace_id != claims.trace_id
-            || sled.schema_version != claims.schema_version
-            || sled.expires_at.unwrap_or(0) != claims.expires_at
-            || sled.arrival_timestamp != claims.arrival_timestamp
-            || claims.issued_at != claims.arrival_timestamp
-            || sled.chain_head_at_arrival != claims.chain_head_at_arrival
-            || sled.catalog_hash_at_arrival != claims.catalog_hash_at_arrival
-            || sled.head_timestamp_at_arrival != claims.head_timestamp_at_arrival
-        {
-            return Err(McpAuthError(
-                "sealed identity does not match the authoritative sled".into(),
-            ));
-        }
+        let claims = crate::identity_sled_dispatch::authenticate_sid1_wire(
+            self.engine.as_ref(),
+            &wire,
+            "mcp",
+        )
+        .await
+        .map_err(McpAuthError)?;
 
         // A local sled can exist without MCP authority.  Exact principal-only
         // grants remain the final admission source; no sealed ID/genesis/hash is
@@ -716,7 +669,33 @@ impl McpBackend for MutationEngineMcpBackend {
         selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Value> {
         if !self.policy.is_hot_tool(name) && selection.is_none() {
-            anyhow::bail!("AccessDenied: select the toolset containing '{name}' before calling it");
+            let sets: Vec<_> = self
+                .policy
+                .toolsets
+                .sets
+                .iter()
+                .filter(|set| set.tools.iter().any(|tool| tool == name))
+                .collect();
+            if sets.is_empty() {
+                anyhow::bail!(
+                    "AccessDenied: tool '{name}' is not exposed by the configured MCP toolsets"
+                );
+            }
+            let descriptor = self.typed_tool_descriptor(name).await?;
+            let (capability, _) = descriptor_authority(&descriptor, Some(name))?;
+            Self::authorize(caller, capability)?;
+            let available: Vec<_> = sets
+                .iter()
+                .filter(|set| Self::provider_ready(set))
+                .map(|set| set.id.as_str())
+                .collect();
+            if available.is_empty() {
+                anyhow::bail!("provider_unavailable: no ready toolset exposes '{name}'");
+            }
+            anyhow::bail!(
+                "AccessDenied: select toolset {} before calling '{name}'",
+                available.join(" or ")
+            );
         }
         let descriptor = self
             .selected_toolset_tools(caller, selection)
@@ -807,6 +786,20 @@ struct McpFrontendState {
 pub fn build_mcp_router(engine: Arc<MutationEngine>, validator: Arc<AssertionValidator>) -> Router {
     let policy = McpProjectionPolicy::load_from_env()
         .expect("protected MCP audience/toolset policy must be valid before binding :8090");
+    build_mcp_router_with_policy(engine, validator, policy)
+}
+
+/// Build the raw HTTP projection with an already validated policy.
+///
+/// Production callers should use [`build_mcp_router`], which loads the
+/// root-protected policy files from the configured environment.  This explicit
+/// form is also used by isolated integration tests so they can provide a
+/// deterministic policy without reading host configuration.
+pub fn build_mcp_router_with_policy(
+    engine: Arc<MutationEngine>,
+    validator: Arc<AssertionValidator>,
+    policy: McpProjectionPolicy,
+) -> Router {
     let state = McpFrontendState {
         authenticator: Arc::new(OracleHttpAuthenticator {
             validator,

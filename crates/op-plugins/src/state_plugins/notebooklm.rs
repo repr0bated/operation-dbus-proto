@@ -216,7 +216,20 @@ pub struct ChatConfigureInput {
 pub struct ChatGetInput {
     #[serde(default)]
     pub notebook_id: Option<String>,
-    pub chat_id: String,
+    #[serde(default)]
+    pub chat_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChatExportInput {
+    #[serde(default)]
+    pub notebook_id: Option<String>,
+    #[serde(default)]
+    pub chat_id: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub output_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -393,6 +406,8 @@ pub struct ShareBatchInput {
     pub confirm: Option<bool>,
     #[serde(default)]
     pub recipients: Option<serde_json::Value>,
+    #[serde(default)]
+    pub emails: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -777,7 +792,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.chat.get@v1",
     );
-    insert_nlm::<NotebookIdInput>(
+    insert_nlm::<ChatExportInput>(
         &mut schema,
         "chat_export",
         SideEffect::Read,

@@ -76,10 +76,13 @@ pub fn nlm_argv(
     selected_notebook_id: Option<&str>,
 ) -> anyhow::Result<NlmInvocation> {
     let argv = match method {
-        "get_health" | "server_info" => vec_str(["login", "--check", "--json"]),
+        // The pinned CLI has no JSON login/check endpoint. A real catalog
+        // request is the authentication probe; its contents are not returned
+        // from health methods (see run_notebooklm_method).
+        "get_health" | "server_info" => vec_str(["notebook", "list", "--json"]),
         "setup_auth" => vec_str(["login"]),
         "reauth" => vec_str(["login", "--force"]),
-        "refresh_auth" => vec_str(["auth", "refresh", "--json"]),
+        "refresh_auth" => vec_str(["auth", "refresh"]),
         "save_auth_tokens" => save_auth_tokens_argv(args)?,
         "notebook_list" => vec_str(["notebook", "list", "--json"]),
         "notebook_create" => {
@@ -97,7 +100,7 @@ pub fn nlm_argv(
         "notebook_rename" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
             let title = require_str(args, &["title", "new_title"])?;
-            vec_owned(["notebook", "rename", &id, &title, "--json"])
+            vec_owned(["notebook", "rename", &id, &title])
         }
         "notebook_delete" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
@@ -105,10 +108,8 @@ pub fn nlm_argv(
             vec_owned(["notebook", "delete", &id, "--confirm", "--json"])
         }
         "notebook_query" => notebook_query_argv(args, selected_notebook_id, false)?,
-        "notebook_query_start" => notebook_query_argv(args, selected_notebook_id, true)?,
-        "notebook_query_status" => {
-            let query_id = require_str(args, &["query_id", "id"])?;
-            vec_owned(["notebook", "query-status", &query_id, "--json"])
+        "notebook_query_start" | "notebook_query_status" => {
+            bail!("{method} is MCP-only; the nlm CLI has no corresponding command")
         }
         "source_add" => source_add_argv(args, selected_notebook_id)?,
         "source_list_drive" => {
@@ -122,7 +123,7 @@ pub fn nlm_argv(
         "source_sync_drive" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
             confirm_required(args, method)?;
-            let mut argv = vec_owned(["source", "sync", &id, "--confirm", "--json"]);
+            let mut argv = vec_owned(["source", "sync", &id, "--confirm"]);
             if let Some(ids) = csv_or_list(args, "source_ids") {
                 argv.push("--source-ids".into());
                 argv.push(ids);
@@ -154,22 +155,36 @@ pub fn nlm_argv(
                 &title,
                 "--notebook",
                 &notebook,
-                "--json",
             ])
         }
         "chat_configure" => chat_configure_argv(args, selected_notebook_id)?,
         "chat_list" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
-            vec_owned(["chat", "list", &id, "--json"])
+            vec_owned(["chats", "list", &id, "--json"])
         }
         "chat_get" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
-            let chat_id = require_str(args, &["chat_id", "id"])?;
-            vec_owned(["chat", "get", &id, &chat_id, "--json"])
+            let mut argv = vec_owned(["chats", "get", &id]);
+            if let Some(chat_id) = arg_str(args, &["chat_id"]) {
+                argv.push(chat_id);
+            }
+            argv.push("--json".into());
+            argv
         }
         "chat_export" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
-            vec_owned(["chat", "export", &id, "--json"])
+            let mut argv = vec_owned(["chats", "export", &id]);
+            if let Some(chat_id) = arg_str(args, &["chat_id", "id"]) {
+                argv.push("--conversation-id".into());
+                argv.push(chat_id);
+            }
+            if let Some(format) = arg_str(args, &["format"]) {
+                argv.extend(["--format".into(), format]);
+            }
+            if let Some(path) = arg_str(args, &["output_path", "output"]) {
+                argv.extend(["--output".into(), path]);
+            }
+            argv
         }
         "studio_create" => studio_create_argv(args, selected_notebook_id)?,
         "studio_status" => studio_status_argv(args, selected_notebook_id)?,
@@ -177,14 +192,7 @@ pub fn nlm_argv(
             let notebook = require_notebook_id(args, selected_notebook_id)?;
             let artifact = require_str(args, &["artifact_id"])?;
             confirm_required(args, method)?;
-            vec_owned([
-                "studio",
-                "delete",
-                &notebook,
-                &artifact,
-                "--confirm",
-                "--json",
-            ])
+            vec_owned(["studio", "delete", &notebook, &artifact, "--confirm"])
         }
         "studio_revise" => {
             let artifact = require_str(args, &["artifact_id"])?;
@@ -197,7 +205,6 @@ pub fn nlm_argv(
                 "--slide",
                 &instruction,
                 "--confirm",
-                "--json",
             ])
         }
         "download_artifact" => download_artifact_argv(args, selected_notebook_id)?,
@@ -206,7 +213,7 @@ pub fn nlm_argv(
         "research_start" => research_start_argv(args, selected_notebook_id)?,
         "research_status" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
-            let mut argv = vec_owned(["research", "status", &id, "--json"]);
+            let mut argv = vec_owned(["research", "status", &id]);
             if let Some(task) = arg_str(args, &["task_id"]) {
                 argv.push("--task-id".into());
                 argv.push(task);
@@ -219,7 +226,7 @@ pub fn nlm_argv(
         "research_import" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
             let task = require_str(args, &["task_id"])?;
-            let mut argv = vec_owned(["research", "import", &id, &task, "--json"]);
+            let mut argv = vec_owned(["research", "import", &id, &task]);
             if let Some(indices) = csv_or_list(args, "indices") {
                 argv.push("--indices".into());
                 argv.push(indices);
@@ -243,7 +250,7 @@ pub fn nlm_argv(
         "notebook_share_invite" => {
             let id = require_notebook_id(args, selected_notebook_id)?;
             let email = require_str(args, &["email", "recipient"])?;
-            let mut argv = vec_owned(["share", "invite", &id, &email, "--json"]);
+            let mut argv = vec_owned(["share", "invite", &id, &email]);
             if let Some(role) = arg_str(args, &["role"]) {
                 argv.push("--role".into());
                 argv.push(role);
@@ -337,9 +344,32 @@ pub async fn run_nlm(invocation: &NlmInvocation) -> anyhow::Result<Value> {
     }
 
     let mut command = Command::new(&bin);
+    command.kill_on_drop(true);
     command.args(&invocation.argv);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+    command.stdin(Stdio::null());
+    // HOME alone does not change the OS identity. In particular, never launch
+    // Chrome as the root bridge or leave root-owned authentication profiles.
+    let user = nix::unistd::User::from_name("jeremy")?
+        .ok_or_else(|| anyhow!("NotebookLM runtime account is missing"))?;
+    let uid = nix::unistd::geteuid();
+    if uid.is_root() {
+        let gid = user.gid;
+        let user_id = user.uid;
+        // Only async-signal-safe libc operations in the forked child. Clear
+        // supplementary groups before dropping gid/uid.
+        unsafe {
+            command.pre_exec(move || {
+                nix::unistd::setgroups(&[])?;
+                nix::unistd::setgid(gid)?;
+                nix::unistd::setuid(user_id)?;
+                Ok(())
+            });
+        }
+    } else if uid != user.uid {
+        bail!("NotebookLM must run as its configured account");
+    }
     command.env("HOME", DEFAULT_HOME);
     command.env("USER", "jeremy");
     command.env("PATH", "/usr/local/bin:/usr/bin:/bin");
@@ -366,20 +396,57 @@ pub async fn run_nlm(invocation: &NlmInvocation) -> anyhow::Result<Value> {
         bail!("nlm exited {code}: {}", stderr.trim());
     }
 
-    parse_structured_stdout(&stdout).or_else(|error| {
-        if stdout.trim().is_empty() {
-            Err(error)
-        } else {
-            Ok(Value::Object({
-                let mut map = serde_json::Map::new();
-                map.insert("stdout".into(), Value::String(stdout));
-                if !stderr.is_empty() {
-                    map.insert("stderr".into(), Value::String(stderr));
-                }
-                map
-            }))
+    if invocation.argv.iter().any(|arg| arg == "--json") {
+        parse_structured_stdout(&stdout)
+    } else {
+        // A receipt reports process completion, not fabricated domain fields.
+        // Rich output is diagnostic text, never parsed into provider objects.
+        Ok(serde_json::json!({
+            "status": "command_completed",
+            "output_format": "text",
+            "message": redact_nlm_text(&stdout),
+            "diagnostic": stderr,
+        }))
+    }
+}
+
+pub async fn run_notebooklm_method(
+    method: &str,
+    invocation: &NlmInvocation,
+) -> anyhow::Result<Value> {
+    let health = matches!(method, "get_health" | "server_info");
+    let auth = matches!(
+        method,
+        "setup_auth" | "reauth" | "refresh_auth" | "save_auth_tokens"
+    );
+    if !health && !auth {
+        return run_nlm(invocation).await;
+    }
+    // Invalidate readiness before any attempt: cancellation, timeout, malformed
+    // output or failed login must not leave a previous authenticated marker.
+    apply_ready_marker(NOTEBOOKLM_AUTH_READY, AuthMarkerAction::Clear)?;
+    if auth {
+        run_nlm(invocation).await?;
+    }
+    let probe = nlm_argv("get_health", &serde_json::json!({}), None)?;
+    match run_nlm(&probe).await {
+        Ok(Value::Array(notebooks)) => Ok(serde_json::json!({
+            "provider": "jacob-bd/notebooklm-mcp-cli",
+            "auth_status": "configured",
+            "authenticated": true,
+            "notebook_count": notebooks.len(),
+        })),
+        Ok(_) => bail!("NotebookLM authentication probe returned an unexpected catalog shape"),
+        Err(error) if health => Ok(serde_json::json!({
+            "provider": "jacob-bd/notebooklm-mcp-cli",
+            "auth_status": "unverified",
+            "authenticated": false,
+            "diagnostic": redact_nlm_text(&error.to_string()),
+        })),
+        Err(error) => {
+            Err(error.context("NotebookLM login completed but Google access was not verified"))
         }
-    })
+    }
 }
 
 fn parse_structured_stdout(stdout: &str) -> anyhow::Result<Value> {
@@ -387,13 +454,8 @@ fn parse_structured_stdout(stdout: &str) -> anyhow::Result<Value> {
     if trimmed.is_empty() {
         bail!("nlm produced no structured output (need --json or --ai)");
     }
-    serde_json::from_str(trimmed).or_else(|_| {
-        trimmed
-            .lines()
-            .rev()
-            .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-            .ok_or_else(|| anyhow!("nlm produced no JSON stdout; refusing to scrape Rich tables"))
-    })
+    serde_json::from_str(trimmed)
+        .map_err(|_| anyhow!("nlm produced invalid JSON stdout; refusing to scrape Rich tables"))
 }
 
 fn timeout_for(method: &str, args: &Value) -> u64 {
@@ -494,7 +556,7 @@ fn source_delete_argv(args: &Value) -> anyhow::Result<Vec<String>> {
 
 fn chat_configure_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>> {
     let id = require_notebook_id(args, selected)?;
-    let mut argv = vec_owned(["chat", "configure", &id, "--json"]);
+    let mut argv = vec_owned(["chat", "configure", &id]);
     if let Some(goal) = arg_str(args, &["goal"]) {
         argv.push("--goal".into());
         argv.push(goal);
@@ -576,7 +638,7 @@ fn studio_status_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Ve
         if action == "rename" {
             let artifact = require_str(args, &["artifact_id"])?;
             let title = require_str(args, &["new_title", "title"])?;
-            return Ok(vec_owned(["studio", "rename", &artifact, &title, "--json"]));
+            return Ok(vec_owned(["studio", "rename", &artifact, &title]));
         }
     }
     Ok(argv)
@@ -620,7 +682,15 @@ fn export_artifact_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<
     let id = require_notebook_id(args, selected)?;
     let artifact = require_str(args, &["artifact_id"])?;
     let export_type = require_str(args, &["export_type", "type"])?;
-    let mut argv = vec_owned(["export", &export_type, &id, &artifact, "--json"]);
+    let mut argv = vec_owned([
+        "export",
+        "artifact",
+        &id,
+        &artifact,
+        "--type",
+        &export_type,
+        "--json",
+    ]);
     if let Some(title) = arg_str(args, &["title"]) {
         argv.push("--title".into());
         argv.push(title);
@@ -630,7 +700,7 @@ fn export_artifact_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<
 
 fn research_start_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>> {
     let query = require_str(args, &["query", "question"])?;
-    let mut argv = vec_owned(["research", "start", &query, "--json"]);
+    let mut argv = vec_owned(["research", "start", &query]);
     if let Some(id) = arg_str(args, &["notebook_id", "id"]).or_else(|| selected.map(str::to_string))
     {
         argv.push("--notebook-id".into());
@@ -672,6 +742,10 @@ fn note_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>
             argv.push(require_str(args, &["note_id"])?);
             argv.push("--content".into());
             argv.push(require_str(args, &["content"])?);
+            if let Some(title) = arg_str(args, &["title"]) {
+                argv.push("--title".into());
+                argv.push(title);
+            }
         }
         "delete" => {
             confirm_required(args, "note")?;
@@ -680,7 +754,9 @@ fn note_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>
         }
         other => bail!("unsupported note action '{other}'"),
     }
-    argv.push("--json".into());
+    if action == "list" {
+        argv.push("--json".into());
+    }
     Ok(argv)
 }
 
@@ -688,7 +764,9 @@ fn label_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String
     let action = require_str(args, &["action"])?;
     let mut argv = vec_str(["label", &action]);
     match action.as_str() {
-        "list" => {}
+        "list" => {
+            argv.push(require_notebook_id(args, selected)?);
+        }
         "auto" | "reorganize" => {
             argv.push(require_notebook_id(args, selected)?);
             if arg_bool(args, "confirm") {
@@ -703,19 +781,25 @@ fn label_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String
             argv.push(require_str(args, &["name", "title"])?);
         }
         "rename" => {
+            argv.push(require_notebook_id(args, selected)?);
             argv.push(require_str(args, &["label_id", "id"])?);
             argv.push(require_str(args, &["new_name", "name", "title"])?);
         }
-        "set_emoji" => {
+        "set_emoji" | "emoji" => {
+            argv[1] = "emoji".into();
+            argv.push(require_notebook_id(args, selected)?);
             argv.push(require_str(args, &["label_id", "id"])?);
             argv.push(require_str(args, &["emoji"])?);
         }
-        "move_source" => {
+        "move_source" | "move" => {
+            argv[1] = "move".into();
+            argv.push(require_notebook_id(args, selected)?);
             argv.push(require_str(args, &["source_id"])?);
             argv.push(require_str(args, &["label_id", "id"])?);
         }
         "delete" => {
             confirm_required(args, "label")?;
+            argv.push(require_notebook_id(args, selected)?);
             argv.push(require_str(args, &["label_id", "id"])?);
             argv.push("--confirm".into());
         }
@@ -727,24 +811,34 @@ fn label_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String
 
 fn share_public_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>> {
     let id = require_notebook_id(args, selected)?;
-    let mut argv = vec_owned(["share", "public", &id, "--json"]);
-    if arg_bool(args, "off")
+    let argv = if arg_bool(args, "off")
         || arg_bool(args, "disable")
         || arg_str(args, &["action"]).as_deref() == Some("disable")
     {
-        argv.push("--off".into());
-    }
+        vec_owned(["share", "private", &id])
+    } else {
+        vec_owned(["share", "public", &id])
+    };
     Ok(argv)
 }
 
 fn share_batch_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>> {
     confirm_required(args, "notebook_share_batch")?;
     let id = require_notebook_id(args, selected)?;
-    let mut argv = vec_owned(["share", "batch", &id, "--confirm", "--json"]);
-    if let Some(recipients) = args.get("recipients") {
-        argv.push("--recipients".into());
-        argv.push(serde_json::to_string(recipients)?);
-    }
+    let emails = arg_str(args, &["emails"])
+        .or_else(|| {
+            args.get("recipients")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+        })
+        .ok_or_else(|| anyhow!("emails/recipients is required"))?;
+    let argv = vec_owned(["share", "batch", &id, &emails]);
     Ok(argv)
 }
 
@@ -774,13 +868,12 @@ fn batch_argv(args: &Value) -> anyhow::Result<Vec<String>> {
     if arg_bool(args, "confirm") {
         argv.push("--confirm".into());
     }
-    argv.push("--json".into());
     Ok(argv)
 }
 
 fn cross_query_argv(args: &Value) -> anyhow::Result<Vec<String>> {
     let query = require_str(args, &["query", "question"])?;
-    let mut argv = vec_owned(["cross", "query", &query, "--json"]);
+    let mut argv = vec_owned(["cross", "query", &query]);
     if let Some(notebooks) = arg_str(args, &["notebook_names", "notebooks"]) {
         argv.push("--notebooks".into());
         argv.push(notebooks);
@@ -798,16 +891,13 @@ fn cross_query_argv(args: &Value) -> anyhow::Result<Vec<String>> {
 fn pipeline_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>> {
     let action = require_str(args, &["action"])?;
     match action.as_str() {
-        "list" => Ok(vec_str(["pipeline", "list", "--json"])),
+        "list" => Ok(vec_str(["pipeline", "list"])),
         "run" => {
             let name = require_str(args, &["pipeline_name", "name"])?;
-            let mut argv = vec_owned(["pipeline", "run", &name, "--json"]);
-            if let Some(id) =
-                arg_str(args, &["notebook_id"]).or_else(|| selected.map(str::to_string))
-            {
-                argv.push("--notebook".into());
-                argv.push(id);
-            }
+            let id = arg_str(args, &["notebook_id"])
+                .or_else(|| selected.map(str::to_string))
+                .ok_or_else(|| anyhow!("notebook_id is required for pipeline run"))?;
+            let mut argv = vec_owned(["pipeline", "run", &name, "--notebook", &id]);
             if let Some(url) = arg_str(args, &["input_url"]) {
                 argv.push("--input-url".into());
                 argv.push(url);
@@ -817,9 +907,7 @@ fn pipeline_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<Str
         "create" => {
             let name = require_str(args, &["pipeline_name", "name"])?;
             let file = require_str(args, &["file", "file_path"])?;
-            Ok(vec_owned([
-                "pipeline", "create", &name, "--file", &file, "--json",
-            ]))
+            Ok(vec_owned(["pipeline", "create", &name, "--file", &file]))
         }
         other => bail!("unsupported pipeline action '{other}'"),
     }
@@ -828,15 +916,15 @@ fn pipeline_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<Str
 fn tag_argv(args: &Value, selected: Option<&str>) -> anyhow::Result<Vec<String>> {
     let action = require_str(args, &["action"])?;
     match action.as_str() {
-        "list" => Ok(vec_str(["tag", "list", "--json"])),
+        "list" => Ok(vec_str(["tag", "list"])),
         "select" => {
             let query = require_str(args, &["query"])?;
-            Ok(vec_owned(["tag", "select", &query, "--json"]))
+            Ok(vec_owned(["tag", "select", &query]))
         }
         "add" | "remove" => {
             let id = require_notebook_id(args, selected)?;
             let tags = require_str(args, &["tags"])?;
-            let mut argv = vec_owned(["tag", &action, &id, "--tags", &tags, "--json"]);
+            let mut argv = vec_owned(["tag", &action, &id, "--tags", &tags]);
             if let Some(title) = arg_str(args, &["title"]) {
                 argv.push("--title".into());
                 argv.push(title);
@@ -852,7 +940,7 @@ fn save_auth_tokens_argv(args: &Value) -> anyhow::Result<Vec<String>> {
         bail!("save_auth_tokens refuses inline cookies; pass file_path and never set NOTEBOOKLM_COOKIES");
     }
     let path = require_str(args, &["file_path", "path"])?;
-    Ok(vec_owned(["login", "--from-file", &path, "--json"]))
+    Ok(vec_owned(["login", "--manual", "--file", &path]))
 }
 
 fn require_notebook_id(args: &Value, selected: Option<&str>) -> anyhow::Result<String> {
@@ -1000,11 +1088,6 @@ mod tests {
                 json!({"notebook_id": "nb-1", "question": "What?"}),
             ),
             (
-                "notebook_query_start",
-                json!({"notebook_id": "nb-1", "question": "What?"}),
-            ),
-            ("notebook_query_status", json!({"query_id": "q1"})),
-            (
                 "source_add",
                 json!({"notebook_id": "nb-1", "source_type": "url", "url": "https://ex"}),
             ),
@@ -1029,7 +1112,10 @@ mod tests {
             ),
             ("chat_list", with_id.clone()),
             ("chat_get", json!({"notebook_id": "nb-1", "chat_id": "c1"})),
-            ("chat_export", with_id.clone()),
+            (
+                "chat_export",
+                json!({"notebook_id": "nb-1", "chat_id": "c1"}),
+            ),
             (
                 "studio_create",
                 json!({"notebook_id": "nb-1", "artifact_type": "audio", "confirm": true}),
@@ -1065,7 +1151,7 @@ mod tests {
                 json!({"notebook_id": "nb-1", "task_id": "t1"}),
             ),
             ("note", json!({"action": "list", "notebook_id": "nb-1"})),
-            ("label", json!({"action": "list"})),
+            ("label", json!({"action": "list", "notebook_id": "nb-1"})),
             ("notebook_share_status", with_id.clone()),
             ("notebook_share_public", with_id.clone()),
             (
@@ -1074,7 +1160,7 @@ mod tests {
             ),
             (
                 "notebook_share_batch",
-                json!({"notebook_id": "nb-1", "confirm": true, "recipients": []}),
+                json!({"notebook_id": "nb-1", "confirm": true, "emails": "a@b.c"}),
             ),
             (
                 "batch",
@@ -1111,6 +1197,14 @@ mod tests {
     }
 
     #[test]
+    fn mcp_only_query_lifecycle_never_maps_to_cli() {
+        for method in ["notebook_query_start", "notebook_query_status"] {
+            let err = notebooklm_dispatch(method, &json!({}), Some("nb-1")).unwrap_err();
+            assert!(err.to_string().contains("MCP-only"), "{method}: {err}");
+        }
+    }
+
+    #[test]
     fn selected_notebook_fills_omitted_id() {
         let argv = argv(
             "notebook_get",
@@ -1129,14 +1223,14 @@ mod tests {
     }
 
     #[test]
-    fn get_health_and_server_info_share_login_check() {
+    fn get_health_and_server_info_probe_real_catalog() {
         assert_eq!(
             argv("get_health", json!({}), None),
             argv("server_info", json!({}), None)
         );
         assert_eq!(
             argv("get_health", json!({}), None),
-            vec!["login", "--check", "--json"]
+            vec!["notebook", "list", "--json"]
         );
     }
 

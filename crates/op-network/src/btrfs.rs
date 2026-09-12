@@ -1,9 +1,7 @@
 //! Native btrfs device operations via ioctl — no CLI subprocesses.
 //!
-//! The identity-sled persistence model attaches a per-container writable
-//! block device to a mounted (seed-image) btrfs filesystem with
-//! `BTRFS_IOC_ADD_DEV` — the same ioctl `btrfs device add` issues — so no
-//! overlay layers and no subvolume snapshots are involved.
+//! Identity persistence uses a dedicated, already-mounted filesystem. Binding
+//! it to a sled must never add/wipe a device into a shared storage pool.
 
 use std::ffi::CString;
 use std::fs::File;
@@ -61,4 +59,85 @@ pub fn device_add(device: &Path, mount_point: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[repr(C)]
+struct FsInfo {
+    max_id: u64,
+    num_devices: u64,
+    fsid: [u8; 16],
+    nodesize: u32,
+    sectorsize: u32,
+    clone_alignment: u32,
+    csum_type: u16,
+    csum_size: u16,
+    flags: u64,
+    generation: u64,
+    metadata_uuid: [u8; 16],
+    reserved: [u8; 944],
+}
+
+#[repr(C)]
+struct DevInfo {
+    devid: u64,
+    uuid: [u8; 16],
+    bytes_used: u64,
+    total_bytes: u64,
+    fsid: [u8; 16],
+    unused: [u64; 377],
+    path: [u8; 1024],
+}
+
+const _: () = assert!(std::mem::size_of::<FsInfo>() == 1024);
+const _: () = assert!(std::mem::size_of::<DevInfo>() == 4096);
+
+/// Verify a dedicated mount by kernel FSID and backing device. Read-only ioctls;
+/// no format, pool membership change, mount, or filesystem mutation occurs.
+pub fn verify_dedicated_mount(
+    device: &Path,
+    mount_point: &Path,
+    expected_uuid: &str,
+) -> Result<()> {
+    let expected = uuid::Uuid::parse_str(expected_uuid).context("invalid registered btrfs UUID")?;
+    let dir = File::open(mount_point).context("open registered btrfs mount")?;
+    // SAFETY: these kernel ABI structs contain only integer fields/arrays.
+    let mut fs: FsInfo = unsafe { std::mem::zeroed() };
+    // _IOR(0x94, 31, struct btrfs_ioctl_fs_info_args), linux/btrfs.h.
+    if unsafe { libc::ioctl(dir.as_raw_fd(), 0x8400_941f as libc::c_ulong, &mut fs) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("query btrfs filesystem identity");
+    }
+    if fs.fsid != *expected.as_bytes() || fs.num_devices != 1 {
+        bail!("mount is not the registered dedicated single-device btrfs filesystem");
+    }
+    // SAFETY: same integer-only ABI guarantee; max_id is kernel-provided.
+    let mut dev: DevInfo = unsafe { std::mem::zeroed() };
+    dev.devid = fs.max_id;
+    // _IOWR(0x94, 30, struct btrfs_ioctl_dev_info_args), linux/btrfs.h.
+    if unsafe { libc::ioctl(dir.as_raw_fd(), 0xd000_941e as libc::c_ulong, &mut dev) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("query btrfs backing device");
+    }
+    let end = dev
+        .path
+        .iter()
+        .position(|byte| *byte == 0)
+        .context("unterminated kernel device path")?;
+    let actual = std::str::from_utf8(&dev.path[..end]).context("invalid kernel device path")?;
+    if std::fs::canonicalize(device)? != std::fs::canonicalize(actual)? {
+        bail!("mounted btrfs backing device differs from the registered device");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dedicated_mount_verification_rejects_invalid_uuid_before_io() {
+        assert!(
+            verify_dedicated_mount(Path::new("/missing"), Path::new("/missing"), "invalid")
+                .unwrap_err()
+                .to_string()
+                .contains("UUID")
+        );
+    }
 }

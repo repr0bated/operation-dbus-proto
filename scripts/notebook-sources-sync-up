@@ -19,6 +19,11 @@ if [ -r "${NOTEBOOKLM_SOURCES_DIR}/notebook.env" ]; then
     . "${NOTEBOOKLM_SOURCES_DIR}/notebook.env"
     set +a
 fi
+# Per-model capture reads native logs and raw conversation DB rows directly.
+# Do not run the old formatted-export/archive pipeline in this mode.
+if [ "${OPDBUS_NOTEBOOK_SYNC_MODE:-}" = "per-model" ]; then
+    exec "$OP_DBUS_ROOT/scripts/notebook-sync" ingest
+fi
 if [ -r /etc/op-dbus/environment ]; then
     # only pull notebook-related keys (avoid clobbering with bad lines)
     OP_NOTEBOOK_ID=$(grep -E '^OP_NOTEBOOK_ID=' /etc/op-dbus/environment 2>/dev/null | tail -1 | cut -d= -f2- || true)

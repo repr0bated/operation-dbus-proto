@@ -450,6 +450,13 @@ impl OperationGrpcServer {
         self
     }
 
+    /// Supply an isolated sealed-blob catalog for embedded servers and tests.
+    /// The default constructor continues to use the host SHM catalog.
+    pub fn with_reflection_catalog(mut self, catalog: ActiveReflectionCatalog) -> Self {
+        self.active_reflection = catalog;
+        self
+    }
+
     /// Hydrate in-memory reflection from the sealed SHM blob catalog.
     ///
     /// The blob catalog IS the plugin registry: a restart must advertise the
@@ -486,8 +493,8 @@ impl OperationGrpcServer {
 
     /// Freeze all plugin method descriptors from the configured schema provider.
     ///
-    /// tonic-reflection is immutable once mounted. This must run before
-    /// `build_operation_routes` creates the reflection service.
+    /// Populate schema/authority metadata before building routes. This does
+    /// not mount handlers; the generated `add_routes` does that separately.
     pub async fn freeze_plugin_method_reflection(&self) {
         for plugin in self.plugin_provider.list_plugins().await {
             let Some((schema_json, _, _)) = self.plugin_provider.get_schema(&plugin.id).await
@@ -538,11 +545,11 @@ impl OperationGrpcServer {
         (snapshot, rx)
     }
 
-    /// Register a plugin's methods as per-method gRPC services.
+    /// Register a plugin's frozen per-method schema and authority descriptors.
     ///
-    /// This is called at D-Bus object creation time. Each method gets its own
-    /// gRPC service generated and frozen. The reflection service is updated
-    /// to include these new method services.
+    /// This is called at D-Bus object creation time. Descriptor registration
+    /// does not create an RPC route; service discovery advertises only the
+    /// generated handlers that are actually mounted for active blobs.
     pub async fn register_plugin_methods(
         &self,
         plugin_id: String,

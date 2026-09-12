@@ -130,7 +130,8 @@ pub enum SessionGenesisVerifyError {
     SledUnreachable,
     /// The selected session exists but has not minted an anchored genesis.
     InvalidSled,
-    /// The selected session was explicitly torn down or revoked.
+    /// The selected session was torn down or revoked. Parked (Incus stopped)
+    /// is not this error — `active` is power policy, not identity.
     Inactive,
     /// The selected session term has elapsed.
     Expired,
@@ -167,9 +168,6 @@ pub fn resolve_verified_session(
     }
     if !session.is_anchored() {
         return Err(SessionGenesisVerifyError::InvalidSled);
-    }
-    if !session.active {
-        return Err(SessionGenesisVerifyError::Inactive);
     }
     if !session.is_current() {
         return Err(SessionGenesisVerifyError::Expired);

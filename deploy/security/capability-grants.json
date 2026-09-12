@@ -3,6 +3,7 @@
     "display_alias": "jeremy-wg-f036",
     "capabilities": [
       "cap.identity.dbus.bind@v1",
+      "identity_sled.read",
       "cap.service.lifecycle.init@v1",
       "cap.service.lifecycle.run@v1",
       "cap.service.lifecycle.shutdown@v1",

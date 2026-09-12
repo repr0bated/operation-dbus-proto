@@ -39,6 +39,7 @@ pub mod oracle_assertion;
 pub mod per_plugin_reflection;
 pub mod plugin_grpc_gen;
 pub mod plugin_object_blob;
+pub mod project_dispatch;
 pub mod proto_gen;
 pub mod schema_loader;
 pub mod schema_router;
@@ -244,6 +245,21 @@ mod interceptor_crate_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn assertion_without_connect_info_rejects_missing_connect_info() {
         crate::interceptor::tests::assertion_without_connect_info_rejects_missing_connect_info_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sid1_parked_inserts_human_principal_identity() {
+        crate::interceptor::tests::sid1_parked_inserts_human_principal_identity_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sid1_and_oia1_together_rejected() {
+        crate::interceptor::tests::sid1_and_oia1_together_rejected_impl().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sid1_requires_current_principal_registration() {
+        crate::interceptor::tests::sid1_requires_current_principal_registration_impl().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

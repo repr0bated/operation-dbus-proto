@@ -511,6 +511,7 @@ mod tests {
     fn derives_ghostbridge_headers_only_from_an_anchored_session() {
         let identity = SessionIdentity {
             session_id: "session-a".into(),
+            principal_kind: Some("human".into()),
             wireguard_pubkey: "pubkey".into(),
             mutation_index: 1,
             genesis: Some("ab".repeat(32)),

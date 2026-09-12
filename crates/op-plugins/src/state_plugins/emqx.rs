@@ -9,7 +9,7 @@ use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
+use op_state_store::{CapabilityDecl, PluginSchema, SideEffect, SignalDecl};
 use reqwest::Method;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,21 @@ pub const REGISTERED_HOOKS: &[&str] = &[
     "message.acked",
     "message.dropped",
 ];
+
+/// Metadata-only observation of the authenticated broker's ExHook callback.
+/// References are digests, not MQTT identities or reusable credentials. Broker
+/// message bodies must never enter the globally visible accountability stream.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerEvent {
+    pub event_type: String,
+    pub client_ref: String,
+    pub topic_ref: Option<String>,
+    pub detail_ref: Option<String>,
+}
+
+pub const BROKER_EVENT_SIGNAL: &str = "broker_event";
+pub const BROKER_EVENT_SUBID: &str = "evt.network.emqx.broker-event@v1";
 
 fn typed_input<T: serde::de::DeserializeOwned>(args: &JsonValue) -> Result<T> {
     serde_json::from_value(if args.is_null() {
@@ -383,6 +398,8 @@ async fn runit_lifecycle(action: &'static str) -> Result<String> {
 
 fn api_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(5))
         .build()
@@ -415,7 +432,7 @@ async fn emqx_api(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = request
+    let mut response = request
         .send()
         .await
         .with_context(|| format!("EMQX API request to {path} failed"))?;
@@ -423,12 +440,22 @@ async fn emqx_api(
     if !status.is_success() {
         anyhow::bail!("EMQX API request to {path} returned HTTP {status}");
     }
-    let bytes = response
-        .bytes()
-        .await
-        .with_context(|| format!("EMQX API response from {path} could not be read"))?;
-    if bytes.len() > API_RESPONSE_LIMIT {
+    if response
+        .content_length()
+        .is_some_and(|length| length > API_RESPONSE_LIMIT as u64)
+    {
         anyhow::bail!("EMQX API response from {path} exceeded the size limit");
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .with_context(|| format!("EMQX API response from {path} could not be read"))?
+    {
+        if chunk.len() > API_RESPONSE_LIMIT.saturating_sub(bytes.len()) {
+            anyhow::bail!("EMQX API response from {path} exceeded the size limit");
+        }
+        bytes.extend_from_slice(&chunk);
     }
     if bytes.is_empty() {
         return Ok(serde_json::json!({}));
@@ -437,12 +464,12 @@ async fn emqx_api(
         .with_context(|| format!("EMQX API response from {path} was not valid JSON"))
 }
 
-fn response_array(value: &JsonValue) -> &[JsonValue] {
+fn response_array(value: &JsonValue) -> Result<&[JsonValue]> {
     value
         .as_array()
         .or_else(|| value.get("data").and_then(JsonValue::as_array))
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .ok_or_else(|| anyhow::anyhow!("EMQX API returned a non-array inventory"))
 }
 
 fn string_field(value: &JsonValue, names: &[&str]) -> Option<String> {
@@ -501,7 +528,7 @@ async fn query_listeners() -> Result<ListListenersOutput> {
     }
 
     let payload = emqx_api(Method::GET, "/listeners", None).await?;
-    let listeners = response_array(&payload)
+    let listeners = response_array(&payload)?
         .iter()
         .map(|item| {
             let id = string_field(item, &["id", "name"]).unwrap_or_else(|| "unknown".into());
@@ -539,20 +566,43 @@ async fn query_listeners() -> Result<ListListenersOutput> {
 }
 
 fn exhook_from_json(item: &JsonValue) -> EmqxExhookServer {
-    let url = string_field(item, &["url"]).unwrap_or_else(|| EXHOOK_TARGET.to_string());
+    let url = string_field(item, &["url"]).unwrap_or_default();
+    let ssl = &item["ssl"];
+    let transport_authenticated = url == EXHOOK_TARGET
+        && ssl["enable"].as_bool() == Some(true)
+        && ssl["verify"].as_str() == Some("verify_peer")
+        && ssl["cacertfile"].as_str() == Some("/etc/op-dbus/tls/tonic-svc0-ca.crt")
+        && ssl["certfile"].as_str() == Some("/etc/op-dbus/tls/emqx-exhook-client.crt")
+        && ssl["keyfile"].as_str() == Some("/etc/op-dbus/tls/emqx-exhook-client.key");
+    let status = item["node_status"]
+        .as_array()
+        .filter(|nodes| !nodes.is_empty())
+        .map(|nodes| {
+            if nodes
+                .iter()
+                .all(|node| node["status"].as_str() == Some("connected"))
+            {
+                "connected"
+            } else {
+                "disconnected"
+            }
+        })
+        .unwrap_or("unknown");
     EmqxExhookServer {
         name: string_field(item, &["name"]).unwrap_or_default(),
         is_local: local_endpoint(&url),
-        transport_authenticated: url.starts_with("https://"),
+        transport_authenticated,
         url,
         enable: item
             .get("enable")
             .and_then(JsonValue::as_bool)
             .unwrap_or(false),
-        status: string_field(item, &["status"]).unwrap_or_else(|| "unknown".into()),
-        hooks: REGISTERED_HOOKS
-            .iter()
-            .map(|hook| (*hook).to_string())
+        status: status.into(),
+        hooks: item["hooks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|hook| hook["name"].as_str().map(str::to_string))
             .collect(),
     }
 }
@@ -561,23 +611,12 @@ async fn query_hooks() -> Result<ListHooksOutput> {
     let status = runit_status().await?;
     if !status.running() {
         return Ok(ListHooksOutput {
-            exhook_servers: vec![EmqxExhookServer {
-                name: EXHOOK_SERVER_NAME.to_string(),
-                url: EXHOOK_TARGET.to_string(),
-                enable: true,
-                status: "broker_stopped".to_string(),
-                hooks: REGISTERED_HOOKS
-                    .iter()
-                    .map(|hook| (*hook).to_string())
-                    .collect(),
-                is_local: true,
-                transport_authenticated: true,
-            }],
-            total_hooks: REGISTERED_HOOKS.len(),
+            exhook_servers: vec![],
+            total_hooks: 0,
         });
     }
     let payload = emqx_api(Method::GET, "/exhooks", None).await?;
-    let servers = response_array(&payload)
+    let servers = response_array(&payload)?
         .iter()
         .map(exhook_from_json)
         .collect::<Vec<_>>();
@@ -664,18 +703,31 @@ async fn query_status() -> Result<GetStatusOutput> {
             connections_current: 0,
         });
     }
-    let api = emqx_api(Method::GET, "/status", None).await?;
+    // /status defaults to plain text in pinned EMQX 6.2.2. The health JSON
+    // omits the version, which must come from the actual node inventory.
+    let api = emqx_api(Method::GET, "/status?format=json", None).await?;
+    let nodes = emqx_api(Method::GET, "/nodes", None).await?;
+    let node_name = api["node_name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("EMQX health response has no node_name"))?;
+    let node = response_array(&nodes)?
+        .iter()
+        .find(|node| node["node"].as_str() == Some(node_name))
+        .ok_or_else(|| anyhow::anyhow!("EMQX health node is absent from node inventory"))?;
+    let version = node["version"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("EMQX node inventory has no version"))?;
+    let app_status = api["app_status"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("EMQX health response has no app_status"))?;
     let listeners = query_listeners().await?;
     Ok(GetStatusOutput {
-        running: true,
+        running: app_status == "running" && node["node_status"].as_str() == Some("running"),
         pid: runit.main_pid,
         uptime_seconds: runit.uptime_seconds(),
-        version: string_field(&api, &["version", "rel_vsn"])
-            .unwrap_or_else(|| EMQX_RELEASE_VERSION.to_string()),
-        node_name: string_field(&api, &["node_name", "node"])
-            .unwrap_or_else(|| "emqx@127.0.0.1".to_string()),
-        cluster_status: string_field(&api, &["cluster_status", "status"])
-            .unwrap_or_else(|| "running".to_string()),
+        version: version.into(),
+        node_name: node_name.into(),
+        cluster_status: app_status.into(),
         data_dir: EMQX_DATA_DIR.to_string(),
         config_dir: EMQX_CONFIG_DIR.to_string(),
         listeners_active: listeners
@@ -898,6 +950,15 @@ pub(crate) fn emqx_schema() -> PluginSchema {
     super::schemars_adapter::apply_state_defaults(&mut schema, &declared);
     schema.example = Some(declared);
 
+    schema.signals.push(SignalDecl {
+        name: BROKER_EVENT_SIGNAL.to_string(),
+        payload: Some(
+            simd_json::serde::to_owned_value(schemars::schema_for!(BrokerEvent))
+                .expect("broker event schema serializes"),
+        ),
+        subid: BROKER_EVENT_SUBID.to_string(),
+    });
+
     add_method::<GetStatusInput, GetStatusOutput>(
         &mut schema,
         "get_status",
@@ -981,6 +1042,7 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn schema_is_standalone_deterministic_and_complete() {
@@ -1068,5 +1130,140 @@ mod tests {
         assert!(!encoded.contains("credential"));
         assert!(!encoded.contains(API_KEY_FILE));
         assert!(!encoded.contains(API_SECRET_FILE));
+    }
+
+    #[test]
+    fn broker_event_signal_has_typed_metadata_payload_and_event_subid() {
+        let schema = emqx_schema();
+        let signal = schema
+            .signals
+            .iter()
+            .find(|signal| signal.name == BROKER_EVENT_SIGNAL)
+            .expect("broker event signal");
+        assert_eq!(signal.subid, BROKER_EVENT_SUBID);
+        let payload = signal.payload.as_ref().expect("typed payload");
+        let payload_json = serde_json::to_value(payload).expect("payload JSON");
+        let properties = payload_json.get("properties").expect("payload properties");
+        for field in ["event_type", "client_ref", "topic_ref", "detail_ref"] {
+            assert!(properties.get(field).is_some(), "missing {field}");
+        }
+        assert!(payload_json.get("required").is_some());
+        assert!(!serde_json::to_string(&payload_json)
+            .unwrap()
+            .contains("payload"));
+    }
+
+    #[test]
+    fn method_contracts_preserve_reads_writes_subids_and_idempotence() {
+        let schema = emqx_schema();
+        let expected = [
+            (
+                "get_status",
+                SideEffect::Read,
+                true,
+                "obs.network.emqx.status.get@v2",
+            ),
+            (
+                "get_mcp_status",
+                SideEffect::Read,
+                true,
+                "obs.network.emqx.mcp.status.get@v1",
+            ),
+            (
+                "list_listeners",
+                SideEffect::Read,
+                true,
+                "obs.network.emqx.listeners.list@v1",
+            ),
+            (
+                "list_hooks",
+                SideEffect::Read,
+                true,
+                "obs.network.emqx.hooks.list@v1",
+            ),
+            (
+                "get_hook_status",
+                SideEffect::Read,
+                true,
+                "obs.network.emqx.hooks.status.get@v1",
+            ),
+            (
+                "configure_hooks",
+                SideEffect::Mutation,
+                true,
+                "mut.network.emqx.hooks.configure@v1",
+            ),
+            (
+                "start",
+                SideEffect::Mutation,
+                true,
+                "mut.network.emqx.lifecycle.start@v1",
+            ),
+            (
+                "stop",
+                SideEffect::Mutation,
+                true,
+                "mut.network.emqx.lifecycle.stop@v1",
+            ),
+            (
+                "restart",
+                SideEffect::Mutation,
+                false,
+                "mut.network.emqx.lifecycle.restart@v1",
+            ),
+        ];
+        for (name, effect, idempotent, subid) in expected {
+            let method = schema.methods.get(name).expect(name);
+            assert_eq!(method.side_effect, effect, "{name} side effect");
+            assert_eq!(method.idempotent, idempotent, "{name} idempotence");
+            assert_eq!(method.subid, subid, "{name} subid");
+        }
+    }
+
+    #[test]
+    fn exhook_parser_accepts_only_the_pinned_authenticated_shape() {
+        let value = json!({
+            "name": "opdbus",
+            "url": EXHOOK_TARGET,
+            "enable": true,
+            "ssl": {
+                "enable": true,
+                "verify": "verify_peer",
+                "cacertfile": "/etc/op-dbus/tls/tonic-svc0-ca.crt",
+                "certfile": "/etc/op-dbus/tls/emqx-exhook-client.crt",
+                "keyfile": "/etc/op-dbus/tls/emqx-exhook-client.key"
+            },
+            "node_status": [{"node": "emqx@127.0.0.1", "status": "connected"}],
+            "hooks": [{"name": "message.publish", "params": {"topics": ["#"]}}]
+        });
+        let parsed = exhook_from_json(&value);
+        assert!(parsed.is_local);
+        assert!(parsed.transport_authenticated);
+        assert_eq!(parsed.status, "connected");
+        assert_eq!(parsed.hooks, vec!["message.publish"]);
+    }
+
+    #[test]
+    fn exhook_parser_rejects_https_without_exact_mtls_material() {
+        let value = json!({
+            "name": "opdbus",
+            "url": "https://127.0.0.1:9000",
+            "enable": true,
+            "ssl": {"enable": true},
+            "node_status": [{"status": "connected"}],
+            "hooks": []
+        });
+        let parsed = exhook_from_json(&value);
+        assert!(parsed.is_local);
+        assert!(!parsed.transport_authenticated);
+    }
+
+    #[test]
+    fn malformed_inventory_fails_closed_instead_of_becoming_empty() {
+        assert!(response_array(&json!({"message": "not an inventory"})).is_err());
+        assert!(response_array(&json!(null)).is_err());
+        let parsed = exhook_from_json(&json!({"name": "opdbus", "hooks": []}));
+        assert_eq!(parsed.status, "unknown");
+        assert!(!parsed.transport_authenticated);
     }
 }

@@ -168,7 +168,10 @@ impl Tool for ShellExecuteTool {
 
                 // Include warning if native alternative exists
                 if let Some(warn_msg) = warning {
-                    response["native_alternative_hint"] = Value::String(warn_msg);
+                    response
+                        .as_object_mut()
+                        .expect("shell response is an object")
+                        .insert("native_alternative_hint".into(), Value::String(warn_msg));
                 }
 
                 Ok(response)

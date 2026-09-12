@@ -12,9 +12,11 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
-use op_plugins::state_plugins::emqx::REGISTERED_HOOKS;
+use op_plugins::state_plugins::emqx::{
+    BrokerEvent, BROKER_EVENT_SIGNAL, BROKER_EVENT_SUBID, REGISTERED_HOOKS,
+};
 
-use crate::mutation_engine::MutationEngine;
+use crate::mutation_engine::{ChangeSource, ChangeType, MutationEngine};
 use crate::proto::emqx_exhook::{
     self as exhook, hook_provider_server::HookProvider, valued_response, EmptySuccess, HookSpec,
     LoadedResponse, ValuedResponse,
@@ -34,7 +36,7 @@ impl HookProviderService {
         Self { mutation_engine }
     }
 
-    /// Record an EMQX event as a signal mutation.
+    /// Record a broker observation, never a fictitious mutation/tool call.
     async fn record_event(
         &self,
         event_type: &str,
@@ -42,28 +44,50 @@ impl HookProviderService {
         topic: Option<&str>,
         detail: Option<&str>,
     ) -> anyhow::Result<()> {
-        let mut event_data = simd_json::json!({
-            "event_type": event_type,
-            "client_id": client_id,
-        });
-        if let Some(t) = topic {
-            event_data["topic"] = simd_json::json!(t);
-        }
-        if let Some(d) = detail {
-            event_data["detail"] = simd_json::json!(d);
-        }
-
-        self.mutation_engine
-            .dispatch_method_call(
-                "mqtt",
-                &format!("hook.{}", event_type),
-                &serde_json::to_string(&event_data)?,
+        let event_data = broker_event(event_type, client_id, topic, detail);
+        let result = self
+            .mutation_engine
+            .process_authoritative_change(
+                "emqx".into(),
+                "/org/opdbus/v1/plugins/emqx".into(),
+                ChangeType::Signal,
+                Some(BROKER_EVENT_SIGNAL.into()),
                 None,
-                "grpc:emqx.exhook.v3",
+                simd_json::serde::to_owned_value(event_data)?,
+                vec![BROKER_EVENT_SUBID.into()],
+                "grpc:emqx.exhook.v3".into(),
+                None,
+                ChangeSource::Grpc,
             )
-            .await?;
+            .await;
+        if let Err(error) = result {
+            tracing::error!(%error, event_type, "could not record broker observation");
+            return Err(anyhow::anyhow!(error));
+        }
 
         Ok(())
+    }
+}
+
+fn broker_event(
+    event_type: &str,
+    client: &str,
+    topic: Option<&str>,
+    detail: Option<&str>,
+) -> BrokerEvent {
+    let digest = |value: &str| {
+        blake3::Hash::from(blake3::derive_key(
+            "opdbus broker observation v1",
+            value.as_bytes(),
+        ))
+        .to_hex()
+        .to_string()
+    };
+    BrokerEvent {
+        event_type: event_type.to_owned(),
+        client_ref: digest(client),
+        topic_ref: topic.map(digest),
+        detail_ref: detail.map(digest),
     }
 }
 
@@ -316,14 +340,13 @@ impl HookProvider for HookProviderService {
     ) -> Result<Response<ValuedResponse>, Status> {
         let req = request.into_inner();
         if let Some(message) = req.message.as_ref() {
-            let payload_preview = String::from_utf8_lossy(&message.payload).into_owned();
             info!(from = %message.from, topic = %message.topic, "EMQX OnMessagePublish");
             let _ = self
                 .record_event(
                     "on_message_publish",
                     &message.from,
                     Some(&message.topic),
-                    Some(&payload_preview),
+                    None,
                 )
                 .await;
         }
@@ -349,5 +372,41 @@ impl HookProvider for HookProviderService {
         _request: Request<exhook::MessageAckedRequest>,
     ) -> Result<Response<EmptySuccess>, Status> {
         Ok(empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_events_are_metadata_only_and_digest_all_external_values() {
+        let event = broker_event(
+            "message.publish",
+            "client-secret",
+            Some("private/project/topic"),
+            Some("message body must not be retained"),
+        );
+        assert_eq!(event.event_type, "message.publish");
+        assert_ne!(event.client_ref, "client-secret");
+        assert_ne!(event.topic_ref.as_deref(), Some("private/project/topic"));
+        assert_ne!(
+            event.detail_ref.as_deref(),
+            Some("message body must not be retained")
+        );
+        let encoded = serde_json::to_string(&event).unwrap();
+        assert!(!encoded.contains("client-secret"));
+        assert!(!encoded.contains("private/project/topic"));
+        assert!(!encoded.contains("message body must not be retained"));
+    }
+
+    #[test]
+    fn auth_and_authorize_responses_leave_broker_decisions_unchanged() {
+        let response = ignore().into_inner();
+        assert_eq!(
+            response.r#type,
+            valued_response::ResponsedType::Ignore as i32
+        );
+        assert!(response.value.is_none());
     }
 }

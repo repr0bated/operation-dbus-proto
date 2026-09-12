@@ -1,38 +1,10 @@
-//! Identity integration — reads identity from the state-tree JSON
-//! at /dev/shm/opdbus/state/identity_sled.json and provides
-//! the GhostBridge footprint + trace_id for authenticated gRPC calls.
+//! Display the canonical configured session, using the same fail-closed
+//! human/service selection policy as other identity-aware clients.
 
-use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Canonical location written by `write_projection()` (post projection-removal).
 const STATE_PATH: &str = "/dev/shm/opdbus/state/identity_sled.json";
-/// Pre-removal location under `projections/`. Read fallback only, one deploy cycle.
-const LEGACY_PROJECTION_PATH: &str = "/dev/shm/opdbus/projections/identity_sled.json";
-
-/// A single sled entry from the identity projection
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // schema_version, last_seen_at, session_started_at kept for deserialization fidelity
-pub struct SledEntry {
-    pub active: bool,
-    pub hashed_footprint: String,
-    pub trace_id: String,
-    pub session_id: String,
-    pub wireguard_pubkey: String,
-    pub mutation_index: u64,
-    #[serde(default)]
-    pub schema_version: u32,
-    #[serde(default)]
-    pub last_seen_at: i64,
-    #[serde(default)]
-    pub session_started_at: i64,
-}
-
-/// The full identity projection structure
-#[derive(Debug, Deserialize)]
-struct IdentityProjection {
-    sleds: Vec<SledEntry>,
-}
 
 /// Identity context for authenticated calls.
 #[derive(Debug, Clone)]
@@ -50,46 +22,23 @@ pub struct CliIdentity {
 }
 
 impl CliIdentity {
-    /// Read the active identity from the state-tree JSON.
-    /// Returns the first active sled with a non-empty footprint.
+    /// Resolve the configured session, or the unambiguous current human.
+    /// Never adopt the chatbot merely because it is the first projected row.
     pub fn read() -> Option<Self> {
-        let data = match std::fs::read_to_string(STATE_PATH)
-            .or_else(|_| std::fs::read_to_string(LEGACY_PROJECTION_PATH))
-        {
-            Ok(d) => d,
-            Err(e) => {
-                debug!("Could not read identity state: {}", e);
+        let session = match op_identity::session_projection::configured_identity_session() {
+            Ok(session) => session,
+            Err(error) => {
+                debug!(%error, "No unambiguous current CLI identity");
                 return None;
             }
         };
-
-        let projection: IdentityProjection = match serde_json::from_str(&data) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Failed to parse identity projection: {}", e);
-                return None;
-            }
-        };
-
-        // Find the first active sled with a valid footprint
-        projection
-            .sleds
-            .iter()
-            .find(|s| s.active && !s.hashed_footprint.is_empty() && !s.trace_id.is_empty())
-            .map(|s| {
-                debug!(
-                    "Using identity: session={}, footprint={}…",
-                    s.session_id,
-                    &s.hashed_footprint[..16.min(s.hashed_footprint.len())]
-                );
-                CliIdentity {
-                    footprint: s.hashed_footprint.clone(),
-                    trace_id: s.trace_id.clone(),
-                    session_id: s.session_id.clone(),
-                    wireguard_pubkey: s.wireguard_pubkey.clone(),
-                    mutation_index: s.mutation_index,
-                }
-            })
+        Some(Self {
+            footprint: session.genesis?,
+            trace_id: session.trace_id,
+            session_id: session.session_id,
+            wireguard_pubkey: session.wireguard_pubkey,
+            mutation_index: session.mutation_index,
+        })
     }
 
     /// Print identity info for `dbus-plugin-cli identity` command.

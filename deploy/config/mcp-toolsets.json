@@ -1,5 +1,5 @@
 {
-  "generation": 6,
+  "generation": 7,
   "hot": [
     "memory_recall",
     "memory_store",
@@ -11,6 +11,16 @@
     "toolsets"
   ],
   "sets": [
+    {
+      "id": "identity_read",
+      "temperature": "warm",
+      "provider": "op-grpc-bridge",
+      "requires_provider_health": false,
+      "tools": [
+        "plugin.identity_sled.get_identity",
+        "plugin.identity_sled.get_session_history"
+      ]
+    },
     {
       "id": "context_code",
       "temperature": "hot",

@@ -434,10 +434,38 @@ pub fn build_axum_app(loader: Arc<SchemaLoader>, server: OperationGrpcServer) ->
     build_axum_app_with_validator(loader, server, validator)
 }
 
+/// Build the shared ingress with an already validated MCP projection policy.
+///
+/// Production callers should use [`build_axum_app`], which keeps the
+/// root-protected environment policy loading in the normal MCP constructor.
+/// This explicit form is for isolated integration fixtures; it preserves the
+/// same assertion validator, interceptor, and authorization routes.
+pub fn build_axum_app_with_policy(
+    loader: Arc<SchemaLoader>,
+    server: OperationGrpcServer,
+    policy: crate::mcp_policy::McpProjectionPolicy,
+) -> Router {
+    let validator = Arc::new(AssertionValidator::from_env(DecoyTrustStore::load()));
+    let engine = server.mutation_engine();
+    let mcp = crate::mcp_frontend::build_mcp_router_with_policy(engine, validator.clone(), policy);
+    build_axum_app_with_mcp(loader, server, validator, mcp)
+}
+
 fn build_axum_app_with_validator(
     loader: Arc<SchemaLoader>,
     server: OperationGrpcServer,
     validator: Arc<AssertionValidator>,
+) -> Router {
+    let engine = server.mutation_engine();
+    let mcp = crate::mcp_frontend::build_mcp_router(engine, validator.clone());
+    build_axum_app_with_mcp(loader, server, validator, mcp)
+}
+
+fn build_axum_app_with_mcp(
+    loader: Arc<SchemaLoader>,
+    server: OperationGrpcServer,
+    validator: Arc<AssertionValidator>,
+    mcp: Router,
 ) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(crate::mcp_frontend::configured_allow_origin())
@@ -470,9 +498,7 @@ fn build_axum_app_with_validator(
             crate::mcp_frontend::MCP_SESSION_HEADER.parse().unwrap(),
         ]);
 
-    let engine = server.mutation_engine();
-    crate::mcp_frontend::build_mcp_router(engine, validator.clone())
-        .merge(build_routes(loader, server, validator).into_axum_router())
+    mcp.merge(build_routes(loader, server, validator).into_axum_router())
         .layer(cors)
         .layer(GhostbridgeTraceLayer::new())
 }
@@ -557,19 +583,10 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
     // it so a bridge restart advertises every sealed plugin immediately.
     operation_server.hydrate_reflection_from_shm().await;
 
-    // Activate the frozen per-method descriptors.
-    //
-    // Hydrating the catalog above only makes the sealed blobs *discoverable*; it
-    // does not mount them. This turns each method's frozen descriptor into a live
-    // typed gRPC service (one service per method, e.g.
-    // `operation.method.cognitive_mcp.invoke_tool.InvokeToolService`) and registers
-    // it with the per-method reflection registry.
-    //
-    // Must run before `build_axum_app` below: tonic-reflection is immutable once
-    // mounted, so a service activated after route construction can never be served.
-    // `run_grpc_server` (op-dbus :50051) already did this; omitting it here meant the
-    // tched_router bridge advertised sealed plugins while serving none of their typed
-    // per-method services.
+    // Freeze schema/authority metadata before constructing the server. This
+    // registers descriptors, not RPC handlers: the generated add_routes mounts
+    // the typed aggregate services. Reflection advertises that same route table,
+    // restricted to plugins whose sealed blobs are present.
     operation_server.freeze_plugin_method_reflection().await;
 
     // ── D-Bus plugin object registration ──────────────────────────────────
