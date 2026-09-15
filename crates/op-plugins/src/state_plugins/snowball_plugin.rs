@@ -8,14 +8,10 @@
 //! capabilities register here as plugins; the served gRPC surface stays the one
 //! shared route-builder.
 //!
-//! Every read is live: the plugin's live state
-//! opens the on-disk chain at `$OPDBUS_SNOWBALL_PATH` and reports its real
-//! snapshots, DR `current_state`, snapshot interval and retention policy.
-//! [`create_checkpoint`](SnowballPlugin::create_checkpoint) performs a real
-//! `create_snapshot()` and `apply_state` writes the DR state through the chain.
-//! Nothing here is mocked.
+//! Every canonical method uses the bridge-owned shared Snowball handle. The
+//! legacy `StatePlugin` view can read the configured chain, but refuses writes
+//! so it cannot create a competing writer lifecycle.
 
-use super::plugin_scaffold_helpers::schema_from_state;
 use anyhow::Result;
 use async_trait::async_trait;
 use op_snowball::StreamingSnowball;
@@ -24,17 +20,12 @@ use op_state::{
 };
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::ValueAsContainer;
-use simd_json::{json, OwnedValue as Value};
+use simd_json::OwnedValue as Value;
 use std::path::PathBuf;
 
 /// Default on-disk location of the streaming snowball when
 /// `$OPDBUS_SNOWBALL_PATH` is unset.
 const DEFAULT_BASE_PATH: &str = "/var/lib/opdbus/snowball";
-
-/// Key under which the disaster-recovery "current state" blob is persisted in
-/// the state subvolume (`StreamingSnowball::write_current_state` writes here).
-const CURRENT_STATE_KEY: &str = "current";
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RetentionView {
@@ -60,6 +51,82 @@ pub struct SnapshotEntry {
     /// Snapshot creation timestamp.
     #[schemars(extend("x-oscal-subid" = "exp.software.snowball.snapshot.created@v1"))]
     pub created: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnowballEmptyInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotInput {
+    pub snapshot_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SnapshotRecord {
+    pub name: String,
+    pub counter: u64,
+    pub created: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CreateSnapshotOutput {
+    pub snapshot: SnapshotRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListSnapshotsOutput {
+    pub snapshots: Vec<SnapshotRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetSnapshotOutput {
+    pub snapshot: SnapshotRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetCurrentStateOutput {
+    pub initialized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SnowballStatsOutput {
+    /// Timing records that parsed as complete Snowball blocks.
+    pub readable_block_count: u64,
+    pub vectorized_block_count: u64,
+    pub snapshot_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_block_number: Option<u64>,
+    pub retention: RetentionView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RollbackOutput {
+    /// The Snowball state-directory snapshot used as the source.
+    pub snapshot_name: String,
+    /// Restored disaster-recovery image only. This does not apply state to any
+    /// live provider; provider restoration must use that plugin's own method.
+    pub restored_current_state: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetRetentionInput {
+    pub hourly: u32,
+    pub daily: u32,
+    pub weekly: u32,
+    pub quarterly: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetRetentionOutput {
+    pub retention: RetentionView,
+    pub remaining_snapshots: u64,
 }
 
 // ── Audit-trail query surface (accountability-audit-trail spec) ──────────────
@@ -174,7 +241,7 @@ pub struct SnowballState {
     /// Current snowball state.
     #[schemars(skip)]
     #[schemars(extend("x-oscal-subid" = "obs.software.snowball.current-state@v1"))]
-    pub current_state: Value,
+    pub current_state: Option<Value>,
 }
 
 pub struct SnowballPlugin {
@@ -220,7 +287,7 @@ impl SnowballPlugin {
                 },
                 snapshot_count: 0,
                 snapshots: Vec::new(),
-                current_state: json!({}),
+                current_state: None,
             });
         }
 
@@ -228,18 +295,14 @@ impl SnowballPlugin {
 
         let snapshots: Vec<SnapshotEntry> = chain
             .list_snapshots()
-            .await
-            .unwrap_or_default()
+            .await?
             .into_iter()
             .map(|(name, created)| SnapshotEntry { name, created })
             .collect();
 
-        let current_state = chain
-            .read_state(CURRENT_STATE_KEY)
-            .await
-            .unwrap_or_else(|_| json!({}));
+        let current_state = chain.current_state().await?;
 
-        let retention = chain.retention_policy();
+        let retention = chain.retention_policy().await;
 
         Ok(SnowballState {
             status: "active".to_string(),
@@ -276,7 +339,7 @@ impl SnowballPlugin {
                 name: "state-000001".to_string(),
                 created: "1970-01-01 00:00:00 UTC".to_string(),
             }],
-            current_state: json!({}),
+            current_state: None,
         }
     }
 }
@@ -288,7 +351,7 @@ impl StatePlugin for SnowballPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -321,36 +384,10 @@ impl StatePlugin for SnowballPlugin {
     }
 
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        let mut changes_applied = Vec::new();
-        let mut errors = Vec::new();
-
-        for action in &diff.actions {
-            match action {
-                StateAction::Modify { resource, changes } if resource == "current_state" => {
-                    // Persist the DR current-state blob through the real chain.
-                    let state_blob = changes
-                        .as_object()
-                        .and_then(|o| o.get("current_state").cloned())
-                        .unwrap_or_else(|| changes.clone());
-                    match self.open().await {
-                        Ok(chain) => match chain.write_current_state(&state_blob).await {
-                            Ok(()) => changes_applied.push(format!("wrote {}", resource)),
-                            Err(e) => errors.push(format!("write_current_state failed: {}", e)),
-                        },
-                        Err(e) => errors.push(format!("open chain failed: {}", e)),
-                    }
-                }
-                StateAction::NoOp { .. } => {}
-                other => errors.push(format!("unsupported snowball action: {:?}", other)),
-            }
-        }
-
-        Ok(ApplyResult {
-            success: errors.is_empty(),
-            changes_applied,
-            errors,
-            checkpoint: None,
-        })
+        let _ = diff;
+        anyhow::bail!(
+            "Snowball state mutation requires the canonical shared Snowball method adapter"
+        )
     }
 
     async fn verify_state(&self, desired: &Value) -> Result<bool> {
@@ -359,34 +396,18 @@ impl StatePlugin for SnowballPlugin {
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        // A real BTRFS (or copy-fallback) snapshot of the state subvolume.
-        let chain = self.open().await?;
-        let snapshot_name = chain.create_snapshot().await?;
-        let state_snapshot = chain
-            .read_state(CURRENT_STATE_KEY)
-            .await
-            .unwrap_or_else(|_| json!({}));
-        Ok(Checkpoint {
-            id: snapshot_name,
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!("Snowball checkpoints require the canonical shared Snowball method adapter")
     }
 
     async fn rollback(&self, checkpoint: &Checkpoint) -> Result<()> {
-        // Resolve and validate the snapshot the checkpoint points at.
-        let chain = self.open().await?;
-        let path = chain.rollback(&checkpoint.id).await?;
-        tracing::info!(snapshot = %checkpoint.id, path = %path.display(), "snowball rollback resolved");
-        Ok(())
+        let _ = checkpoint;
+        anyhow::bail!("Snowball rollback requires the canonical shared Snowball method adapter")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
-            supports_rollback: true,
-            supports_checkpoints: true,
+            supports_rollback: false,
+            supports_checkpoints: false,
             supports_verification: true,
             atomic_operations: false,
         }
@@ -398,37 +419,18 @@ pub(crate) fn snowball_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "snowball",
-        "1.0.0",
+        "2.0.0",
         "Streaming snowball audit chain — snapshots, DR current-state, retention/interval",
         &root,
     );
 
-    // Output structs
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListSnapshotsOutput {
-        pub snapshots: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetSnapshotOutput {
-        pub snapshot: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetCurrentStateOutput {
-        pub state: serde_json::Value,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetStatsOutput {
-        pub stats: serde_json::Value,
-    }
-
     // Add methods
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
     use op_state_store::SideEffect;
 
     schema.methods.insert(
         "create_snapshot".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<SnowballEmptyInput, CreateSnapshotOutput>(
             "create_snapshot",
             SideEffect::Mutation,
             false,
@@ -438,7 +440,7 @@ pub(crate) fn snowball_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_snapshots".to_string(),
-        method_decl_from_schemars_with_output::<(), ListSnapshotsOutput>(
+        method_decl_from_schemars_with_output::<SnowballEmptyInput, ListSnapshotsOutput>(
             "list_snapshots",
             SideEffect::Read,
             true,
@@ -448,7 +450,7 @@ pub(crate) fn snowball_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_snapshot".to_string(),
-        method_decl_from_schemars_with_output::<(), GetSnapshotOutput>(
+        method_decl_from_schemars_with_output::<SnapshotInput, GetSnapshotOutput>(
             "get_snapshot",
             SideEffect::Read,
             true,
@@ -458,7 +460,7 @@ pub(crate) fn snowball_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "rollback".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<SnapshotInput, RollbackOutput>(
             "rollback",
             SideEffect::Mutation,
             true,
@@ -468,7 +470,7 @@ pub(crate) fn snowball_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_current_state".to_string(),
-        method_decl_from_schemars_with_output::<(), GetCurrentStateOutput>(
+        method_decl_from_schemars_with_output::<SnowballEmptyInput, GetCurrentStateOutput>(
             "get_current_state",
             SideEffect::Read,
             true,
@@ -478,7 +480,7 @@ pub(crate) fn snowball_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_retention".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<SetRetentionInput, SetRetentionOutput>(
             "set_retention",
             SideEffect::Mutation,
             false,
@@ -488,7 +490,7 @@ pub(crate) fn snowball_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_stats".to_string(),
-        method_decl_from_schemars_with_output::<(), GetStatsOutput>(
+        method_decl_from_schemars_with_output::<SnowballEmptyInput, SnowballStatsOutput>(
             "get_stats",
             SideEffect::Read,
             true,
@@ -497,9 +499,8 @@ pub(crate) fn snowball_schema() -> PluginSchema {
         ),
     );
 
-    // Audit-trail query surface. Dispatched by MutationEngine's "snowball"
-    // arm — these two are wired; the seven above are not (see the spec's
-    // scope boundary in .kiro/specs/accountability-audit-trail).
+    // Audit-trail query surface. MutationEngine dispatches these two through
+    // EventChain and the seven native methods above through SnowballMethods.
     schema.methods.insert(
         "query_events".to_string(),
         method_decl_from_schemars_with_output::<QueryEventsInput, QueryEventsOutput>(

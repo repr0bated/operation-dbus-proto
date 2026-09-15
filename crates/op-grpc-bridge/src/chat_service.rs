@@ -412,6 +412,7 @@ impl ChatService for ChatServiceImpl {
                 .collect(),
             provider,
             model,
+            conversation_id: Some(conversation_id.clone()),
         };
         let chat_args = serde_json::to_string(&chat_args)
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
@@ -736,11 +737,98 @@ mod tests {
 
     #[tokio::test]
     async fn chat_dispatch_reaches_the_tched_router_backend() {
+        use crate::human_principal_dispatch::tests::{pk, register, temp_cozo};
+        use crate::identity_sled_dispatch::{tests::write_identity, IdentitySledStore};
+        use op_plugins::state_plugins::{
+            human_principal::HumanPrincipalPlugin, identity_sled::IdentitySledPlugin,
+        };
+        use op_state::StatePlugin;
+
+        let _cozo = temp_cozo();
+        let router_schema = TchedRouterPlugin::new().schema().unwrap();
+        let _catalog = crate::human_principal_dispatch::tests::temp_shm_with_schemas(&[
+            HumanPrincipalPlugin::new().schema().unwrap(),
+            IdentitySledPlugin::new().schema().unwrap(),
+            op_plugins::state_plugins::ctl_plane_chatbot::CtlPlaneChatbotPlugin::new()
+                .schema()
+                .unwrap(),
+            router_schema.clone(),
+        ]);
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(
+            [
+                "TCHED_ROUTER_RUNTIME_ENDPOINT",
+                "TCHED_ROUTER_RUNTIME_TOKEN",
+                "OP_GRANTS_PATH",
+            ]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/health",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({"status": "fixture-offline"}))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        std::env::set_var("TCHED_ROUTER_RUNTIME_ENDPOINT", endpoint);
+        std::env::remove_var("TCHED_ROUTER_RUNTIME_TOKEN");
         let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
             op_state_store::ChainConfig::default(),
         )));
         let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
         let engine = MutationEngine::new(event_chain, ovsdb);
+        engine
+            .install_identity_sled_store_for_test(IdentitySledStore::new(
+                op_cozo_store::CozoGraphShuttle::new_in_memory().unwrap(),
+            ))
+            .unwrap();
+        let key = pk(0xC7);
+        register(&key, "chat-router-fixture").await.unwrap();
+        let sled = write_identity(&engine, &key).await.unwrap();
+        let actor = op_identity::session::derive_principal_id(&key);
+        let capability = router_schema.methods["Chat"]
+            .required_capability
+            .clone()
+            .unwrap();
+        let grants_dir = tempfile::tempdir().unwrap();
+        engine
+            .configure_chatbot_episode_store(Arc::new(
+                op_cozo_store::CozoGraphShuttle::new_in_memory().unwrap(),
+            ))
+            .unwrap();
+        engine
+            .configure_chatbot_episode_projection(
+                op_core::projection_shm::PrivateProjectionDirectory::prepare(
+                    &grants_dir.path().join("episodes"),
+                )
+                .unwrap(),
+                crate::sealed_schema_reader::blob_catalog_dir_from_env(),
+            )
+            .unwrap();
+        let grants = grants_dir.path().join("grants.json");
+        std::fs::write(
+            &grants,
+            serde_json::to_vec(&serde_json::json!({
+                (actor.clone()): {"capabilities":[capability]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::env::set_var("OP_GRANTS_PATH", grants);
         let input = ChatInput {
             message: "hello".to_string(),
             provider: "salad".to_string(),
@@ -753,19 +841,18 @@ mod tests {
             &engine,
             &args,
             &GhostbridgeIdentity {
-                principal_id: "test-actor".into(),
-                session_id: "test-session".into(),
-                session_genesis: "test-genesis".into(),
+                principal_id: actor,
+                session_id: sled.session_id,
+                session_genesis: sled.genesis.expect("identity genesis"),
             },
         )
         .await
-        .expect_err("undeclared model must be rejected by the router");
+        .expect_err("the backend fixture must reject chat while unhealthy");
+        server.abort();
 
         let message = error.to_string();
         assert!(
-            message.contains("not declared")
-                || message.contains("differs from ZeroClaw's selected provider")
-                || message.contains("differs from ZeroClaw's selected model"),
+            message.contains("tched_router health status is 'fixture-offline', expected 'ok'"),
             "{error}"
         );
     }

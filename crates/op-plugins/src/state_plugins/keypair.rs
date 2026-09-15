@@ -15,15 +15,17 @@ use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
 use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+mod agent;
+pub use agent::dispatch_keypair_method;
 
 // =============================================================================
 // PLUGIN ENTRY: identity and typed schema seed
 // =============================================================================
 
 const PLUGIN_NAME: &str = "keypair";
-const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_VERSION: &str = "2.0.0";
 const PLUGIN_CATEGORY: &str = "service";
-const PLUGIN_DESCRIPTION: &str = "Keypair declaration state";
+const PLUGIN_DESCRIPTION: &str = "Public identities advertised by the configured SSH agent";
 const PLUGIN_DISPLAY_NAME: &str = "GB.Keypair";
 
 /// Keypair declaration state.
@@ -79,12 +81,15 @@ pub struct Keypair {
 /// Typed input for the `list_keypairs` method (empty — no parameters).
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "obs.service.keypair.list.input@v1"))]
+#[serde(deny_unknown_fields)]
 pub struct ListKeypairsInput {}
 
 /// Typed output for the `list_keypairs` method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "obs.service.keypair.list.output@v1"))]
 pub struct ListKeypairsOutput {
+    /// Provider scope; this is an agent inventory, not a scan of key files.
+    pub source: String,
     /// Discovered keypairs.
     #[schemars(
         description = "Discovered keypairs",
@@ -97,6 +102,8 @@ pub struct ListKeypairsOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "obs.service.keypair.keypair-info.list@v1"))]
 pub struct KeypairInfo {
+    /// SHA-256 fingerprint of the SSH public-key wire encoding.
+    pub fingerprint: String,
     /// Keypair name.
     #[schemars(
         description = "Keypair name",
@@ -121,10 +128,11 @@ pub struct KeypairInfo {
     )]
     pub public_key: Option<String>,
 
-    /// Whether the keypair is present on the system.
+    /// Whether the agent advertised this identity. This does not assert that
+    /// signing is currently permitted or that private material is exportable.
     #[serde(default)]
     #[schemars(
-        description = "Whether the keypair is present on the system",
+        description = "Identity advertised by the SSH agent; signing availability is not tested",
         extend("x-oscal-subid" = "obs.service.keypair.info.present.render@v1")
     )]
     pub present: bool,

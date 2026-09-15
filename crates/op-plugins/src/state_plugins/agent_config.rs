@@ -1,12 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::json;
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Agent configuration plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -52,6 +51,33 @@ pub struct AgentConfig {
     pub tools: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentNameInput {
+    pub name: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateConfigInput {
+    pub config: AgentConfig,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RegisterToolInput {
+    pub name: String,
+    pub tool: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentConfigOutput {
+    pub config: Option<AgentConfig>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentToolsOutput {
+    pub tools: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentMutationOutput {
+    pub config: AgentConfig,
+    pub revision: u64,
+}
+
 pub struct AgentConfigPlugin;
 
 impl Default for AgentConfigPlugin {
@@ -73,7 +99,7 @@ impl StatePlugin for AgentConfigPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -110,7 +136,7 @@ impl StatePlugin for AgentConfigPlugin {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: Value::null(),
+            state_snapshot: simd_json::json!(null),
             backend_checkpoint: None,
         })
     }
@@ -135,31 +161,18 @@ pub fn agent_config_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "agent_config",
-        "1.0.0",
+        "2.0.0",
         "Agent configuration and tool assignments",
         &root,
     );
 
-    /// Output for GetConfig method
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetConfigOutput {
-        pub config: serde_json::Value,
-    }
-
-    /// Output for ListTools method
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListToolsOutput {
-        pub tools: Vec<String>,
-    }
-
     // Add methods
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
     use op_state_store::SideEffect;
 
     schema.methods.insert(
         "get_config".to_string(),
-        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
+        method_decl_from_schemars_with_output::<AgentNameInput, AgentConfigOutput>(
             "get_config",
             SideEffect::Read,
             true,
@@ -169,7 +182,7 @@ pub fn agent_config_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "update_config".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<UpdateConfigInput, AgentMutationOutput>(
             "update_config",
             SideEffect::Mutation,
             false,
@@ -179,7 +192,7 @@ pub fn agent_config_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "list_tools".to_string(),
-        method_decl_from_schemars_with_output::<(), ListToolsOutput>(
+        method_decl_from_schemars_with_output::<AgentNameInput, AgentToolsOutput>(
             "list_tools",
             SideEffect::Read,
             true,
@@ -189,7 +202,7 @@ pub fn agent_config_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "register_tool".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<RegisterToolInput, AgentMutationOutput>(
             "register_tool",
             SideEffect::Mutation,
             false,
@@ -199,7 +212,7 @@ pub fn agent_config_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "reset_config".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<AgentNameInput, AgentMutationOutput>(
             "reset_config",
             SideEffect::Mutation,
             true,
@@ -226,16 +239,164 @@ pub fn agent_config_schema() -> PluginSchema {
     schema
 }
 
+fn valid_name(value: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(|c| c.is_control()) {
+        anyhow::bail!("agent name/tool must be non-empty and contain no control characters")
+    }
+    Ok(value.to_string())
+}
+
+fn decode_agents(document: Option<serde_json::Value>) -> Result<Vec<AgentConfig>> {
+    let document = document.unwrap_or_else(|| serde_json::json!({"agents": []}));
+    serde_json::from_value(
+        document
+            .get("agents")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("agent_config document is missing agents"))?,
+    )
+    .map_err(Into::into)
+}
+
+pub async fn dispatch_agent_config_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    dispatch_agent_config_with_store(
+        super::runtime_documents::runtime_documents().await?,
+        method,
+        args,
+    )
+    .await
+}
+
+pub async fn dispatch_agent_config_with_store(
+    store: Arc<super::runtime_documents::RuntimeDocuments>,
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let current = store
+        .read("agent_config")
+        .await?
+        .map(|d| d.document)
+        .unwrap_or_else(|| serde_json::json!({"agents": []}));
+    let agents = decode_agents(Some(current))?;
+    match method {
+        "get_config" => {
+            let i: AgentNameInput = serde_json::from_value(args.clone())?;
+            let name = valid_name(&i.name)?;
+            Ok(serde_json::json!({"config": agents.iter().find(|a| a.name==name)}))
+        }
+        "list_tools" => {
+            let i: AgentNameInput = serde_json::from_value(args.clone())?;
+            let name = valid_name(&i.name)?;
+            let config = agents
+                .iter()
+                .find(|a| a.name == name)
+                .ok_or_else(|| anyhow::anyhow!("unknown agent '{name}'"))?;
+            Ok(serde_json::json!({"tools":config.tools}))
+        }
+        "update_config" => {
+            let i: UpdateConfigInput = serde_json::from_value(args.clone())?;
+            let mut config = i.config;
+            config.name = valid_name(&config.name)?;
+            let lookup_name = config.name.clone();
+            config.tools = config
+                .tools
+                .into_iter()
+                .map(|t| valid_name(&t))
+                .collect::<Result<Vec<_>>>()?;
+            config.tools.sort();
+            config.tools.dedup();
+            let row = store
+                .update("agent_config", move |old| {
+                    let mut list = decode_agents(old)?;
+                    if let Some(a) = list.iter_mut().find(|a| a.name == config.name) {
+                        *a = config.clone()
+                    } else {
+                        list.push(config.clone())
+                    };
+                    Ok(serde_json::json!({"agents":list}))
+                })
+                .await?;
+            let committed = decode_agents(Some(row.document))?
+                .into_iter()
+                .find(|a| a.name == lookup_name)
+                .context("committed agent config missing")?;
+            Ok(serde_json::to_value(AgentMutationOutput {
+                config: committed,
+                revision: row.revision,
+            })?)
+        }
+        "register_tool" => {
+            let i: RegisterToolInput = serde_json::from_value(args.clone())?;
+            let name = valid_name(&i.name)?;
+            let tool = valid_name(&i.tool)?;
+            let lookup_name = name.clone();
+            let row = store
+                .update("agent_config", move |old| {
+                    let mut list = decode_agents(old)?;
+                    let a = list
+                        .iter_mut()
+                        .find(|a| a.name == name)
+                        .ok_or_else(|| anyhow::anyhow!("unknown agent '{name}'"))?;
+                    if !a.tools.contains(&tool) {
+                        a.tools.push(tool.clone());
+                        a.tools.sort();
+                    }
+                    Ok(serde_json::json!({"agents":list}))
+                })
+                .await?;
+            let config = decode_agents(Some(row.document))?
+                .into_iter()
+                .find(|a| a.name == lookup_name)
+                .context("committed agent config missing")?;
+            Ok(serde_json::to_value(AgentMutationOutput {
+                config,
+                revision: row.revision,
+            })?)
+        }
+        "reset_config" => {
+            let i: AgentNameInput = serde_json::from_value(args.clone())?;
+            let name = valid_name(&i.name)?;
+            let lookup_name = name.clone();
+            let row = store
+                .update("agent_config", move |old| {
+                    let mut list = decode_agents(old)?;
+                    let a = list
+                        .iter_mut()
+                        .find(|a| a.name == name)
+                        .ok_or_else(|| anyhow::anyhow!("unknown agent '{name}'"))?;
+                    a.enabled = false;
+                    a.model = None;
+                    a.tools.clear();
+                    Ok(serde_json::json!({"agents":list}))
+                })
+                .await?;
+            let config = decode_agents(Some(row.document))?
+                .into_iter()
+                .find(|a| a.name == lookup_name)
+                .context("committed agent config missing")?;
+            Ok(serde_json::to_value(AgentMutationOutput {
+                config,
+                revision: row.revision,
+            })?)
+        }
+        other => anyhow::bail!("unknown agent_config method: {other}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
+    use crate::state_plugins::runtime_documents::RuntimeDocuments;
 
     #[test]
     fn schema_is_schemars_seeded_and_typed() {
         let schema = agent_config_schema();
         assert_eq!(schema.name, "agent_config");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.version, "2.0.0");
         assert_eq!(
             schema.description,
             "Agent configuration and tool assignments"
@@ -271,6 +432,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_agent_methods_round_trip_and_reject_unknown() {
+        let store = Arc::new(RuntimeDocuments::new(
+            op_cozo_store::CozoGraphShuttle::new_in_memory().unwrap(),
+        ));
+        let cfg = serde_json::json!({"config":{"name":"builder","enabled":true,"model":"m1","tools":["search","search"]}});
+        dispatch_agent_config_with_store(store.clone(), "update_config", &cfg)
+            .await
+            .unwrap();
+        assert_eq!(
+            dispatch_agent_config_with_store(
+                store.clone(),
+                "list_tools",
+                &serde_json::json!({"name":"builder"})
+            )
+            .await
+            .unwrap()["tools"],
+            serde_json::json!(["search"])
+        );
+        dispatch_agent_config_with_store(
+            store.clone(),
+            "register_tool",
+            &serde_json::json!({"name":"builder","tool":"write"}),
+        )
+        .await
+        .unwrap();
+        dispatch_agent_config_with_store(
+            store.clone(),
+            "reset_config",
+            &serde_json::json!({"name":"builder"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            dispatch_agent_config_with_store(
+                store.clone(),
+                "get_config",
+                &serde_json::json!({"name":"builder"})
+            )
+            .await
+            .unwrap()["config"]["enabled"],
+            false
+        );
+        assert!(dispatch_agent_config_with_store(
+            store,
+            "list_tools",
+            &serde_json::json!({"name":"missing"})
+        )
+        .await
+        .is_err());
     }
 }
 

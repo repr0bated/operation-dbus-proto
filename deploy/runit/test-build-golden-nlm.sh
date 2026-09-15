@@ -25,7 +25,7 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 
 # Keep this extraction bounded to the two helpers under test. In particular,
 # do not source build-golden.sh: its top-level code validates artifacts and
-# performs host/golden installation.
+# prepares the golden subvolume.
 HELPERS=$(awk '
     /^write_nlm_wrapper\(\)/ { capture = 1 }
     capture && /^\[ -r "\$EMQX_VERSION_FILE" \]/ { exit }
@@ -70,7 +70,7 @@ DRY_RUN=0
 [ ! -e "$dry_wrapper" ] || fail "dry-run created wrapper"
 
 # Golden staging uses the target runtime path in its wrapper, not its staging
-# prefix (which would be unusable after the golden tree is installed).
+# prefix (which would be unusable after the received release is activated).
 golden_root="$TEST_ROOT/golden"
 golden_venv="$golden_root$NLM_CLI_ROOT/$NOTEBOOKLM_MCP_INSTALL_NAME"
 mkdir -p "$golden_venv/bin" "$golden_root/bin"

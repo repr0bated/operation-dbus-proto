@@ -10,7 +10,8 @@
 //!   Composite: \[Type\] (list), (T1, T2) (tuple), <F32; N> (vector)
 //!   Special: Any, Any? (nullable)
 //!
-//! Engines: mem, sled, rocksdb, sqlite
+//! The bridge supplies its existing cognitive Cozo handle; methods do not open
+//! another database. Portable archives never invoke SQLite backup APIs.
 //! Access levels: normal, protected, read_only, hidden
 
 use schemars::JsonSchema;
@@ -22,41 +23,62 @@ use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
+#[path = "cozo_methods.rs"]
+pub mod methods;
+pub use methods::dispatch_cozo_method;
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RunQueryInput {
     pub query: String,
+    #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ImportRelationsInput {
-    pub data: serde_json::Value,
+    /// Native Cozo JSON headers/rows. Existing relations must already exist.
+    /// Transactional puts maintain indexes and enable declared triggers.
+    pub data: std::collections::BTreeMap<String, methods::RelationRows>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExportRelationsInput {
     pub relations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BackupInput {
+    /// A short archive label, not a filesystem path. The receipt names a unique
+    /// immutable artifact beneath OP_COZO_ARCHIVE_DIR.
     pub path: String,
+    /// Empty selects all base relations. Archives reject defaults, triggers,
+    /// advanced indexes, hidden relations, and nonempty descriptions because
+    /// Cozo 0.7.6 cannot expose/recreate that metadata faithfully here.
+    #[serde(default)]
+    pub relations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RestoreInput {
+    /// Exact artifact basename from backup's receipt. Existing relation
+    /// metadata must match; missing relations are created atomically.
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListRelationsInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DescribeRelationInput {
     pub name: String,
 }
-
-const DEFAULT_COZO_DB_PATH: &str = "/var/lib/opdbus/cognitive.db";
 
 /// CozoDB column definition — mirrors `::columns` system op output.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -163,55 +185,6 @@ impl CozoPlugin {
     pub fn new() -> Self {
         Self
     }
-
-    fn db_path() -> String {
-        std::env::var("COGNITIVE_MCP_COZO_DB_PATH")
-            .unwrap_or_else(|_| DEFAULT_COZO_DB_PATH.to_string())
-    }
-
-    fn engine() -> String {
-        let path = Self::db_path();
-        if path.is_empty() {
-            "mem".to_string()
-        } else {
-            "sled".to_string()
-        }
-    }
-
-    /// Exemplar state derived from CozoDB docs system ops structure.
-    /// Field names and types match the `::relations`, `::columns`, `::indices`
-    /// system op outputs and the datatypes reference.
-    pub(crate) fn exemplar_state() -> CozoState {
-        CozoState {
-            engine: Self::engine(),
-            path: Self::db_path(),
-            version: "0.7.6".to_string(),
-            relations: vec![CozoRelation {
-                name: "example_relation".to_string(),
-                description: String::new(),
-                keys: vec![CozoColumn {
-                    name: "id".to_string(),
-                    r#type: "String".to_string(),
-                    is_key: true,
-                    default: None,
-                    description: String::new(),
-                }],
-                values: vec![CozoColumn {
-                    name: "data".to_string(),
-                    r#type: "Json".to_string(),
-                    is_key: false,
-                    default: Some("'{}".to_string()),
-                    description: String::new(),
-                }],
-                access_level: "normal".to_string(),
-                row_count: Some(0),
-            }],
-            indices: vec![],
-            hnsw_indices: vec![],
-            triggers: vec![],
-            running_queries: 0,
-        }
-    }
 }
 
 #[async_trait]
@@ -221,7 +194,7 @@ impl StatePlugin for CozoPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -284,14 +257,11 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "cozo",
-        "1.0.0",
+        "2.0.0",
         "CozoDB relational-graph-vector database — relations, indices, HNSW, triggers, Datalog",
         &root,
     );
     schema.category = "data".to_string();
-    if let Ok(defaults) = simd_json::serde::to_owned_value(CozoPlugin::exemplar_state()) {
-        super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
-    }
     schema.subids.insert(
         "__schema__".to_string(),
         "sch.software.plugin.cozo.schema@v1".to_string(),
@@ -333,7 +303,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "run_query".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             RunQueryInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::QueryOutput,
         >(
             "run_query",
             op_state_store::SideEffect::Mutation, // Assuming it could mutate data
@@ -346,7 +316,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "import_relations".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ImportRelationsInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::ImportOutput,
         >(
             "import_relations",
             op_state_store::SideEffect::Mutation,
@@ -359,7 +329,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "export_relations".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ExportRelationsInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::ExportOutput,
         >(
             "export_relations",
             op_state_store::SideEffect::Read,
@@ -372,7 +342,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "backup".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             BackupInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::ArchiveReceipt,
         >(
             "backup",
             op_state_store::SideEffect::Mutation,
@@ -385,7 +355,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "restore".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             RestoreInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::RestoreReceipt,
         >(
             "restore",
             op_state_store::SideEffect::Mutation,
@@ -398,7 +368,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "list_relations".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ListRelationsInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::ListRelationsOutput,
         >(
             "list_relations",
             op_state_store::SideEffect::Read,
@@ -411,7 +381,7 @@ pub(crate) fn cozo_schema() -> PluginSchema {
         "describe_relation".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             DescribeRelationInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            methods::RelationDescription,
         >(
             "describe_relation",
             op_state_store::SideEffect::Read,

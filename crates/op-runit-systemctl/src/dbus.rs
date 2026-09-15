@@ -12,7 +12,7 @@
 //! | `/etc/runit/runsvdir/default/<service>` | Symlink for boot-persistent enablement of the `default` runlevel |
 //! | `/etc/runit/sv/<service>/down`        | Marker file: service should not auto-start when supervised |
 //!
-//! `enable` = symlink into both the persistent runlevel dir and the live dir
+//! `enable` = symlink into the persistent runlevel directory
 //! (and remove any `down` marker). `disable` = `sv down` + remove both
 //! symlinks. There is no compiled service database (unlike s6-rc); runsvdir
 //! picks up directory changes automatically, so `daemon_reload` is a no-op.
@@ -282,7 +282,7 @@ impl ServiceStatus {
 
 #[interface(name = "org.opdbus.v1.Runit.Systemctl")]
 impl RunitSystemctlService {
-    /// Start a service (ensures live symlink, then `sv up <service>`)
+    /// Start a service (ensures the persistent runlevel entry, then `sv up`).
     async fn start(
         &self,
         service: &str,
@@ -299,7 +299,7 @@ impl RunitSystemctlService {
             service, self.runtime_dir, service
         );
 
-        if let Err(e) = self.ensure_symlink(service, &self.runtime_dir) {
+        if let Err(e) = self.ensure_symlink(service, &self.enable_dir) {
             error!("Failed to start service {}: {}", service, e);
             return (false, e);
         }
@@ -347,6 +347,20 @@ impl RunitSystemctlService {
         result
     }
 
+    /// Stop with runit's bounded force-stop escalation, preserving the same
+    /// root-only D-Bus admission as normal lifecycle operations.
+    async fn force_stop(
+        &self,
+        service: &str,
+        #[zbus(connection)] connection: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> (bool, String) {
+        if let Err(error) = Self::authorize_lifecycle(service, connection, &header).await {
+            return (false, error);
+        }
+        self.run_sv(&["force-stop", &self.live_path(service)])
+    }
+
     /// Restart a service (maps to: sv restart <service>)
     async fn restart(
         &self,
@@ -366,7 +380,7 @@ impl RunitSystemctlService {
 
         let live = self.live_path(service);
         if !std::path::Path::new(&live).exists() {
-            if let Err(e) = self.ensure_symlink(service, &self.runtime_dir) {
+            if let Err(e) = self.ensure_symlink(service, &self.enable_dir) {
                 return (false, e);
             }
             return self.run_sv(&["up", &self.live_path(service)]);
@@ -407,7 +421,7 @@ impl RunitSystemctlService {
         result
     }
 
-    /// Enable a service (symlink into the persistent `default` runlevel and the live runlevel)
+    /// Enable a service in the persistent `default` runlevel.
     async fn enable(
         &self,
         service: &str,
@@ -420,14 +434,11 @@ impl RunitSystemctlService {
         }
         debug!("Enabling service: {}", service);
         info!(
-            "systemctl enable {} -> symlink into {} and {}",
-            service, self.enable_dir, self.runtime_dir
+            "runit enable {} -> symlink into {}",
+            service, self.enable_dir
         );
 
         if let Err(e) = self.ensure_symlink(service, &self.enable_dir) {
-            return (false, e);
-        }
-        if let Err(e) = self.ensure_symlink(service, &self.runtime_dir) {
             return (false, e);
         }
 
@@ -439,7 +450,7 @@ impl RunitSystemctlService {
         (true, format!("Service {service} enabled"))
     }
 
-    /// Disable a service (sv down + remove both symlinks)
+    /// Disable a service (sv down + remove the persistent runlevel entry).
     async fn disable(
         &self,
         service: &str,
@@ -452,8 +463,8 @@ impl RunitSystemctlService {
         }
         debug!("Disabling service: {}", service);
         info!(
-            "systemctl disable {} -> sv down + remove symlinks from {} and {}",
-            service, self.runtime_dir, self.enable_dir
+            "runit disable {} -> sv down + remove entry from {}",
+            service, self.enable_dir
         );
 
         let live = self.live_path(service);
@@ -461,7 +472,6 @@ impl RunitSystemctlService {
             let _ = self.run_sv(&["down", &live]);
         }
 
-        self.remove_symlink(service, &self.runtime_dir);
         self.remove_symlink(service, &self.enable_dir);
 
         info!("Service {} disabled", service);

@@ -48,6 +48,11 @@ A plugin shows green/connected on the gRPC diagnostic page **iff**:
   see `collect_plugin_methods()`), **and**
 - the plugin is sealed in the SHM blob catalog.
 
+These are discovery prerequisites, not proof of execution. Canonical dispatch
+also requires the method's complete declaration and plugin version to match the
+compiled handler, argument validation, verified identity, and its exact grant.
+An advertised method whose adapter is absent is unfinished work.
+
 ## Where to actually make changes
 
 | Task | File |
@@ -143,27 +148,22 @@ In short: this is a **standing, reactive meta-plugin that drafts schemas for
 whatever plugin is found missing, research-backed via NotebookLM, gated by
 human review** — not a fixed batch job for a specific list of plugins.
 
-## JSON Schema → proto type mapping (what `build.rs` actually does)
+## JSON Schema → proto mapping
 
-`crates/op-grpc-bridge/build.rs::json_schema_type_to_proto` maps:
+The shared mapper lives in `crates/op-blob/src/json_schema_proto.rs`; the bridge
+uses it for generated native messages. Structured objects become typed nested
+messages; typed string-key maps retain their value types. Scalars preserve
+presence, including explicit false, zero and empty strings. Unsigned 64-bit
+contracts use `uint64`. Nulls, arbitrary JSON, unions and nested arrays use the
+appropriate standard `Value`/`Struct`/`ListValue` dependencies. Arbitrary numbers
+inside `Value` remain subject to protobuf's double-precision limit.
 
-| JSON Schema | Proto type |
-|---|---|
-| `string` (or has non-empty `enum`) | `string` |
-| `boolean` | `bool` |
-| `integer` | `int64` |
-| `number` | `double` |
-| `array` | `repeated <item type>` |
-| `object` with `properties` | `google.protobuf.Struct` |
-| anything else / untyped | `google.protobuf.Value` |
-
-Field numbers are **not** sequential — they're an FNV-1a hash of the field name
-(`stable_field_number`), deliberately stable across regenerations rather than
-assignment-order-stable. This is intentional in this codebase (schemas are
-generated from Rust structs whose field order can shift); don't "fix" it to
-sequential numbering without checking with the user first, since wire
-compatibility here depends on the hash being stable, not on classic proto
-field-number discipline.
+Two existing wire layouts have distinct numbering rules: generated native
+bridge fields use stable FNV-1a numbers; sealed per-method messages retain their
+sorted sequential numbering. Preserve both layouts. Canonical schema map keys
+and declared transport method names are separate identities, not interchangeable
+aliases. Consumers register the original sealed descriptors and never reseal,
+regenerate, or hash them as an existence check.
 
 ## Known project-specific tensions vs. generic gRPC best practice
 
@@ -185,11 +185,13 @@ Be aware of these before applying textbook advice unmodified:
   If asked to add real proto enums, that requires changing
   `json_schema_type_to_proto` in `crates/op-grpc-bridge/build.rs`, not just the
   plugin schema.
-- **No streaming (`Watch`) support in the generator.** Every generated RPC is
-  unary (`rpc X(Request) returns (Response)`); `stream` responses aren't
-  emitted by `generate_plugin_methods_proto`. A real `Watch`/streaming RPC for
-  a plugin needs a hand-written service in `crates/op-grpc-bridge/proto/`, not
-  a `MethodDecl`.
+- **Streaming comes from state in SHM.** The owner reaffirmed this on
+  2026-09-13. Methods update authoritative SHM state before notifications;
+  existing state subscriptions read that state. Current generated method RPCs
+  being unary does not require another streaming method/service. Preserve
+  private principal/session scope. Method arguments, event payloads and
+  generator buffers are not independent state authorities, and buffered unary
+  responses are not a substitute for SHM state streaming.
 - **One generated file per bridge crate**, not the "1-1-1" file-per-message
   convention — `plugin_methods.proto` bundles every plugin's messages/services
   in one generated file. That's fine; it's a build artifact, not hand-maintained

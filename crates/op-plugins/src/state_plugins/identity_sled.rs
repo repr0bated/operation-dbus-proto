@@ -15,11 +15,14 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+
+#[path = "identity_sled_metadata.rs"]
+mod metadata;
+pub use metadata::identity_metadata_projection;
 
 /// Record format discriminator for `ContainerIdentitySled`.
 ///
@@ -203,6 +206,11 @@ pub struct IdentitySledState {
     /// All known container identity sleds, keyed by `session_id`, sorted.
     #[schemars(extend("x-oscal-subid" = "obs.service.identity-sled.sleds@v1"))]
     pub sleds: Vec<ContainerIdentitySled>,
+    /// Recent durable session events, newest first. This is a bounded
+    /// projection of the Cozo ledger and remains private unless a later schema
+    /// explicitly grants public paths.
+    #[serde(default)]
+    pub events: Vec<SessionEvent>,
 }
 
 pub struct IdentitySledPlugin;
@@ -210,18 +218,6 @@ pub struct IdentitySledPlugin;
 impl IdentitySledPlugin {
     pub fn new() -> Self {
         Self
-    }
-
-    /// This plugin's present state, read from its own sealed blob in the SHM
-    /// catalog (the blob IS the plugin).
-    fn read_state() -> IdentitySledState {
-        let Some(schema) = op_blob::catalog::read_plugin_schema_shm("identity_sled") else {
-            return IdentitySledState::default();
-        };
-        let Some(state) = schema.example else {
-            return IdentitySledState::default();
-        };
-        simd_json::serde::from_owned_value::<IdentitySledState>(state).unwrap_or_default()
     }
 }
 
@@ -237,8 +233,10 @@ impl StatePlugin for IdentitySledPlugin {
         "identity_sled"
     }
 
+    // Plugin field contract v3 retains the native Device discriminants.
+    // SID1, RECORD_FORMAT and durable identity record/revision formats do not change.
     fn version(&self) -> &str {
-        "1.0.0"
+        "3.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -248,51 +246,30 @@ impl StatePlugin for IdentitySledPlugin {
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions: vec![],
-            metadata: DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: "schema".to_string(),
-                desired_hash: "schema".to_string(),
-            },
-        })
+        anyhow::bail!("identity changes require the canonical identity owner; generic reconciliation is unsupported")
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        // Mutations go through the identity_sled dispatcher (MutationEngine);
-        // reconciliation has nothing to converge here.
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
-            checkpoint: None,
-        })
+        anyhow::bail!("identity changes require the canonical identity owner; generic reconciliation is unsupported")
     }
 
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        anyhow::bail!("identity verification requires the canonical private credential reader")
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::read_state())?,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!("identity credentials do not support generic checkpoints")
     }
 
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        anyhow::bail!("identity recovery requires the canonical durable owner; generic rollback is unsupported")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
@@ -305,13 +282,14 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "identity_sled",
-        "1.0.0",
+        "3.0.0",
         "Container identity sleds: the container is the sled is the identity; host is container zero; each record is seeded by its sealed blob",
         &root,
     );
 
     // Typed method inputs / outputs.
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct GetIdentityInput {
         /// Session (container) id to read; empty = the host ("container zero").
         #[serde(default)]
@@ -322,6 +300,7 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub identity: ContainerIdentitySled,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct WriteIdentityInput {
         /// WireGuard public key (base64). session_id is DERIVED from this —
         /// never supplied — so an identity cannot be written under a foreign id.
@@ -335,6 +314,7 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub btrfs_device: Option<SledBtrfsDevice>,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct ProvisionContainerInput {
         /// WireGuard public key (base64). session_id — and therefore the
         /// container name — is DERIVED from this, never supplied.
@@ -353,14 +333,17 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub instance: Option<super::incus::IncusInstance>,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct AttachBtrfsDeviceInput {
         pub session_id: String,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct TouchSessionInput {
         pub session_id: String,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct RecordSessionEventInput {
         pub session_id: String,
         /// Event kind (e.g. "arrival", "mutation", "handshake").
@@ -372,19 +355,30 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
         pub content: String,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
     pub struct GetSessionHistoryInput {
         pub session_id: String,
-        /// Maximum entries to return, newest first (0 = all).
+        /// Maximum entries to return, newest first. 0 selects the bounded
+        /// default of 100; values above 4096 are rejected.
         #[serde(default)]
+        #[schemars(range(max = 4096))]
         pub limit: u32,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct GetSessionHistoryOutput {
         pub events: Vec<SessionEvent>,
     }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct TouchSessionOutput {
+        pub identity: ContainerIdentitySled,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct RecordSessionEventOutput {
+        pub session_id: String,
+        pub seq: u64,
+    }
 
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
     use op_state_store::SideEffect;
 
     schema.methods.insert(
@@ -429,7 +423,7 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "touch_session".to_string(),
-        method_decl_from_schemars_with_output::<TouchSessionInput, AckOutput>(
+        method_decl_from_schemars_with_output::<TouchSessionInput, TouchSessionOutput>(
             "touch_session",
             SideEffect::Mutation,
             true,
@@ -439,7 +433,7 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "record_session_event".to_string(),
-        method_decl_from_schemars_with_output::<RecordSessionEventInput, AckOutput>(
+        method_decl_from_schemars_with_output::<RecordSessionEventInput, RecordSessionEventOutput>(
             "record_session_event",
             SideEffect::Mutation,
             false,
@@ -480,9 +474,41 @@ pub(crate) fn identity_sled_schema() -> PluginSchema {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn generic_state_hooks_cannot_claim_identity_verification_or_recovery() {
+        let plugin = IdentitySledPlugin::new();
+        let state = simd_json::json!({"sleds":[]});
+        let diff = StateDiff {
+            plugin: "identity_sled".into(),
+            actions: vec![],
+            metadata: op_state::DiffMetadata {
+                timestamp: 0,
+                current_hash: String::new(),
+                desired_hash: String::new(),
+            },
+        };
+        let checkpoint = Checkpoint {
+            id: "untrusted-checkpoint".into(),
+            plugin: "identity_sled".into(),
+            timestamp: 0,
+            state_snapshot: state.clone(),
+            backend_checkpoint: None,
+        };
+        assert!(plugin.calculate_diff(&state, &state).await.is_err());
+        assert!(plugin.apply_state(&diff).await.is_err());
+        assert!(plugin.verify_state(&state).await.is_err());
+        assert!(plugin.create_checkpoint().await.is_err());
+        assert!(plugin.rollback(&checkpoint).await.is_err());
+        let capabilities = plugin.capabilities();
+        assert!(!capabilities.supports_checkpoints);
+        assert!(!capabilities.supports_verification);
+        assert!(!capabilities.supports_rollback);
+    }
+
     #[test]
     fn schema_has_method_surface() {
         let schema = identity_sled_schema();
+        assert_eq!(schema.version, "3.0.0");
         for method in [
             "get_identity",
             "write_identity",
@@ -494,6 +520,52 @@ mod tests {
         ] {
             assert!(schema.methods.contains_key(method), "missing {method}");
         }
+    }
+
+    #[test]
+    fn v2_outputs_and_bounded_inputs_match_runtime_receipts() {
+        let schema = identity_sled_schema();
+        let validate = |method: &str, side: &str, value: serde_json::Value| {
+            let declaration = &schema.methods[method];
+            let shape = if side == "args" {
+                &declaration.args
+            } else {
+                declaration.returns.as_ref().unwrap()
+            };
+            let shape = serde_json::to_value(shape).unwrap();
+            let validator = jsonschema::Validator::new(&shape).unwrap();
+            validator
+                .validate(&value)
+                .map_err(|error| error.to_string())
+        };
+        let identity = serde_json::json!({
+            "session_id":"00000000-0000-4000-8000-000000000001",
+            "wireguard_pubkey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        });
+        assert!(validate(
+            "touch_session",
+            "returns",
+            serde_json::json!({"identity":identity})
+        )
+        .is_ok());
+        assert!(validate(
+            "record_session_event",
+            "returns",
+            serde_json::json!({"session_id":"s","seq":7})
+        )
+        .is_ok());
+        assert!(validate(
+            "get_session_history",
+            "args",
+            serde_json::json!({"session_id":"s","limit":4097})
+        )
+        .is_err());
+        assert!(validate(
+            "touch_session",
+            "args",
+            serde_json::json!({"session_id":"s","sealed_id":"caller"})
+        )
+        .is_err());
     }
 
     #[test]

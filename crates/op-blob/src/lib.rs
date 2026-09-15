@@ -38,8 +38,8 @@
 //!   `blobify_plugin_schema`, which seals the FULL canonical
 //!   `op_state_store::PluginSchema` JSON (signals, guarantees, category, …);
 //!   read it back with `BlobRef::state_store_schema`.
-//! - Descriptor bytes are hand-encoded protobuf (`descriptor.rs`) instead of
-//!   prost — keeps the crate dependency-free per NFR-3's spirit.
+//! - Plugin descriptor bytes are hand-encoded protobuf (`descriptor.rs`).
+//!   Standard JSON well-known descriptors come from prost-reflect's built-ins.
 
 pub mod adapter;
 pub mod blob;
@@ -48,6 +48,7 @@ pub mod catalog;
 pub mod demo;
 pub mod descriptor;
 pub mod identity;
+pub mod json_schema_proto;
 pub mod schema;
 pub mod subid;
 

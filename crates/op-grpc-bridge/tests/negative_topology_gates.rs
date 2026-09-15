@@ -43,7 +43,6 @@ const PINNED_PROTO_FILES: &[&str] = &[
     "crates/op-chat/proto/chat.proto",
     "crates/op-chat/proto/orchestration.proto",
     "crates/op-cognitive-mcp/proto/cognitive.proto",
-    "crates/op-grpc-adapters/proto/adapters.proto",
     "crates/op-grpc-bridge/proto/emqx_exhook_v3.proto",
     "crates/op-grpc-bridge/proto/mail.proto",
     "crates/op-grpc-bridge/proto/operation.proto",
@@ -54,20 +53,32 @@ const PINNED_PROTO_FILES: &[&str] = &[
     "crates/op-mcp/proto/internal_agents.proto",
     "crates/op-mcp/proto/mcp.proto",
     "crates/op-services/proto/services.proto",
-    "crates/op-waypipe-grpc/proto/waypipe_tunnel.proto",
     "crates/op-xray-daemon/proto/app/log/command/config.proto",
+    "crates/op-xray-daemon/proto/app/proxyman/command/command.proto",
+    "crates/op-xray-daemon/proto/app/proxyman/config.proto",
     "crates/op-xray-daemon/proto/app/router/command/command.proto",
     "crates/op-xray-daemon/proto/app/stats/command/command.proto",
+    "crates/op-xray-daemon/proto/common/net/address.proto",
     "crates/op-xray-daemon/proto/common/net/network.proto",
+    "crates/op-xray-daemon/proto/common/net/port.proto",
+    "crates/op-xray-daemon/proto/common/protocol/headers.proto",
+    "crates/op-xray-daemon/proto/common/protocol/server_spec.proto",
+    "crates/op-xray-daemon/proto/common/protocol/user.proto",
     "crates/op-xray-daemon/proto/common/serial/typed_message.proto",
+    "crates/op-xray-daemon/proto/core/config.proto",
+    "crates/op-xray-daemon/proto/proxy/trojan/config.proto",
+    "crates/op-xray-daemon/proto/proxy/vless/account.proto",
+    "crates/op-xray-daemon/proto/proxy/vless/inbound/config.proto",
+    "crates/op-xray-daemon/proto/proxy/vmess/account.proto",
+    "crates/op-xray-daemon/proto/proxy/vmess/inbound/config.proto",
+    "crates/op-xray-daemon/proto/transport/internet/config.proto",
+    "crates/op-xray-daemon/proto/transport/internet/tls/config.proto",
 ];
 
 const PINNED_GRPC_PACKAGES: &[&str] = &[
     "assistant.v1",
     "emqx.exhook.v3",
-    "op.adapters.v1",
     "op.mcp.v1",
-    "op.waypipe.v1",
     "op_agents",
     "op_cache",
     "op_chat.agents",
@@ -80,12 +91,49 @@ const PINNED_GRPC_PACKAGES: &[&str] = &[
     "operation.registration.v1",
     "operation.registry.v1",
     "operation.v1",
+    "tched_router",
     "xray.app.log.command",
+    "xray.app.proxyman",
+    "xray.app.proxyman.command",
     "xray.app.router.command",
     "xray.app.stats.command",
     "xray.common.net",
+    "xray.common.protocol",
     "xray.common.serial",
+    "xray.core",
+    "xray.proxy.trojan",
+    "xray.proxy.vless",
+    "xray.proxy.vless.inbound",
+    "xray.proxy.vmess",
+    "xray.proxy.vmess.inbound",
+    "xray.transport.internet",
+    "xray.transport.internet.tls",
+];
+
+/// Packages that declare a gRPC service, separate from message-only dependency
+/// packages. This pin keeps new service surfaces visible even when a vendored
+/// protocol dependency closure legitimately expands.
+const PINNED_GRPC_SERVICE_PACKAGES: &[&str] = &[
+    "assistant.v1",
+    "emqx.exhook.v3",
+    "op.mcp.v1",
+    "op_agents",
+    "op_cache",
+    "op_chat.agents",
+    "op_chat.chat",
+    "op_chat.orchestration",
+    "opdbus.services.v1",
+    "operation.cognitive.v1",
+    "operation.mail.v1",
+    "operation.privacy.v1",
+    "operation.registration.v1",
+    "operation.registry.v1",
+    "operation.v1",
     "tched_router",
+    "xray.app.log.command",
+    "xray.app.proxyman.command",
+    "xray.app.router.command",
+    "xray.app.stats.command",
 ];
 
 const PINNED_PYTHON_FILES: &[&str] = &[
@@ -453,6 +501,32 @@ fn collect_grpc_packages(root: &Path) -> Result<BTreeSet<String>, String> {
     Ok(packages)
 }
 
+fn collect_grpc_service_packages(root: &Path) -> Result<BTreeSet<String>, String> {
+    let protos = inventory_set(root, &["crates"], "proto")?;
+    let mut packages = BTreeSet::new();
+    for rel in protos {
+        let text = read_text(&root.join(&rel))?;
+        let package = text.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("package ")
+                .map(|rest| rest.trim_end_matches(';').trim())
+                .filter(|name| !name.is_empty())
+        });
+        let declares_service = text.lines().any(|line| {
+            line.trim()
+                .strip_prefix("service ")
+                .and_then(|rest| rest.chars().next())
+                .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+        });
+        if declares_service {
+            let package = package
+                .ok_or_else(|| format!("gRPC service declaration without package in {rel}"))?;
+            packages.insert(package.to_string());
+        }
+    }
+    Ok(packages)
+}
+
 fn scan_identity_command_new(root: &Path) -> Result<Vec<Violation>, String> {
     let paths = identity_command_new_scope(root)?;
     let mut violations = Vec::new();
@@ -589,7 +663,7 @@ fn assert_violations_empty(label: &str, violations: Vec<Violation>) {
 }
 
 fn boundaries_path(root: &Path) -> PathBuf {
-    root.join("kiro/specs/netmaker-xray-identity-handoff/boundaries.md")
+    root.join("docs/src/architecture/identity-boundaries.md")
 }
 
 fn ttl_900s_in_issuance_context(text: &str) -> bool {
@@ -618,6 +692,40 @@ fn scan_root_non_vacuous() {
         err.contains("Cargo.toml") || err.contains("empty") || err.contains("missing"),
         "empty root must hard-fail: {err}"
     );
+}
+
+#[test]
+fn retired_waypipe_is_not_a_build_or_proto_input() {
+    let root = workspace_root().canonicalize().unwrap();
+    assert!(!root.join("crates/op-waypipe-grpc/Cargo.toml").exists());
+    for manifest in ["Cargo.toml", "Cargo.lock"] {
+        let text = fs::read_to_string(root.join(manifest)).unwrap();
+        assert!(
+            !text.contains("op-waypipe-grpc"),
+            "retired Waypipe in {manifest}"
+        );
+    }
+    assert!(!PINNED_GRPC_PACKAGES.contains(&"op.waypipe.v1"));
+    assert!(!PINNED_GRPC_SERVICE_PACKAGES.contains(&"op.waypipe.v1"));
+}
+
+#[test]
+fn retired_standalone_adapters_are_not_build_or_proto_inputs() {
+    let root = workspace_root().canonicalize().unwrap();
+    assert!(!root.join("crates/op-grpc-adapters/Cargo.toml").exists());
+    for manifest in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "crates/op-grpc-bridge/Cargo.toml",
+    ] {
+        let text = fs::read_to_string(root.join(manifest)).unwrap();
+        assert!(
+            !text.contains("op-grpc-adapters"),
+            "retired standalone adapters in {manifest}"
+        );
+    }
+    assert!(!PINNED_GRPC_PACKAGES.contains(&"op.adapters.v1"));
+    assert!(!PINNED_GRPC_SERVICE_PACKAGES.contains(&"op.adapters.v1"));
 }
 
 #[test]
@@ -668,6 +776,37 @@ fn grpc_package_set_matches_pinned_baseline() {
         .map(|s| (*s).to_string())
         .collect();
     assert_eq!(found, expected, "gRPC package set drift");
+}
+
+#[test]
+fn grpc_service_package_set_matches_pinned_baseline() {
+    let root = workspace_root().canonicalize().unwrap();
+    let found = collect_grpc_service_packages(&root).unwrap();
+    let expected: BTreeSet<_> = PINNED_GRPC_SERVICE_PACKAGES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(found, expected, "gRPC service package set drift");
+}
+
+#[test]
+fn grpc_service_scanner_detects_new_authored_service_package() {
+    let fixture = tempfile::tempdir().unwrap();
+    let proto_dir = fixture.path().join("crates/demo/proto");
+    fs::create_dir_all(&proto_dir).unwrap();
+    fs::write(
+        proto_dir.join("messages.proto"),
+        "syntax = \"proto3\";\npackage fixture.messages.v1;\nmessage Item {}\n",
+    )
+    .unwrap();
+    fs::write(
+        proto_dir.join("authored.proto"),
+        "syntax = \"proto3\";\npackage fixture.authored.v1;\nservice NewSurface {}\n",
+    )
+    .unwrap();
+
+    let found = collect_grpc_service_packages(fixture.path()).unwrap();
+    assert_eq!(found, BTreeSet::from(["fixture.authored.v1".to_string()]));
 }
 
 #[test]
@@ -825,6 +964,16 @@ fn python_inventory_matches_pinned_baseline() {
     let found = inventory_set(&root, &["crates", "scripts"], "py").unwrap();
     let expected: BTreeSet<String> = PINNED_PYTHON_FILES
         .iter()
+        // The source exporter omits these historical credential-bearing
+        // scripts. They may remain in the original checkout, but are not
+        // required build inputs. Every other pinned path remains mandatory,
+        // and paths outside the pinned set are still rejected.
+        .filter(|path| {
+            !matches!(
+                **path,
+                "scripts/test-antigravity-gemini.py" | "scripts/vectorize_rust_repos.py"
+            ) || found.contains(**path)
+        })
         .map(|s| (*s).to_string())
         .collect();
     assert_eq!(found, expected, "python inventory drift");

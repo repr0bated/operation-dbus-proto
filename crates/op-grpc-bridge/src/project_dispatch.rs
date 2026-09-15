@@ -29,10 +29,8 @@ fn project_path(id: &str) -> Result<PathBuf> {
     Ok(Path::new(PROJECT_ROOT).join(id))
 }
 
-async fn catalog(query: &'static str, params: Value) -> Result<Value> {
-    let store = crate::identity_sled_dispatch::sled_cozo()
-        .ok_or_else(|| anyhow!("durable identity/project catalog is unavailable"))?
-        .clone();
+async fn catalog(engine: &MutationEngine, query: &'static str, params: Value) -> Result<Value> {
+    let store = engine.identity_sled_store()?.cozo().clone();
     tokio::task::spawn_blocking(move || store.run_query(query, Some(params)))
         .await?
         .map_err(Into::into)
@@ -54,14 +52,22 @@ fn decode_project_rows(value: Value) -> Result<Vec<Project>> {
         .collect()
 }
 
-async fn list_projects() -> Result<Vec<Project>> {
-    decode_project_rows(catalog("?[document] := *project_catalog{document}", json!({})).await?)
+async fn list_projects(engine: &MutationEngine) -> Result<Vec<Project>> {
+    decode_project_rows(
+        catalog(
+            engine,
+            "?[document] := *project_catalog{document}",
+            json!({}),
+        )
+        .await?,
+    )
 }
 
-async fn get_project(id: &str) -> Result<Project> {
+async fn get_project(engine: &MutationEngine, id: &str) -> Result<Project> {
     canonical_id(id)?;
     decode_project_rows(
         catalog(
+            engine,
             "?[document] := *project_catalog{project_id, document}, project_id = $id",
             json!({"id":id}),
         )
@@ -72,8 +78,8 @@ async fn get_project(id: &str) -> Result<Project> {
     .ok_or_else(|| anyhow!("project access denied"))
 }
 
-async fn save_project(project: &Project) -> Result<()> {
-    catalog("?[project_id, document] <- [[$id, $document]] :put project_catalog {project_id => document}",
+async fn save_project(engine: &MutationEngine, project: &Project) -> Result<()> {
+    catalog(engine, "?[project_id, document] <- [[$id, $document]] :put project_catalog {project_id => document}",
         json!({"id":project.project_id, "document":serde_json::to_string(project)?})).await?;
     Ok(())
 }
@@ -150,6 +156,7 @@ pub(crate) async fn verified_session(
     canonical_id(session)?;
     let sled = crate::identity_sled_dispatch::stored_session(engine, session)
         .await
+        .context("identity credential projection is unavailable")?
         .ok_or_else(|| anyhow!("verified session does not exist"))?;
     if !sled.is_anchored()
         || sled.genesis.as_deref() != genesis
@@ -199,13 +206,13 @@ pub(crate) async fn dispatch(
     if method == "resolve_context" {
         let input: ResolveContextInput = serde_json::from_value(args.clone())?;
         return Ok(serde_json::to_value(
-            resolve_context(&session, &grants, input).await?,
+            resolve_context(engine, &session, &grants, input).await?,
         )?);
     }
     if method == "list" {
         let _: EmptyInput = serde_json::from_value(args.clone())?;
         return Ok(serde_json::to_value(ProjectListOutput {
-            projects: list_projects()
+            projects: list_projects(engine)
                 .await?
                 .into_iter()
                 .filter(|p| p.role_for(&session).is_some())
@@ -243,7 +250,7 @@ pub(crate) async fn dispatch(
             selected_agent: None,
             created_at: chrono::Utc::now().timestamp(),
         };
-        save_project(&project).await?;
+        save_project(engine, &project).await?;
         project_store(&project, true).await?;
         IncusPlugin::create_project_container(
             &id,
@@ -255,13 +262,13 @@ pub(crate) async fn dispatch(
         .await
         .with_context(|| format!("project {id} remains provisioning; inspect before retrying"))?;
         project.status = ProjectStatus::Ready;
-        save_project(&project).await?;
+        save_project(engine, &project).await?;
         return Ok(serde_json::to_value(ProjectOutput { project })?);
     }
     let id = args["project_id"]
         .as_str()
         .ok_or_else(|| anyhow!("project_id is required"))?;
-    let mut project = get_project(id).await?;
+    let mut project = get_project(engine, id).await?;
     if method == "accept_invite" {
         let input: AcceptInviteInput = serde_json::from_value(args.clone())?;
         project.accept_invitation(
@@ -269,7 +276,7 @@ pub(crate) async fn dispatch(
             &input.invitation_id,
             chrono::Utc::now().timestamp(),
         )?;
-        save_project(&project).await?;
+        save_project(engine, &project).await?;
     } else {
         project.authorize(
             &session,
@@ -291,6 +298,7 @@ pub(crate) async fn dispatch(
                 }
                 if crate::identity_sled_dispatch::stored_session(engine, &input.invited_session_id)
                     .await
+                    .context("identity credential projection is unavailable")?
                     .is_none()
                 {
                     bail!("invited session does not exist");
@@ -305,7 +313,7 @@ pub(crate) async fn dispatch(
                     role: input.role,
                     expires_at: chrono::Utc::now().timestamp() + i64::from(input.ttl_seconds),
                 });
-                save_project(&project).await?;
+                save_project(engine, &project).await?;
             }
             "revoke_member" => {
                 let input: RevokeMemberInput = serde_json::from_value(args.clone())?;
@@ -316,7 +324,7 @@ pub(crate) async fn dispatch(
                 project
                     .invitations
                     .retain(|i| i.invited_session_id != input.session_id);
-                save_project(&project).await?;
+                save_project(engine, &project).await?;
             }
             "select_agent" => {
                 let input: SelectAgentInput = serde_json::from_value(args.clone())?;
@@ -326,7 +334,7 @@ pub(crate) async fn dispatch(
                     bail!("agent is not allowed for this project");
                 }
                 project.selected_agent = Some(input.agent_id);
-                save_project(&project).await?;
+                save_project(engine, &project).await?;
             }
             "put_document" => {
                 let input: PutDocumentInput = serde_json::from_value(args.clone())?;
@@ -384,6 +392,7 @@ pub(crate) async fn dispatch(
 }
 
 async fn resolve_context(
+    engine: &MutationEngine,
     session: &str,
     grants: &BTreeSet<String>,
     input: ResolveContextInput,
@@ -406,7 +415,7 @@ async fn resolve_context(
             let id = input
                 .project_id
                 .ok_or_else(|| anyhow!("project mode requires project_id"))?;
-            let project = get_project(&id).await?;
+            let project = get_project(engine, &id).await?;
             context.effective_capabilities = project.effective_capabilities(session, grants)?;
             require_ready(&project).await?;
             context.read_only = project.role_for(session) == Some(ProjectRole::Reader);
@@ -459,3 +468,7 @@ async fn resolve_context(
     }
     Ok(context)
 }
+
+#[cfg(test)]
+#[path = "project_dispatch_tests.rs"]
+mod tests;

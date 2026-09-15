@@ -7,7 +7,9 @@ license.workspace = true
 description = "LLM provider integration with dynamic model discovery for HuggingFace"
 
 [dependencies]
-# Single schema source: the Zeroclaw plugin owns the LLM schema; op-llm embeds
+serde_json = { workspace = true }
+google-cloud-auth = "1.15"
+# Single schema source: the tched_router plugin owns the LLM schema; op-llm embeds
 # it (see src/schema.rs) instead of defining a divergent copy.
 op-plugins = { path = "../op-plugins" }
 op-state-store = { path = "../op-state-store" }

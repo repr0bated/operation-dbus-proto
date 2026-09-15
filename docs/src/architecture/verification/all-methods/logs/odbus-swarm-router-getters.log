@@ -1,0 +1,30 @@
+   Compiling op-core v0.1.0 (/srv/git/odbus/crates/op-core)
+   Compiling op-cache v0.1.0 (/srv/git/odbus/crates/op-cache)
+   Compiling op-xray-daemon v0.1.0 (/srv/git/odbus/crates/op-xray-daemon)
+   Compiling op-snowball v1.0.0 (/srv/git/odbus/crates/op-snowball)
+   Compiling op-network v1.0.0 (/srv/git/odbus/crates/op-network)
+   Compiling op-jsonrpc v1.0.0 (/srv/git/odbus/crates/op-jsonrpc)
+   Compiling op-agents v1.0.0 (/srv/git/odbus/crates/op-agents)
+   Compiling op-dbus-model v0.1.0 (/srv/git/odbus/crates/op-dbus-model)
+   Compiling op-compliance v0.1.0 (/srv/git/odbus/crates/op-compliance)
+   Compiling op-identity v0.1.0 (/srv/git/odbus/crates/op-identity)
+   Compiling op-introspection v1.0.0 (/srv/git/odbus/crates/op-introspection)
+   Compiling op-inspector v1.0.0 (/srv/git/odbus/crates/op-inspector)
+   Compiling op-state v1.0.0 (/srv/git/odbus/crates/op-state)
+   Compiling op-tools v0.1.0 (/srv/git/odbus/crates/op-tools)
+   Compiling op-dynamic-loader v0.1.0 (/srv/git/odbus/crates/op-dynamic-loader)
+   Compiling op-plugins v1.0.0 (/srv/git/odbus/crates/op-plugins)
+   Compiling op-mcp v0.4.0 (/srv/git/odbus/crates/op-mcp)
+   Compiling op-llm v1.0.0 (/srv/git/odbus/crates/op-llm)
+   Compiling op-cognitive-mcp v0.1.0 (/srv/git/odbus/crates/op-cognitive-mcp)
+   Compiling op-grpc-bridge v0.1.0 (/srv/git/odbus/crates/op-grpc-bridge)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 30s
+     Running tests/tched_router_backing.rs (target/debug/deps/tched_router_backing-683edfbd38e1120f)
+
+running 2 tests
+test gemma_route_uses_the_exact_tched_router_resolve_contract ... ok
+test canonical_selection_commits_verified_upstream_and_preserves_projection_on_failure has been running for over 60 seconds
+test canonical_selection_commits_verified_upstream_and_preserves_projection_on_failure ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 293.18s
+

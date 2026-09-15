@@ -3,6 +3,11 @@
 //! Tracks Postfix/Dovecot runtime state, Unix socket endpoints for Xray routing,
 //! and exposes mail configuration as a D-Bus object via zbus.
 
+#[path = "mail_server/methods.rs"]
+pub mod methods;
+#[path = "mail_server/native_owner.rs"]
+pub mod native_owner;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
@@ -39,6 +44,9 @@ pub struct MailServerState {
     /// Additional container devices (unix socket mounts, etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices: Option<HashMap<String, HashMap<String, String>>>,
+    /// Administration state observed from the native Postfix/Dovecot owner.
+    #[serde(default)]
+    pub administration: MailAdministrationState,
 }
 
 /// Mail protocol endpoints.
@@ -67,7 +75,7 @@ impl MailServerPlugin {
     }
 
     /// Default state for 3tched.com mail stack
-    fn default_state() -> MailServerState {
+    pub fn declared_state() -> MailServerState {
         MailServerState {
             container_name: "mail-3tched".to_string(),
             container_status: "Unknown".to_string(),
@@ -86,6 +94,7 @@ impl MailServerPlugin {
             healthy: false,
             last_error: None,
             devices: None,
+            administration: MailAdministrationState::default(),
         }
     }
 
@@ -240,11 +249,16 @@ impl StatePlugin for MailServerPlugin {
         op_state::PluginMetadata {
             name: self.name().to_string(),
             version: self.version().to_string(),
-            description: "Mail server container state and D-Bus registration for 3tched.com"
+            description: "Postfix/Dovecot state and native D-Bus administration for mail-3tched"
                 .to_string(),
             author: None,
             license: None,
-            dependencies: vec!["incus".to_string(), "unix_socket".to_string()],
+            dependencies: vec![
+                "incus".to_string(),
+                "postfix".to_string(),
+                "dovecot".to_string(),
+                "unix_socket".to_string(),
+            ],
             dbus_services: vec!["org.opdbus.MailServer.3tched".to_string()],
             feature_schemas: vec![],
             object_schemas: std::collections::HashMap::new(),
@@ -256,7 +270,7 @@ impl StatePlugin for MailServerPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -400,8 +414,10 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
 
     let mut schema = PluginSchema::builder("mail_server")
         .category("service")
-        .version("1.0.0")
-        .description("Mail server container state and D-Bus registration for 3tched.com")
+        .version("2.0.0")
+        .description(
+            "Postfix/Dovecot mail administration through the mail-3tched native D-Bus owner",
+        )
         .dependency("incus")
         .dependency("unix_socket")
         .field(
@@ -537,15 +553,41 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
             },
             "container_ip": "10.200.0.2",
             "healthy": true,
-            "last_error": null
+            "last_error": null,
+            "administration": {
+                "revision": 0,
+                "domains": [],
+                "mailboxes": [],
+                "aliases": [],
+                "queue": {"messages": 0, "bytes": 0, "observed_at_unix": 0}
+            }
         }))
         .build();
+
+    let derived_state = super::schemars_adapter::plugin_schema_from_json(
+        "mail_server",
+        "2.0.0",
+        "Postfix/Dovecot mail administration",
+        &serde_json::to_value(schemars::schema_for!(MailServerState))
+            .expect("mail state schema serializes"),
+    );
+    let mut administration = derived_state
+        .fields
+        .get("administration")
+        .cloned()
+        .expect("mail administration field is derived");
+    administration.read_only = true;
+    administration.description =
+        "Native Postfix/Dovecot domains, mailboxes, aliases, quotas and queue summary".into();
+    schema
+        .fields
+        .insert("administration".to_string(), administration);
 
     schema.methods.insert(
         "add_domain".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             DomainInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            DomainMutationOutput,
         >(
             "AddDomain",
             op_state_store::SideEffect::Mutation,
@@ -558,7 +600,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
         "remove_domain".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             DomainInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            DomainMutationOutput,
         >(
             "RemoveDomain",
             op_state_store::SideEffect::Mutation,
@@ -570,8 +612,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     schema.methods.insert(
         "add_mailbox".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            MailboxInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            AddMailboxInput,
+            MailboxMutationOutput,
         >(
             "AddMailbox",
             op_state_store::SideEffect::Mutation,
@@ -583,8 +625,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     schema.methods.insert(
         "remove_mailbox".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            MailboxInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            RemoveMailboxInput,
+            MailboxMutationOutput,
         >(
             "RemoveMailbox",
             op_state_store::SideEffect::Mutation,
@@ -597,7 +639,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
         "add_alias".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             AliasInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            AliasMutationOutput,
         >(
             "AddAlias",
             op_state_store::SideEffect::Mutation,
@@ -609,8 +651,8 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
     schema.methods.insert(
         "remove_alias".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            AliasInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            RemoveAliasInput,
+            AliasMutationOutput,
         >(
             "RemoveAlias",
             op_state_store::SideEffect::Mutation,
@@ -623,7 +665,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
         "set_quota".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             QuotaInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            QuotaMutationOutput,
         >(
             "SetQuota",
             op_state_store::SideEffect::Mutation,
@@ -636,7 +678,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
         "get_queue".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetQueueOutput,
         >(
             "GetQueue",
             op_state_store::SideEffect::Read,
@@ -649,7 +691,7 @@ pub(crate) fn mail_server_schema() -> PluginSchema {
         "flush_queue".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            FlushQueueOutput,
         >(
             "FlushQueue",
             op_state_store::SideEffect::Mutation,
@@ -688,9 +730,13 @@ pub struct DomainInput {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct MailboxInput {
+pub struct AddMailboxInput {
     pub domain: String,
     pub user: String,
+    /// Dovecot passwd-file value, including its password scheme prefix.
+    /// The native owner never returns this credential.
+    #[schemars(extend("x-secret" = true))]
+    pub password_hash: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -701,8 +747,125 @@ pub struct AliasInput {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RemoveMailboxInput {
+    pub domain: String,
+    pub user: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RemoveAliasInput {
+    pub domain: String,
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct QuotaInput {
     pub domain: String,
     pub user: String,
     pub quota_mb: u32,
+}
+
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct MailAdministrationState {
+    pub revision: u64,
+    pub domains: Vec<String>,
+    pub mailboxes: Vec<MailMailbox>,
+    pub aliases: Vec<MailAlias>,
+    pub queue: MailQueueSummary,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct MailMailbox {
+    pub address: String,
+    pub maildir: String,
+    pub quota_bytes: Option<u64>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct MailAlias {
+    pub address: String,
+    pub destination: String,
+}
+
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct MailQueueSummary {
+    pub messages: u64,
+    pub bytes: u64,
+    pub observed_at_unix: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DomainMutationOutput {
+    pub domain: String,
+    pub changed: bool,
+    pub domains: Vec<String>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct MailboxMutationOutput {
+    pub address: String,
+    pub maildir: String,
+    pub quota_bytes: Option<u64>,
+    pub changed: bool,
+    pub maildir_preserved: bool,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct AliasMutationOutput {
+    pub address: String,
+    pub destination: Option<String>,
+    pub changed: bool,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct QuotaMutationOutput {
+    pub address: String,
+    pub quota_bytes: u64,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct MailQueueRecipient {
+    pub address: String,
+    pub original_address: Option<String>,
+    /// Postfix's reason class, such as `defer` or `bounce`.
+    pub reason_kind: Option<String>,
+    pub delay_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct MailQueueEntry {
+    pub queue_name: String,
+    pub queue_id: String,
+    pub arrival_time: i64,
+    pub message_size: u64,
+    pub forced_expire: bool,
+    pub sender: String,
+    pub recipients: Vec<MailQueueRecipient>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetQueueOutput {
+    pub entries: Vec<MailQueueEntry>,
+    pub summary: MailQueueSummary,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct FlushQueueOutput {
+    /// True once Postfix accepted the at-least-once flush trigger. A lost
+    /// transport reply can require readback and a repeat trigger.
+    pub accepted: bool,
+    pub before: MailQueueSummary,
+    pub after: MailQueueSummary,
 }

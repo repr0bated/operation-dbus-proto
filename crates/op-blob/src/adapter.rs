@@ -22,6 +22,21 @@ pub fn plugin_schema_from_json(
     description: &str,
     root: &JVal,
 ) -> PluginSchema {
+    try_plugin_schema_from_json(name, version, description, root)
+        .expect("plugin state schema cannot be represented without loss")
+}
+
+/// Fallible producer boundary. Rejects recursive references, mixed dynamic /
+/// named objects, and unsupported map-value constraints before conversion.
+/// This never reads a catalog or establishes runtime plugin existence.
+pub fn try_plugin_schema_from_json(
+    name: &str,
+    version: &str,
+    description: &str,
+    root: &JVal,
+) -> Result<PluginSchema, op_state_store::state_schema_shape::StateSchemaShapeError> {
+    let prepared = op_state_store::state_schema_shape::prepare_state_schema(root)?;
+    let root = &prepared;
     let defs = root
         .get("$defs")
         .or_else(|| root.get("definitions"))
@@ -59,14 +74,16 @@ pub fn plugin_schema_from_json(
             .filter_map(|v| v.as_str().map(String::from))
             .collect();
     }
-    schema
+    Ok(schema)
 }
 
 /// Follow a single `$ref` into `$defs`/`definitions`, recursively.
 fn resolve<'a>(node: &'a JVal, defs: Option<&'a Map<String, JVal>>) -> &'a JVal {
     if let (Some(r), Some(d)) = (node.get("$ref").and_then(JVal::as_str), defs) {
         if let Some(key) = r.rsplit('/').next() {
-            if let Some(target) = d.get(key) {
+            let key = op_state_store::state_schema_shape::decode_component(key)
+                .expect("producer preflight checked the local reference");
+            if let Some(target) = d.get(&key) {
                 return resolve(target, defs);
             }
         }
@@ -86,7 +103,25 @@ fn required_set(node: &JVal) -> HashSet<String> {
 }
 
 fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
-    let node = resolve(node, defs);
+    // Preserve an explicit field opt-in even when its body is a local $ref.
+    let node = if node
+        .get("x-opdbus-exact-json-schema")
+        .and_then(JVal::as_bool)
+        == Some(true)
+    {
+        node
+    } else {
+        resolve(node, defs)
+    };
+    if node
+        .get("x-opdbus-exact-json-schema")
+        .and_then(JVal::as_bool)
+        == Some(true)
+    {
+        let document = op_state_store::exact_schema::self_contained_field_schema(node, defs)
+            .expect("producer preflight admitted the explicit exact field");
+        return FieldType::JsonSchema(Box::new(document));
+    }
 
     // `anyOf`/`oneOf`: Option<T> collapses to T; multi-branch unions become a
     // real discriminated `OneOf` so all variants render.
@@ -106,6 +141,10 @@ fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
                 return FieldType::OneOf(many.iter().map(|a| field_type(a, defs)).collect());
             }
         }
+    }
+
+    if let Some(value) = node.get("const").and_then(JVal::as_str) {
+        return FieldType::Enum(vec![value.to_owned()]);
     }
 
     if let Some(en) = node.get("enum").and_then(JVal::as_array) {
@@ -129,6 +168,14 @@ fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
             FieldType::Array(Box::new(item))
         }
         Some("object") => {
+            let named = node.get("properties").and_then(JVal::as_object);
+            if named.is_none_or(|properties| properties.is_empty()) {
+                if let Some(additional) = node.get("additionalProperties") {
+                    if additional != &JVal::Bool(false) {
+                        return FieldType::Map(Box::new(field_type(additional, defs)));
+                    }
+                }
+            }
             let req = required_set(node);
             let mut m = HashMap::new();
             if let Some(props) = node.get("properties").and_then(JVal::as_object) {
@@ -163,13 +210,32 @@ fn field_schema(node: &JVal, defs: Option<&Map<String, JVal>>, required: bool) -
             .to_string(),
         default: meta.get("default").cloned(),
         example: example_of(meta).cloned(),
-        constraints: constraints(meta),
+        constraints: constraints(constraint_node(meta, defs)),
         read_only: meta
             .get("readOnly")
             .and_then(JVal::as_bool)
             .unwrap_or(false),
         read_only_when: None,
     }
+}
+
+// The finite producer preflight admits only one non-null optional branch
+// when a shared FieldSchema must carry its constraints.
+fn constraint_node<'a>(node: &'a JVal, defs: Option<&'a Map<String, JVal>>) -> &'a JVal {
+    let resolved = resolve(node, defs);
+    if let Some(alternatives) = resolved
+        .get("anyOf")
+        .or_else(|| resolved.get("oneOf"))
+        .and_then(JVal::as_array)
+    {
+        let mut concrete = alternatives
+            .iter()
+            .filter(|node| type_str(node) != Some("null"));
+        if let (Some(single), None) = (concrete.next(), concrete.next()) {
+            return constraint_node(single, defs);
+        }
+    }
+    resolved
 }
 
 fn example_of(node: &JVal) -> Option<&JVal> {
@@ -363,6 +429,12 @@ fn field_diffs(d: &mut Vec<String>, prefix: &str, r: &FieldSchema, v: &FieldSche
 
 fn field_type_diffs(d: &mut Vec<String>, prefix: &str, r: &FieldType, v: &FieldType) {
     match (r, v) {
+        (FieldType::JsonSchema(left), FieldType::JsonSchema(right)) if left != right => {
+            d.push(format!("{prefix}: exact schema changed"));
+        }
+        (FieldType::Map(r_inner), FieldType::Map(v_inner)) => {
+            field_type_diffs(d, &format!("{prefix}{{value}}"), r_inner, v_inner);
+        }
         (FieldType::Array(r_inner), FieldType::Array(v_inner)) => {
             field_type_diffs(d, &format!("{prefix}[]"), r_inner, v_inner);
         }
@@ -404,6 +476,7 @@ fn type_tag(t: &FieldType) -> String {
         FieldType::Integer => "integer".into(),
         FieldType::Float => "float".into(),
         FieldType::Boolean => "boolean".into(),
+        FieldType::JsonSchema(_) => "json_schema".into(),
         FieldType::Any => "any".into(),
         FieldType::Enum(_) => "enum".into(),
         FieldType::OneOf(branches) => {
@@ -411,6 +484,7 @@ fn type_tag(t: &FieldType) -> String {
             tags.sort();
             format!("one_of<{}>", tags.join("|"))
         }
+        FieldType::Map(i) => format!("map<string,{}>", type_tag(i)),
         FieldType::Array(i) => format!("array<{}>", type_tag(i)),
         FieldType::Object(m) => {
             let mut entries: Vec<String> = m

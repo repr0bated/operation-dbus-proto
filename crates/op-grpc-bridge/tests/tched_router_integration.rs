@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::{extract::Query, routing::get, Json, Router};
 use op_grpc_bridge::mcp_policy::{
     parse_audience_policy, parse_toolset_manifest, McpProjectionPolicy,
 };
@@ -18,18 +19,101 @@ use op_grpc_bridge::proto::tched_router::{
 };
 use op_grpc_bridge::schema_loader::SchemaLoader;
 use op_grpc_bridge::server::build_axum_app_with_policy;
-use serde_json::json;
+use op_state::StatePlugin;
 use tokio::time::timeout;
 use tonic::metadata::MetadataValue;
+mod support;
 
 const TEST_TRACE_HEADER: &str = "x-ghostbridge-trace-id";
 const TEST_GENESIS_HEADER: &str = "x-ghostbridge-genesis";
 
-fn write_schema(path: &PathBuf, value: &serde_json::Value) {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).unwrap();
+struct RuntimeFixture {
+    task: tokio::task::JoinHandle<()>,
+    environment: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl Drop for RuntimeFixture {
+    fn drop(&mut self) {
+        self.task.abort();
+        for (key, value) in &self.environment {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
     }
-    std::fs::write(path, serde_json::to_string(value).unwrap()).unwrap();
+}
+
+async fn start_runtime_fixture() -> RuntimeFixture {
+    async fn health() -> Json<serde_json::Value> {
+        Json(serde_json::json!({"status":"ok"}))
+    }
+    async fn full() -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "agents":{"dashboard":{"model_provider":"ollama.default"}},
+            "providers":{"models":{"ollama":{"default":{"model":"ollama-model"}}}}
+        }))
+    }
+    async fn list() -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "entries":[{
+                "path":"providers.models.ollama.default.model",
+                "value":"ollama-model"
+            }]
+        }))
+    }
+    async fn prop(
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        let value = match query.get("path").map(String::as_str) {
+            Some("agents.dashboard.model_provider") => "ollama.default",
+            Some("providers.models.ollama.default.model") => "ollama-model",
+            _ => "",
+        };
+        Json(serde_json::json!({"value":value}))
+    }
+    async fn models() -> Json<serde_json::Value> {
+        Json(serde_json::json!({"models":["ollama-model"],"live":true}))
+    }
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/api/config", get(full))
+        .route("/api/config/list", get(list))
+        .route("/api/config/prop", get(prop))
+        .route("/api/config/catalog/models", get(models));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let environment = [
+        "TCHED_ROUTER_RUNTIME_ENDPOINT",
+        "TCHED_ROUTER_RUNTIME_AGENT",
+        "TCHED_ROUTER_RUNTIME_TOKEN",
+        "OP_GRANTS_PATH",
+        "OP_HUMAN_PRINCIPAL_COZO_DB_PATH",
+        "OP_LOCAL_HUMAN_WIREGUARD_PUBKEY",
+        "OP_LOCAL_HUMAN_SESSION_ID",
+        "OP_LOCAL_HUMAN_PRINCIPAL_ID",
+    ]
+    .into_iter()
+    .map(|key| (key, std::env::var_os(key)))
+    .collect();
+    std::env::set_var("TCHED_ROUTER_RUNTIME_ENDPOINT", format!("http://{address}"));
+    std::env::set_var("TCHED_ROUTER_RUNTIME_AGENT", "dashboard");
+    std::env::remove_var("TCHED_ROUTER_RUNTIME_TOKEN");
+    RuntimeFixture { task, environment }
+}
+
+fn write_schema(dir: &std::path::Path, version: &str, description: &str) {
+    let schema = op_state_store::PluginSchema::builder("tched_router")
+        .version(version)
+        .description(description)
+        .build();
+    let blob = op_blob::blobify_plugin_schema("tched_router", schema);
+    op_blob::catalog::BlobStore::open(dir)
+        .unwrap()
+        .write(&blob)
+        .unwrap();
 }
 
 fn test_mcp_policy() -> McpProjectionPolicy {
@@ -48,14 +132,8 @@ fn test_mcp_policy() -> McpProjectionPolicy {
 
 async fn start_test_server() -> (SocketAddr, Arc<SchemaLoader>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("live-schema.json");
-    let schema = json!({
-        "name": "tched_router",
-        "version": "1.0.0",
-        "kind": "llm",
-        "description": "test schema"
-    });
-    write_schema(&path, &json!({ "tched_router": [schema] }));
+    let path = dir.path().to_path_buf();
+    write_schema(&path, "1.0.0", "test schema");
 
     let loader = Arc::new(SchemaLoader::new(&path).unwrap());
 
@@ -137,13 +215,7 @@ async fn should_stream_reload_on_sighup() {
     // Simulate a SIGHUP-triggered reload by reloading the file and broadcasting
     // the event through the loader's channel. Tests do not send real SIGHUP to
     // the process to avoid interfering with other tests.
-    let updated = json!({
-        "name": "tched_router",
-        "version": "2.0.0",
-        "kind": "llm",
-        "description": "reloaded schema"
-    });
-    write_schema(&path, &json!({ "tched_router": [updated] }));
+    write_schema(&path, "2.0.0", "reloaded schema");
     loader.load().unwrap();
     let _ = loader
         .reload_tx()
@@ -164,19 +236,69 @@ async fn should_stream_reload_on_sighup() {
 
 #[tokio::test]
 async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
+    let router_schema = op_plugins::state_plugins::tched_router::TchedRouterPlugin::new()
+        .schema()
+        .unwrap();
+    let _catalog = support::CatalogScope::new(&[
+        op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
+            .schema()
+            .unwrap(),
+        op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
+            .schema()
+            .unwrap(),
+        router_schema.clone(),
+    ]);
+    let _runtime = start_runtime_fixture().await;
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let engine = op_grpc_bridge::MutationEngine::new(event_chain.clone(), ovsdb);
+    let identity_cozo = op_cozo_store::CozoGraphShuttle::new_in_memory().unwrap();
+    engine
+        .configure_identity_store(identity_cozo.clone())
+        .unwrap();
+    use base64::Engine as _;
+    let public_key = base64::engine::general_purpose::STANDARD.encode([0xD2; 32]);
+    std::env::set_var(
+        "OP_HUMAN_PRINCIPAL_COZO_DB_PATH",
+        _catalog.root().join("human-cozo"),
+    );
+    std::env::set_var("OP_LOCAL_HUMAN_WIREGUARD_PUBKEY", &public_key);
+    std::env::remove_var("OP_LOCAL_HUMAN_SESSION_ID");
+    std::env::remove_var("OP_LOCAL_HUMAN_PRINCIPAL_ID");
+    let actor = op_identity::session::derive_principal_id(&public_key);
+    let capability = router_schema.methods["ListModels"]
+        .required_capability
+        .clone()
+        .unwrap();
+    let grants = _catalog.root().join("grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::to_vec(&serde_json::json!({
+            (actor.clone()): {"capabilities":[capability.clone()]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::env::set_var("OP_GRANTS_PATH", grants);
+    support::provision_identity_record(&identity_cozo, _catalog.root(), &public_key).unwrap();
+    engine.recover_configured_identity_store().await.unwrap();
+    let caller = engine
+        .bootstrap_configured_local_human_identity()
+        .await
+        .unwrap()
+        .expect("configured fixture identity");
 
     let result = engine
-        .dispatch_method_call(
+        .dispatch_method_call_with_identity(
             "tched_router",
             "ListModels",
-            r#"{"provider":"salad"}"#,
-            Some("cap.software.3tched-router.models.read@v1"),
-            "integration-test-actor",
+            r#"{"provider":"ollama"}"#,
+            Some(&capability),
+            &actor,
+            Some(&caller.session_id),
+            Some(&caller.genesis_hex),
         )
         .await
         .unwrap();
@@ -188,7 +310,7 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
     assert!(!routes.is_empty());
     assert!(routes
         .iter()
-        .all(|route| { route["provider"] == "salad" || route["upstream_provider"] == "salad" }));
+        .all(|route| { route["provider"] == "ollama" || route["upstream_provider"] == "ollama" }));
 
     let chain = event_chain.read().await;
     let event = chain.events().last().unwrap();
@@ -198,9 +320,9 @@ async fn list_models_uses_the_audited_tched_router_method_dispatcher() {
         event.capability_id.as_deref(),
         Some("cap.software.3tched-router.models.read@v1")
     );
-    assert_eq!(event.actor_id, "integration-test-actor");
+    assert_eq!(event.actor_id, actor);
     assert_eq!(
         event.input_payload.as_ref().expect("payload")["args"]["provider"],
-        "salad"
+        "ollama"
     );
 }

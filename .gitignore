@@ -36,6 +36,8 @@ google-cloud-sdk/
 # Local built artifacts
 deploy/bin/
 *.tar.gz
+!vendor/tched-router/source.tar.gz
+!vendor/vercel-json-render-ui/source.tar.gz
 backup.tar.gz
 
 # Local WARP premium credentials

@@ -641,6 +641,8 @@ fn render_field_type(field_type: &FieldType) -> String {
                 .collect::<Vec<_>>()
                 .join("|")
         ),
+        FieldType::Map(value) => format!("map<string,{}>", render_field_type(value)),
+        FieldType::JsonSchema(_) => "json_schema".to_string(),
         FieldType::Any => "any".to_string(),
     }
 }
@@ -813,6 +815,8 @@ mod tests {
             description: "Human reviewable reasoning episodes".into(),
             display_name: None,
             fields,
+            public_state: Default::default(),
+            field_writes: std::collections::HashMap::new(),
             dependencies: vec!["op-grpc-bridge".into(), "op-state-store".into()],
             example: None,
             immutable_paths: vec!["/episode_id".into()],

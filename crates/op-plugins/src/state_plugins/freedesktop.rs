@@ -9,13 +9,13 @@
 //! This plugin follows the canonical path convention:
 //! - D-Bus Path: /org/opdbus/v1/plugins/freedesktop
 //! - Interface: org.opdbus.v1.PluginV1
-//! - Schema: schemas/plugin/freedesktop.json
+//! - Schema: this plugin's Rust declaration.
 //!
 //! ## Architecture
 //!
-//! The FreeDesktop plugin provides a schema-backed implementation of standard
-//! FreeDesktop D-Bus interfaces. It acts as a reference implementation for how
-//! plugins should be structured in this system.
+//! The bridge executes these standard operations against canonical sealed
+//! OP-DBUS plugin objects. The descriptor tables below describe FreeDesktop
+//! metadata; they do not grant arbitrary external D-Bus access.
 //!
 //! ## Canonical Path Compliance
 //!
@@ -38,35 +38,124 @@ use simd_json::prelude::{ValueAsScalar, ValueObjectAccess};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 
+/// Enumeration is restricted to the current sealed OP-DBUS plugin catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetManagedObjectsInput {}
 
+fn canonical_interface() -> String {
+    canonical::PLUGIN_INTERFACE.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetPropertyInput {
+    pub plugin_id: String,
+    #[serde(default = "canonical_interface")]
     pub interface_name: String,
     pub property_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetAllPropertiesInput {
+    pub plugin_id: String,
+    #[serde(default = "canonical_interface")]
     pub interface_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetPropertyInput {
+    pub plugin_id: String,
+    #[serde(default = "canonical_interface")]
     pub interface_name: String,
     pub property_name: String,
-    pub value: String,
+    /// A native JSON value checked against the target plugin's sealed field.
+    pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct IntrospectInput {}
+#[serde(deny_unknown_fields)]
+pub struct IntrospectInput {
+    pub plugin_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PingInput {}
+#[serde(deny_unknown_fields)]
+pub struct PingInput {
+    pub plugin_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GetMachineIdInput {}
+#[serde(deny_unknown_fields)]
+pub struct GetMachineIdInput {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ManagedPluginObject {
+    pub plugin_id: String,
+    pub object_path: String,
+    pub interface_name: String,
+    pub schema_hash: String,
+    /// Only fields declared by this sealed plugin and present in public SHM.
+    pub properties: std::collections::BTreeMap<String, serde_json::Value>,
+    pub projection_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetManagedObjectsOutput {
+    pub objects: Vec<ManagedPluginObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetPropertyOutput {
+    pub plugin_id: String,
+    pub property_name: String,
+    pub value: serde_json::Value,
+    pub read_only: bool,
+    pub schema_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetAllPropertiesOutput {
+    pub object: ManagedPluginObject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetPropertyOutput {
+    pub plugin_id: String,
+    pub property_name: String,
+    pub method: String,
+    /// The mapped mutation's actual result; no requested-value echo.
+    pub result: serde_json::Value,
+    pub event_id: u64,
+    pub event_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IntrospectOutput {
+    pub plugin_id: String,
+    pub object_path: String,
+    pub schema_hash: String,
+    /// Canonical PluginV1 ABI with sealed method/field metadata annotations.
+    /// A declared plugin method is invoked through Call, not a new D-Bus member.
+    pub xml: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PingOutput {
+    pub plugin_id: String,
+    pub object_path: String,
+    pub schema_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetMachineIdOutput {
+    pub plugin_id: String,
+    pub machine_id: String,
+}
 
 /// FreeDesktop plugin implementation
 pub struct FreeDesktopPlugin {
@@ -135,30 +224,30 @@ impl FreeDesktopPlugin {
 
     /// Initialize the plugin schema
     fn initialize_schema(&mut self) {
-        // In a full implementation, this would load from schemas/plugin/freedesktop.json
+        // Static fallback; the plugin owns its contract.
         // For now, we define the schema programmatically following the canonical structure
         self.schema = Some(
             PluginSchema::builder("freedesktop")
                 .category("service")
-                .version("1.0.0")
+                .version("2.0.0")
                 .category("system")
-                .description("FreeDesktop D-Bus standards implementation")
+                .description("FreeDesktop operations scoped to sealed OP-DBUS plugin objects")
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        GetManagedObjectsInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+GetManagedObjectsInput,
+                        GetManagedObjectsOutput,
                     >(
                         "GetManagedObjects",
                         op_state_store::SideEffect::Read,
                         true,
                         "freedesktop.read",
-                        "obs.software.freedesktop.managed_objects.get@v1",
+                        "obs.software.freedesktop.managed-objects.get@v1",
                     ),
                 )
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        GetPropertyInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+GetPropertyInput,
+                        GetPropertyOutput,
                     >(
                         "Get",
                         op_state_store::SideEffect::Read,
@@ -169,8 +258,8 @@ impl FreeDesktopPlugin {
                 )
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        GetAllPropertiesInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+GetAllPropertiesInput,
+                        GetAllPropertiesOutput,
                     >(
                         "GetAll",
                         op_state_store::SideEffect::Read,
@@ -181,8 +270,8 @@ impl FreeDesktopPlugin {
                 )
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        SetPropertyInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+SetPropertyInput,
+                        SetPropertyOutput,
                     >(
                         "Set",
                         op_state_store::SideEffect::Mutation,
@@ -193,8 +282,8 @@ impl FreeDesktopPlugin {
                 )
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        IntrospectInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+IntrospectInput,
+                        IntrospectOutput,
                     >(
                         "Introspect",
                         op_state_store::SideEffect::Read,
@@ -205,8 +294,8 @@ impl FreeDesktopPlugin {
                 )
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        PingInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+PingInput,
+                        PingOutput,
                     >(
                         "Ping",
                         op_state_store::SideEffect::Read,
@@ -217,14 +306,14 @@ impl FreeDesktopPlugin {
                 )
                 .method(
                     super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-                        GetMachineIdInput,
-                        super::plugin_scaffold_helpers::AckOutput,
+GetMachineIdInput,
+                        GetMachineIdOutput,
                     >(
                         "GetMachineId",
                         op_state_store::SideEffect::Read,
                         true,
                         "freedesktop.read",
-                        "obs.software.freedesktop.machine_id.get@v1",
+                        "obs.software.freedesktop.machine-id.get@v1",
                     ),
                 )
                 .capability(op_state_store::CapabilityDecl {
@@ -235,7 +324,7 @@ impl FreeDesktopPlugin {
                 })
                 .capability(op_state_store::CapabilityDecl {
                     id: "freedesktop.write".to_string(),
-                    description: "Grants: Set.".to_string(),
+                    description: "Admits Set; the target plugin's mapped mutation capability is independently required.".to_string(),
                 })
                 .build(),
         );
@@ -394,7 +483,7 @@ impl StatePlugin for FreeDesktopPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn is_available(&self) -> bool {
@@ -489,13 +578,37 @@ impl Default for FreeDesktopConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simd_json::prelude::TypedContainerValue;
+
+    #[test]
+    fn property_contract_requires_canonical_target_and_native_json_value() {
+        let input: SetPropertyInput = serde_json::from_value(serde_json::json!({
+            "plugin_id": "tched_router",
+            "property_name": "selected_model",
+            "value": "model-id"
+        }))
+        .unwrap();
+        assert_eq!(input.interface_name, canonical::PLUGIN_INTERFACE);
+        assert_eq!(input.value, serde_json::json!("model-id"));
+        assert!(
+            serde_json::from_value::<SetPropertyInput>(serde_json::json!({
+                "property_name": "selected_model", "value": "model-id"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SetPropertyInput>(serde_json::json!({
+                "plugin_id": "tched_router", "property_name": "selected_model",
+                "value": "model-id", "destination": "org.external.Service"
+            }))
+            .is_err()
+        );
+    }
 
     #[test]
     fn test_freedesktop_plugin_creation() {
         let plugin = FreeDesktopPlugin::new();
         assert_eq!(plugin.name(), "freedesktop");
-        assert_eq!(plugin.version(), "1.0.0");
+        assert_eq!(plugin.version(), "2.0.0");
         assert!(plugin.is_available());
     }
 

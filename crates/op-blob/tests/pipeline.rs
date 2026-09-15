@@ -115,10 +115,15 @@ fn reflection_descriptor_covers_every_method_with_typed_messages() {
     for schema in [unix_socket_schema(), wireguard_schema()] {
         let blob = blobify(&schema);
         let files = decode_file_summaries(&blob.descriptor_set).unwrap();
-        assert_eq!(files.len(), schema.methods.len());
-        for f in &files {
-            // Typed field descriptors, not google.protobuf.Struct (REQ-6.1).
-            assert!(!f.package.contains("google.protobuf"));
+        let method_files = files
+            .iter()
+            .filter(|file| file.package != "google.protobuf")
+            .collect::<Vec<_>>();
+        assert_eq!(method_files.len(), schema.methods.len());
+        assert!(files.len() <= method_files.len() + 1);
+        for f in method_files {
+            // Per-method Input/Output records remain typed. Dynamic/nullable
+            // fields import the standard JSON well-known descriptor once.
             assert_eq!(f.messages.len(), 2, "{}: Input + Output", f.name);
             assert_eq!(f.services.len(), 1);
             assert!(f

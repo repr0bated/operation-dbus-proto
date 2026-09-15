@@ -1,129 +1,325 @@
-// pcidecl_plugin.rs — declarative PCI device presence/config
-// Query via /sys/bus/pci/devices/* and lspci fallback. Enforce supports "driver_override".
+//! Read-only PCI inventory backed by libudev.
+//!
+//! Kernel PCI identity fields are udev sysattrs. Human-readable hardware
+//! database names are udev properties and remain optional.
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{PluginSchema, SideEffect};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use std::fs;
-use std::path::Path;
+use std::ffi::OsStr;
 
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
-use op_state_store::{Constraint, FieldSchema, FieldType, PluginSchema, SideEffect};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PciDecl {
-    pub version: u32,
-    pub items: Vec<PciItem>,
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("x-oscal-subid" = "sch.hardware.pci.inventory@v2"))]
+pub struct PciState {
+    pub provider: String,
+    pub mutation_supported: bool,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Mode {
-    Enforce,
-    ObserveOnly,
+impl Default for PciState {
+    fn default() -> Self {
+        Self {
+            provider: "libudev".into(),
+            mutation_supported: false,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PciItem {
-    pub id: String, // stable id in your inventory
-    pub mode: Mode,
-    pub address: String, // 0000:00:1f.6
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expect_vendor: Option<String>, // "8086"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expect_device: Option<String>, // "15f3"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub driver_override: Option<String>, // desired override string or "" to clear
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EnumerateDevicesInput {
+    /// Four hexadecimal digits, without the sysfs `0x` prefix.
+    #[serde(default)]
+    pub vendor_id: Option<String>,
+    /// Six hexadecimal digits, without the sysfs `0x` prefix.
+    #[serde(default)]
+    pub class_code: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PciLive {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetDeviceInfoInput {
+    /// Canonical domain:bus:slot.function PCI address, for example 0000:00:1f.6.
     pub address: String,
-    pub vendor: Option<String>,
-    pub device: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PciDeviceRecord {
+    pub address: String,
+    pub vendor_id: String,
+    pub device_id: String,
+    pub class_code: String,
+    pub subsystem_vendor_id: Option<String>,
+    pub subsystem_device_id: Option<String>,
+    pub revision: Option<String>,
     pub driver: Option<String>,
-    pub driver_override: Option<String>,
-    pub present: bool,
+    pub vendor_name: Option<String>,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EnumerateDevicesOutput {
+    pub vendor_id_filter: Option<String>,
+    pub class_code_filter: Option<String>,
+    pub devices: Vec<PciDeviceRecord>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetDeviceInfoOutput {
+    pub address: String,
+    pub found: bool,
+    pub device: Option<PciDeviceRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct ScanRequest {
+    address: Option<String>,
+    vendor_id: Option<String>,
+    class_code: Option<String>,
+}
+
+trait PciProvider: Send + Sync {
+    fn scan(&self, request: &ScanRequest) -> Result<Vec<PciDeviceRecord>>;
+}
+
+struct UdevPciProvider;
+
+fn normalized_hex(raw: &str, width: usize, field: &str) -> Result<String> {
+    anyhow::ensure!(
+        raw.len() == width && raw.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{field} must contain exactly {width} hexadecimal digits without a 0x prefix"
+    );
+    Ok(raw.to_ascii_lowercase())
+}
+
+fn normalized_address(raw: &str) -> Result<String> {
+    anyhow::ensure!(
+        raw.is_ascii()
+            && raw.len() == 12
+            && raw.as_bytes()[4] == b':'
+            && raw.as_bytes()[7] == b':'
+            && raw.as_bytes()[10] == b'.',
+        "PCI address must use exact domain:bus:slot.function syntax"
+    );
+    let domain = normalized_hex(&raw[0..4], 4, "PCI domain")?;
+    let bus = normalized_hex(&raw[5..7], 2, "PCI bus")?;
+    let slot = normalized_hex(&raw[8..10], 2, "PCI slot")?;
+    let function = normalized_hex(&raw[11..12], 1, "PCI function")?;
+    anyhow::ensure!(
+        u8::from_str_radix(&slot, 16)? <= 0x1f,
+        "PCI slot must be between 00 and 1f"
+    );
+    anyhow::ensure!(
+        u8::from_str_radix(&function, 16)? <= 7,
+        "PCI function must be between 0 and 7"
+    );
+    Ok(format!("{domain}:{bus}:{slot}.{function}"))
+}
+
+fn sysattr(device: &udev::Device, name: &str, width: usize) -> Result<String> {
+    let value = device
+        .attribute_value(name)
+        .with_context(|| format!("PCI device is missing required '{name}' sysattr"))?
+        .to_str()
+        .with_context(|| format!("PCI '{name}' sysattr is not UTF-8"))?;
+    normalized_hex(value.strip_prefix("0x").unwrap_or(value), width, name)
+}
+
+fn optional_sysattr(device: &udev::Device, name: &str, width: usize) -> Result<Option<String>> {
+    device
+        .attribute_value(name)
+        .map(|value| {
+            let value = value
+                .to_str()
+                .with_context(|| format!("PCI '{name}' sysattr is not UTF-8"))?;
+            normalized_hex(value.strip_prefix("0x").unwrap_or(value), width, name)
+        })
+        .transpose()
+}
+
+fn optional_property(device: &udev::Device, name: &str) -> Option<String> {
+    device
+        .property_value(name)
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn device_record(device: &udev::Device) -> Result<PciDeviceRecord> {
+    let address = device
+        .sysname()
+        .to_str()
+        .context("PCI device sysname is not UTF-8")?;
+    Ok(PciDeviceRecord {
+        address: normalized_address(address)?,
+        vendor_id: sysattr(device, "vendor", 4)?,
+        device_id: sysattr(device, "device", 4)?,
+        class_code: sysattr(device, "class", 6)?,
+        subsystem_vendor_id: optional_sysattr(device, "subsystem_vendor", 4)?,
+        subsystem_device_id: optional_sysattr(device, "subsystem_device", 4)?,
+        revision: optional_sysattr(device, "revision", 2)?,
+        driver: device
+            .driver()
+            .map(OsStr::to_string_lossy)
+            .map(|value| value.into_owned()),
+        vendor_name: optional_property(device, "ID_VENDOR_FROM_DATABASE"),
+        device_name: optional_property(device, "ID_MODEL_FROM_DATABASE"),
+    })
+}
+
+impl PciProvider for UdevPciProvider {
+    fn scan(&self, request: &ScanRequest) -> Result<Vec<PciDeviceRecord>> {
+        let mut enumerator = udev::Enumerator::new().context("create udev enumerator")?;
+        enumerator
+            .match_subsystem("pci")
+            .context("filter udev PCI subsystem")?;
+        if let Some(address) = &request.address {
+            enumerator
+                .match_sysname(address)
+                .context("filter udev PCI address")?;
+        }
+        if let Some(vendor) = &request.vendor_id {
+            enumerator
+                .match_attribute("vendor", format!("0x{vendor}"))
+                .context("filter udev PCI vendor sysattr")?;
+        }
+        if let Some(class) = &request.class_code {
+            enumerator
+                .match_attribute("class", format!("0x{class}"))
+                .context("filter udev PCI class sysattr")?;
+        }
+        let devices = enumerator.scan_devices().context("scan udev PCI devices")?;
+        let mut records = devices
+            .map(|device| device_record(&device))
+            .collect::<Result<Vec<_>>>()?;
+        records.sort_by(|left, right| left.address.cmp(&right.address));
+        Ok(records)
+    }
+}
+
+fn dispatch_with_provider(
+    provider: &dyn PciProvider,
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "enumerate_devices" => {
+            let input = serde_json::from_value::<EnumerateDevicesInput>(args.clone())
+                .context("invalid enumerate_devices arguments")?;
+            let vendor_id = input
+                .vendor_id
+                .map(|value| normalized_hex(&value, 4, "vendor_id"))
+                .transpose()?;
+            let class_code = input
+                .class_code
+                .map(|value| normalized_hex(&value, 6, "class_code"))
+                .transpose()?;
+            let devices = provider.scan(&ScanRequest {
+                address: None,
+                vendor_id: vendor_id.clone(),
+                class_code: class_code.clone(),
+            })?;
+            Ok(serde_json::to_value(EnumerateDevicesOutput {
+                vendor_id_filter: vendor_id,
+                class_code_filter: class_code,
+                total: u64::try_from(devices.len()).context("PCI device count overflow")?,
+                devices,
+            })?)
+        }
+        "get_device_info" => {
+            let input = serde_json::from_value::<GetDeviceInfoInput>(args.clone())
+                .context("invalid get_device_info arguments")?;
+            let address = normalized_address(&input.address)?;
+            let mut devices = provider.scan(&ScanRequest {
+                address: Some(address.clone()),
+                vendor_id: None,
+                class_code: None,
+            })?;
+            anyhow::ensure!(devices.len() <= 1, "udev returned duplicate PCI addresses");
+            let device = devices.pop();
+            Ok(serde_json::to_value(GetDeviceInfoOutput {
+                address,
+                found: device.is_some(),
+                device,
+            })?)
+        }
+        other => anyhow::bail!("unknown pcidecl method '{other}'"),
+    }
+}
+
+pub async fn dispatch_pcidecl_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let method = method.to_owned();
+    let args = args.clone();
+    tokio::task::spawn_blocking(move || dispatch_with_provider(&UdevPciProvider, &method, &args))
+        .await
+        .context("PCI udev provider task failed")?
+}
+
+pub(crate) fn pcidecl_schema() -> PluginSchema {
+    let root = serde_json::to_value(schemars::schema_for!(PciState)).expect("schema serializes");
+    let mut schema = super::schemars_adapter::plugin_schema_from_json(
+        "pcidecl",
+        "2.0.0",
+        "Read-only PCI device inventory from libudev",
+        &root,
+    );
+    schema.category = "hardware".into();
+    schema.methods.insert(
+        "enumerate_devices".into(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            EnumerateDevicesInput,
+            EnumerateDevicesOutput,
+        >(
+            "enumerate_devices",
+            SideEffect::Read,
+            true,
+            "pcidecl.read",
+            "obs.hardware.pci.devices.enumerate@v2",
+        ),
+    );
+    schema.methods.insert(
+        "get_device_info".into(),
+        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+            GetDeviceInfoInput,
+            GetDeviceInfoOutput,
+        >(
+            "get_device_info",
+            SideEffect::Read,
+            true,
+            "pcidecl.read",
+            "obs.hardware.pci.device.info@v2",
+        ),
+    );
+    schema.capabilities.insert(
+        "pcidecl.read".into(),
+        op_state_store::CapabilityDecl {
+            id: "pcidecl.read".into(),
+            description: "Grants: enumerate_devices, get_device_info.".into(),
+        },
+    );
+    schema.example = Some(simd_json::json!({"provider":"libudev","mutation_supported":false}));
+    schema
 }
 
 pub struct PciDeclPlugin;
-
 impl Default for PciDeclPlugin {
     fn default() -> Self {
         Self
     }
 }
-
 impl PciDeclPlugin {
     pub fn new() -> Self {
         Self
-    }
-
-    fn sys_path(addr: &str) -> String {
-        format!("/sys/bus/pci/devices/{}", addr)
-    }
-
-    fn read_to_string(path: &str) -> Option<String> {
-        fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-    }
-
-    fn live_for(addr: &str) -> PciLive {
-        let root = Self::sys_path(addr);
-        let present = Path::new(&root).exists();
-        let vendor = Self::read_to_string(&format!("{}/vendor", root));
-        let device = Self::read_to_string(&format!("{}/device", root));
-        let drv_link = Path::new(&format!("{}/driver", root))
-            .read_link()
-            .ok()
-            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()));
-        let drv_override = Self::read_to_string(&format!("{}/driver_override", root));
-        PciLive {
-            address: addr.to_string(),
-            vendor,
-            device,
-            driver: drv_link,
-            driver_override: drv_override,
-            present,
-        }
-    }
-
-    fn sysfs_present(addr: &str) -> bool {
-        Path::new(&Self::sys_path(addr)).exists()
-    }
-
-    fn compliant(l: &PciLive, i: &PciItem) -> bool {
-        if !l.present {
-            return false;
-        }
-        if let Some(v) = &i.expect_vendor {
-            if l.vendor.as_deref() != Some(&format!("0x{}", v).to_lowercase())
-                && l.vendor.as_deref() != Some(v)
-            {
-                return false;
-            }
-        }
-        if let Some(d) = &i.expect_device {
-            if l.device.as_deref() != Some(&format!("0x{}", d).to_lowercase())
-                && l.device.as_deref() != Some(d)
-            {
-                return false;
-            }
-        }
-        if let Some(ovr) = &i.driver_override {
-            if l.driver_override.as_deref() != Some(ovr.as_str()) {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn set_driver_override(addr: &str, val: &str) -> Result<()> {
-        let p = format!("{}/driver_override", Self::sys_path(addr));
-        fs::write(&p, format!("{}\n", val)).context("write driver_override")?;
-        Ok(())
     }
 }
 
@@ -133,157 +329,45 @@ impl StatePlugin for PciDeclPlugin {
         "pcidecl"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
-
     fn schema(&self) -> Option<PluginSchema> {
-        let mut schema = PluginSchema::builder("pcidecl")
-            .category("hardware")
-            .version("1.0.0")
-            .description("PCI device declaration state")
-            .field(
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: false,
-                    description: "Schema version".to_string(),
-                    default: Some(simd_json::json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            )
-            .field(
-                "items",
-                FieldSchema {
-                    field_type: FieldType::Any,
-                    required: true,
-                    description: "PCI declarations".to_string(),
-                    default: Some(simd_json::json!([])),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            )
-            .build();
-        // Add D-Bus methods for PCI devices
-        add_pcidecl_methods(&mut schema);
-        Some(schema)
+        Some(pcidecl_schema())
     }
-
-    async fn calculate_diff(&self, _current: &Value, desired: &Value) -> Result<StateDiff> {
-        let want: PciDecl = simd_json::serde::from_owned_value(desired.clone())
-            .context("desired must be PciDecl")?;
-        let mut actions = Vec::new();
-        for item in &want.items {
-            let live = Self::live_for(&item.address);
-            let present = live.present || Self::sysfs_present(&item.address);
-            if let Mode::ObserveOnly = item.mode {
-                actions.push(StateAction::NoOp {
-                    resource: item.id.clone(),
-                });
-            } else {
-                if !present {
-                    actions.push(StateAction::NoOp {
-                        resource: item.id.clone(),
-                    });
-                    continue;
-                }
-                if Self::compliant(&live, item) {
-                    actions.push(StateAction::NoOp {
-                        resource: item.id.clone(),
-                    });
-                } else {
-                    actions.push(StateAction::Modify {
-                        resource: item.id.clone(),
-                        changes: simd_json::serde::to_owned_value(item)?,
-                    });
-                }
-            }
-        }
+    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions,
+            plugin: self.name().into(),
+            actions: vec![],
             metadata: DiffMetadata {
                 timestamp: chrono::Utc::now().timestamp(),
-                current_hash: format!("{:x}", md5::compute("pcidecl-current")),
-                desired_hash: format!(
-                    "{:x}",
-                    md5::compute(simd_json::to_string(&desired).unwrap_or_default())
-                ),
+                current_hash: String::new(),
+                desired_hash: String::new(),
             },
         })
     }
-
-    async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        let mut changes_applied = Vec::new();
-        let mut errors = Vec::new();
-        for action in &diff.actions {
-            match action {
-                StateAction::Modify { resource, changes }
-                | StateAction::Create {
-                    resource,
-                    config: changes,
-                } => {
-                    let item: PciItem = simd_json::serde::from_owned_value(changes.clone())
-                        .context("invalid PciItem")?;
-                    if let Some(val) = &item.driver_override {
-                        match Self::set_driver_override(&item.address, val) {
-                            Ok(_) => changes_applied
-                                .push(format!("{}: driver_override -> {}", resource, val)),
-                            Err(e) => errors.push(format!("{}: {}", resource, e)),
-                        }
-                    } else {
-                        changes_applied.push(format!("{}: no changes required", resource));
-                    }
-                }
-                StateAction::NoOp { resource } => {
-                    changes_applied.push(format!("{}: no-op", resource));
-                }
-                StateAction::Delete { resource } => {
-                    changes_applied.push(format!("{}: delete not supported", resource));
-                }
-            }
-        }
+    async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
         Ok(ApplyResult {
-            success: errors.is_empty(),
-            changes_applied,
-            errors,
+            success: true,
+            changes_applied: vec![],
+            errors: vec![],
             checkpoint: None,
         })
     }
-
-    async fn verify_state(&self, desired: &Value) -> Result<bool> {
-        let want: PciDecl =
-            simd_json::serde::from_owned_value(desired.clone()).unwrap_or(PciDecl {
-                version: 1,
-                items: vec![],
-            });
-        for item in &want.items {
-            let live = Self::live_for(&item.address);
-            if !Self::compliant(&live, item) {
-                return Ok(false);
-            }
-        }
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
         Ok(true)
     }
-
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
-            id: format!("pcidecl-{}", chrono::Utc::now().timestamp()),
-            plugin: self.name().to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
+            plugin: self.name().into(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::json!({}),
+            state_snapshot: simd_json::serde::to_owned_value(PciState::default())?,
             backend_checkpoint: None,
         })
     }
-
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
         Ok(())
     }
-
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
@@ -294,65 +378,115 @@ impl StatePlugin for PciDeclPlugin {
     }
 }
 
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("pcidecl", |_ctx| std::sync::Arc::new(PciDeclPlugin::new()))
 }
 
-/// Input struct for EnumerateDevices method
-/// D-Bus method spec: https://github.com/pciutils/pciutils/blob/master/HEADER
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct EnumerateDevicesInput {
-    /// Filter by vendor ID (optional)
-    pub vendor_id: Option<String>,
-    /// Filter by device class (optional)
-    pub class_code: Option<String>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Input struct for GetDeviceInfo method
-/// D-Bus method spec: https://github.com/pciutils/pciutils/blob/master/HEADER
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GetDeviceInfoInput {
-    /// PCI address (e.g., "0000:00:00.0")
-    pub address: String,
-}
+    struct Fixture {
+        records: Result<Vec<PciDeviceRecord>, &'static str>,
+        request: std::sync::Mutex<Option<ScanRequest>>,
+    }
+    impl PciProvider for Fixture {
+        fn scan(&self, request: &ScanRequest) -> Result<Vec<PciDeviceRecord>> {
+            *self.request.lock().unwrap() = Some(request.clone());
+            self.records.clone().map_err(anyhow::Error::msg)
+        }
+    }
+    fn record(address: &str) -> PciDeviceRecord {
+        PciDeviceRecord {
+            address: address.into(),
+            vendor_id: "8086".into(),
+            device_id: "15f3".into(),
+            class_code: "020000".into(),
+            subsystem_vendor_id: Some("8086".into()),
+            subsystem_device_id: Some("0000".into()),
+            revision: Some("03".into()),
+            driver: Some("igc".into()),
+            vendor_name: None,
+            device_name: None,
+        }
+    }
+    fn fixture(records: Result<Vec<PciDeviceRecord>, &'static str>) -> Fixture {
+        Fixture {
+            records,
+            request: std::sync::Mutex::new(None),
+        }
+    }
 
-/// Add methods to schema for pcidecl
-fn add_pcidecl_methods(schema: &mut PluginSchema) {
-    // EnumerateDevices method
-    schema.methods.insert(
-        "enumerate_devices".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            EnumerateDevicesInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "EnumerateDevices",
-            SideEffect::Read,
-            true,
-            "pcidecl.read",
-            "obs.hardware.pci.devices.enumerate@v1",
-        ),
-    );
-    // GetDeviceInfo method
-    schema.methods.insert(
-        "get_device_info".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            GetDeviceInfoInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "GetDeviceInfo",
-            SideEffect::Read,
-            true,
-            "pcidecl.read",
-            "obs.hardware.pci.device.info@v1",
-        ),
-    );
-    schema.capabilities.insert(
-        "pcidecl.read".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "pcidecl.read".to_string(),
-            description: "Grants: enumerate_devices, get_device_info.".to_string(),
-        },
-    );
+    #[test]
+    fn enumerate_applies_typed_normalized_filters_and_returns_records() {
+        let provider = fixture(Ok(vec![record("0000:00:1f.6")]));
+        let output = dispatch_with_provider(
+            &provider,
+            "enumerate_devices",
+            &serde_json::json!({"vendor_id":"8086","class_code":"020000"}),
+        )
+        .unwrap();
+        assert_eq!(output["total"], 1);
+        assert_eq!(output["devices"][0]["driver"], "igc");
+        let request = provider.request.lock().unwrap();
+        assert_eq!(request.as_ref().unwrap().vendor_id.as_deref(), Some("8086"));
+        assert_eq!(
+            request.as_ref().unwrap().class_code.as_deref(),
+            Some("020000")
+        );
+    }
+
+    #[test]
+    fn exact_lookup_distinguishes_missing_from_provider_error() {
+        let missing = fixture(Ok(vec![]));
+        let output = dispatch_with_provider(
+            &missing,
+            "get_device_info",
+            &serde_json::json!({"address":"0000:00:1F.6"}),
+        )
+        .unwrap();
+        assert_eq!(output["address"], "0000:00:1f.6");
+        assert_eq!(output["found"], false);
+        assert!(output["device"].is_null());
+
+        let failed = fixture(Err("udev unavailable"));
+        let error = dispatch_with_provider(
+            &failed,
+            "get_device_info",
+            &serde_json::json!({"address":"0000:00:1f.6"}),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("udev unavailable"));
+    }
+
+    #[test]
+    fn malformed_addresses_and_filters_reject_before_provider() {
+        for (method, args) in [
+            ("get_device_info", serde_json::json!({"address":"00:1f.6"})),
+            (
+                "get_device_info",
+                serde_json::json!({"address":"0000:00:20.0"}),
+            ),
+            (
+                "enumerate_devices",
+                serde_json::json!({"vendor_id":"0x8086"}),
+            ),
+            ("enumerate_devices", serde_json::json!({"class_code":"02"})),
+        ] {
+            let provider = fixture(Ok(vec![]));
+            assert!(dispatch_with_provider(&provider, method, &args).is_err());
+            assert!(provider.request.lock().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn schema_has_only_two_typed_read_methods() {
+        let schema = pcidecl_schema();
+        assert_eq!(schema.methods.len(), 2);
+        assert!(schema.methods.contains_key("enumerate_devices"));
+        assert!(schema.methods.contains_key("get_device_info"));
+        let encoded = serde_json::to_string(&schema).unwrap();
+        assert!(!encoded.contains("driver_override"));
+        assert!(!encoded.contains("AckOutput"));
+    }
 }

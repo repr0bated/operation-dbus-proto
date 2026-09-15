@@ -51,6 +51,7 @@ hex = { workspace = true }
 tonic-build = { workspace = true }
 
 [dev-dependencies]
+op-core = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = "0.4"
 

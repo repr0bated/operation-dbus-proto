@@ -31,16 +31,24 @@ mod tests {
     use simd_json::prelude::*;
     use std::collections::HashSet;
 
+    fn test_catalog() -> SchemaCatalog {
+        let mut catalog = SchemaCatalog::empty();
+        catalog.register(crate::state_plugins::net::net_schema());
+        catalog.register(crate::state_plugins::incus::incus_schema());
+        catalog.register(crate::state_plugins::service::service_schema());
+        catalog
+    }
+
     #[test]
     fn test_all_plugins_have_contract_schema() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
+        let catalog = test_catalog();
         let schemas = all_contract_schemas(&catalog);
         assert_eq!(schemas.len(), catalog.list().len());
     }
 
     #[test]
     fn test_contract_shape_has_required_sections() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
+        let catalog = test_catalog();
         let schema = schema_for_plugin(&catalog, "net").expect("net schema");
         let required = schema
             .get("required")
@@ -64,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_dependency_targets_are_known_plugins() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
+        let catalog = test_catalog();
         let known: HashSet<String> = all_contract_schemas(&catalog).keys().cloned().collect();
 
         for (plugin, schema) in all_contract_schemas(&catalog) {
@@ -91,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_uniform_index_paths_use_absolute_json_paths() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
+        let catalog = test_catalog();
 
         fn validate_path_array(paths: Option<&Vec<Value>>, context: &str) {
             if let Some(arr) = paths {
@@ -153,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_recovery_priority_is_bounded() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
+        let catalog = test_catalog();
 
         for (plugin, schema) in all_contract_schemas(&catalog) {
             let priority = schema
@@ -176,10 +184,9 @@ mod tests {
 
     #[test]
     fn test_aliases_resolve_from_registry() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
+        let catalog = test_catalog();
 
-        assert!(schema_for_plugin(&catalog, "systemd").is_some());
-        assert!(schema_for_plugin(&catalog, "web-ui").is_some());
+        assert!(schema_for_plugin(&catalog, "network").is_some());
         assert!(schema_for_plugin(&catalog, "incus").is_some());
     }
 }

@@ -7,13 +7,14 @@ use op_state::{
 use op_state_store::{FieldSchema, FieldType};
 use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_json::Value as JsonValue;
-use simd_json::json;
 
-use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Schema-only view of the `config` plugin. The runtime store uses a typed
 /// `HashMap<String, Value>`; the published schema preserves the original opaque
@@ -44,6 +45,33 @@ const DEFAULT_CONFIG_STORE_PATH: &str = "/etc/op-dbus/config-store.json";
 pub struct ConfigStoreState {
     #[serde(default)]
     pub configs: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigKeyInput {
+    pub key: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigValueInput {
+    pub key: String,
+    pub value: JsonValue,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigKeysOutput {
+    pub keys: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigValueOutput {
+    pub value: Option<JsonValue>,
+    pub found: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigDeleteOutput {
+    pub deleted: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConfigExportOutput {
+    pub config: JsonValue,
 }
 
 pub struct ConfigPlugin {
@@ -96,29 +124,16 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "config",
-        "1.0.0",
+        "1.1.0",
         "Global key/value config store",
         &root,
     );
 
     // Output structs for methods that return data
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListKeysOutput {
-        pub keys: Vec<String>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetValueOutput {
-        pub value: Option<String>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ExportConfigOutput {
-        pub config: serde_json::Value,
-    }
-
     // Add methods
     schema.methods.insert(
         "list_keys".to_string(),
-        method_decl_from_schemars_with_output::<(), ListKeysOutput>(
+        method_decl_from_schemars_with_output::<(), ConfigKeysOutput>(
             "list_keys",
             SideEffect::Read,
             true,
@@ -128,7 +143,7 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_value".to_string(),
-        method_decl_from_schemars_with_output::<(), GetValueOutput>(
+        method_decl_from_schemars_with_output::<ConfigKeyInput, ConfigValueOutput>(
             "get_value",
             SideEffect::Read,
             true,
@@ -138,7 +153,7 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "set_value".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<ConfigValueInput, ConfigValueOutput>(
             "set_value",
             SideEffect::Mutation,
             false,
@@ -148,7 +163,7 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_key".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<ConfigKeyInput, ConfigDeleteOutput>(
             "delete_key",
             SideEffect::Mutation,
             true,
@@ -158,7 +173,7 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "export_config".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<(), ConfigExportOutput>(
             "export_config",
             SideEffect::Read,
             true,
@@ -185,6 +200,89 @@ pub(crate) fn config_plugin_schema() -> PluginSchema {
     schema
 }
 
+pub async fn dispatch_config_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
+    dispatch_config_with_store(
+        super::runtime_documents::runtime_documents().await?,
+        method,
+        args,
+    )
+    .await
+}
+
+pub async fn dispatch_config_with_store(
+    store: Arc<super::runtime_documents::RuntimeDocuments>,
+    method: &str,
+    args: &JsonValue,
+) -> Result<JsonValue> {
+    let document = store
+        .read("config")
+        .await?
+        .map(|d| d.document)
+        .unwrap_or_else(|| json!({"configs": {}}));
+    let configs = document
+        .get("configs")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("stored config document is invalid"))?;
+    match method {
+        "list_keys" => {
+            let mut keys: Vec<_> = configs.keys().cloned().collect();
+            keys.sort();
+            Ok(json!({"keys": keys}))
+        }
+        "get_value" => {
+            let input: ConfigKeyInput = serde_json::from_value(args.clone())?;
+            Ok(json!({
+                "value": configs.get(&input.key),
+                "found": configs.contains_key(&input.key),
+            }))
+        }
+        "export_config" => Ok(json!({"config": configs})),
+        "set_value" => {
+            let input: ConfigValueInput = serde_json::from_value(args.clone())?;
+            let key = input.key;
+            let lookup_key = key.clone();
+            let value = input.value;
+            let row = store
+                .update("config", move |old| {
+                    let mut root = old.unwrap_or_else(|| json!({"configs":{}}));
+                    root["configs"]
+                        .as_object_mut()
+                        .ok_or_else(|| anyhow::anyhow!("configs must be an object"))?
+                        .insert(key, value.clone());
+                    Ok(root)
+                })
+                .await?;
+            let configs = row
+                .document
+                .get("configs")
+                .and_then(JsonValue::as_object)
+                .ok_or_else(|| anyhow::anyhow!("committed config document is invalid"))?;
+            let returned = configs
+                .get(&lookup_key)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("committed config key is missing"))?;
+            Ok(json!({"value": returned, "found": true}))
+        }
+        "delete_key" => {
+            let input: ConfigKeyInput = serde_json::from_value(args.clone())?;
+            let key = input.key;
+            let (_, deleted) = store
+                .update_with_result("config", move |old| {
+                    let mut root = old.unwrap_or_else(|| json!({"configs":{}}));
+                    let map = root["configs"]
+                        .as_object_mut()
+                        .ok_or_else(|| anyhow::anyhow!("configs must be an object"))?;
+                    let deleted = map.remove(&key).is_some();
+                    Ok((root, deleted))
+                })
+                .await?;
+            Ok(json!({"deleted": deleted}))
+        }
+        other => Err(anyhow::anyhow!("unknown config method: {other}")),
+    }
+}
+
 #[async_trait]
 impl StatePlugin for ConfigPlugin {
     fn name(&self) -> &str {
@@ -192,7 +290,7 @@ impl StatePlugin for ConfigPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "1.1.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -309,6 +407,7 @@ impl StatePlugin for ConfigPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state_plugins::runtime_documents::RuntimeDocuments;
 
     #[test]
     fn should_publish_plugin_owned_config_schema() {
@@ -316,17 +415,17 @@ mod tests {
         let field = schema.fields.get("configs").expect("configs field");
 
         assert_eq!(schema.name, "config");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.version, "1.1.0");
         assert_eq!(schema.description, "Global key/value config store");
         assert!(matches!(field.field_type, FieldType::Any));
-        assert_eq!(field.default, Some(json!({})));
+        assert_eq!(field.default, Some(simd_json::json!({})));
     }
 
     #[test]
     fn schema_is_schemars_seeded_and_typed() {
         let schema = config_plugin_schema();
         assert_eq!(schema.name, "config");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.version, "1.1.0");
         assert_eq!(schema.description, "Global key/value config store");
         assert!(schema.fields.contains_key("configs"));
         assert!(schema.methods.contains_key("list_keys"));
@@ -363,6 +462,44 @@ mod tests {
                 collect_subids(v, out);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_config_methods_round_trip_arbitrary_json() {
+        let store = Arc::new(RuntimeDocuments::new(
+            op_cozo_store::CozoGraphShuttle::new_in_memory().unwrap(),
+        ));
+        assert_eq!(
+            dispatch_config_with_store(store.clone(), "list_keys", &json!({}))
+                .await
+                .unwrap(),
+            json!({"keys":[]})
+        );
+        dispatch_config_with_store(
+            store.clone(),
+            "set_value",
+            &json!({"key":"nested","value":{"n":3}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            dispatch_config_with_store(store.clone(), "get_value", &json!({"key":"nested"}))
+                .await
+                .unwrap(),
+            json!({"value":{"n":3},"found":true})
+        );
+        assert_eq!(
+            dispatch_config_with_store(store.clone(), "export_config", &json!({}))
+                .await
+                .unwrap(),
+            json!({"config":{"nested":{"n":3}}})
+        );
+        assert_eq!(
+            dispatch_config_with_store(store.clone(), "delete_key", &json!({"key":"nested"}))
+                .await
+                .unwrap(),
+            json!({"deleted":true})
+        );
     }
 }
 

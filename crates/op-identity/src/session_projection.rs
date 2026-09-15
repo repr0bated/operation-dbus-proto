@@ -112,6 +112,15 @@ impl SessionIdentity {
     /// reads and forwards the MutationEngine-authored sealed ID; it never rebuilds
     /// claims or hashes a footprint/genesis/hash-chain value.
     pub fn mcp_sealed_id_header(&self) -> Result<&str, SessionProjectionError> {
+        self.sealed_id_header_for_transport("mcp")
+    }
+
+    /// Return the exact SID1 payload for a transport named by the caller.
+    /// The payload is read from the private projection and is never rebuilt.
+    pub fn sealed_id_header_for_transport(
+        &self,
+        transport: &str,
+    ) -> Result<&str, SessionProjectionError> {
         let inline = self.inline_sealed_id()?;
         let claims = crate::sealed_id::SealedId::from_inline_ref(inline).map_err(|error| {
             SessionProjectionError::InvalidSealedId {
@@ -123,7 +132,7 @@ impl SessionIdentity {
             && claims
                 .transport_scope
                 .split(',')
-                .any(|scope| scope.trim() == "mcp")
+                .any(|scope| scope.trim() == transport)
             && claims.principal_id == crate::session::derive_principal_id(&self.wireguard_pubkey)
             && claims.session_id == self.session_id
             && claims.wireguard_pubkey == self.wireguard_pubkey
@@ -220,23 +229,43 @@ pub enum SessionProjectionError {
 }
 
 pub fn read_identity_sessions() -> Result<Vec<SessionIdentity>, SessionProjectionError> {
-    let path = op_core::projection_shm::projection_file_path("identity_sled");
-    read_identity_sessions_at(path)
+    read_identity_sessions_in(&op_core::projection_shm::shm_state_dir(), false)
 }
 
 /// Read the protected credential-bearing identity projection. Only local
 /// SID1-aware clients should use this path; generic identity validation and
 /// display continue to use [`read_identity_sessions`].
 pub fn read_identity_credential_sessions() -> Result<Vec<SessionIdentity>, SessionProjectionError> {
-    let path = op_core::projection_shm::credential_projection_file_path("identity_sled");
-    read_identity_sessions_at(path)
+    read_identity_sessions_in(&op_core::projection_shm::shm_state_dir(), true)
 }
 
-fn read_identity_sessions_at(path: String) -> Result<Vec<SessionIdentity>, SessionProjectionError> {
-    let bytes = std::fs::read(&path).map_err(|source| SessionProjectionError::Unavailable {
-        path: path.clone(),
-        source,
-    })?;
+fn read_identity_sessions_in(
+    state_dir: &str,
+    credentials: bool,
+) -> Result<Vec<SessionIdentity>, SessionProjectionError> {
+    let path = if credentials {
+        op_core::projection_shm::credential_projection_file_path_in(state_dir, "identity_sled")
+    } else {
+        op_core::projection_shm::projection_file_path_in(state_dir, "identity_sled")
+    };
+    let snapshot = if credentials {
+        op_core::projection_shm::read_credential_projection_bytes_in(state_dir, "identity_sled")
+    } else {
+        op_core::projection_shm::read_projection_snapshot_in(state_dir, &["identity_sled".into()])
+            .map(|mut snapshot| snapshot.states.remove("identity_sled"))
+    };
+    let bytes = snapshot
+        .map_err(|error| SessionProjectionError::Unavailable {
+            path: path.clone(),
+            source: std::io::Error::other(error),
+        })?
+        .ok_or_else(|| SessionProjectionError::Unavailable {
+            path,
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "committed identity projection is absent",
+            ),
+        })?;
     Ok(serde_json::from_slice::<SessionProjection>(&bytes)?.sleds)
 }
 
@@ -339,6 +368,10 @@ pub fn configured_identity_session() -> Result<SessionIdentity, SessionProjectio
         .or_else(|| std::env::var("IDENTITY_SLED_HOST_SESSION_ID").ok());
     resolve_identity_session(selector.as_deref())
 }
+
+#[cfg(test)]
+#[path = "identity_projection_reads_tests.rs"]
+mod projection_read_tests;
 
 #[cfg(test)]
 mod tests {

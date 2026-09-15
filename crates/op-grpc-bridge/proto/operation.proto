@@ -123,16 +123,21 @@ message StateChange {
   string actor_id = 12;
   // Stream framing: initial static-tree state, a live update, or keepalive.
   StateFrameKind frame_kind = 13;
-  // Hash of the contract this frame's plugin is currently published under.
-  // Empty only when the frame names no plugin (keepalives). A subscriber
-  // compares it against the contract it is holding: a mismatch means it
-  // missed a schema frame and must re-hydrate.
+  // Hash of the contract observed for this frame's currently published
+  // plugin. Empty for keepalives and removal tombstones.
   string schema_hash = 14;
-  // Identity of the whole published catalog — blake3 over the sorted
+  // Identity of the whole catalog observed stable around this state read —
+  // blake3 over the sorted
   // (plugin_id, schema_hash) pairs. Present on EVERY frame, keepalives
-  // included, so an otherwise idle subscriber still has something to compare
-  // against and can detect drift it never received an event for.
+  // included. Keepalives repeat the last committed observation and do not poll
+  // for catalog changes. This does not claim the state generation was authored
+  // from that schema revision.
   string catalog_hash = 15;
+  // Monotonic generation of the committed selected SHM namespace. Explicit
+  // private workspace paths use that verified owner namespace, not the public
+  // global counter. Do not compare generations across owners or namespaces.
+  // Audit event identifiers are deliberately independent of this counter.
+  uint64 state_generation = 16;
 }
 
 enum StateFrameKind {
@@ -247,6 +252,10 @@ message GetStateResponse {
   google.protobuf.Struct state = 1;
   string effective_hash = 2;
   uint64 at_event_id = 3;
+  // Exact selected JSON value. Present also for scalar/array/null descendants;
+  // state remains populated for object clients. Value numbers retain the
+  // standard protobuf double-precision limitation.
+  google.protobuf.Value value = 4;
 }
 
 message BatchMutateRequest {

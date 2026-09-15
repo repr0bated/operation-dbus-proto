@@ -77,8 +77,14 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/logs", get(handlers::logs::logs_handler))
         .route("/logs/stream", get(handlers::logs::logs_stream_handler))
         // Chat endpoints
-        .route("/chat", post(handlers::chat::chat_handler))
-        .route("/chat/stream", post(handlers::chat::chat_stream_handler))
+        .route(
+            "/chat",
+            post(handlers::tched_router::tched_router_chat_handler),
+        )
+        .route(
+            "/chat/stream",
+            post(handlers::tched_router::tched_router_chat_stream_handler),
+        )
         .route(
             "/tched-router/chat",
             post(handlers::tched_router::tched_router_chat_handler),
@@ -215,7 +221,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/openclaw/chat",
-            post(handlers::openclaw::openclaw_chat_handler),
+            post(handlers::tched_router::tched_router_chat_handler),
         )
         .route(
             "/openclaw/models",
@@ -232,7 +238,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/assistant/chat",
-            post(handlers::openclaw::openclaw_chat_handler),
+            post(handlers::tched_router::tched_router_chat_handler),
         )
         .route(
             "/assistant/models",

@@ -74,6 +74,8 @@ pub fn wireguard_auth_interceptor(mut req: Request<()>) -> Result<Request<()>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use op_core::projection_shm::update_projection_with_credentials_in;
+    use std::os::unix::fs::MetadataExt;
     use tonic::metadata::MetadataValue;
 
     const FOOTPRINT_HEADER: &str = "x-ghostbridge-footprint";
@@ -109,26 +111,49 @@ mod tests {
 
     #[test]
     fn should_verify_genesis_against_identity_session() {
+        static STATE_DIR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        struct StateDirGuard(Option<std::ffi::OsString>);
+        impl Drop for StateDirGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(previous) => unsafe {
+                        std::env::set_var("OP_SHM_STATE_DIR", previous);
+                    },
+                    None => unsafe {
+                        std::env::remove_var("OP_SHM_STATE_DIR");
+                    },
+                }
+            }
+        }
+
+        let _serial = STATE_DIR_ENV.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("identity_sled.json");
-        std::fs::write(
-            path,
-            serde_json::to_vec(&serde_json::json!({
-                "sleds": [{
-                    "session_id": "session-a",
-                    "wireguard_pubkey": "abcd1234",
-                    "genesis": "ab".repeat(32),
-                    "trace_id": "11".repeat(16),
-                    "schema_version": 3,
-                    "arrival_timestamp": 1,
-                    "chain_head_at_arrival": "22".repeat(32)
-                }]
-            }))
-            .unwrap(),
+        let state_dir = dir.path().to_str().unwrap();
+        let projection = serde_json::to_vec(&serde_json::json!({
+            "sleds": [{
+                "session_id": "session-a",
+                "wireguard_pubkey": "abcd1234",
+                "genesis": "ab".repeat(32),
+                "trace_id": "11".repeat(16),
+                "schema_version": 3,
+                "active": false,
+                "arrival_timestamp": 1,
+                "chain_head_at_arrival": "22".repeat(32),
+                "catalog_hash_at_arrival": "33".repeat(32),
+                "head_timestamp_at_arrival": 1
+            }]
+        }))
+        .unwrap();
+        update_projection_with_credentials_in(
+            state_dir,
+            "identity_sled",
+            dir.path().metadata().unwrap().gid(),
+            |_| Ok(Some((projection.clone(), projection))),
         )
         .unwrap();
+        let _state_dir = StateDirGuard(std::env::var_os("OP_SHM_STATE_DIR"));
         unsafe {
-            std::env::set_var("OP_SHM_STATE_DIR", dir.path());
+            std::env::set_var("OP_SHM_STATE_DIR", state_dir);
         }
         let matching = "ab".repeat(32);
         let mismatch = hex::encode([0x00u8; 32]);
@@ -157,9 +182,6 @@ mod tests {
         let out = wireguard_auth_interceptor(good).unwrap();
         let id = out.extensions().get::<WireGuardIdentity>().unwrap();
         assert_eq!(id.pubkey, "abcd1234");
-
-        unsafe {
-            std::env::remove_var("OP_SHM_STATE_DIR");
-        }
+        assert_eq!(id.session_id, "session-a");
     }
 }

@@ -399,16 +399,32 @@ pub(crate) mod tests {
     pub(crate) struct TempCozo {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
+        previous_path: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for TempCozo {
+        fn drop(&mut self) {
+            match self.previous_path.take() {
+                Some(path) => std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", path),
+                None => std::env::remove_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH"),
+            }
+        }
     }
 
     pub(crate) struct TempShm {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
+        environment: Vec<(&'static str, Option<std::ffi::OsString>)>,
     }
 
     impl Drop for TempShm {
         fn drop(&mut self) {
-            std::env::remove_var("OP_SHM_STATE_DIR");
+            for (key, value) in &self.environment {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
         }
     }
 
@@ -424,25 +440,54 @@ pub(crate) mod tests {
     pub(crate) fn temp_cozo() -> TempCozo {
         let guard = test_registry_guard();
         let dir = tempfile::tempdir().expect("tempdir");
+        let previous_path = std::env::var_os("OP_HUMAN_PRINCIPAL_COZO_DB_PATH");
         std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", dir.path().join("cozo"));
         TempCozo {
             _guard: guard,
             _dir: dir,
+            previous_path,
         }
     }
 
     /// Unique temp projection dir per test so MutationEngine-driving tests
     /// never write the live `/dev/shm/opdbus/state` tree.
     pub(crate) fn temp_shm() -> TempShm {
+        temp_shm_with_schemas(&[
+            op_plugins::state_plugins::human_principal::HumanPrincipalPlugin::new()
+                .schema()
+                .unwrap(),
+            op_plugins::state_plugins::identity_sled::IdentitySledPlugin::new()
+                .schema()
+                .unwrap(),
+        ])
+    }
+
+    pub(crate) fn temp_shm_with_schemas(schemas: &[op_state_store::PluginSchema]) -> TempShm {
         static TEST_SHM: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let guard = TEST_SHM
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
+        let environment = ["OP_SHM_STATE_DIR", "OP_BLOB_CATALOG_DIR"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect();
+        let catalog = dir.path().join("blobs");
+        let mut sealer = op_blob::BlobStore::open(&catalog).unwrap();
+        for schema in schemas {
+            sealer
+                .write(&op_blob::blobify_plugin_schema(
+                    &schema.name,
+                    schema.clone(),
+                ))
+                .unwrap();
+        }
         std::env::set_var("OP_SHM_STATE_DIR", dir.path());
+        std::env::set_var("OP_BLOB_CATALOG_DIR", catalog);
         TempShm {
             _guard: guard,
             _dir: dir,
+            environment,
         }
     }
 
@@ -1189,6 +1234,7 @@ pub(crate) mod tests {
     /// fails register_key cleanly — no partial record, no panic, unchanged
     /// list.
     pub(crate) async fn register_key_unwritable_cozo_fails_clean_impl() {
+        let _cozo = temp_cozo();
         // A path UNDER A FILE can never become a directory (ENOTDIR) — a
         // deterministic unwritable location on any host.
         let blocker = tempfile::NamedTempFile::new().expect("blocker file");

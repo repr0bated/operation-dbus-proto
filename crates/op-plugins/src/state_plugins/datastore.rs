@@ -1,185 +1,149 @@
-//! `datastore` StatePlugin — projects the live canonical state store
-//! (`op-state-store`) through the `org.opdbus.v1.plugins` surface (PluginService).
+//! `datastore` indexes the canonical committed public plugin projections.
 //!
-//! This is the correct home for the capability the Lovable frontend mistakenly
-//! called as a standalone `operation.stores.v1.DataStoreService` gRPC package —
-//! there is no such proto and there must not be one (see OD-30).
-//!
-//! The read is **live, not mocked**: the plugin's live state calls
-//! `StateStore::export_canonical()` on the *same shared store handle* the rest
-//! of the process uses (injected at registration via `PluginCtx::state_store`),
-//! so there is no second DB open / lock contention. It reports the real object
-//! index (id/type/namespace), per-namespace counts and execution/snowball row
-//! counts.
-//!
-//! The store is mutable, but writes flow through the MutationEngine and the
-//! owning plugins (every mutation is an enforcement point). This projection is
-//! therefore read-only: it rejects state-diff mutations with an explanation
-//! rather than letting arbitrary objects be upserted around the enforcement path.
+//! The five retained methods are read-only views over manifest-pinned sealed
+//! schemas and the matching SHM projection generation. This plugin owns the
+//! method contract; it does not create a database, read private runtime
+//! documents, or aggregate independently owned audit/execution stores.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
-use op_state_store::{FieldSchema, FieldType, PluginSchema};
+use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
-use simd_json::json;
-use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
-use std::collections::HashMap;
 
-/// Datastore plugin state schema.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.datastore.schema@v1"))]
+pub const MAX_DATASTORE_SELECTION: usize = 256;
+pub const MAX_DATASTORE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.datastore.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "data"))]
 pub struct DataStoreState {
-    /// Runtime status.
-    #[serde(default)]
-    #[schemars(
-        description = "Runtime status",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.status@v1")
-    )]
-    pub status: String,
-    /// Total object count.
-    #[serde(default)]
-    #[schemars(
-        description = "Total object count",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.object-count@v1")
-    )]
+    pub generation: u64,
+    pub catalog_hash: String,
     pub object_count: usize,
-    /// Total execution count.
-    #[serde(default)]
-    #[schemars(
-        description = "Total execution count",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.execution-count@v1")
-    )]
-    pub execution_count: usize,
-    /// Total snowball count.
-    #[serde(default)]
-    #[schemars(
-        description = "Total snowball count",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.snowball-count@v1")
-    )]
-    pub snowball_count: usize,
-    /// Namespaces with counts.
-    #[serde(default)]
-    #[schemars(
-        description = "Namespaces with counts",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.namespaces@v1")
-    )]
-    pub namespaces: Vec<NamespaceCount>,
-    /// List of stored objects.
-    #[serde(default)]
-    #[schemars(
-        description = "List of stored objects",
-        extend("x-oscal-subid" = "obs.software.plugin.datastore.objects@v1")
-    )]
-    pub objects: Vec<ObjectRef>,
+    pub present_count: usize,
+    pub withheld_count: usize,
+    pub unobserved_count: usize,
+    pub state_bytes: u64,
+    pub objects: Vec<DataStoreObjectRef>,
 }
 
-/// Individual stored object reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicObjectExposure {
+    /// A committed observation exists and was filtered by the sealed schema's
+    /// explicit public-state policy.
+    Present,
+    /// The sealed schema deliberately declares no public-state paths.
+    Withheld,
+    /// The schema exposes public paths, but no observation has been committed.
+    Unobserved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DataStoreObjectRef {
+    pub plugin_id: String,
+    pub object_path: String,
+    pub schema_hash: String,
+    pub exposure: PublicObjectExposure,
+    pub state_bytes: u64,
+}
+
+/// Schema-owned dynamic content inside a typed, generation-bound envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.software.plugin.datastore.object-ref@v1"))]
-pub struct ObjectRef {
-    /// Object identifier.
-    #[schemars(
-        description = "Object identifier",
-        extend("x-oscal-subid" = "obs.software.datastore.object-ref.id@v1")
-    )]
-    pub id: String,
-    /// Object type classification.
-    #[schemars(
-        description = "Object type classification",
-        extend("x-oscal-subid" = "obs.software.datastore.object-ref.type@v1")
-    )]
-    pub object_type: String,
-    /// Namespace containing the object.
-    #[schemars(
-        description = "Namespace containing the object",
-        extend("x-oscal-subid" = "obs.software.datastore.object-ref.namespace@v1")
-    )]
-    pub namespace: String,
+pub struct DataStoreObject {
+    pub reference: DataStoreObjectRef,
+    /// Structurally exact JSON parsed from the manifest-pinned sealed plugin
+    /// schema. `reference.schema_hash` binds it to the original sealed bytes.
+    pub schema: serde_json::Value,
+    /// Policy-filtered committed state. `None` is explained by `exposure`.
+    pub state: Option<serde_json::Value>,
 }
 
-/// Namespace with object count statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.software.plugin.datastore.namespace-count@v1"))]
-pub struct NamespaceCount {
-    /// Namespace name.
-    #[schemars(
-        description = "Namespace name",
-        extend("x-oscal-subid" = "obs.software.datastore.namespace-count.namespace@v1")
-    )]
-    pub namespace: String,
-    /// Number of objects in this namespace.
-    #[schemars(
-        description = "Number of objects in this namespace",
-        extend("x-oscal-subid" = "obs.software.datastore.namespace-count.count@v1")
-    )]
-    pub count: usize,
+pub struct SnapshotBinding {
+    pub generation: u64,
+    pub catalog_hash: String,
 }
 
-pub struct DataStorePlugin {
-    store: std::sync::Arc<dyn op_state_store::StateStore>,
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PluginSelection {
+    /// Exact sealed plugin ids. Empty selects the whole sealed catalog.
+    #[serde(default)]
+    #[schemars(length(max = 256), inner(length(min = 1, max = 128)))]
+    pub plugin_ids: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetObjectInput {
+    #[schemars(length(min = 1, max = 128))]
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueryInput {
+    /// Exact sealed plugin ids. Empty selects the whole sealed catalog.
+    #[serde(default)]
+    #[schemars(length(max = 256), inner(length(min = 1, max = 128)))]
+    pub plugin_ids: Vec<String>,
+    /// Optional exact exposure class; no arbitrary query language is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<PublicObjectExposure>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetStatsInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListObjectsOutput {
+    pub binding: SnapshotBinding,
+    pub objects: Vec<DataStoreObjectRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetObjectOutput {
+    pub binding: SnapshotBinding,
+    pub object: DataStoreObject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct QueryOutput {
+    pub binding: SnapshotBinding,
+    pub results: Vec<DataStoreObject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetStatsOutput {
+    pub binding: SnapshotBinding,
+    pub object_count: usize,
+    pub present_count: usize,
+    pub withheld_count: usize,
+    pub unobserved_count: usize,
+    pub state_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ExportOutput {
+    pub binding: SnapshotBinding,
+    pub objects: Vec<DataStoreObject>,
+}
+
+pub struct DataStorePlugin;
 
 impl DataStorePlugin {
-    pub fn new(store: std::sync::Arc<dyn op_state_store::StateStore>) -> Self {
-        Self { store }
+    pub fn new() -> Self {
+        Self
     }
+}
 
-    /// Read the live store via the shared handle.
-    async fn read_live(&self) -> anyhow::Result<DataStoreState> {
-        let export = self.store.export_canonical().await?;
-
-        let mut namespace_counts: std::collections::BTreeMap<String, usize> =
-            std::collections::BTreeMap::new();
-        let objects: Vec<ObjectRef> = export
-            .objects
-            .iter()
-            .map(|o| {
-                *namespace_counts.entry(o.namespace.clone()).or_default() += 1;
-                ObjectRef {
-                    id: o.id.clone(),
-                    object_type: o.object_type.clone(),
-                    namespace: o.namespace.clone(),
-                }
-            })
-            .collect();
-
-        let namespaces = namespace_counts
-            .into_iter()
-            .map(|(namespace, count)| NamespaceCount { namespace, count })
-            .collect();
-
-        Ok(DataStoreState {
-            status: "active".to_string(),
-            object_count: export.objects.len(),
-            execution_count: export.executions.len(),
-            snowball_count: export.snowball.len(),
-            namespaces,
-            objects,
-        })
-    }
-
-    /// Synchronous shape exemplar for the schema (the data path is always live).
-    fn schema_exemplar() -> DataStoreState {
-        DataStoreState {
-            status: "active".to_string(),
-            object_count: 0,
-            execution_count: 0,
-            snowball_count: 0,
-            namespaces: vec![NamespaceCount {
-                namespace: "default".to_string(),
-                count: 0,
-            }],
-            objects: vec![ObjectRef {
-                id: "example".to_string(),
-                object_type: "plugin".to_string(),
-                namespace: "default".to_string(),
-            }],
-        }
+impl Default for DataStorePlugin {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -190,179 +154,167 @@ impl StatePlugin for DataStorePlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
-    fn schema(&self) -> Option<op_state_store::PluginSchema> {
+    fn schema(&self) -> Option<PluginSchema> {
         let mut schema = datastore_schema();
         super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
     }
 
-    async fn calculate_diff(
-        &self,
-        _current: &Value,
-        _desired: &Value,
-    ) -> anyhow::Result<StateDiff> {
-        // Writes flow through the MutationEngine / owning plugins, not through a
-        // whole-store diff. Always NoOp here.
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions: vec![StateAction::NoOp {
-                resource: "objects".to_string(),
-            }],
-            metadata: DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: String::new(),
-                desired_hash: String::new(),
-            },
-        })
+    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
+        bail!("datastore is a read-only committed public projection index")
     }
 
-    async fn apply_state(&self, _diff: &StateDiff) -> anyhow::Result<ApplyResult> {
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: Vec::new(),
-            errors: Vec::new(),
-            checkpoint: None,
-        })
+    async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
+        bail!("datastore has no mutation or apply operation")
     }
 
-    async fn verify_state(&self, _desired: &Value) -> anyhow::Result<bool> {
-        Ok(true)
+    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
+        bail!("datastore has no desired-state verification operation")
     }
 
-    async fn create_checkpoint(&self) -> anyhow::Result<Checkpoint> {
-        let export = self.store.export_canonical().await?;
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(export)?,
-            backend_checkpoint: None,
-        })
+    async fn create_checkpoint(&self) -> Result<Checkpoint> {
+        bail!("datastore does not own the SHM projection transaction")
     }
 
-    async fn rollback(&self, _checkpoint: &Checkpoint) -> anyhow::Result<()> {
-        Ok(())
+    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
+        bail!("datastore does not own rollback")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
 }
 
-/// Canonical `datastore` schema derived from `DataStoreState` via schemars.
 pub(crate) fn datastore_schema() -> PluginSchema {
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use op_state_store::SideEffect;
+
     let root = serde_json::to_value(schemars::schema_for!(DataStoreState))
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "datastore",
-        "1.0.0",
-        "Canonical state store — object index, per-namespace counts, execution/snowball rows",
+        "2.0.0",
+        "Read-only index of manifest-pinned, policy-filtered committed public plugin state",
         &root,
     );
-
-    // Output structs
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListObjectsOutput {
-        pub objects: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetObjectOutput {
-        pub object: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct QueryOutput {
-        pub results: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetStatsOutput {
-        pub stats: serde_json::Value,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ExportOutput {
-        pub data: serde_json::Value,
-    }
-
-    // Add methods
-    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
-    use op_state_store::SideEffect;
+    schema.example = Some(simd_json::json!({
+        "generation": 7,
+        "catalog_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "object_count": 1,
+        "present_count": 1,
+        "withheld_count": 0,
+        "unobserved_count": 0,
+        "state_bytes": 18,
+        "objects": [{
+            "plugin_id": "service",
+            "object_path": "/org/opdbus/v1/plugins/service",
+            "schema_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "exposure": "present",
+            "state_bytes": 18
+        }]
+    }));
 
     schema.methods.insert(
-        "list_objects".to_string(),
-        method_decl_from_schemars_with_output::<(), ListObjectsOutput>(
+        "list_objects".into(),
+        method_decl_from_schemars_with_output::<PluginSelection, ListObjectsOutput>(
             "list_objects",
             SideEffect::Read,
             true,
             "datastore.read",
-            "obs.service.datastore.object.list@v1",
+            "obs.service.datastore.object.list@v2",
         ),
     );
     schema.methods.insert(
-        "get_object".to_string(),
-        method_decl_from_schemars_with_output::<(), GetObjectOutput>(
+        "get_object".into(),
+        method_decl_from_schemars_with_output::<GetObjectInput, GetObjectOutput>(
             "get_object",
             SideEffect::Read,
             true,
             "datastore.read",
-            "obs.service.datastore.object.get@v1",
+            "obs.service.datastore.object.get@v2",
         ),
     );
     schema.methods.insert(
-        "query".to_string(),
-        method_decl_from_schemars_with_output::<(), QueryOutput>(
+        "query".into(),
+        method_decl_from_schemars_with_output::<QueryInput, QueryOutput>(
             "query",
             SideEffect::Read,
             true,
             "datastore.read",
-            "obs.service.datastore.query@v1",
+            "obs.service.datastore.query@v2",
         ),
     );
     schema.methods.insert(
-        "get_stats".to_string(),
-        method_decl_from_schemars_with_output::<(), GetStatsOutput>(
+        "get_stats".into(),
+        method_decl_from_schemars_with_output::<GetStatsInput, GetStatsOutput>(
             "get_stats",
             SideEffect::Read,
             true,
             "datastore.read",
-            "obs.service.datastore.stats@v1",
+            "obs.service.datastore.stats@v2",
         ),
     );
     schema.methods.insert(
-        "export".to_string(),
-        method_decl_from_schemars_with_output::<(), ExportOutput>(
+        "export".into(),
+        method_decl_from_schemars_with_output::<PluginSelection, ExportOutput>(
             "export",
             SideEffect::Read,
             true,
             "datastore.read",
-            "obs.service.datastore.export@v1",
+            "obs.service.datastore.export@v2",
         ),
     );
-
     schema.capabilities.insert(
-        "datastore.read".to_string(),
+        "datastore.read".into(),
         op_state_store::CapabilityDecl {
-            id: "datastore.read".to_string(),
-            description: "Grants: list_objects, get_object, query, get_stats, export.".to_string(),
+            id: "datastore.read".into(),
+            description: "Grants read-only access to sealed-schema-filtered public SHM projections through list_objects, get_object, query, get_stats and export.".into(),
         },
     );
-
     schema
 }
 
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list). The shared store
-// handle is injected from the registry context, exactly like `mcp`.
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list). The shared store
-// handle is injected from the registry context, exactly like `mcp`.
 inventory::submit! {
-    crate::default_registry::PluginReg::new("datastore", |ctx| std::sync::Arc::new(DataStorePlugin::new(ctx.state_store())))
+    crate::default_registry::PluginReg::new("datastore", |_ctx| std::sync::Arc::new(DataStorePlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn five_method_contract_is_typed_and_read_only() {
+        let schema = datastore_schema();
+        assert_eq!(schema.version, "2.0.0");
+        assert_eq!(schema.methods.len(), 5);
+        for (name, method) in &schema.methods {
+            assert_eq!(name, &method.name);
+            assert_eq!(method.side_effect, op_state_store::SideEffect::Read);
+            assert_eq!(
+                serde_json::to_value(&method.args).unwrap()["type"],
+                "object"
+            );
+            assert_eq!(
+                serde_json::to_value(method.returns.as_ref().unwrap()).unwrap()["type"],
+                "object"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_hooks_never_fabricate_success() {
+        let plugin = DataStorePlugin::new();
+        let empty = simd_json::json!({});
+        assert!(plugin.calculate_diff(&empty, &empty).await.is_err());
+        assert!(plugin.verify_state(&empty).await.is_err());
+        assert!(plugin.create_checkpoint().await.is_err());
+    }
 }

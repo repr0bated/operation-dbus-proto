@@ -11,7 +11,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use op_snowball::PluginFootprint;
 use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{CapabilityDecl, PluginSchema};
+use op_state_store::PluginSchema;
 #[cfg(test)]
 use op_state_store::{Constraint, FieldSchema, FieldType};
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,6 @@ use serde::{Deserialize, Serialize};
 use simd_json::json;
 use simd_json::{prelude::*, OwnedValue as Value};
 use std::collections::HashMap;
-
-use super::plugin_scaffold_helpers::{
-    method_decl_from_schemars, method_decl_from_schemars_with_output,
-};
 
 // ============================================================================
 // SECTION 1: IMMUTABLE IDENTITY (set once, never changes)
@@ -54,7 +50,7 @@ impl Default for WebUiIdentity {
     fn default() -> Self {
         Self {
             name: "web_ui".to_string(),
-            version: "1.0.0".to_string(),
+            version: "3.0.0".to_string(),
             plugin_type: "ui".to_string(),
             driver: "rust-embed".to_string(),
         }
@@ -293,35 +289,6 @@ pub struct WebUiState {
     pub capabilities: WebUiCapabilities,
 }
 
-/// Input struct for RenderPage method.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RenderPageInput {
-    /// Page identifier to render
-    pub page_id: String,
-    /// Optional locale for internationalization
-    pub locale: Option<String>,
-}
-
-/// Input struct for HandleEvent method.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct HandleEventInput {
-    /// Event type
-    pub event_type: String,
-    /// Event payload as JSON
-    pub payload: serde_json::Value,
-    /// Session ID
-    pub session_id: Option<String>,
-}
-
-/// Input struct for UpdateComponent method.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct UpdateComponentInput {
-    /// Component path (e.g., "header.title")
-    pub component_path: String,
-    /// New component properties
-    pub properties: serde_json::Value,
-}
-
 impl WebUiTunables {
     /// Property schema - tracks which tunable fields exist (append-only).
     pub fn property_schema() -> Vec<String> {
@@ -461,92 +428,45 @@ impl StatePlugin for WebUiPlugin {
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
-        let current_state: WebUiState = simd_json::serde::from_owned_value(current.clone())?;
-        let desired_state: WebUiState = simd_json::serde::from_owned_value(desired.clone())?;
-
-        let mut actions = Vec::new();
-
-        if current_state.tunables.enabled != desired_state.tunables.enabled {
-            actions.push(op_state::StateAction::Modify {
-                resource: "enabled".to_string(),
-                changes: simd_json::json!({ "enabled": desired_state.tunables.enabled }),
-            });
-        }
-
-        if current_state.tunables.theme != desired_state.tunables.theme {
-            actions.push(op_state::StateAction::Modify {
-                resource: "theme".to_string(),
-                changes: simd_json::json!({ "theme": desired_state.tunables.theme }),
-            });
-        }
-
-        if current_state.tunables.compression != desired_state.tunables.compression {
-            actions.push(op_state::StateAction::Modify {
-                resource: "compression".to_string(),
-                changes: simd_json::json!({ "compression": desired_state.tunables.compression }),
-            });
-        }
-
-        if current_state.tunables.cache_ttl != desired_state.tunables.cache_ttl {
-            actions.push(op_state::StateAction::Modify {
-                resource: "cache_ttl".to_string(),
-                changes: simd_json::json!({ "cache_ttl": desired_state.tunables.cache_ttl }),
-            });
-        }
-
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions,
-            metadata: op_state::DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: format!("{:x}", md5::compute(simd_json::to_string(current)?)),
-                desired_hash: format!("{:x}", md5::compute(simd_json::to_string(desired)?)),
-            },
-        })
+        let _ = (current, desired);
+        anyhow::bail!(
+            "generic web_ui state diff is unsupported; use its canonical principal/session-owned workspace methods"
+        )
     }
 
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        let mut changes_applied = Vec::new();
-
-        for action in &diff.actions {
-            if let op_state::StateAction::Modify { resource, .. } = action {
-                changes_applied.push(format!("Updated UI config: {}", resource));
-            }
-        }
-
-        Ok(ApplyResult {
-            success: true,
-            changes_applied,
-            errors: vec![],
-            checkpoint: None,
-        })
+        let _ = diff;
+        anyhow::bail!(
+            "generic web_ui state apply is unsupported; use its canonical principal/session-owned workspace methods"
+        )
     }
 
-    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true) // UI state is always consistent (embedded).
+    async fn verify_state(&self, desired: &Value) -> Result<bool> {
+        let _ = desired;
+        anyhow::bail!(
+            "generic web_ui verification is unsupported; use a canonical workspace read receipt"
+        )
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = simd_json::json!(null);
-        Ok(Checkpoint {
-            id: format!("web-ui-{}", chrono::Utc::now().timestamp()),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: current,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!(
+            "generic web_ui checkpoints are unsupported; workspace revisions are owned by the canonical durable document methods"
+        )
     }
 
-    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+    async fn rollback(&self, checkpoint: &Checkpoint) -> Result<()> {
+        let _ = checkpoint;
+        anyhow::bail!(
+            "generic web_ui rollback is unsupported; no canonical rollback method is declared"
+        )
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
-            supports_rollback: true,
-            supports_checkpoints: true,
-            supports_verification: true,
-            atomic_operations: true,
+            supports_rollback: false,
+            supports_checkpoints: false,
+            supports_verification: false,
+            atomic_operations: false,
         }
     }
 }
@@ -557,73 +477,16 @@ pub(crate) fn web_ui_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "web_ui",
-        "1.0.0",
-        "Web UI state — identity, tunables, and capabilities",
+        "3.0.0",
+        "Web UI facade over the principal/session-owned Gemma workspace; no independent page or component state",
         &root,
     );
     let state = simd_json::serde::to_owned_value(&WebUiState::default())
         .expect("WebUiState default serializes");
     super::schemars_adapter::apply_state_defaults(&mut schema, &state);
 
-    // RenderPage method
-    schema.methods.insert(
-        "render_page".to_string(),
-        method_decl_from_schemars_with_output::<
-            RenderPageInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "RenderPage",
-            op_state_store::SideEffect::Read,
-            true,
-            "ui.read",
-            "obs.software.plugin.web-ui.render-page@v1",
-        ),
-    );
-
-    // HandleEvent method
-    schema.methods.insert(
-        "handle_event".to_string(),
-        method_decl_from_schemars_with_output::<
-            HandleEventInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "HandleEvent",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "ui.write",
-            "mut.software.plugin.web-ui.handle-event@v1",
-        ),
-    );
-
-    // UpdateComponent method
-    schema.methods.insert(
-        "update_component".to_string(),
-        method_decl_from_schemars_with_output::<
-            UpdateComponentInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "UpdateComponent",
-            op_state_store::SideEffect::Mutation,
-            false,
-            "ui.write",
-            "mut.software.plugin.web-ui.update-component@v1",
-        ),
-    );
-
-    schema.capabilities.insert(
-        "ui.read".to_string(),
-        CapabilityDecl {
-            id: "ui.read".to_string(),
-            description: "Grants: render_page.".to_string(),
-        },
-    );
-    schema.capabilities.insert(
-        "ui.write".to_string(),
-        CapabilityDecl {
-            id: "ui.write".to_string(),
-            description: "Grants: handle_event, update_component.".to_string(),
-        },
-    );
+    super::web_ui_methods::declare_methods(&mut schema);
+    schema.dependencies = vec!["gemma_brain".to_owned()];
 
     schema
 }
@@ -659,7 +522,7 @@ mod tests {
     fn test_default_identity() {
         let identity = WebUiIdentity::default();
         assert_eq!(identity.name, "web_ui");
-        assert_eq!(identity.version, "1.0.0");
+        assert_eq!(identity.version, "3.0.0");
         assert_eq!(identity.plugin_type, "ui");
         assert_eq!(identity.driver, "rust-embed");
     }
@@ -696,6 +559,41 @@ mod tests {
         assert!(schema.contains(&"enabled".to_string()));
         assert!(schema.contains(&"theme".to_string()));
         assert!(schema.contains(&"websocket".to_string()));
+    }
+
+    #[tokio::test]
+    async fn generic_lifecycle_hooks_never_claim_workspace_effects() {
+        let plugin = WebUiPlugin::new();
+        let current = simd_json::serde::to_owned_value(WebUiState::default()).unwrap();
+        let mut desired_state = WebUiState::default();
+        desired_state.tunables.theme = "light".into();
+        let desired = simd_json::serde::to_owned_value(desired_state).unwrap();
+        assert!(plugin.calculate_diff(&current, &desired).await.is_err());
+        let diff = StateDiff {
+            plugin: plugin.name().into(),
+            actions: Vec::new(),
+            metadata: op_state::DiffMetadata {
+                timestamp: 0,
+                current_hash: String::new(),
+                desired_hash: String::new(),
+            },
+        };
+        assert!(plugin.apply_state(&diff).await.is_err());
+        assert!(plugin.verify_state(&desired).await.is_err());
+        assert!(plugin.create_checkpoint().await.is_err());
+        let checkpoint = Checkpoint {
+            id: "untrusted-fixture".into(),
+            plugin: plugin.name().into(),
+            timestamp: 0,
+            state_snapshot: simd_json::json!(null),
+            backend_checkpoint: None,
+        };
+        assert!(plugin.rollback(&checkpoint).await.is_err());
+        let capabilities = StatePlugin::capabilities(&plugin);
+        assert!(!capabilities.supports_rollback);
+        assert!(!capabilities.supports_checkpoints);
+        assert!(!capabilities.supports_verification);
+        assert!(!capabilities.atomic_operations);
     }
 
     #[test]

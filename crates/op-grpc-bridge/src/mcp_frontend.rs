@@ -31,7 +31,9 @@ use crate::grpc_server::DECLARED_CAPABILITY_HEADER;
 #[cfg(test)]
 use crate::interceptor::capabilities_for_principal;
 use crate::interceptor::load_capability_grants;
-use crate::mcp_policy::{McpProjectionPolicy, ToolTemperature, ToolsetDefinition, HOT_TOOL_NAMES};
+use crate::mcp_policy::{
+    McpPolicyOwner, McpProjectionPolicy, ToolTemperature, ToolsetDefinition, HOT_TOOL_NAMES,
+};
 use crate::mutation_engine::MutationEngine;
 use crate::oracle_assertion::AssertionValidator;
 use crate::sealed_schema_reader::{
@@ -333,17 +335,17 @@ trait McpBackend: Send + Sync {
 struct MutationEngineMcpBackend {
     engine: Arc<MutationEngine>,
     blob_catalog_dir: PathBuf,
-    policy: Arc<McpProjectionPolicy>,
+    policy: Arc<McpPolicyOwner>,
     close_check_active: Arc<AtomicBool>,
 }
 
 impl MutationEngineMcpBackend {
-    fn new(engine: Arc<MutationEngine>, policy: McpProjectionPolicy) -> Self {
+    fn new(engine: Arc<MutationEngine>, policy: Arc<McpPolicyOwner>) -> Self {
         let blob_catalog_dir = blob_catalog_dir_from_env();
         Self {
             engine,
             blob_catalog_dir,
-            policy: Arc::new(policy),
+            policy,
             close_check_active: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -455,17 +457,17 @@ impl MutationEngineMcpBackend {
     }
 
     fn selected_set<'a>(
-        &'a self,
+        policy: &'a McpProjectionPolicy,
         selection: &ToolsetSelection,
     ) -> anyhow::Result<&'a ToolsetDefinition> {
-        if selection.generation != self.policy.toolsets.generation {
+        if selection.generation != policy.toolsets.generation {
             anyhow::bail!(
                 "toolset_generation_changed: requested {}, current {}; relist required",
                 selection.generation,
-                self.policy.toolsets.generation
+                policy.toolsets.generation
             );
         }
-        self.policy
+        policy
             .toolset(&selection.id)
             .ok_or_else(|| anyhow::anyhow!("unknown toolset '{}'", selection.id))
     }
@@ -476,12 +478,12 @@ impl MutationEngineMcpBackend {
         selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Vec<Value>> {
         let grants = load_exact_capability_grants(&caller.principal_id);
+        let policy = self.policy.snapshot();
         let mut by_name = BTreeMap::new();
         for descriptor in self.authorized_hot_tools(&grants).await? {
             by_name.insert(tool_name(&descriptor).to_string(), descriptor);
         }
-        for set in self
-            .policy
+        for set in policy
             .toolsets
             .sets
             .iter()
@@ -492,7 +494,7 @@ impl MutationEngineMcpBackend {
             }
         }
         if let Some(selection) = selection {
-            let set = self.selected_set(selection)?;
+            let set = Self::selected_set(&policy, selection)?;
             for descriptor in self.authorized_toolset_tools(set, &grants).await? {
                 by_name.insert(tool_name(&descriptor).to_string(), descriptor);
             }
@@ -511,11 +513,12 @@ impl MutationEngineMcpBackend {
         caller: &AuthenticatedCaller,
     ) -> anyhow::Result<Vec<Value>> {
         let grants = load_exact_capability_grants(&caller.principal_id);
+        let policy = self.policy.snapshot();
         let mut by_name = BTreeMap::new();
         for descriptor in self.authorized_hot_tools(&grants).await? {
             by_name.insert(tool_name(&descriptor).to_string(), descriptor);
         }
-        for set in &self.policy.toolsets.sets {
+        for set in &policy.toolsets.sets {
             if !Self::provider_ready(set) {
                 continue;
             }
@@ -532,12 +535,13 @@ impl MutationEngineMcpBackend {
         arguments: &Value,
     ) -> anyhow::Result<Value> {
         let grants = load_exact_capability_grants(&caller.principal_id);
+        let policy = self.policy.snapshot();
         let operation = arguments
             .get("operation")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("toolsets requires operation"))?;
         let mut projected = Vec::new();
-        for set in &self.policy.toolsets.sets {
+        for set in &policy.toolsets.sets {
             let authorized_count = self
                 .authorized_toolset_tools_without_health(set, &grants)
                 .await?
@@ -557,7 +561,7 @@ impl MutationEngineMcpBackend {
         match operation {
             "list" => Ok(json!({
                 "operation": "list",
-                "toolset_generation": self.policy.toolsets.generation,
+                "toolset_generation": policy.toolsets.generation,
                 "relist_required": false,
                 "result": {"sets": projected}
             })),
@@ -566,8 +570,7 @@ impl MutationEngineMcpBackend {
                     .get("toolset_id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("toolsets select requires toolset_id"))?;
-                let set = self
-                    .policy
+                let set = policy
                     .toolset(id)
                     .ok_or_else(|| anyhow::anyhow!("unknown toolset '{id}'"))?;
                 if !Self::provider_ready(set) {
@@ -579,12 +582,12 @@ impl MutationEngineMcpBackend {
                 }
                 Ok(json!({
                     "operation": "select",
-                    "toolset_generation": self.policy.toolsets.generation,
+                    "toolset_generation": policy.toolsets.generation,
                     "relist_required": false,
                     "result": {
                         "selector": {
                             "id": id,
-                            "generation": self.policy.toolsets.generation
+                            "generation": policy.toolsets.generation
                         },
                         "selected_set": id,
                         "activated_tool_count": tools.len()
@@ -668,9 +671,30 @@ impl McpBackend for MutationEngineMcpBackend {
         arguments: Value,
         selection: Option<&ToolsetSelection>,
     ) -> anyhow::Result<Value> {
-        if !self.policy.is_hot_tool(name) && selection.is_none() {
-            let sets: Vec<_> = self
-                .policy
+        let policy = self.policy.snapshot();
+        if policy.denies_singleton_chatbot_direct_tool(&caller.principal_id, name) {
+            anyhow::bail!(
+                "AccessDenied: singleton chatbot cannot call direct-execution tool '{name}'"
+            );
+        }
+        // Reject calls outside the selected projection before resolving any
+        // catalog entries or provider readiness. The later projection still
+        // enforces the caller's exact grants and the provider's health.
+        if !policy.is_hot_tool(name) {
+            if let Some(selection) = selection {
+                if !Self::selected_set(&policy, selection)?
+                    .tools
+                    .iter()
+                    .any(|tool| tool == name)
+                {
+                    anyhow::bail!(
+                        "AccessDenied: tool '{name}' is not in the current HOT/toolset projection"
+                    );
+                }
+            }
+        }
+        if !policy.is_hot_tool(name) && selection.is_none() {
+            let sets: Vec<_> = policy
                 .toolsets
                 .sets
                 .iter()
@@ -784,9 +808,9 @@ struct McpFrontendState {
 
 /// Build the raw HTTP projection. The returned router owns no listener.
 pub fn build_mcp_router(engine: Arc<MutationEngine>, validator: Arc<AssertionValidator>) -> Router {
-    let policy = McpProjectionPolicy::load_from_env()
+    let owner = McpPolicyOwner::from_env()
         .expect("protected MCP audience/toolset policy must be valid before binding :8090");
-    build_mcp_router_with_policy(engine, validator, policy)
+    build_mcp_router_with_owner(engine, validator, owner)
 }
 
 /// Build the raw HTTP projection with an already validated policy.
@@ -800,12 +824,24 @@ pub fn build_mcp_router_with_policy(
     validator: Arc<AssertionValidator>,
     policy: McpProjectionPolicy,
 ) -> Router {
+    let owner = McpPolicyOwner::for_fixture(policy);
+    build_mcp_router_with_owner(engine, validator, owner)
+}
+
+fn build_mcp_router_with_owner(
+    engine: Arc<MutationEngine>,
+    validator: Arc<AssertionValidator>,
+    owner: Arc<McpPolicyOwner>,
+) -> Router {
+    engine
+        .install_mcp_policy_owner(owner.clone())
+        .expect("MutationEngine MCP policy owner must be installed once");
     let state = McpFrontendState {
         authenticator: Arc::new(OracleHttpAuthenticator {
             validator,
             engine: engine.clone(),
         }),
-        backend: Arc::new(MutationEngineMcpBackend::new(engine, policy)),
+        backend: Arc::new(MutationEngineMcpBackend::new(engine, owner)),
         allowed_origins: Arc::new(configured_allowed_origins()),
         sessions: Arc::new(RwLock::new(HashMap::new())),
     };
@@ -2880,5 +2916,129 @@ mod tests {
         assert_eq!(filtered["plugin_count"], 1);
         assert_eq!(filtered["subid_count"], 1);
         assert!(read_sealed_schema_result(dir.path(), "missing").is_err());
+    }
+
+    fn deployed_mcp_policy() -> McpProjectionPolicy {
+        McpProjectionPolicy {
+            audience: crate::mcp_policy::parse_audience_policy(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../deploy/config/mcp-audience-policy.json"
+            )))
+            .unwrap(),
+            toolsets: crate::mcp_policy::parse_toolset_manifest(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../deploy/config/mcp-toolsets.json"
+            )))
+            .unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn singleton_chatbot_cannot_call_outside_hot_or_selected_toolset() {
+        let mut backend = MutationEngineMcpBackend::new(
+            crate::human_principal_dispatch::tests::test_engine(),
+            McpPolicyOwner::for_fixture(deployed_mcp_policy()),
+        );
+        let catalog_root = tempfile::tempdir().unwrap();
+        backend.blob_catalog_dir = catalog_root.path().join("catalog-does-not-exist");
+        let policy = backend.policy.snapshot();
+        let caller = AuthenticatedCaller {
+            principal_id: policy.audience.singleton_chatbot_principal_id.clone(),
+            session_id: "chatbot-session".into(),
+            session_genesis: "chatbot-genesis".into(),
+        };
+        let unknown = "plugin.unlisted.operation";
+        let error = backend
+            .call_tool(&caller, unknown, json!({}), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("AccessDenied: tool '{unknown}' is not exposed by the configured MCP toolsets")
+        );
+        for set in &policy.toolsets.sets {
+            let selection = ToolsetSelection {
+                id: set.id.clone(),
+                generation: policy.toolsets.generation,
+            };
+            let outside = policy
+                .toolsets
+                .sets
+                .iter()
+                .flat_map(|other| other.tools.iter().map(String::as_str))
+                .chain(std::iter::once(unknown))
+                .filter(|name| {
+                    !policy.is_hot_tool(name)
+                        && !set.tools.iter().any(|tool| tool.as_str() == *name)
+                });
+            for name in outside {
+                let error = backend
+                    .call_tool(&caller, name, json!({}), Some(&selection))
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "AccessDenied: tool '{name}' is not in the current HOT/toolset projection"
+                    ),
+                    "selection {}",
+                    set.id
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn singleton_chatbot_direct_tools_are_denied_before_catalog_or_provider_work() {
+        let mut backend = MutationEngineMcpBackend::new(
+            crate::human_principal_dispatch::tests::test_engine(),
+            McpPolicyOwner::for_fixture(deployed_mcp_policy()),
+        );
+        let catalog_root = tempfile::tempdir().unwrap();
+        backend.blob_catalog_dir = catalog_root.path().join("catalog-does-not-exist");
+        let policy = backend.policy.snapshot();
+        let caller = AuthenticatedCaller {
+            principal_id: policy.audience.singleton_chatbot_principal_id.clone(),
+            session_id: "chatbot-session".into(),
+            session_genesis: "chatbot-genesis".into(),
+        };
+        let names = [
+            "shell_execute",
+            "shell_read",
+            "file_read",
+            "file_write",
+            "dbus_call",
+            "plugin.example.shell_execute",
+            "plugin.example.file_read",
+            "plugin.example.dbus_call",
+        ];
+        let selections = policy
+            .toolsets
+            .sets
+            .iter()
+            .map(|set| ToolsetSelection {
+                id: set.id.clone(),
+                generation: policy.toolsets.generation,
+            })
+            .collect::<Vec<_>>();
+
+        for name in names {
+            let error = backend
+                .call_tool(&caller, name, json!({}), None)
+                .await
+                .unwrap_err();
+            let expected = format!(
+                "AccessDenied: singleton chatbot cannot call direct-execution tool '{name}'"
+            );
+            assert_eq!(error.to_string(), expected);
+
+            for selection in &selections {
+                let error = backend
+                    .call_tool(&caller, name, json!({}), Some(selection))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.to_string(), expected, "selection {}", selection.id);
+            }
+        }
     }
 }

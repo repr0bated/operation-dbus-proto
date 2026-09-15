@@ -8,12 +8,25 @@
 //!
 //!   1. `snowball.query_events` / `snowball.verify_chain` return real audit
 //!      data — not the catch-all echo of their input.
-//!   2. The snowball plugin's seven pre-existing methods still echo, proving
-//!      the scope boundary was not crossed.
+//!   2. Missing runtime ownership and undeclared methods fail explicitly.
+
+mod support;
 
 use std::sync::Arc;
 
 use op_grpc_bridge::MutationEngine;
+use op_state::StatePlugin;
+
+fn catalog() -> support::CatalogScope {
+    support::CatalogScope::new(&[
+        op_plugins::state_plugins::snowball_plugin::SnowballPlugin::new()
+            .schema()
+            .unwrap(),
+        op_plugins::state_plugins::endpoint::EndpointPlugin::new()
+            .schema()
+            .unwrap(),
+    ])
+}
 
 fn engine() -> Arc<MutationEngine> {
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
@@ -26,22 +39,23 @@ fn engine() -> Arc<MutationEngine> {
 /// Every dispatch records an event, so calling a method is how we populate the
 /// chain under test.
 async fn record_calls(engine: &MutationEngine, count: usize) {
-    for i in 0..count {
+    for _ in 0..count {
         engine
             .dispatch_method_call(
-                "audit_fixture",
-                "record",
-                &format!("{{\"probe\":{i}}}"),
-                Some("cognitive.read"),
+                "snowball",
+                "verify_chain",
+                "{}",
+                Some("snowball.read"),
                 "test-actor",
             )
             .await
-            .expect("dispatch records an event");
+            .expect("verify_chain dispatches and records an event");
     }
 }
 
 #[tokio::test]
 async fn query_events_returns_real_audit_data_not_echo() {
+    let _catalog = catalog();
     let engine = engine();
     record_calls(&engine, 3).await;
 
@@ -74,10 +88,10 @@ async fn query_events_returns_real_audit_data_not_echo() {
 
     // Records carry the accountability surface, not just ids.
     let first = &events[0];
-    assert_eq!(first["plugin_id"], serde_json::json!("audit_fixture"));
-    assert_eq!(first["method_name"], serde_json::json!("record"));
+    assert_eq!(first["plugin_id"], serde_json::json!("snowball"));
+    assert_eq!(first["method_name"], serde_json::json!("verify_chain"));
     assert_eq!(first["actor_id"], serde_json::json!("test-actor"));
-    assert_eq!(first["capability_id"], serde_json::json!("cognitive.read"));
+    assert_eq!(first["capability_id"], serde_json::json!("snowball.read"));
     assert_eq!(first["decision"], serde_json::json!("Allow"));
     assert!(!first["event_hash"].as_str().unwrap_or_default().is_empty());
     assert!(!first["timestamp"].as_str().unwrap_or_default().is_empty());
@@ -85,6 +99,7 @@ async fn query_events_returns_real_audit_data_not_echo() {
 
 #[tokio::test]
 async fn query_events_filters_and_clamps_limit() {
+    let _catalog = catalog();
     let engine = engine();
     record_calls(&engine, 5).await;
 
@@ -128,7 +143,7 @@ async fn query_events_filters_and_clamps_limit() {
         .dispatch_method_call(
             "snowball",
             "query_events",
-            "{\"plugin_id\":\"audit_fixture\",\"limit\":50}",
+            "{\"plugin_id\":\"snowball\",\"limit\":50}",
             Some("snowball.read"),
             "test-actor",
         )
@@ -138,7 +153,7 @@ async fn query_events_filters_and_clamps_limit() {
     assert!(!rows.is_empty(), "plugin filter returned nothing");
     assert!(
         rows.iter()
-            .all(|e| e["plugin_id"] == serde_json::json!("audit_fixture")),
+            .all(|e| e["plugin_id"] == serde_json::json!("snowball")),
         "plugin filter leaked other plugins"
     );
 
@@ -162,6 +177,7 @@ async fn query_events_filters_and_clamps_limit() {
 
 #[tokio::test]
 async fn verify_chain_reports_integrity() {
+    let _catalog = catalog();
     let engine = engine();
     record_calls(&engine, 4).await;
 
@@ -184,41 +200,83 @@ async fn verify_chain_reports_integrity() {
 }
 
 #[tokio::test]
-async fn existing_snowball_methods_still_echo() {
+async fn snowball_methods_require_the_initialized_shared_backend() {
+    let _catalog = catalog();
     let engine = engine();
 
-    // Scope boundary (FR-8): the seven pre-existing methods stay un-wired and
-    // fall through to the catch-all echo.
-    for method in [
-        "list_snapshots",
-        "get_snapshot",
-        "create_snapshot",
-        "rollback",
-        "get_current_state",
-        "set_retention",
-        "get_stats",
+    for (method, args, capability) in [
+        ("list_snapshots", "{}", "snowball.read"),
+        (
+            "get_snapshot",
+            "{\"snapshot_name\":\"SNP-state-00000000000000000001\"}",
+            "snowball.read",
+        ),
+        ("create_snapshot", "{}", "snowball.invoke"),
+        (
+            "rollback",
+            "{\"snapshot_name\":\"SNP-state-00000000000000000001\"}",
+            "snowball.invoke",
+        ),
+        ("get_current_state", "{}", "snowball.read"),
+        (
+            "set_retention",
+            "{\"hourly\":1,\"daily\":1,\"weekly\":1,\"quarterly\":1}",
+            "snowball.invoke",
+        ),
+        ("get_stats", "{}", "snowball.read"),
     ] {
-        let response = engine
-            .dispatch_method_call(
-                "snowball",
-                method,
-                "{\"scope_marker\":true}",
-                Some("snowball.read"),
-                "test-actor",
-            )
+        let error = engine
+            .dispatch_method_call("snowball", method, args, Some(capability), "test-actor")
             .await
-            .unwrap_or_else(|e| panic!("{method} dispatch failed: {e}"));
-
-        assert_eq!(
-            response["result"]["scope_marker"],
-            serde_json::json!(true),
-            "{method} no longer echoes — the scope boundary was crossed"
-        );
+            .expect_err("method requires initialized durable backend");
         assert!(
-            response["result"].get("events").is_none(),
-            "{method} unexpectedly returned audit data"
+            error
+                .to_string()
+                .contains("durable Snowball backend is not initialized"),
+            "unexpected error for {method}: {error}"
         );
     }
+}
+
+#[tokio::test]
+async fn undeclared_method_is_rejected_and_its_attempt_remains_auditable() {
+    let _catalog = catalog();
+    let engine = engine();
+    let error = engine
+        .dispatch_method_call(
+            "endpoint",
+            "missing_method",
+            "{}",
+            Some("endpoint.read"),
+            "test-actor",
+        )
+        .await
+        .expect_err("undeclared method cannot reach any backend");
+    assert!(
+        error.to_string().contains("absent from pinned seal"),
+        "unexpected error: {error}"
+    );
+
+    // Rejection happens after the immutable attempted-call event is recorded.
+    let audit = engine
+        .dispatch_method_call(
+            "snowball",
+            "query_events",
+            "{\"plugin_id\":\"endpoint\",\"limit\":10}",
+            Some("snowball.read"),
+            "test-actor",
+        )
+        .await
+        .expect("audit query remains supported");
+    let events = audit["result"]["events"]
+        .as_array()
+        .expect("audit events array");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["plugin_id"], serde_json::json!("endpoint"));
+    assert_eq!(
+        events[0]["method_name"],
+        serde_json::json!("missing_method")
+    );
 }
 
 #[tokio::test]
@@ -240,7 +298,7 @@ async fn audit_methods_are_declared_in_the_plugin_schema() {
         assert!(decl.returns.is_some(), "{name} must declare a typed output");
     }
 
-    // The seven originals are still declared.
+    // Snapshot methods retain their declared, separately gated surface.
     for name in [
         "create_snapshot",
         "list_snapshots",
@@ -267,6 +325,7 @@ async fn audit_methods_are_declared_in_the_plugin_schema() {
 /// design (NFR-4), and this test says so rather than silently passing.
 #[tokio::test]
 async fn audit_trail_persists_and_survives_a_restart() {
+    let _catalog = catalog();
     let test_root = tempfile::Builder::new()
         .prefix("opdbus-audit-test-")
         .tempdir()
@@ -359,8 +418,8 @@ async fn audit_trail_persists_and_survives_a_restart() {
 
     // 3 replayed from disk + this query_events call.
     assert_eq!(events.len(), 4, "restored page: {restored}");
-    assert_eq!(events[0]["method_name"], serde_json::json!("record"));
-    assert_eq!(events[0]["plugin_id"], serde_json::json!("audit_fixture"));
+    assert_eq!(events[0]["method_name"], serde_json::json!("verify_chain"));
+    assert_eq!(events[0]["plugin_id"], serde_json::json!("snowball"));
 
     // Hash linkage survived persistence, so the rebuilt chain verifies and the
     // new event continues the chain instead of restarting the ids.

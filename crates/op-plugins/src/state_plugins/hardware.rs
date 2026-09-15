@@ -1,10 +1,11 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
+use sysinfo::{Disks, System};
 
 /// Hardware inventory snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
@@ -45,7 +46,7 @@ pub struct CpuInfo {
         example = &"AMD Ryzen 9 7950X",
         extend("x-oscal-subid" = "exp.service.hardware.cpu.model.declare@v1")
     )]
-    pub model: String,
+    pub model: Option<String>,
 
     /// Number of CPU cores.
     #[schemars(
@@ -87,13 +88,16 @@ pub struct DiskInfo {
     )]
     pub name: String,
 
-    /// Disk size in bytes.
+    /// Capacity of the mounted filesystem in bytes.
     #[schemars(
-        description = "Disk size in bytes",
+        description = "Mounted filesystem capacity in bytes",
         example = 1000204886016_i64,
-        extend("x-oscal-subid" = "exp.service.hardware.disk.size-bytes.declare@v1")
+        extend("x-oscal-subid" = "exp.service.hardware.disk.capacity-bytes.declare@v1")
     )]
-    pub size_bytes: u64,
+    pub capacity_bytes: u64,
+
+    /// Currently available space on the mounted filesystem in bytes.
+    pub available_bytes: u64,
 
     /// Mount point, if any.
     #[serde(default)]
@@ -103,6 +107,57 @@ pub struct DiskInfo {
         extend("x-oscal-subid" = "exp.service.hardware.disk.mountpoint.declare@v1")
     )]
     pub mountpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ScanHardwareOutput {
+    pub observed_at: String,
+    pub inventory: HardwareState,
+    /// `observed` means this request took a fresh native snapshot; it does not
+    /// claim a kernel hotplug rescan or a mutation.
+    pub disposition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RefreshInventoryOutput {
+    pub observed_at: String,
+    pub inventory: HardwareState,
+    /// `observed` means this request took a fresh native snapshot; it does not
+    /// claim a kernel hotplug rescan or a mutation.
+    pub disposition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListDevicesOutput {
+    pub observed_at: String,
+    pub devices: Vec<DiskInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetDeviceInput {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetDeviceOutput {
+    pub observed_at: String,
+    pub device: Option<DiskInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetStatsOutput {
+    pub observed_at: String,
+    pub cpu: CpuInfo,
+    pub memory: MemoryInfo,
+    pub disk_count: usize,
+}
+
+/// Method output paired with the inventory captured by the same native
+/// snapshot. The caller commits `state` before returning `output`.
+#[derive(Debug, Clone)]
+pub struct HardwareObservedDispatch {
+    pub output: serde_json::Value,
+    pub state: HardwareState,
 }
 
 pub struct HardwarePlugin;
@@ -118,111 +173,152 @@ impl HardwarePlugin {
         Self
     }
 
-    async fn get_cpu_info() -> CpuInfo {
-        let content = tokio::fs::read_to_string("/proc/cpuinfo")
-            .await
-            .unwrap_or_default();
-        let mut model = "Unknown".to_string();
-        let mut cores = 0;
-
-        for line in content.lines() {
-            if line.starts_with("model name") {
-                if let Some(val) = line.split(':').nth(1) {
-                    if model == "Unknown" {
-                        model = val.trim().to_string();
-                    }
-                }
-                cores += 1;
-            }
-        }
-
-        // Fallback for cores if using processor count
-        if cores == 0 {
-            cores = content
-                .lines()
-                .filter(|l| l.starts_with("processor"))
-                .count();
-        }
-
-        CpuInfo { model, cores }
-    }
-
-    async fn get_memory_info() -> MemoryInfo {
-        let content = tokio::fs::read_to_string("/proc/meminfo")
-            .await
-            .unwrap_or_default();
-        let mut total = 0;
-        let mut available = 0;
-
-        for line in content.lines() {
-            if line.starts_with("MemTotal:") {
-                if let Some(val) = line.split_whitespace().nth(1) {
-                    total = val.parse().unwrap_or(0);
-                }
-            } else if line.starts_with("MemAvailable:") {
-                if let Some(val) = line.split_whitespace().nth(1) {
-                    available = val.parse().unwrap_or(0);
-                }
-            }
-        }
-
-        MemoryInfo {
-            total_kb: total,
-            available_kb: available,
-        }
-    }
-
-    async fn get_disk_info() -> Vec<DiskInfo> {
-        let mut disks = Vec::new();
-        let sysfs = std::path::Path::new("/sys/block");
-        if !sysfs.exists() {
-            return disks;
-        }
-
-        let mut entries = match tokio::fs::read_dir(sysfs).await {
-            Ok(e) => e,
-            Err(_) => return disks,
+    fn snapshot() -> Result<(String, HardwareState)> {
+        let mut system = System::new();
+        system.refresh_memory();
+        system.refresh_cpu();
+        validate_native_inventory(
+            system.total_memory(),
+            system.available_memory(),
+            system.cpus().len(),
+        )?;
+        let cpu = system.cpus().first();
+        let disks = Disks::new_with_refreshed_list();
+        let inventory = HardwareState {
+            cpu: CpuInfo {
+                model: cpu.and_then(|cpu| nonempty(cpu.brand())),
+                cores: system.cpus().len(),
+            },
+            memory: MemoryInfo {
+                total_kb: bytes_to_kib(system.total_memory()),
+                available_kb: bytes_to_kib(system.available_memory()),
+            },
+            disks: disks
+                .list()
+                .iter()
+                .map(|disk| DiskInfo {
+                    name: disk.name().to_string_lossy().into_owned(),
+                    capacity_bytes: disk.total_space(),
+                    available_bytes: disk.available_space(),
+                    mountpoint: nonempty(&disk.mount_point().to_string_lossy()),
+                })
+                .collect(),
         };
-
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            // Skip loop devices and ramdisks
-            if name.starts_with("loop") || name.starts_with("ram") {
-                continue;
-            }
-
-            let size_path = entry.path().join("size");
-            let size_sectors = tokio::fs::read_to_string(&size_path)
-                .await
-                .ok()
-                .and_then(|s| s.trim().parse::<u64>().ok())
-                .unwrap_or(0);
-            let size_bytes = size_sectors * 512;
-
-            let mountpoint = Self::read_mountpoint(&name).await;
-
-            disks.push(DiskInfo {
-                name,
-                size_bytes,
-                mountpoint,
-            });
-        }
-        disks
+        Ok((chrono::Utc::now().to_rfc3339(), inventory))
     }
 
-    async fn read_mountpoint(device: &str) -> Option<String> {
-        let mounts = tokio::fs::read_to_string("/proc/mounts").await.ok()?;
-        for line in mounts.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let dev = parts[0];
-                if dev.contains(device) {
-                    return Some(parts[1].to_string());
+    pub fn dispatch_hardware_method(
+        method: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        Ok(Self::dispatch_hardware_method_observed(method, args)?.output)
+    }
+
+    pub fn dispatch_hardware_method_observed(
+        method: &str,
+        args: &serde_json::Value,
+    ) -> Result<HardwareObservedDispatch> {
+        let (observed_at, inventory) = Self::snapshot()?;
+        Self::dispatch_snapshot_observed(method, args, observed_at, inventory)
+    }
+
+    fn dispatch_snapshot_observed(
+        method: &str,
+        args: &serde_json::Value,
+        observed_at: String,
+        inventory: HardwareState,
+    ) -> Result<HardwareObservedDispatch> {
+        validate_hardware_state(&inventory)?;
+        let output = Self::dispatch_snapshot(method, args, observed_at, inventory.clone())?;
+        Ok(HardwareObservedDispatch {
+            output,
+            state: inventory,
+        })
+    }
+
+    fn dispatch_snapshot(
+        method: &str,
+        args: &serde_json::Value,
+        observed_at: String,
+        inventory: HardwareState,
+    ) -> Result<serde_json::Value> {
+        match method {
+            "list_devices" => Ok(serde_json::to_value(ListDevicesOutput {
+                observed_at,
+                devices: inventory.disks.clone(),
+            })?),
+            "get_device" => {
+                let input: GetDeviceInput = serde_json::from_value(args.clone())?;
+                if input.name.trim().is_empty() {
+                    bail!("device name must not be empty");
                 }
+                Ok(serde_json::to_value(GetDeviceOutput {
+                    observed_at,
+                    device: inventory
+                        .disks
+                        .iter()
+                        .find(|disk| disk.name == input.name)
+                        .cloned(),
+                })?)
             }
+            "get_stats" => Ok(serde_json::to_value(GetStatsOutput {
+                observed_at,
+                cpu: inventory.cpu,
+                memory: inventory.memory,
+                disk_count: inventory.disks.len(),
+            })?),
+            "scan_hardware" => Ok(serde_json::to_value(ScanHardwareOutput {
+                observed_at,
+                inventory,
+                disposition: "observed".to_string(),
+            })?),
+            "refresh_inventory" => Ok(serde_json::to_value(RefreshInventoryOutput {
+                observed_at,
+                inventory,
+                disposition: "observed".to_string(),
+            })?),
+            _ => bail!("unsupported hardware method: {method}"),
         }
-        None
     }
+}
+
+fn validate_native_inventory(
+    total_memory_bytes: u64,
+    available_memory_bytes: u64,
+    cpu_count: usize,
+) -> Result<()> {
+    if total_memory_bytes == 0 {
+        bail!("native hardware snapshot reported zero total memory");
+    }
+    if available_memory_bytes > total_memory_bytes {
+        bail!("native hardware snapshot reported available memory greater than total memory");
+    }
+    if cpu_count == 0 {
+        bail!("native hardware snapshot reported no CPUs");
+    }
+    Ok(())
+}
+
+fn validate_hardware_state(inventory: &HardwareState) -> Result<()> {
+    if inventory.memory.total_kb == 0 {
+        bail!("hardware observation reported zero total memory");
+    }
+    if inventory.memory.available_kb > inventory.memory.total_kb {
+        bail!("hardware observation reported available memory greater than total memory");
+    }
+    if inventory.cpu.cores == 0 {
+        bail!("hardware observation reported no CPU cores");
+    }
+    Ok(())
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn bytes_to_kib(bytes: u64) -> u64 {
+    bytes / 1024
 }
 
 #[async_trait]
@@ -299,28 +395,13 @@ pub fn hardware_schema() -> PluginSchema {
         &root,
     );
 
-    // Output structs
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListDevicesOutput {
-        pub devices: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetDeviceOutput {
-        pub device: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetStatsOutput {
-        pub stats: serde_json::Value,
-    }
-
     // Add methods
-    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
     use op_state_store::SideEffect;
 
     schema.methods.insert(
         "list_devices".to_string(),
-        method_decl_from_schemars_with_output::<(), ListDevicesOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, ListDevicesOutput>(
             "list_devices",
             SideEffect::Read,
             true,
@@ -330,7 +411,7 @@ pub fn hardware_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_device".to_string(),
-        method_decl_from_schemars_with_output::<(), GetDeviceOutput>(
+        method_decl_from_schemars_with_output::<GetDeviceInput, GetDeviceOutput>(
             "get_device",
             SideEffect::Read,
             true,
@@ -340,17 +421,17 @@ pub fn hardware_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "scan_hardware".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, ScanHardwareOutput>(
             "scan_hardware",
-            SideEffect::Mutation,
-            false,
-            "hardware.invoke",
-            "mut.service.hardware.scan@v1",
+            SideEffect::Read,
+            true,
+            "hardware.read",
+            "obs.service.hardware.scan@v1",
         ),
     );
     schema.methods.insert(
         "get_stats".to_string(),
-        method_decl_from_schemars_with_output::<(), GetStatsOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, GetStatsOutput>(
             "get_stats",
             SideEffect::Read,
             true,
@@ -360,12 +441,12 @@ pub fn hardware_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "refresh_inventory".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EmptyInput, RefreshInventoryOutput>(
             "refresh_inventory",
-            SideEffect::Mutation,
-            false,
-            "hardware.invoke",
-            "mut.service.hardware.refresh@v1",
+            SideEffect::Read,
+            true,
+            "hardware.read",
+            "obs.service.hardware.refresh@v1",
         ),
     );
 
@@ -373,23 +454,178 @@ pub fn hardware_schema() -> PluginSchema {
         "hardware.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "hardware.read".to_string(),
-            description: "Grants: list_devices, get_device, get_stats.".to_string(),
+            description:
+                "Grants: list_devices, get_device, scan_hardware, get_stats, refresh_inventory."
+                    .to_string(),
         },
     );
-    schema.capabilities.insert(
-        "hardware.invoke".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "hardware.invoke".to_string(),
-            description: "Grants: scan_hardware, refresh_inventory.".to_string(),
-        },
-    );
-
+    // Publish inventory without mount paths. Array-item rules retain disk
+    // identity and capacity fields while withholding other filesystem detail.
+    schema.public_state.paths = vec![
+        "/cpu/cores".to_string(),
+        "/memory".to_string(),
+        "/disks/*/name".to_string(),
+        "/disks/*/capacity_bytes".to_string(),
+        "/disks/*/available_bytes".to_string(),
+    ];
     schema
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture() -> HardwareState {
+        HardwareState {
+            cpu: CpuInfo {
+                model: Some("fixture-cpu".into()),
+                cores: 4,
+            },
+            memory: MemoryInfo {
+                total_kb: 1024,
+                available_kb: 512,
+            },
+            disks: vec![DiskInfo {
+                name: "fixture0".into(),
+                capacity_bytes: 4096,
+                available_bytes: 1024,
+                mountpoint: Some("/mnt".into()),
+            }],
+        }
+    }
+
+    #[test]
+    fn all_inventory_methods_use_typed_fixture_and_filter_devices() {
+        let state = fixture();
+        let list = HardwarePlugin::dispatch_snapshot(
+            "list_devices",
+            &serde_json::json!({}),
+            "t".into(),
+            state.clone(),
+        )
+        .unwrap();
+        assert_eq!(list["devices"][0]["name"], "fixture0");
+        let one = HardwarePlugin::dispatch_snapshot(
+            "get_device",
+            &serde_json::json!({"name":"fixture0"}),
+            "t".into(),
+            state.clone(),
+        )
+        .unwrap();
+        assert_eq!(one["device"]["capacity_bytes"], 4096);
+        let missing = HardwarePlugin::dispatch_snapshot(
+            "get_device",
+            &serde_json::json!({"name":"missing"}),
+            "t".into(),
+            state.clone(),
+        )
+        .unwrap();
+        assert!(missing["device"].is_null());
+        let stats = HardwarePlugin::dispatch_snapshot(
+            "get_stats",
+            &serde_json::json!({}),
+            "t".into(),
+            state.clone(),
+        )
+        .unwrap();
+        assert_eq!(stats["cpu"]["cores"], 4);
+        for method in ["scan_hardware", "refresh_inventory"] {
+            let output = HardwarePlugin::dispatch_snapshot(
+                method,
+                &serde_json::json!({}),
+                "t".into(),
+                state.clone(),
+            )
+            .unwrap();
+            assert_eq!(output["disposition"], "observed");
+            assert_eq!(output["inventory"]["cpu"]["model"], "fixture-cpu");
+        }
+        assert!(HardwarePlugin::dispatch_snapshot(
+            "get_device",
+            &serde_json::json!({"name":" "}),
+            "t".into(),
+            state,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn observed_dispatch_pairs_output_with_the_same_complete_inventory() {
+        let receipt = HardwarePlugin::dispatch_snapshot_observed(
+            "get_stats",
+            &serde_json::json!({}),
+            "t".into(),
+            fixture(),
+        )
+        .unwrap();
+        assert_eq!(receipt.output["cpu"]["cores"], 4);
+        assert_eq!(receipt.state.cpu.cores, 4);
+        assert_eq!(receipt.state.disks[0].name, "fixture0");
+    }
+
+    #[test]
+    fn invalid_native_inventory_is_rejected_before_publication() {
+        assert!(validate_native_inventory(0, 0, 1).is_err());
+        assert!(validate_native_inventory(1024, 1025, 1).is_err());
+        assert!(validate_native_inventory(1024, 0, 0).is_err());
+        assert!(validate_native_inventory(1024, 0, 1).is_ok());
+
+        let mut invalid = fixture();
+        invalid.cpu.cores = 0;
+        assert!(HardwarePlugin::dispatch_snapshot_observed(
+            "get_stats",
+            &serde_json::json!({}),
+            "t".into(),
+            invalid,
+        )
+        .is_err());
+
+        let mut invalid = fixture();
+        invalid.memory.available_kb = invalid.memory.total_kb + 1;
+        assert!(HardwarePlugin::dispatch_snapshot_observed(
+            "get_stats",
+            &serde_json::json!({}),
+            "t".into(),
+            invalid,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn default_and_actual_inventory_satisfy_the_public_policy() {
+        for state in [HardwareState::default(), fixture()] {
+            let state = simd_json::serde::to_owned_value(&state).unwrap();
+            let projected = hardware_schema()
+                .project_public_state(&state)
+                .unwrap()
+                .expect("hardware has an explicit public policy");
+            let projected = serde_json::to_value(projected).unwrap();
+            assert!(projected["cpu"].get("model").is_none());
+            if let Some(disk) = projected["disks"]
+                .as_array()
+                .and_then(|disks| disks.first())
+            {
+                assert!(disk.get("mountpoint").is_none());
+                assert!(disk.get("name").is_some());
+                assert!(disk.get("capacity_bytes").is_some());
+                assert!(disk.get("available_bytes").is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn schema_method_keys_match_declared_names() {
+        let schema = hardware_schema();
+        assert_eq!(schema.methods.len(), 5);
+        for (key, method) in &schema.methods {
+            assert_eq!(key, &method.name);
+        }
+    }
+
+    #[test]
+    fn native_byte_counts_are_converted_to_kibibytes() {
+        assert_eq!(bytes_to_kib(2049), 2);
+    }
 
     /// Every `x-oscal-subid` annotation in the derived schema must be a valid
     /// OSCAL subid according to the canonical taxonomy.

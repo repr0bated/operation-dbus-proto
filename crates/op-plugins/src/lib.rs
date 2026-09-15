@@ -35,7 +35,6 @@ pub mod chat;
 pub mod dynamic_loading;
 pub mod plugin;
 pub mod registry;
-pub mod schema_loader;
 pub mod service_def;
 pub mod state;
 
@@ -49,7 +48,6 @@ pub use default_registry::{DefaultPluginRegistry, PluginRegistryConfig};
 pub use plugin::{Plugin, PluginCapabilities, PluginContext, PluginMetadata};
 pub use registry::PluginRegistry as PluginCatalog;
 pub use registry::{PluginRecord, PluginRegistry};
-pub use schema_loader::SchemaLoader;
 pub use state::{ChangeOperation, DesiredState, StateChange, ValidationResult};
 
 // ── Canonical PluginSchema authority surface ───────────────────────────────
@@ -96,14 +94,14 @@ pub mod prelude {
     pub use super::state_plugins::{
         AdcPlugin, AgentConfigPlugin, AntigravityChatPlugin, AntigravityPlugin, BtrfsPlugin,
         CognitiveMcpPlugin, ConfigPlugin, CronPlugin, CtlPlaneChatbotPlugin, DnsResolverPlugin,
-        EndpointPlugin, ExecutionResult, FactoryPlugin, Fail2banPlugin, FreeDesktopPlugin,
-        FullSystemPlugin, GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin,
-        KeyringPlugin, Login1Plugin, MailServerPlugin, McpStatePlugin, MemoryPlugin,
-        NetStatePlugin, NetmakerConfig, NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin,
-        OvsBridgePlugin, PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin,
-        RovsCommandsPlugin, RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin,
-        SoftwarePlugin, TchedRouterPlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin,
-        WebUiPlugin, WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin,
+        EndpointPlugin, ExecutionResult, Fail2banPlugin, FreeDesktopPlugin, FullSystemPlugin,
+        GcloudAdcPlugin, HardwarePlugin, IncusPlugin, KeypairPlugin, KeyringPlugin, Login1Plugin,
+        MailServerPlugin, McpStatePlugin, MemoryPlugin, NetStatePlugin, NetmakerConfig,
+        NetmakerPlugin, OpenFlowObfuscationPlugin, OpenFlowPlugin, OvsBridgePlugin,
+        PackageKitPlugin, PciDeclPlugin, ProcfsPlugin, ProxyServerPlugin, RovsCommandsPlugin,
+        RtnetlinkPlugin, SchemaRendererPlugin, ServicePlugin, SessDeclPlugin, SoftwarePlugin,
+        TchedRouterPlugin, ToolDefinition, UnixSocketPlugin, UsersPlugin, WebUiPlugin,
+        WgOpdbusPlugin, WireGuardPlugin, WorkflowsPlugin,
     };
 }
 pub mod state_publisher;

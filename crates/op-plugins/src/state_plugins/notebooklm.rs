@@ -16,6 +16,12 @@ use std::path::Path;
 
 use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 
+pub mod outputs;
+pub mod provider_outputs;
+
+use outputs::*;
+use provider_outputs::*;
+
 /// Manifest of the designated knowledge corpus.
 const MANIFEST_PATH: &str = "knowledge/notebooks.manifest.json";
 const PROFILE_ROOT: &str = "/home/jeremy/.notebooklm-mcp-cli";
@@ -148,6 +154,7 @@ pub struct ConfirmNotebookInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NotebookQueryInput {
     pub question: String,
     #[serde(default)]
@@ -157,6 +164,7 @@ pub struct NotebookQueryInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct QueryStatusInput {
     pub query_id: String,
 }
@@ -434,12 +442,6 @@ pub struct SetupAuthInput {
     pub show_browser: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ProviderResult {
-    #[serde(flatten)]
-    pub value: serde_json::Map<String, serde_json::Value>,
-}
-
 pub struct NotebookLmPlugin;
 
 impl Default for NotebookLmPlugin {
@@ -531,7 +533,7 @@ impl NotebookLmPlugin {
             auth: NotebookLmAuth {
                 profile_configured: configured,
                 profile_path: PROFILE_ROOT.to_string(),
-                note: "jacob-bd nlm login writes cookies under ~/.notebooklm-mcp-cli; live auth_status comes from nlm login --check, not file presence"
+                note: "jacob-bd nlm login writes cookies under ~/.notebooklm-mcp-cli; live auth_status comes from an authenticated notebook-list probe, not file presence"
                     .to_string(),
             },
             master_notebook: master,
@@ -552,7 +554,7 @@ impl StatePlugin for NotebookLmPlugin {
         "notebooklm"
     }
     fn version(&self) -> &str {
-        "3.0.0"
+        "5.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
         Some(notebooklm_schema())
@@ -601,7 +603,7 @@ impl StatePlugin for NotebookLmPlugin {
     }
 }
 
-fn insert_nlm<I: schemars::JsonSchema>(
+fn insert_nlm<I: schemars::JsonSchema, O: schemars::JsonSchema>(
     schema: &mut PluginSchema,
     name: &str,
     side_effect: SideEffect,
@@ -611,13 +613,7 @@ fn insert_nlm<I: schemars::JsonSchema>(
 ) {
     schema.methods.insert(
         name.to_string(),
-        method_decl_from_schemars_with_output::<I, ProviderResult>(
-            name,
-            side_effect,
-            idempotent,
-            cap,
-            subid,
-        ),
+        method_decl_from_schemars_with_output::<I, O>(name, side_effect, idempotent, cap, subid),
     );
 }
 
@@ -627,12 +623,12 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "notebooklm",
-        "3.0.0",
+        "5.0.0",
         "NotebookLM knowledge notebooks via jacob-bd nlm CLI",
         &root,
     );
 
-    insert_nlm::<EmptyInput>(
+    insert_nlm::<EmptyInput, NotebookListOutput>(
         &mut schema,
         "notebook_list",
         SideEffect::Read,
@@ -640,7 +636,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.notebook.list@v1",
     );
-    insert_nlm::<NotebookCreateInput>(
+    insert_nlm::<NotebookCreateInput, NotebookCreateOutput>(
         &mut schema,
         "notebook_create",
         SideEffect::Mutation,
@@ -648,7 +644,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.notebook.create@v1",
     );
-    insert_nlm::<NotebookIdInput>(
+    insert_nlm::<NotebookIdInput, NotebookGetOutput>(
         &mut schema,
         "notebook_get",
         SideEffect::Read,
@@ -656,7 +652,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.notebook.get@v1",
     );
-    insert_nlm::<NotebookIdInput>(
+    insert_nlm::<NotebookIdInput, NotebookDescribeOutput>(
         &mut schema,
         "notebook_describe",
         SideEffect::Read,
@@ -664,7 +660,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.notebook.describe@v1",
     );
-    insert_nlm::<NotebookRenameInput>(
+    insert_nlm::<NotebookRenameInput, NotebookRenameOutput>(
         &mut schema,
         "notebook_rename",
         SideEffect::Mutation,
@@ -672,7 +668,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.notebook.rename@v1",
     );
-    insert_nlm::<ConfirmNotebookInput>(
+    insert_nlm::<ConfirmNotebookInput, NotebookDeleteOutput>(
         &mut schema,
         "notebook_delete",
         SideEffect::Mutation,
@@ -680,7 +676,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.notebook.delete@v1",
     );
-    insert_nlm::<NotebookIdInput>(
+    insert_nlm::<NotebookIdInput, SelectNotebookOutput>(
         &mut schema,
         "select_notebook",
         SideEffect::Mutation,
@@ -688,7 +684,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.notebook.select@v1",
     );
-    insert_nlm::<NotebookQueryInput>(
+    insert_nlm::<NotebookQueryInput, NotebookQueryOutput>(
         &mut schema,
         "notebook_query",
         SideEffect::Read,
@@ -696,7 +692,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.notebook.query@v1",
     );
-    insert_nlm::<NotebookQueryInput>(
+    insert_nlm::<NotebookQueryInput, NotebookQueryStartOutput>(
         &mut schema,
         "notebook_query_start",
         SideEffect::Read,
@@ -704,7 +700,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.query.start@v1",
     );
-    insert_nlm::<QueryStatusInput>(
+    insert_nlm::<QueryStatusInput, NotebookQueryStatusOutput>(
         &mut schema,
         "notebook_query_status",
         SideEffect::Read,
@@ -712,7 +708,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.query.status@v1",
     );
-    insert_nlm::<SourceAddInput>(
+    insert_nlm::<SourceAddInput, SourceAddOutput>(
         &mut schema,
         "source_add",
         SideEffect::Mutation,
@@ -720,7 +716,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.source.add@v1",
     );
-    insert_nlm::<SourceIdInput>(
+    insert_nlm::<SourceIdInput, SourceListDriveOutput>(
         &mut schema,
         "source_list_drive",
         SideEffect::Read,
@@ -728,7 +724,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.source.list@v1",
     );
-    insert_nlm::<SourceIdInput>(
+    insert_nlm::<SourceIdInput, SourceSyncDriveOutput>(
         &mut schema,
         "source_sync_drive",
         SideEffect::Mutation,
@@ -736,7 +732,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.source.sync-drive@v1",
     );
-    insert_nlm::<SourceIdInput>(
+    insert_nlm::<SourceIdInput, SourceDeleteOutput>(
         &mut schema,
         "source_delete",
         SideEffect::Mutation,
@@ -744,7 +740,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.source.delete@v1",
     );
-    insert_nlm::<SourceIdInput>(
+    insert_nlm::<SourceIdInput, SourceDescribeOutput>(
         &mut schema,
         "source_describe",
         SideEffect::Read,
@@ -752,7 +748,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.source.describe@v1",
     );
-    insert_nlm::<SourceIdInput>(
+    insert_nlm::<SourceIdInput, SourceGetContentOutput>(
         &mut schema,
         "source_get_content",
         SideEffect::Read,
@@ -760,7 +756,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.source.content@v1",
     );
-    insert_nlm::<SourceIdInput>(
+    insert_nlm::<SourceIdInput, SourceRenameOutput>(
         &mut schema,
         "source_rename",
         SideEffect::Mutation,
@@ -768,7 +764,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.source.rename@v1",
     );
-    insert_nlm::<ChatConfigureInput>(
+    insert_nlm::<ChatConfigureInput, ChatConfigureOutput>(
         &mut schema,
         "chat_configure",
         SideEffect::Mutation,
@@ -776,7 +772,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.chat.configure@v1",
     );
-    insert_nlm::<NotebookIdInput>(
+    insert_nlm::<NotebookIdInput, ChatListOutput>(
         &mut schema,
         "chat_list",
         SideEffect::Read,
@@ -784,7 +780,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.chat.list@v1",
     );
-    insert_nlm::<ChatGetInput>(
+    insert_nlm::<ChatGetInput, ChatGetOutput>(
         &mut schema,
         "chat_get",
         SideEffect::Read,
@@ -792,7 +788,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.chat.get@v1",
     );
-    insert_nlm::<ChatExportInput>(
+    insert_nlm::<ChatExportInput, ChatExportOutput>(
         &mut schema,
         "chat_export",
         SideEffect::Read,
@@ -800,7 +796,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.chat.export@v1",
     );
-    insert_nlm::<StudioCreateInput>(
+    insert_nlm::<StudioCreateInput, StudioCreateOutput>(
         &mut schema,
         "studio_create",
         SideEffect::Mutation,
@@ -808,7 +804,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.studio.create@v1",
     );
-    insert_nlm::<StudioStatusInput>(
+    insert_nlm::<StudioStatusInput, StudioStatusOutput>(
         &mut schema,
         "studio_status",
         SideEffect::Read,
@@ -816,7 +812,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.studio.status@v1",
     );
-    insert_nlm::<StudioArtifactInput>(
+    insert_nlm::<StudioArtifactInput, StudioDeleteOutput>(
         &mut schema,
         "studio_delete",
         SideEffect::Mutation,
@@ -824,7 +820,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.studio.delete@v1",
     );
-    insert_nlm::<StudioArtifactInput>(
+    insert_nlm::<StudioArtifactInput, StudioReviseOutput>(
         &mut schema,
         "studio_revise",
         SideEffect::Mutation,
@@ -832,7 +828,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.studio.revise@v1",
     );
-    insert_nlm::<DownloadArtifactInput>(
+    insert_nlm::<DownloadArtifactInput, DownloadArtifactOutput>(
         &mut schema,
         "download_artifact",
         SideEffect::Read,
@@ -840,7 +836,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.studio.download@v1",
     );
-    insert_nlm::<DownloadAllInput>(
+    insert_nlm::<DownloadAllInput, DownloadAllArtifactsOutput>(
         &mut schema,
         "download_all_artifacts",
         SideEffect::Read,
@@ -848,7 +844,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.studio.download-all@v1",
     );
-    insert_nlm::<StudioArtifactInput>(
+    insert_nlm::<StudioArtifactInput, ExportArtifactOutput>(
         &mut schema,
         "export_artifact",
         SideEffect::Mutation,
@@ -856,7 +852,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.studio.export@v1",
     );
-    insert_nlm::<ResearchStartInput>(
+    insert_nlm::<ResearchStartInput, ResearchStartOutput>(
         &mut schema,
         "research_start",
         SideEffect::Mutation,
@@ -864,7 +860,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.research.start@v1",
     );
-    insert_nlm::<ResearchStatusInput>(
+    insert_nlm::<ResearchStatusInput, ResearchStatusOutput>(
         &mut schema,
         "research_status",
         SideEffect::Read,
@@ -872,7 +868,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.research.status@v1",
     );
-    insert_nlm::<ResearchImportInput>(
+    insert_nlm::<ResearchImportInput, ResearchImportOutput>(
         &mut schema,
         "research_import",
         SideEffect::Mutation,
@@ -880,7 +876,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.research.import@v1",
     );
-    insert_nlm::<ActionInput>(
+    insert_nlm::<ActionInput, NoteOutput>(
         &mut schema,
         "note",
         SideEffect::Mutation,
@@ -888,7 +884,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.note.dispatch@v1",
     );
-    insert_nlm::<ActionInput>(
+    insert_nlm::<ActionInput, LabelOutput>(
         &mut schema,
         "label",
         SideEffect::Mutation,
@@ -896,7 +892,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.label.dispatch@v1",
     );
-    insert_nlm::<NotebookIdInput>(
+    insert_nlm::<NotebookIdInput, NotebookShareStatusOutput>(
         &mut schema,
         "notebook_share_status",
         SideEffect::Read,
@@ -904,7 +900,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.share.settings@v1",
     );
-    insert_nlm::<SharePublicInput>(
+    insert_nlm::<SharePublicInput, NotebookSharePublicOutput>(
         &mut schema,
         "notebook_share_public",
         SideEffect::Mutation,
@@ -912,7 +908,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.share.public@v1",
     );
-    insert_nlm::<ShareInviteInput>(
+    insert_nlm::<ShareInviteInput, NotebookShareInviteOutput>(
         &mut schema,
         "notebook_share_invite",
         SideEffect::Mutation,
@@ -920,7 +916,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.share.invite@v1",
     );
-    insert_nlm::<ShareBatchInput>(
+    insert_nlm::<ShareBatchInput, NotebookShareBatchOutput>(
         &mut schema,
         "notebook_share_batch",
         SideEffect::Mutation,
@@ -928,7 +924,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.share.batch@v1",
     );
-    insert_nlm::<EmptyInput>(
+    insert_nlm::<EmptyInput, RefreshAuthOutput>(
         &mut schema,
         "refresh_auth",
         SideEffect::Mutation,
@@ -936,7 +932,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.auth.refresh@v1",
     );
-    insert_nlm::<SaveAuthInput>(
+    insert_nlm::<SaveAuthInput, SaveAuthTokensOutput>(
         &mut schema,
         "save_auth_tokens",
         SideEffect::Mutation,
@@ -944,7 +940,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.admin",
         "mut.service.plugin.notebooklm.auth.save-tokens@v1",
     );
-    insert_nlm::<EmptyInput>(
+    insert_nlm::<EmptyInput, ServerInfoOutput>(
         &mut schema,
         "server_info",
         SideEffect::Read,
@@ -952,7 +948,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.server.info@v1",
     );
-    insert_nlm::<ActionInput>(
+    insert_nlm::<ActionInput, BatchOutput>(
         &mut schema,
         "batch",
         SideEffect::Mutation,
@@ -960,7 +956,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.batch.run@v1",
     );
-    insert_nlm::<ActionInput>(
+    insert_nlm::<ActionInput, CrossNotebookQueryOutput>(
         &mut schema,
         "cross_notebook_query",
         SideEffect::Read,
@@ -968,7 +964,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.cross.query@v1",
     );
-    insert_nlm::<ActionInput>(
+    insert_nlm::<ActionInput, PipelineOutput>(
         &mut schema,
         "pipeline",
         SideEffect::Mutation,
@@ -976,7 +972,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.pipeline.run@v1",
     );
-    insert_nlm::<ActionInput>(
+    insert_nlm::<ActionInput, TagOutput>(
         &mut schema,
         "tag",
         SideEffect::Mutation,
@@ -984,7 +980,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.invoke",
         "mut.service.plugin.notebooklm.tag.dispatch@v1",
     );
-    insert_nlm::<EmptyInput>(
+    insert_nlm::<EmptyInput, GetHealthOutput>(
         &mut schema,
         "get_health",
         SideEffect::Read,
@@ -992,7 +988,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.read",
         "obs.service.plugin.notebooklm.health@v1",
     );
-    insert_nlm::<SetupAuthInput>(
+    insert_nlm::<SetupAuthInput, SetupAuthOutput>(
         &mut schema,
         "setup_auth",
         SideEffect::Mutation,
@@ -1000,7 +996,7 @@ pub(crate) fn notebooklm_schema() -> PluginSchema {
         "notebooklm.admin",
         "mut.service.plugin.notebooklm.auth.setup@v1",
     );
-    insert_nlm::<EmptyInput>(
+    insert_nlm::<EmptyInput, ReauthOutput>(
         &mut schema,
         "reauth",
         SideEffect::Mutation,

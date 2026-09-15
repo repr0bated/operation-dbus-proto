@@ -18,7 +18,6 @@ pub(crate) use super::cognitive_mcp::cognitive_mcp_schema as cognitive_mcp_plugi
 pub(crate) use super::cron::cron_schema as cron_plugin_schema;
 pub(crate) use super::ctl_plane_chatbot::ctl_plane_chatbot_schema as ctl_plane_chatbot_plugin_schema;
 pub(crate) use super::endpoint::endpoint_schema as endpoint_plugin_schema;
-pub(crate) use super::factory::factory_schema as factory_plugin_schema;
 pub(crate) use super::fail2ban::fail2ban_schema as fail2ban_plugin_schema;
 pub(crate) use super::gcloud_adc::gcloud_adc_schema as gcloud_adc_plugin_schema;
 pub(crate) use super::hardware::hardware_schema as hardware_plugin_schema;
@@ -134,7 +133,8 @@ fn materialize_field_type(field_type: &FieldType) -> Value {
             .first()
             .map(materialize_field_type)
             .unwrap_or_else(|| json!(null)),
-        FieldType::Any => json!(null),
+        FieldType::Map(_) => json!({}),
+        FieldType::JsonSchema(_) | FieldType::Any => json!(null),
     }
 }
 
@@ -473,7 +473,7 @@ mod derive_schema_subid_tests {
         // procfs declares `service` on every field but `software` on its struct;
         // the fields are the plugin describing itself, so they win.
         let subids = declared(&[
-            ("memory", "obs.service.procfs.memory.query@v1"),
+            ("memory", "obs.service.procfs.memory.query@v2"),
             ("cpuinfo", "obs.service.procfs.cpuinfo.query@v1"),
         ]);
         let got = derive_schema_subid("procfs", None, &subids);

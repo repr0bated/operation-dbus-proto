@@ -31,6 +31,37 @@ struct OpenFlowDbusService {
 
 #[interface(name = "org.opdbus.v1.plugins.openflow")]
 impl OpenFlowDbusService {
+    /// Install an absent entry or replace/remove an exact live entry. Empty
+    /// expected_json means absent; native readback is required before success.
+    async fn compare_exchange_flow(
+        &self,
+        bridge: String,
+        flow_json: String,
+        expected_json: String,
+        delete: bool,
+    ) -> zbus::fdo::Result<String> {
+        let expected = if expected_json.is_empty() {
+            None
+        } else {
+            Some(expected_json)
+        };
+        self.handle
+            .compare_exchange_flow(bridge, flow_json, expected, delete)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    async fn verify_flow(
+        &self,
+        bridge: String,
+        flow_json: String,
+        absent: bool,
+    ) -> zbus::fdo::Result<bool> {
+        self.handle
+            .verify_flow(bridge, flow_json, absent)
+            .await
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+    }
     /// Install a schema-driven flow (JSON-encoded `FlowEntry`).
     async fn send_flow(&self, flow_json: String) -> zbus::fdo::Result<String> {
         self.handle

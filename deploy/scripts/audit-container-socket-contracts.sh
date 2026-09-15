@@ -18,7 +18,25 @@ for name in $(jq -r '.containers[].name' "$CONTRACT"); do
     fi
 
     for service in $(printf '%s' "$item" | jq -r '.services[]?'); do
-        if incus exec "$name" -- systemctl is-active --quiet "$service" 2>/dev/null; then
+        if incus exec "$name" -- sh -s -- "$service" 2>/dev/null <<'SERVICE_CHECK'
+set -eu
+declared=$1
+service=${declared%.service}
+if command -v sv >/dev/null 2>&1; then
+    for directory in "/etc/runit/runsvdir/default/$service" "/etc/runit/sv/$service"; do
+        if [ -e "$directory" ] || [ -L "$directory" ]; then
+            exec sv check "$directory"
+        fi
+    done
+    exit 1
+fi
+if command -v rc-service >/dev/null 2>&1; then
+    exec rc-service "$service" status
+fi
+echo "no supported runit/OpenRC service manager" >&2
+exit 127
+SERVICE_CHECK
+        then
             echo "  ok   service $service"
         else
             echo "  FAIL service $service"

@@ -4,7 +4,7 @@ description: >-
   Expert skill for building json-render.dev catalog components, page specs, and
   generative UI across three repos: /srv/git/json-render (library source),
   /srv/git/odbus (Rust backend + op-web Axum server), and
-  /srv/git/json-render-ui-vercel (separate chatbot-rendered UI repository).
+  /srv/git/vercel-json-render-ui (separate chatbot-rendered UI repository).
   Covers the full stack: defineCatalog → Zod schema → React component →
   pageSpec → NAV_MANIFEST → factory plugin wiring → sealed blob pipeline →
   gallery/catalog promotion gate. Also covers the D-Bus plugin schema for
@@ -15,18 +15,17 @@ description: >-
 
 ## Local deployment policy — runit, not systemd
 
-The user-designated UI repository is `/srv/git/json-render-ui-vercel`, separate
-from `/srv/git/odbus` and synchronized by a script. Inspect that repository's
-actual build/sync scripts before invoking them; do not assume older examples
-below describe files that already exist there. `/srv/git/vercel-json-render-ui`
-and `/srv/git/operation-dashboard-ui-07` are not targets for new UI work.
+The user-designated UI repository is `/srv/git/vercel-json-render-ui`, separate
+from `/srv/git/odbus`. Inspect its actual catalog, registry and build/sync inputs;
+the reference layouts below do not establish its implemented components.
+`/srv/git/operation-dashboard-ui-07` and `crates/op-web/ui/` are retired UI paths.
 
 The host uses runit. Backend runtime actions go through the authenticated D-Bus
 plugin surface. Only for authorized operator service work use `sudo -n sv`
 (for example `sudo -n sv status op-web`); never use `systemctl`, its shim, s6 or
-service6. Edit versioned runit inputs, not `/run/runit/service`. Backend releases
-use `deploy/runit/build-golden.sh --dry-run` before the authorized golden/live
-deployment; never hand-copy binaries. Static UI synchronization does not itself
+service6. Edit versioned runit inputs, not `/run/runit/service`. Backend deployment
+is btrfs send/receive of an explicitly prepared filesystem snapshot; there is no
+deployment script. Never hand-copy binaries. Static UI synchronization does not itself
 require an op-web restart. Do not create a parallel frontend backend or expose
 broker credentials to the browser.
 
@@ -44,7 +43,7 @@ server-side, including on streamed updates and reconnects.
   crates/op-plugins/src/state_plugins/json_render.rs    D-Bus plugin schema
   crates/op-plugins/src/state_plugins/schema_renderer.rs
   crates/op-web/src/handlers/ui_model.rs                Axum gallery/catalog routes
-/srv/git/json-render-ui-vercel        ← active UI target; paths below are layout examples
+/srv/git/vercel-json-render-ui        ← active UI target; paths below are layout examples
   src/json-render/
     catalog/catalog.ts                 defineCatalog (app catalog contract)
     catalog/registry.tsx               defineRegistry (component implementations)
@@ -268,7 +267,7 @@ From `FACTORY-HANDOFF.md` and `CLAUDE.md` in `/srv/git/odbus`:
 - No JSON string payloads — use `google.protobuf.Struct`.
 - Compliance mappings belong in metadata arrays, not inside the `subid` string.
 
-ZeroClaw context:
+tched_router context:
 
 - `tched_router` is the OP-DBUS scaffolding for the autonomous `zeroclaw` binary.
 - `op-grpc-bridge`, not that binary, owns the `:8090` TLS fabric. Cognitive MCP
@@ -281,7 +280,7 @@ ZeroClaw context:
 ## 7. Gallery → Catalog Promotion Pipeline
 
 ```
-ZeroClaw reads plugin PluginSchema blob
+tched_router reads plugin PluginSchema blob
   ↓ (sealed blob at /dev/shm/opdbus/plugin-blobs/<plugin>.<hash>.blob)
 gemma_brain / op-gallery-gen generates Spec
   ↓
@@ -299,7 +298,7 @@ Schema hash pinning (critical — see `.specs/generative-ui-catalog/vision.md`):
 - Catalog entries are PINNED to that hash.
 - A reseal identifies which approved elements are stale.
 - Never promote without verifying hash matches the current sealed blob.
-- 65 sealed blobs in `/dev/shm/opdbus/plugin-blobs/` — content-addressed by hash.
+- Plugin presence comes from the current sealed manifest; counts change with reseals.
 
 ---
 
@@ -358,7 +357,7 @@ Use when rendering raw gRPC response data without a custom component.
 
 | What | Path |
 |---|---|
-| Catalog contract (reference layout; inspect target first) | `/srv/git/json-render-ui-vercel/src/json-render/catalog/catalog.ts` |
+| Catalog contract (reference layout; inspect target first) | `/srv/git/vercel-json-render-ui/src/json-render/catalog/catalog.ts` |
 | Component registry | `src/json-render/catalog/registry.tsx` |
 | Shell components | `src/json-render/catalog/components/shell.tsx` |
 | Dashboard widgets | `src/json-render/catalog/components/dashboard.tsx` |
@@ -372,7 +371,7 @@ Use when rendering raw gRPC response data without a custom component.
 | gRPC client | `src/grpc/client.ts` |
 | json_render plugin | `/srv/git/odbus/crates/op-plugins/src/state_plugins/json_render.rs` |
 | schema_renderer plugin | `/srv/git/odbus/crates/op-plugins/src/state_plugins/schema_renderer.rs` |
-| zeroclaw plugin | `/srv/git/odbus/crates/op-plugins/src/state_plugins/zeroclaw.rs` |
+| tched_router plugin | `/srv/git/odbus/crates/op-plugins/src/state_plugins/tched_router.rs` |
 | Gallery/catalog routes | `/srv/git/odbus/crates/op-web/src/handlers/ui_model.rs` |
 | json-render library | `/srv/git/json-render/packages/core/src/` |
 | json-render.dev docs | https://json-render.dev/docs |

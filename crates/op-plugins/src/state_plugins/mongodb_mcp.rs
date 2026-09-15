@@ -280,7 +280,7 @@ pub(crate) fn mongodb_mcp_schema() -> PluginSchema {
     read_method!(
         "collection_indexes",
         CollectionInput,
-        "obs.service.plugin.mongodb-mcp.collection.index.list@v1"
+        "obs.service.mongodb-mcp.collection-index.list@v1"
     );
     read_method!(
         "collection_storage_size",
@@ -310,7 +310,7 @@ pub(crate) fn mongodb_mcp_schema() -> PluginSchema {
     read_method!(
         "list_knowledge_sources",
         EmptyInput,
-        "obs.service.plugin.mongodb-mcp.knowledge.source.list@v1"
+        "obs.service.mongodb-mcp.knowledge-source.list@v1"
     );
     read_method!(
         "search_knowledge",

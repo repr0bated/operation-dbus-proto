@@ -4,6 +4,7 @@
 
 # Getting Started
 
+- [Verified Workspace](getting-started/verified-workspace.md)
 - [Building the Workspace](getting-started/building.md)
 - [Running Locally](getting-started/running.md)
 - [Developer Workflow](getting-started/workflow.md)
@@ -12,10 +13,13 @@
 
 - [System Overview](architecture/overview.md)
 - [Crate Map](architecture/crate-map.md)
+- [Plugin Execution Baseline](architecture/plugin-baseline.md)
+- [tched_router Execution Trace](architecture/tched-router-baseline.md)
 - [D-Bus Control Plane](architecture/dbus-plane.md)
 - [Schema-Driven Plugins](architecture/schema-plugins.md)
 - [Sealed Blob Catalog](architecture/blob-catalog.md)
 - [Identity and Transport](architecture/identity-transport.md)
+- [Identity Handoff Boundaries](architecture/identity-boundaries.md)
 
 # Reference
 

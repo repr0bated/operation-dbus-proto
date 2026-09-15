@@ -8,7 +8,7 @@
 //! op-chain-vectors status
 //! op-chain-vectors project --limit 50              # embed → btrfs vectors only (no Qdrant)
 //! op-chain-vectors project --limit 50 --upsert-qdrant  # manual: also write Qdrant directly
-//! op-chain-vectors replicate --host offsite.example --remote-path /var/lib/opdbus/chain-replica
+//! op-chain-vectors replicate --snapshot /prepared/golden-ro --host offsite.example --remote-path /prepared/receive
 //! ```
 //!
 //! Replica host (no Voyage key needed):
@@ -23,12 +23,14 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use op_cognitive_mcp::ChainVectorIndex;
+use op_snowball::replication::{transfer_prepared_snapshot, PreparedSnapshotTransfer};
 use op_snowball::{btrfs_delta, StreamingSnowball};
+use std::{path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(
     name = "op-chain-vectors",
-    about = "Embed snowball blocks into the chain's vector subvolume and index them in Qdrant"
+    about = "Embed Snowball block vectors, index them in Qdrant, and transfer prepared filesystem snapshots"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -39,7 +41,7 @@ struct Cli {
 enum Cmd {
     /// Report chain, vector-coverage and replication state without changing anything.
     Status,
-    /// Origin: embed pending blocks into the chain `vectors` subvolume.
+    /// Origin: embed pending blocks into the chain `vectors` data directory.
     ///
     /// Default does **not** write Qdrant (`snowball_footprints` is filled by
     /// replica `ingest` after `btrfs receive`). Pass `--upsert-qdrant` for a
@@ -61,20 +63,31 @@ enum Cmd {
         #[arg(long)]
         since_block: Option<u64>,
     },
-    /// Snapshot all three subvolumes under one aligned counter, without sending.
+    /// Create a logical recovery snapshot of the three chain data directories.
     Snapshot,
-    /// Origin: snapshot the chain and send it offsite, incrementally when possible.
+    /// Transfer one explicitly prepared read-only Btrfs snapshot; create no snapshots.
     Replicate {
+        /// Absolute path of the prepared read-only filesystem snapshot.
+        #[arg(long)]
+        snapshot: PathBuf,
+        /// Optional read-only parent on the same filesystem; its unchanged copy
+        /// must already exist on the receiver for an incremental transfer.
+        #[arg(long)]
+        parent: Option<PathBuf>,
         /// Target host, e.g. `opc@oracle-host`.
         #[arg(long)]
         host: String,
-        /// Absolute path of a btrfs directory on the target that receives the subvolumes.
+        /// Existing absolute Btrfs directory on the target that receives this snapshot.
         #[arg(long)]
         remote_path: String,
-        /// Absolute path of a program on the target, run as `<program> <counter>`
-        /// once the whole triple lands (see deploy/chain-replica-index).
+        /// Optional absolute remote executable, run as `<program> <received-path>
+        /// <stream-uuid>` only after the entire prepared snapshot is received.
+        /// Legacy hooks expecting a logical Snowball counter are incompatible.
         #[arg(long)]
         on_receive: Option<String>,
+        /// Transfer timeout, also applied separately to the optional arrival hook.
+        #[arg(long, default_value_t = 3600)]
+        timeout_secs: u64,
     },
     /// Origin: semantic search over indexed blocks.
     Search {
@@ -120,47 +133,30 @@ async fn main() -> Result<()> {
         }
         Cmd::Snapshot => {
             let chain = open_chain().await?;
-            let counter = chain.create_snapshot_aligned().await?;
-            for label in op_snowball::SNAPSHOT_LABELS {
-                println!(
-                    "{}",
-                    op_snowball::StreamingSnowball::snapshot_name(label, counter)
-                );
-            }
+            println!("{}", chain.create_snapshot().await?);
             Ok(())
         }
         Cmd::Replicate {
+            snapshot,
+            parent,
             host,
             remote_path,
             on_receive,
+            timeout_secs,
         } => {
-            let chain = open_chain().await?;
-            let report = chain
-                .replicate(&host, &remote_path, on_receive.as_deref())
-                .await?;
-            println!(
-                "counter {} (parent {:?})\n  sent: {}\n  failed: {}",
-                report.counter,
-                report.parent,
-                report.sent.join(", "),
-                if report.failed.is_empty() {
-                    "none".to_string()
-                } else {
-                    report
-                        .failed
-                        .iter()
-                        .map(|(name, err)| format!("{name}: {err}"))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                }
-            );
-            if let Some(err) = &report.hook_error {
-                eprintln!("warning: data landed but the remote index lagged: {err}");
+            let report = transfer_prepared_snapshot(PreparedSnapshotTransfer {
+                snapshot,
+                parent,
+                host,
+                remote_directory: remote_path,
+                on_receive,
+                timeout: Duration::from_secs(timeout_secs),
+            })
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if let Some(error) = report.arrival_hook_error {
+                anyhow::bail!("snapshot transfer completed; arrival hook failed: {error}");
             }
-            anyhow::ensure!(
-                report.failed.is_empty(),
-                "replication incomplete; parent pointer not advanced"
-            );
             Ok(())
         }
         Cmd::Search { query, limit } => {
@@ -239,4 +235,48 @@ async fn status() -> Result<()> {
         Err(err) => println!("index:            unavailable ({err:#})"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replicate_requires_explicit_snapshot_and_preserves_optional_parent() {
+        assert!(Cli::try_parse_from([
+            "op-chain-vectors",
+            "replicate",
+            "--host",
+            "backup",
+            "--remote-path",
+            "/receive",
+        ])
+        .is_err());
+        let cli = Cli::try_parse_from([
+            "op-chain-vectors",
+            "replicate",
+            "--snapshot",
+            "/prepared/current",
+            "--parent",
+            "/prepared/previous",
+            "--host",
+            "backup",
+            "--remote-path",
+            "/receive",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Replicate {
+                snapshot,
+                parent,
+                timeout_secs,
+                ..
+            } => {
+                assert_eq!(snapshot, PathBuf::from("/prepared/current"));
+                assert_eq!(parent, Some(PathBuf::from("/prepared/previous")));
+                assert_eq!(timeout_secs, 3600);
+            }
+            _ => panic!("expected replicate command"),
+        }
+    }
 }

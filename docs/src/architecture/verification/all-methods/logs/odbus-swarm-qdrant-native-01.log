@@ -1,0 +1,15 @@
+
+running 1 test
+Error: invalid Qdrant snapshot description
+
+Caused by:
+    invalid type: null, expected a string
+test state_plugins::qdrant::native_qdrant_tests::native_qdrant_round_trips_all_declared_methods ... FAILED
+
+failures:
+
+failures:
+    state_plugins::qdrant::native_qdrant_tests::native_qdrant_round_trips_all_declared_methods
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 495 filtered out; finished in 1.08s
+

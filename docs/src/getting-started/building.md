@@ -1,9 +1,11 @@
 # Building the Workspace
 
-All Cargo commands run from the repository root.
+All Cargo commands run from the repository root. For Linux packages, toolchain
+setup and cloud-agent validation, follow the
+[verified workspace guide](verified-workspace.md).
 
 ```bash
-cargo build --workspace
+CXXFLAGS="-include cstdint" cargo build --locked --workspace
 ```
 
 For a faster incremental check on a single crate:
@@ -14,24 +16,19 @@ cargo check -p <crate>
 
 ## Frontend
 
-There are two Vite apps. The primary UI dev tree lives in `crates/` and is
-built with:
-
-```bash
-cd crates
-npm run build
-```
-
-The embedded UI that `op-web` actually serves lives in `crates/op-web/ui/`
-and is built with:
-
-```bash
-cd crates/op-web/ui
-npx vite build
-```
+The active UI is a separate repository. The `crates/src/` and
+`crates/op-web/ui/` trees are retired. Do not run their npm tasks as backend
+build prerequisites. op-web serves files from `OP_WEB_STATIC_DIR` (default
+`/usr/local/share/op-dbus/dashboard`) using `ServeDir`; it does not embed a
+Vite build through RustEmbed.
 
 ## Release builds
 
-`op-web` release builds require `crates/op-web/ui/dist/index.html` to exist
-because the assets are embedded with RustEmbed. Dev builds compile with an
-empty asset set, so the requirement only applies to `--release`.
+```bash
+CXXFLAGS="-include cstdint" cargo build --locked --workspace --release
+```
+
+The C++ flag is required by native Cozo/RocksDB compilation with modern GCC.
+Compilation does not deploy services. Host releases require the explicit
+catalog preparation and prepared-filesystem btrfs send/receive process in
+`AGENTS.md`; do not run that process as development environment setup.

@@ -71,12 +71,13 @@ print_summary() {
     echo "  Deploy root:     $OPDBUS_ROOT"
     echo
     echo "Next step:"
-    echo "  sudo deploy/runit/build-golden.sh          # golden subvolume + live install"
+    echo "  sudo deploy/runit/build-golden.sh          # prepare golden subvolume only"
     echo "  sudo deploy/runit/build-golden.sh --dry-run # review first"
     echo
     echo "build-golden.sh creates the golden subvolume at $OPDBUS_ROOT/golden,"
     echo "populates it with release binaries, runit service definitions, and config."
-    echo "Deploy ships it via btrfs send/receive to the target."
+    echo "A separate operator step snapshots it read-only and deploys that snapshot"
+    echo "to the target with btrfs send/receive; neither script performs the transfer."
     echo
 }
 

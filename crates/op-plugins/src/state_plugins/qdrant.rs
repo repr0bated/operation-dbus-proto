@@ -5,8 +5,8 @@
 //! `CollectionInfo`, `CollectionConfig`, `VectorParams`, `HnswConfig`,
 //! `OptimizersConfig`, and `CollectionStatus` schemas defined there.
 
-use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
-use anyhow::Result;
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
@@ -15,13 +15,14 @@ use op_state_store::{PluginSchema, SideEffect};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
+use std::time::Duration;
 
 // =============================================================================
 // PLUGIN ENTRY: identity and typed schema seed
 // =============================================================================
 
 const PLUGIN_NAME: &str = "qdrant";
-const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_VERSION: &str = "1.1.0";
 const PLUGIN_CATEGORY: &str = "data";
 const PLUGIN_DESCRIPTION: &str =
     "Qdrant vector search engine — collections, vector config, HNSW, optimizers";
@@ -222,6 +223,365 @@ pub struct ListSnapshotsOutput {
     pub snapshots: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CollectionMutationOutput {
+    pub status: String,
+    pub result: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OperationMutationOutput {
+    pub status: String,
+    pub operation_id: u64,
+    pub operation_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SnapshotDescription {
+    pub name: String,
+    pub size: u64,
+    pub creation_time: String,
+    #[serde(default)]
+    pub checksum: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CreateSnapshotOutput {
+    pub status: String,
+    pub snapshot: SnapshotDescription,
+}
+
+struct QdrantHttpClient {
+    client: reqwest::Client,
+    base: String,
+    api_key: Option<String>,
+}
+
+impl QdrantHttpClient {
+    fn new() -> Result<Self> {
+        Self::with_base(QdrantPlugin::http_endpoint())
+    }
+
+    fn with_base(endpoint: String) -> Result<Self> {
+        let base = endpoint.trim_end_matches('/').to_string();
+        let parsed = reqwest::Url::parse(&base).context("invalid QDRANT_HTTP_URL")?;
+        anyhow::ensure!(
+            matches!(parsed.scheme(), "http" | "https"),
+            "QDRANT_HTTP_URL must use http or https"
+        );
+        anyhow::ensure!(
+            parsed.username().is_empty() && parsed.password().is_none(),
+            "QDRANT_HTTP_URL must not contain userinfo"
+        );
+        anyhow::ensure!(
+            parsed.query().is_none() && parsed.fragment().is_none(),
+            "QDRANT_HTTP_URL must not contain query or fragment"
+        );
+        Ok(Self {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .context("build Qdrant HTTP client")?,
+            base,
+            api_key: std::env::var("QDRANT_API_KEY")
+                .ok()
+                .filter(|v| !v.is_empty()),
+        })
+    }
+
+    fn collection_segment(name: &str) -> Result<&str> {
+        anyhow::ensure!(
+            !name.is_empty() && name != "." && name != "..",
+            "collection name must be a concrete segment"
+        );
+        anyhow::ensure!(name.len() <= 255, "collection name is too long");
+        anyhow::ensure!(
+            name.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b)),
+            "collection name contains unsafe path characters"
+        );
+        Ok(name)
+    }
+
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        wait: bool,
+    ) -> Result<serde_json::Value> {
+        let mut url = format!("{}{}", self.base, path);
+        if wait {
+            url.push_str(if path.contains('?') {
+                "&wait=true"
+            } else {
+                "?wait=true"
+            });
+        }
+        let mut request = self
+            .client
+            .request(method, url)
+            .header(reqwest::header::ACCEPT, "application/json");
+        if let Some(key) = &self.api_key {
+            request = request.header("api-key", key);
+        }
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request.send().await.context("Qdrant HTTP request")?;
+        let status = response.status();
+        let payload: serde_json::Value = response.json().await.context("decode Qdrant response")?;
+        anyhow::ensure!(
+            status.is_success(),
+            "Qdrant returned HTTP {}: {}",
+            status,
+            payload
+        );
+        anyhow::ensure!(
+            payload.get("status").and_then(|v| v.as_str()) == Some("ok"),
+            "Qdrant returned unsuccessful response: {}",
+            payload
+        );
+        Ok(payload)
+    }
+
+    fn collection_mutation(payload: serde_json::Value) -> Result<serde_json::Value> {
+        let result = payload
+            .get("result")
+            .context("Qdrant collection mutation omitted result")?
+            .as_bool()
+            .context("Qdrant collection mutation result is not boolean")?;
+        Ok(serde_json::to_value(CollectionMutationOutput {
+            status: payload["status"]
+                .as_str()
+                .context("Qdrant response omitted status")?
+                .to_string(),
+            result,
+        })?)
+    }
+
+    fn operation_mutation(payload: serde_json::Value) -> Result<serde_json::Value> {
+        let result = payload
+            .get("result")
+            .context("Qdrant operation omitted result")?;
+        Ok(serde_json::to_value(OperationMutationOutput {
+            status: payload["status"]
+                .as_str()
+                .context("Qdrant response omitted status")?
+                .to_string(),
+            operation_id: result["operation_id"]
+                .as_u64()
+                .context("Qdrant operation omitted operation_id")?,
+            operation_status: result["status"]
+                .as_str()
+                .context("Qdrant operation omitted status")?
+                .to_string(),
+        })?)
+    }
+
+    fn snapshot_mutation(payload: serde_json::Value) -> Result<serde_json::Value> {
+        let snapshot: SnapshotDescription = serde_json::from_value(
+            payload
+                .get("result")
+                .cloned()
+                .context("Qdrant snapshot omitted result")?,
+        )
+        .context("invalid Qdrant snapshot description")?;
+        Ok(serde_json::to_value(CreateSnapshotOutput {
+            status: payload["status"]
+                .as_str()
+                .context("Qdrant response omitted status")?
+                .to_string(),
+            snapshot,
+        })?)
+    }
+}
+
+pub async fn dispatch_qdrant_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let client = QdrantHttpClient::new()?;
+    dispatch_qdrant_method_with_client(&client, method, args).await
+}
+
+async fn dispatch_qdrant_method_with_client(
+    client: &QdrantHttpClient,
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "create_collection" => {
+            let i: CreateCollectionInput = serde_json::from_value(args.clone())
+                .context("invalid create_collection arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.name)?;
+            QdrantHttpClient::collection_mutation(
+                client
+                    .request(
+                        reqwest::Method::PUT,
+                        &format!("/collections/{name}"),
+                        Some(serde_json::json!({"vectors": i.vectors_config})),
+                        true,
+                    )
+                    .await?,
+            )
+        }
+        "delete_collection" => {
+            let i: DeleteCollectionInput = serde_json::from_value(args.clone())
+                .context("invalid delete_collection arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.name)?;
+            QdrantHttpClient::collection_mutation(
+                client
+                    .request(
+                        reqwest::Method::DELETE,
+                        &format!("/collections/{name}"),
+                        None,
+                        true,
+                    )
+                    .await?,
+            )
+        }
+        "list_collections" => {
+            let p = client
+                .request(reqwest::Method::GET, "/collections", None, false)
+                .await?;
+            let collections = p["result"]["collections"]
+                .as_array()
+                .context("Qdrant collections result is not an array")?
+                .iter()
+                .map(|v| {
+                    v["name"]
+                        .as_str()
+                        .map(str::to_string)
+                        .context("Qdrant collection item omitted name")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(serde_json::to_value(ListCollectionsOutput { collections })?)
+        }
+        "upsert_points" => {
+            let i: UpsertPointsInput =
+                serde_json::from_value(args.clone()).context("invalid upsert_points arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            QdrantHttpClient::operation_mutation(
+                client
+                    .request(
+                        reqwest::Method::PUT,
+                        &format!("/collections/{name}/points"),
+                        Some(serde_json::json!({"points": i.points})),
+                        true,
+                    )
+                    .await?,
+            )
+        }
+        "search_points" => {
+            let i: SearchPointsInput =
+                serde_json::from_value(args.clone()).context("invalid search_points arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            let p = client
+                .request(
+                    reqwest::Method::POST,
+                    &format!("/collections/{name}/points/search"),
+                    Some(serde_json::json!({"vector": i.vector, "limit": i.limit})),
+                    false,
+                )
+                .await?;
+            Ok(serde_json::to_value(SearchPointsOutput {
+                results: p["result"]
+                    .as_array()
+                    .context("Qdrant search result is not an array")?
+                    .clone(),
+            })?)
+        }
+        "delete_points" => {
+            let i: DeletePointsInput =
+                serde_json::from_value(args.clone()).context("invalid delete_points arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            QdrantHttpClient::operation_mutation(
+                client
+                    .request(
+                        reqwest::Method::POST,
+                        &format!("/collections/{name}/points/delete"),
+                        Some(serde_json::json!({"points": i.points})),
+                        true,
+                    )
+                    .await?,
+            )
+        }
+        "scroll_points" => {
+            let i: ScrollPointsInput =
+                serde_json::from_value(args.clone()).context("invalid scroll_points arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            let p = client
+                .request(
+                    reqwest::Method::POST,
+                    &format!("/collections/{name}/points/scroll"),
+                    Some(serde_json::json!({"limit": i.limit})),
+                    false,
+                )
+                .await?;
+            let r = &p["result"];
+            Ok(serde_json::to_value(ScrollPointsOutput {
+                points: r["points"]
+                    .as_array()
+                    .cloned()
+                    .context("Qdrant scroll points result is not an array")?,
+                next_page_offset: r.get("next_page_offset").cloned().filter(|v| !v.is_null()),
+            })?)
+        }
+        "create_snapshot" => {
+            let i: CreateSnapshotInput = serde_json::from_value(args.clone())
+                .context("invalid create_snapshot arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            QdrantHttpClient::snapshot_mutation(
+                client
+                    .request(
+                        reqwest::Method::POST,
+                        &format!("/collections/{name}/snapshots"),
+                        None,
+                        true,
+                    )
+                    .await?,
+            )
+        }
+        "list_snapshots" => {
+            let i: ListSnapshotsInput =
+                serde_json::from_value(args.clone()).context("invalid list_snapshots arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            let p = client
+                .request(
+                    reqwest::Method::GET,
+                    &format!("/collections/{name}/snapshots"),
+                    None,
+                    false,
+                )
+                .await?;
+            let snapshots = p["result"]
+                .as_array()
+                .context("Qdrant snapshots result is not an array")?
+                .iter()
+                .map(|v| {
+                    v["name"]
+                        .as_str()
+                        .map(str::to_string)
+                        .context("Qdrant collection item omitted name")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(serde_json::to_value(ListSnapshotsOutput { snapshots })?)
+        }
+        "create_payload_index" => {
+            let i: CreatePayloadIndexInput = serde_json::from_value(args.clone())
+                .context("invalid create_payload_index arguments")?;
+            let name = QdrantHttpClient::collection_segment(&i.collection_name)?;
+            QdrantHttpClient::operation_mutation(client.request(reqwest::Method::PUT, &format!("/collections/{name}/index"), Some(serde_json::json!({"field_name": i.field_name, "field_schema": i.field_schema})), true).await?)
+        }
+        _ => anyhow::bail!(
+            "unknown Qdrant method '{}'; no canonical backend dispatch",
+            method
+        ),
+    }
+}
+
 // =============================================================================
 // PLUGIN BODY: D-Bus-backed behavior only
 // =============================================================================
@@ -241,7 +601,6 @@ impl QdrantPlugin {
 
     fn http_endpoint() -> String {
         std::env::var("QDRANT_HTTP_URL")
-            .or_else(|_| std::env::var("COGNITIVE_MCP_QDRANT_URL"))
             .unwrap_or_else(|_| DEFAULT_QDRANT_HTTP_ENDPOINT.to_string())
     }
 
@@ -434,7 +793,7 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
 
     schema.methods.insert(
         "create_collection".to_string(),
-        method_decl_from_schemars_with_output::<CreateCollectionInput, AckOutput>(
+        method_decl_from_schemars_with_output::<CreateCollectionInput, CollectionMutationOutput>(
             "create_collection",
             SideEffect::Mutation,
             false,
@@ -444,7 +803,7 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_collection".to_string(),
-        method_decl_from_schemars_with_output::<DeleteCollectionInput, AckOutput>(
+        method_decl_from_schemars_with_output::<DeleteCollectionInput, CollectionMutationOutput>(
             "delete_collection",
             SideEffect::Mutation,
             false,
@@ -464,7 +823,7 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "upsert_points".to_string(),
-        method_decl_from_schemars_with_output::<UpsertPointsInput, AckOutput>(
+        method_decl_from_schemars_with_output::<UpsertPointsInput, OperationMutationOutput>(
             "upsert_points",
             SideEffect::Mutation,
             false,
@@ -484,7 +843,7 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "delete_points".to_string(),
-        method_decl_from_schemars_with_output::<DeletePointsInput, AckOutput>(
+        method_decl_from_schemars_with_output::<DeletePointsInput, OperationMutationOutput>(
             "delete_points",
             SideEffect::Mutation,
             false,
@@ -504,7 +863,7 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_snapshot".to_string(),
-        method_decl_from_schemars_with_output::<CreateSnapshotInput, AckOutput>(
+        method_decl_from_schemars_with_output::<CreateSnapshotInput, CreateSnapshotOutput>(
             "create_snapshot",
             SideEffect::Mutation,
             false,
@@ -524,7 +883,7 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "create_payload_index".to_string(),
-        method_decl_from_schemars_with_output::<CreatePayloadIndexInput, AckOutput>(
+        method_decl_from_schemars_with_output::<CreatePayloadIndexInput, OperationMutationOutput>(
             "create_payload_index",
             SideEffect::Mutation,
             false,
@@ -609,4 +968,113 @@ pub(crate) fn qdrant_schema() -> PluginSchema {
 
 inventory::submit! {
     crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(QdrantPlugin::new()))
+}
+
+#[cfg(test)]
+#[path = "qdrant_native_tests.rs"]
+mod native_qdrant_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn invoke(method: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = [0u8; 8192];
+            let n = stream.read(&mut request).await?;
+            let request = String::from_utf8_lossy(&request[..n]);
+            let body = if request.contains("/points/search") {
+                serde_json::json!({"result": [], "status": "ok"})
+            } else if request.contains("/points/scroll") {
+                serde_json::json!({"result": {"points": [], "next_page_offset": null}, "status": "ok"})
+            } else if request.contains("/snapshots") && request.starts_with("POST") {
+                serde_json::json!({"result": {"name":"demo-2026-01-01T00:00:00Z", "size":0, "creation_time":"2026-01-01T00:00:00Z", "checksum":null}, "status": "ok"})
+            } else if request.contains("/points") || request.contains("/index") {
+                serde_json::json!({"result": {"operation_id": 7, "status": "completed"}, "status": "ok"})
+            } else if request.contains("/snapshots") && request.starts_with("GET") {
+                serde_json::json!({"result": [], "status": "ok"})
+            } else if request.starts_with("GET /collections ") {
+                serde_json::json!({"result": {"collections": [{"name": "demo"}]}, "status": "ok"})
+            } else {
+                serde_json::json!({"result": true, "status": "ok"})
+            };
+            let encoded = body.to_string();
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", encoded.len(), encoded);
+            stream.write_all(response.as_bytes()).await?;
+            anyhow::Ok(())
+        });
+        let client = QdrantHttpClient::with_base(format!("http://{}", address))?;
+        let result = dispatch_qdrant_method_with_client(&client, method, &args).await;
+        server.await??;
+        result
+    }
+
+    #[tokio::test]
+    async fn all_declared_methods_use_typed_http_contracts() -> Result<()> {
+        let calls = [
+            (
+                "create_collection",
+                serde_json::json!({"name":"demo","vectors_config":{"size":4,"distance":"Cosine"}}),
+            ),
+            ("delete_collection", serde_json::json!({"name":"demo"})),
+            ("list_collections", serde_json::json!({})),
+            (
+                "upsert_points",
+                serde_json::json!({"collection_name":"demo","points":[]}),
+            ),
+            (
+                "search_points",
+                serde_json::json!({"collection_name":"demo","vector":[0.1],"limit":2}),
+            ),
+            (
+                "delete_points",
+                serde_json::json!({"collection_name":"demo","points":[]}),
+            ),
+            (
+                "scroll_points",
+                serde_json::json!({"collection_name":"demo","limit":2}),
+            ),
+            (
+                "create_snapshot",
+                serde_json::json!({"collection_name":"demo"}),
+            ),
+            (
+                "list_snapshots",
+                serde_json::json!({"collection_name":"demo"}),
+            ),
+            (
+                "create_payload_index",
+                serde_json::json!({"collection_name":"demo","field_name":"tenant","field_schema":"keyword"}),
+            ),
+        ];
+        for (method, args) in calls {
+            let output = invoke(method, args).await?;
+            assert!(
+                output.get("success").is_none(),
+                "{method} must not use AckOutput"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn collection_names_cannot_escape_http_paths() {
+        assert!(QdrantHttpClient::collection_segment("demo").is_ok());
+        assert!(QdrantHttpClient::collection_segment(".").is_err());
+        assert!(QdrantHttpClient::collection_segment("..").is_err());
+        assert!(QdrantHttpClient::collection_segment("../secrets").is_err());
+        assert!(QdrantHttpClient::collection_segment("demo/name").is_err());
+    }
+
+    #[test]
+    fn endpoint_rejects_credentials_and_redirect_targets() {
+        assert!(QdrantHttpClient::with_base("http://user:pass@127.0.0.1:6333".into()).is_err());
+        assert!(QdrantHttpClient::with_base("http://127.0.0.1:6333/?token=x".into()).is_err());
+        assert!(QdrantHttpClient::with_base("http://127.0.0.1:6333/#fragment".into()).is_err());
+    }
 }

@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use netlink_packet_route::address::AddressAttribute;
 use netlink_packet_route::link::LinkAttribute;
+use netlink_packet_route::route::{RouteAddress, RouteAttribute, RouteMessage};
 use rtnetlink::{new_connection, IpVersion};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
@@ -533,17 +534,77 @@ pub async fn del_default_route() -> Result<()> {
 }
 
 /// List IPv4 routes for a given interface (by name)
-pub async fn list_routes_for_interface(_ifname: &str) -> Result<Vec<serde_json::Value>> {
-    // Minimal, compile-safe stub; route filtering can be added later.
-    Ok(Vec::new())
+pub async fn list_routes_for_interface(ifname: &str) -> Result<Vec<serde_json::Value>> {
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().match_name(ifname.to_string()).execute();
+    let link = links
+        .try_next()
+        .await?
+        .context(format!("Interface '{ifname}' not found"))?;
+    let mut routes = handle.route().get(IpVersion::V4).execute();
+    let mut output = Vec::new();
+    while let Some(route) = routes.try_next().await? {
+        let oif = route.attributes.iter().find_map(|a| {
+            if let RouteAttribute::Oif(i) = a {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        if oif != Some(link.header.index) {
+            continue;
+        }
+        let destination = route
+            .attributes
+            .iter()
+            .find_map(|a| match a {
+                RouteAttribute::Destination(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "0.0.0.0".to_string());
+        let gateway = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+            _ => None,
+        });
+        let table = route
+            .attributes
+            .iter()
+            .find_map(|a| {
+                if let RouteAttribute::Table(i) = a {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(route.header.table as u32);
+        output.push(serde_json::json!({"destination": format!("{}/{}", destination, route.header.destination_prefix_length), "gateway": gateway, "interface": ifname, "table": table}));
+    }
+    Ok(output)
 }
 
 /// List all veth interfaces (simplified implementation)
 pub async fn list_veth_interfaces() -> Result<Vec<String>> {
-    // For now, return empty list - this would need more complex rtnetlink code
-    // to properly enumerate all interfaces and check their types
-    // The LXC plugin will fall back to other methods if this returns empty
-    Ok(Vec::new())
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().execute();
+    let mut output = Vec::new();
+    while let Some(link) = links.try_next().await? {
+        let is_veth = link.attributes.iter().any(|attr| matches!(attr, LinkAttribute::LinkInfo(infos) if infos.iter().any(|info| matches!(info, netlink_packet_route::link::LinkInfo::Kind(netlink_packet_route::link::InfoKind::Veth)))));
+        if is_veth {
+            if let Some(name) = link.attributes.iter().find_map(|attr| {
+                if let LinkAttribute::IfName(name) = attr {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }) {
+                output.push(name);
+            }
+        }
+    }
+    output.sort();
+    Ok(output)
 }
 
 /// Rename network interface
@@ -576,22 +637,308 @@ pub async fn link_set_name(old_name: &str, new_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a kernel link using native RTM_NEWLINK.
+pub async fn add_link(name: &str, link_type: &str, peer_name: Option<&str>) -> Result<()> {
+    anyhow::ensure!(
+        !name.is_empty() && name.len() <= 15,
+        "invalid interface name"
+    );
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let request = handle.link().add();
+    match link_type {
+        "dummy" => request.dummy(name.to_string()).execute().await?,
+        "bridge" => request.bridge(name.to_string()).execute().await?,
+        "veth" => {
+            let peer_name = peer_name.context("veth requires peer name")?;
+            request
+                .veth(name.to_string(), peer_name.to_string())
+                .execute()
+                .await?
+        }
+        other => anyhow::bail!("unsupported native link type '{other}'"),
+    }
+    Ok(())
+}
+
+/// Delete a kernel link by its interface name using native RTM_DELLINK.
+pub async fn del_link(name: &str) -> Result<()> {
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().match_name(name.to_string()).execute();
+    let link = links
+        .try_next()
+        .await?
+        .context(format!("Interface '{name}' not found"))?;
+    handle.link().del(link.header.index).execute().await?;
+    Ok(())
+}
+
+fn ipv4_route(value: &str) -> Result<(Ipv4Addr, u8)> {
+    let (address, prefix) = value
+        .split_once('/')
+        .context("route must use CIDR notation")?;
+    let address = address.parse().context("invalid IPv4 route address")?;
+    let prefix = prefix.parse().context("invalid route prefix")?;
+    anyhow::ensure!(prefix <= 32, "IPv4 route prefix must be <= 32");
+    Ok((address, prefix))
+}
+
+fn route_matches(
+    route: &RouteMessage,
+    wanted: Ipv4Addr,
+    prefix: u8,
+    gateway: Option<Ipv4Addr>,
+    ifindex: Option<u32>,
+    table: u32,
+) -> bool {
+    let actual_table = route
+        .attributes
+        .iter()
+        .find_map(|attr| {
+            if let RouteAttribute::Table(value) = attr {
+                Some(*value)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(route.header.table as u32);
+    let actual_destination = route
+        .attributes
+        .iter()
+        .find_map(|attr| match attr {
+            RouteAttribute::Destination(RouteAddress::Inet(addr)) => Some(*addr),
+            _ => None,
+        })
+        .unwrap_or(Ipv4Addr::UNSPECIFIED);
+    let gateway_ok = gateway.map(|wanted| route.attributes.iter().any(|attr| matches!(attr, RouteAttribute::Gateway(RouteAddress::Inet(addr)) if *addr == wanted))).unwrap_or(true);
+    let interface_ok = ifindex
+        .map(|wanted| {
+            route
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, RouteAttribute::Oif(value) if *value == wanted))
+        })
+        .unwrap_or(true);
+    actual_table == table
+        && route.header.destination_prefix_length == prefix
+        && actual_destination == wanted
+        && gateway_ok
+        && interface_ok
+}
+
+/// Add an IPv4 route through the native route netlink API.
+pub async fn add_route(
+    destination: &str,
+    gateway: &str,
+    interface: Option<&str>,
+    table: u32,
+) -> Result<()> {
+    let (destination, prefix) = ipv4_route(destination)?;
+    let gateway: Ipv4Addr = gateway.parse().context("invalid IPv4 route gateway")?;
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut request = handle
+        .route()
+        .add()
+        .v4()
+        .destination_prefix(destination, prefix)
+        .gateway(gateway)
+        .table_id(table);
+    if let Some(name) = interface {
+        let mut links = handle.link().get().match_name(name.to_string()).execute();
+        let link = links
+            .try_next()
+            .await?
+            .context(format!("Interface '{name}' not found"))?;
+        request = request.output_interface(link.header.index);
+    }
+    request.execute().await?;
+    Ok(())
+}
+
+/// Atomically replace the main-table IPv4 default route.
+pub async fn replace_default_route(ifname: &str, gateway: &str) -> Result<()> {
+    let gateway: Ipv4Addr = gateway.parse().context("invalid IPv4 route gateway")?;
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().match_name(ifname.to_string()).execute();
+    let link = links
+        .try_next()
+        .await?
+        .context(format!("Interface '{ifname}' not found"))?;
+    handle
+        .route()
+        .add()
+        .v4()
+        .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+        .gateway(gateway)
+        .output_interface(link.header.index)
+        .table_id(254)
+        .replace()
+        .execute()
+        .await?;
+    Ok(())
+}
+
+/// Return whether the main-table IPv4 default route exactly matches an
+/// interface and gateway. This is used to verify mutations rather than treating
+/// an acknowledged RTM_NEWROUTE request as proof of resulting state.
+pub async fn default_route_matches(ifname: &str, gateway: &str) -> Result<bool> {
+    let wanted_gateway: Ipv4Addr = gateway.parse().context("invalid IPv4 route gateway")?;
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut links = handle.link().get().match_name(ifname.to_string()).execute();
+    let link = links
+        .try_next()
+        .await?
+        .context(format!("Interface '{ifname}' not found"))?;
+    let mut routes = handle.route().get(IpVersion::V4).execute();
+    while let Some(route) = routes.try_next().await? {
+        if route_matches(
+            &route,
+            Ipv4Addr::UNSPECIFIED,
+            0,
+            Some(wanted_gateway),
+            Some(link.header.index),
+            254,
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Delete an IPv4 route matching a destination prefix and gateway.
+pub async fn del_route(
+    destination: &str,
+    gateway: Option<&str>,
+    interface: Option<&str>,
+    table: u32,
+) -> Result<()> {
+    let (wanted, prefix) = ipv4_route(destination)?;
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut routes = handle.route().get(IpVersion::V4).execute();
+    let wanted_gateway = gateway
+        .map(|value| value.parse::<Ipv4Addr>())
+        .transpose()
+        .context("invalid IPv4 route gateway")?;
+    let interface_index = if let Some(name) = interface {
+        let mut links = handle.link().get().match_name(name.to_string()).execute();
+        Some(
+            links
+                .try_next()
+                .await?
+                .context(format!("Interface '{name}' not found"))?
+                .header
+                .index,
+        )
+    } else {
+        None
+    };
+    let mut matches = Vec::new();
+    while let Some(route) = routes.try_next().await? {
+        if route_matches(
+            &route,
+            wanted,
+            prefix,
+            wanted_gateway,
+            interface_index,
+            table,
+        ) {
+            matches.push(route);
+        }
+    }
+    anyhow::ensure!(
+        matches.len() == 1,
+        "route selection matched {} routes; specify table, gateway, and interface",
+        matches.len()
+    );
+    handle
+        .route()
+        .del(matches.into_iter().next().unwrap())
+        .execute()
+        .await?;
+    Ok(())
+}
+
+/// Add an IPv4 policy rule matching a destination CIDR. The compact plugin
+/// contract uses the main table (254), matching the kernel's normal table.
+pub async fn add_rule(destination: &str, table: u32, priority: Option<u32>) -> Result<()> {
+    let (destination, prefix) = ipv4_route(destination)?;
+    let (connection, handle, _) = new_connection()?;
+    tokio::spawn(connection);
+    let mut request = handle
+        .rule()
+        .add()
+        .v4()
+        .destination_prefix(destination, prefix)
+        .table_id(table);
+    if let Some(priority) = priority {
+        request = request.priority(priority);
+    }
+    request.execute().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Basic smoke test to ensure rtnetlink connection and route listing works.
-    // Uses the loopback interface which always exists.
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_list_routes_for_loopback() {
-        let res = list_routes_for_interface("lo").await;
-        assert!(
-            res.is_ok(),
-            "expected Ok from list_routes_for_interface: {:?}",
-            res
-        );
-        let routes = res.unwrap();
-        // No strict expectation on content; presence/empty is both fine.
-        println!("routes on lo: {:?}", routes);
+    #[test]
+    fn route_selector_handles_default_and_disambiguators() {
+        let mut route = RouteMessage::default();
+        route.header.table = 254;
+        route.header.destination_prefix_length = 0;
+        route
+            .attributes
+            .push(RouteAttribute::Gateway(RouteAddress::Inet(Ipv4Addr::new(
+                10, 0, 0, 1,
+            ))));
+        route.attributes.push(RouteAttribute::Oif(7));
+        assert!(route_matches(
+            &route,
+            Ipv4Addr::UNSPECIFIED,
+            0,
+            Some(Ipv4Addr::new(10, 0, 0, 1)),
+            Some(7),
+            254
+        ));
+        assert!(!route_matches(
+            &route,
+            Ipv4Addr::UNSPECIFIED,
+            0,
+            Some(Ipv4Addr::new(10, 0, 0, 2)),
+            Some(7),
+            254
+        ));
+        assert!(!route_matches(
+            &route,
+            Ipv4Addr::UNSPECIFIED,
+            0,
+            None,
+            Some(7),
+            100
+        ));
+    }
+
+    #[test]
+    fn route_selector_requires_unique_match_before_delete() {
+        let mut first = RouteMessage::default();
+        first.header.table = 254;
+        first.header.destination_prefix_length = 24;
+        first
+            .attributes
+            .push(RouteAttribute::Destination(RouteAddress::Inet(
+                Ipv4Addr::new(10, 0, 0, 0),
+            )));
+        let mut second = first.clone();
+        second.attributes.push(RouteAttribute::Oif(9));
+        let candidates = [first, second]
+            .iter()
+            .filter(|route| route_matches(route, Ipv4Addr::new(10, 0, 0, 0), 24, None, None, 254))
+            .count();
+        assert_eq!(candidates, 2);
     }
 }

@@ -2,13 +2,14 @@
 //!
 //! Architecture:
 //! 1. System-wide memory — global CozoDB namespace, all authenticated entities
-//! 2. Chatbot soul — chatbot is a user entity with its own container, session-scoped soul namespace
+//! 2. Chatbot soul — the singleton control-plane chatbot's memory identity
 //! 3. Container memory — user gets container at registration, soul + domain namespace
 //!
 //! Post-turn: detect memorable info, write to CozoDB (durable) + Qdrant (semantic)
 //! MEMORY_INDEX: one key per namespace, slug-per-line orientation
 
-pub const CHATBOT_CONTAINER_ID: &str = "assistant";
+/// Existing soul-record key for the control-plane chatbot, not a container ID.
+pub const CHATBOT_SOUL_ID: &str = "assistant";
 
 use anyhow::{Context, Result};
 use chrono::Utc;

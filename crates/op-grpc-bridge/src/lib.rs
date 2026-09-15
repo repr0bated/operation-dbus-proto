@@ -21,34 +21,84 @@
 //!     └─────────────────┘            └─────────────────┘
 //! ```
 
+mod antigravity_dispatch;
 pub mod chat_service;
+mod chatbot_episode_state;
+mod chatbot_episode_stream;
+mod cron_dispatch;
+mod cron_gateway;
+mod cron_methods;
+mod cron_observer;
+mod ctl_plane_chatbot_dispatch;
+mod datastore_methods;
 pub mod dbus_identity;
+pub mod decoy_network;
 pub mod dynamic_reflection;
 pub mod emqx_hook_provider;
+mod event_chain_access;
+mod freedesktop_dispatch;
+mod gemma_brain_dispatch;
+#[cfg(test)]
+mod gemma_taxonomy_dispatch_tests;
+mod generation_admission;
+mod generation_jobs_dispatch;
+mod generation_jobs_selection;
+mod generation_jobs_stream;
+mod generation_runtime;
 pub mod grpc_client;
 pub mod grpc_server;
 pub mod grpc_web;
 pub mod human_principal_dispatch;
 pub mod identity_sled_dispatch;
+mod incus_observer;
 pub mod interceptor;
+mod json_schema_proto;
+mod large_language_model_dispatch;
+mod mcp_config_dispatch;
 pub mod mcp_frontend;
 pub mod mcp_policy;
+pub(crate) mod method_contract_admission;
 pub mod mutation_engine;
 pub mod nlm_cli;
+mod notebooklm_queries;
 pub mod oracle_assertion;
+pub mod oracle_assertion_client;
+pub use oracle_assertion_client::DecoyAssertionClient;
+mod obfuscation_methods;
+#[cfg(test)]
+mod openflow_canonical_tests;
+mod openflow_methods;
+mod oscal_dispatch;
+mod ovsdb_observer;
 pub mod per_plugin_reflection;
 pub mod plugin_grpc_gen;
 pub mod plugin_object_blob;
 pub mod project_dispatch;
 pub mod proto_gen;
+mod proxy_methods;
+mod schema_integer_arguments;
 pub mod schema_loader;
+mod schema_renderer_dispatch;
 pub mod schema_router;
 mod sealed_schema_reader;
 pub mod server;
 pub mod shared_socket;
+mod state_stream;
+mod state_tree_fold;
+mod tched_config_dispatch;
+mod tched_config_engine;
+mod tched_config_secret_policy;
+mod tched_router_admission;
+mod tched_router_generation_native;
+mod tched_router_legacy_dispatch;
 pub mod tched_router_object_blob;
 pub mod tched_router_runtime;
 pub mod tracing;
+mod ui_workspace_dispatch;
+mod ui_workspace_stream;
+mod ui_workspace_stream_selection;
+mod web_ui_dispatch;
+mod xray_methods;
 
 // Re-export main types
 pub use grpc_client::{

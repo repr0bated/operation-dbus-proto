@@ -9,8 +9,12 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::Duration;
 
 use axum::extract::ConnectInfo as AxumConnectInfo;
+use axum::http::StatusCode;
+use axum::routing::any;
+use axum::Router;
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
+use op_cozo_store::{IdentityCompareExchange, IdentityIntent, IdentitySledRecord};
 use op_grpc_bridge::grpc_server::{
     build_operation_routes_with_validator, OperationGrpcServer, DECLARED_CAPABILITY_HEADER,
 };
@@ -26,15 +30,17 @@ use op_grpc_bridge::proto::plugin_methods::{
     HumanPrincipalResolveKeyRequest, SnowballQueryEventsRequest,
 };
 use op_grpc_bridge::proto::plugin_service_client::PluginServiceClient;
+use op_grpc_bridge::proto::state_sync_client::StateSyncClient;
 use op_grpc_bridge::proto::{
-    CallMethodRequest, ErrorCode as ProtoErrorCode, OvsdbTransactRequest, SetPropertyRequest,
+    BatchMutateRequest, CallMethodRequest, ErrorCode as ProtoErrorCode, MutateRequest,
+    OperationType, OvsdbTransactRequest, SetPropertyRequest,
 };
 use op_identity::oracle_assertion::{
     verify_signature, DecoyIssuer, OracleIdentityAssertion, SignedAssertion,
 };
 use op_identity::session::{derive_principal_id, derive_session_id};
 use op_plugins::state_plugins::identity_sled::{
-    ContainerIdentitySled, IdentitySledState, SledBtrfsDevice, RECORD_FORMAT,
+    ContainerIdentitySled, SledBtrfsDevice, RECORD_FORMAT,
 };
 use op_plugins::state_plugins::incus::IncusInstance;
 use op_state::StatePlugin;
@@ -44,6 +50,7 @@ use prost_types::Value as ProstValue;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tonic::transport::server::TcpConnectInfo;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity, ServerTlsConfig};
@@ -51,7 +58,7 @@ use tonic::{Code, Request, Status};
 use tower::{Layer, Service};
 
 /// Pinned battery size (VAL-E2E-023).
-pub const EXPECTED_TEST_COUNT: usize = 34;
+pub const EXPECTED_TEST_COUNT: usize = 41;
 
 static CRYPTO: Once = Once::new();
 
@@ -128,6 +135,22 @@ fn prost_str(s: &str) -> ProstValue {
 fn prost_struct(fields: BTreeMap<String, ProstValue>) -> ProstValue {
     ProstValue {
         kind: Some(Kind::StructValue(prost_types::Struct { fields })),
+    }
+}
+
+fn resolve_key_mutation(pubkey: &str, actor_id: &str) -> MutateRequest {
+    MutateRequest {
+        plugin_id: "human_principal".to_string(),
+        object_path: "/org/opdbus/v1/plugins/human_principal".to_string(),
+        operation: OperationType::CallMethod as i32,
+        member_name: "method:resolve_key".to_string(),
+        value: Some(prost_struct(BTreeMap::from([(
+            "human_pubkey".to_string(),
+            prost_str(pubkey),
+        )]))),
+        actor_id: actor_id.to_string(),
+        capability_id: "human_principal.read".to_string(),
+        idempotency_key: String::new(),
     }
 }
 
@@ -226,9 +249,9 @@ struct TestEnv {
     _isolation: tokio::sync::OwnedMutexGuard<()>,
     _root: TempDir,
     _cozo: TempDir,
+    identity_cozo: op_cozo_store::CozoGraphShuttle,
     issuer: DecoyIssuer,
     engine: Mutex<Option<Arc<MutationEngine>>>,
-    fixture_sleds: Mutex<BTreeMap<String, ContainerIdentitySled>>,
 }
 
 impl TestEnv {
@@ -269,16 +292,8 @@ impl TestEnv {
         }
         let cozo = tempfile::tempdir().expect("cozo");
         std::env::set_var("OP_HUMAN_PRINCIPAL_COZO_DB_PATH", cozo.path().join("cozo"));
-        // Identity sleds have a distinct durable Cozo relation from the human
-        // principal registry.  Keep one process-wide sandbox because the
-        // identity dispatcher intentionally opens its store once per process.
-        static IDENTITY_COZO: OnceLock<TempDir> = OnceLock::new();
         let identity_cozo =
-            IDENTITY_COZO.get_or_init(|| tempfile::tempdir().expect("identity cozo"));
-        std::env::set_var(
-            "IDENTITY_SLED_COZO_DB_PATH",
-            identity_cozo.path().join("identity-cozo"),
-        );
+            op_cozo_store::CozoGraphShuttle::new_in_memory().expect("identity Cozo");
         std::env::set_var("OP_AUTH_REPLAY_DB_PATH", root.path().join("auth-replay.db"));
         let grants_path = root.path().join("capability-grants.json");
         write_grants(&grants_path, &empty_grants());
@@ -288,31 +303,31 @@ impl TestEnv {
             _isolation: isolation,
             _root: root,
             _cozo: cozo,
+            identity_cozo,
             issuer,
             engine: Mutex::new(None),
-            fixture_sleds: Mutex::new(BTreeMap::new()),
         }
     }
 
     async fn bind_engine(&self, engine: Arc<MutationEngine>) {
-        let fixture_sleds: Vec<_> = self
-            .fixture_sleds
+        // A validator/listener restart can retain the same authoritative
+        // engine. Its identity owner must not be configured a second time.
+        if self
+            .engine
             .lock()
-            .expect("fixture sled lock")
-            .values()
-            .cloned()
-            .collect();
-        if !fixture_sleds.is_empty() {
-            engine
-                .update_state_cache(
-                    "identity_sled".to_string(),
-                    simd_json::serde::to_owned_value(IdentitySledState {
-                        sleds: fixture_sleds,
-                    })
-                    .expect("identity fixture state value"),
-                )
-                .await;
+            .expect("test engine lock")
+            .as_ref()
+            .is_some_and(|bound| Arc::ptr_eq(bound, &engine))
+        {
+            return;
         }
+        engine
+            .configure_identity_store(self.identity_cozo.clone())
+            .expect("configure fixture identity store");
+        engine
+            .recover_configured_identity_store()
+            .await
+            .expect("recover fixture identity store");
         *self.engine.lock().expect("test engine lock") = Some(engine);
     }
 
@@ -329,22 +344,20 @@ impl TestEnv {
             .clone()
             .expect("test engine bound");
         let session_id = derive_session_id(pubkey);
-        let mut state: IdentitySledState = engine
-            .get_state("identity_sled")
-            .await
-            .map(|value| simd_json::serde::from_owned_value(value).expect("identity state"))
-            .unwrap_or_default();
-        if state
-            .sleds
-            .iter()
-            .any(|sled: &ContainerIdentitySled| sled.session_id == session_id)
+        if op_grpc_bridge::identity_sled_dispatch::dispatch_identity_sled_method(
+            engine.as_ref(),
+            "get_identity",
+            &serde_json::json!({"session_id": &session_id}),
+        )
+        .await
+        .is_ok()
         {
             return;
         }
         let now = chrono::Utc::now().timestamp();
         let btrfs_root = self._root.path().join("identity-btrfs");
         std::fs::create_dir_all(&btrfs_root).expect("identity btrfs fixture root");
-        state.sleds.push(ContainerIdentitySled {
+        let sled = ContainerIdentitySled {
             session_id: session_id.clone(),
             wireguard_pubkey: pubkey.to_string(),
             interface: String::new(),
@@ -382,35 +395,63 @@ impl TestEnv {
             chain_head_at_arrival: String::new(),
             catalog_hash_at_arrival: String::new(),
             head_timestamp_at_arrival: 0,
-        });
-        state.sleds.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-        engine
-            .update_state_cache(
-                "identity_sled".to_string(),
-                simd_json::serde::to_owned_value(state).expect("identity state value"),
+        };
+        let expected = self
+            .identity_cozo
+            .read_identity_revision(&session_id)
+            .expect("read fixture identity revision");
+        self.identity_cozo
+            .apply_identity_intent(
+                &session_id,
+                &format!("fixture-provision-{}", uuid::Uuid::new_v4().simple()),
+                IdentityIntent::CompareExchange(Box::new(IdentityCompareExchange {
+                    expected,
+                    record: Some(IdentitySledRecord {
+                        session_id: sled.session_id.clone(),
+                        wireguard_pubkey: sled.wireguard_pubkey.clone(),
+                        interface: sled.interface.clone(),
+                        peer_ip: sled.peer_ip.clone().unwrap_or_default(),
+                        mutation_index: 0,
+                        session_genesis: String::new(),
+                        trace_id: String::new(),
+                        schema_version: i64::from(RECORD_FORMAT),
+                        vector_id: sled.vector_id.clone(),
+                        sealed_id: String::new(),
+                        principal_kind: sled.principal_kind.clone(),
+                        btrfs_device_json: serde_json::to_string(
+                            sled.btrfs_device.as_ref().expect("fixture btrfs device"),
+                        )
+                        .expect("serialize fixture btrfs device"),
+                        instance_json: serde_json::to_string(
+                            sled.instance.as_ref().expect("fixture instance"),
+                        )
+                        .expect("serialize fixture instance"),
+                        session_started_at: sled.session_started_at,
+                        last_seen_at: sled.last_seen_at,
+                        active: false,
+                        expires_at: 0,
+                    }),
+                    genesis: None,
+                })),
             )
-            .await;
+            .expect("commit fixture identity provision");
+        engine
+            .recover_configured_identity_store()
+            .await
+            .expect("publish fixture identity provision");
         engine
             .mint_and_store_genesis(&session_id, pubkey)
             .await
             .expect("fixture identity genesis");
-        let anchored_state: IdentitySledState = engine
-            .get_state("identity_sled")
-            .await
-            .map(|value| {
-                simd_json::serde::from_owned_value(value).expect("anchored identity state")
-            })
-            .expect("anchored identity fixture state");
-        if let Some(sled) = anchored_state
-            .sleds
-            .into_iter()
-            .find(|sled| sled.session_id == session_id)
-        {
-            self.fixture_sleds
-                .lock()
-                .expect("fixture sled lock")
-                .insert(session_id, sled);
-        }
+        let anchored = op_grpc_bridge::identity_sled_dispatch::dispatch_identity_sled_method(
+            engine.as_ref(),
+            "get_identity",
+            &serde_json::json!({"session_id": &session_id}),
+        )
+        .await
+        .expect("read anchored fixture identity");
+        let _: ContainerIdentitySled = serde_json::from_value(anchored["identity"].clone())
+            .expect("anchored fixture identity type");
     }
 
     fn set_grants(&self, doc: &serde_json::Value) {
@@ -484,6 +525,24 @@ where
 
 async fn start_server(strip_connect_info: bool) -> (RunningServer, TestEnv) {
     start_server_with_env(strip_connect_info, TestEnv::new().await).await
+}
+
+async fn start_assertion_issuer(body: String) -> (SocketAddr, JoinHandle<()>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("assertion issuer listener");
+    let addr = listener.local_addr().expect("assertion issuer address");
+    let app = Router::new().route(
+        "/assertion",
+        any(move || {
+            let body = body.clone();
+            async move { (StatusCode::OK, body) }
+        }),
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("assertion issuer");
+    });
+    (addr, task)
 }
 
 async fn start_server_with_env(strip_connect_info: bool, env: TestEnv) -> (RunningServer, TestEnv) {
@@ -867,7 +926,7 @@ async fn generated_plugin_route_authenticates_registered_human() {
 
     let mut client = HumanPrincipalPluginMethodsClient::new(ch);
     let mut request = Request::new(HumanPrincipalResolveKeyRequest {
-        human_pubkey: pubkey.clone(),
+        human_pubkey: Some(pubkey.clone()),
     });
     attach_capability(request.metadata_mut(), "human_principal.read");
     attach_assertion(
@@ -883,7 +942,7 @@ async fn generated_plugin_route_authenticates_registered_human() {
     assert!(response.principal.is_some());
 
     let mut legacy_only = Request::new(HumanPrincipalResolveKeyRequest {
-        human_pubkey: pubkey,
+        human_pubkey: Some(pubkey),
     });
     attach_capability(legacy_only.metadata_mut(), "human_principal.read");
     attach_ghostbridge(
@@ -906,11 +965,10 @@ async fn generated_plugin_route_preserves_integer_arguments() {
 
     let mut client = SnowballPluginMethodsClient::new(ch);
     let mut request = Request::new(SnowballQueryEventsRequest {
-        decision: String::new(),
-        from_event_id: 0,
-        limit: 1,
-        plugin_id: String::new(),
-        to_event_id: 0,
+        limit: Some(prost_types::Value {
+            kind: Some(prost_types::value::Kind::NumberValue(1.0)),
+        }),
+        ..Default::default()
     });
     attach_capability(request.metadata_mut(), "snowball.read");
     attach_assertion(
@@ -924,10 +982,10 @@ async fn generated_plugin_route_preserves_integer_arguments() {
         .expect("generated route should preserve numeric JSON values")
         .into_inner();
     assert_eq!(response.events.len(), 1);
-    assert!(response.has_more);
+    assert_eq!(response.has_more, Some(true));
     // Genesis anchoring records a session-arrival event before the
     // registration mutation, in addition to the chain's initial event.
-    assert_eq!(response.total_in_chain, 3);
+    assert_eq!(response.total_in_chain, Some(3));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -956,7 +1014,7 @@ async fn oracle_assertion_cannot_authenticate_unguarded_ovsdb_transact() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn oracle_assertion_cannot_bypass_capabilities_via_set_property() {
+async fn oracle_assertion_cannot_write_unmapped_property() {
     let (srv, env) = start_server(false).await;
     let ch = tls_channel(srv.addr, &srv.ca_pem).await;
     let pubkey = pk(63);
@@ -978,8 +1036,58 @@ async fn oracle_assertion_cannot_bypass_capabilities_via_set_property() {
     );
 
     let status = client.set_property(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::FailedPrecondition);
+    assert!(status
+        .message()
+        .contains("property is read-only through generic Set"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn writable_property_set_without_target_capability_is_denied_before_effects() {
+    let env = TestEnv::new().await;
+    let schema = op_plugins::state_plugins::tched_router::tched_router_plugin_schema();
+    let plugin_id = schema.name.clone();
+    op_blob::catalog::BlobStore::open(env._root.path().join("plugin-blobs"))
+        .expect("fixture blob store")
+        .write(&op_blob::blobify_plugin_schema(&plugin_id, schema))
+        .expect("seal writable fixture plugin");
+    let (srv, env) = start_server_with_env(false, env).await;
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(65);
+    register_human(
+        channel.clone(),
+        &env,
+        &pubkey,
+        "property-no-capability",
+        [0x65; 16],
+    )
+    .await;
+    let before = srv.engine.event_chain.read().await.events().len();
+
+    let mut request = Request::new(SetPropertyRequest {
+        plugin_id: "tched_router".to_string(),
+        object_path: "/org/opdbus/v1/plugins/tched_router".to_string(),
+        interface_name: "org.opdbus.v1.PluginV1".to_string(),
+        property_name: "selected_provider".to_string(),
+        value: Some(prost_str("salad")),
+        actor_id: "spoofed-property-actor".to_string(),
+        capability_id: String::new(),
+    });
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x66; 16]).to_wire(),
+    );
+
+    let status = PluginServiceClient::new(channel)
+        .set_property(request)
+        .await
+        .unwrap_err();
     assert_eq!(status.code(), Code::PermissionDenied);
-    assert!(status.message().contains("capability-gated plugin methods"));
+    assert_eq!(
+        status.message(),
+        "property write requires its declared method capability"
+    );
+    assert_eq!(srv.engine.event_chain.read().await.events().len(), before);
 }
 
 // ?? VAL-E2E-002 ?????????????????????????????????????????????????????????????
@@ -1705,6 +1813,137 @@ async fn fixture_connect_info_matches_validator() {
         connect_info_peer_addr(&probe),
         Some(SocketAddr::new(test_ip(), 12345))
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_mutate_preserves_verified_identity_and_ignores_spoofed_actor() {
+    let (srv, env) = start_server(false).await;
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(70);
+    register_human(channel.clone(), &env, &pubkey, "mutate-route", [0x70; 16]).await;
+    env.grant_human(&pubkey, &["human_principal.read"]);
+
+    let mut request = Request::new(resolve_key_mutation(&pubkey, "spoofed-mutate-actor"));
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x71; 16]).to_wire(),
+    );
+    attach_capability(request.metadata_mut(), "human_principal.read");
+    let response = StateSyncClient::new(channel)
+        .mutate(request)
+        .await
+        .expect("canonical mutate route")
+        .into_inner();
+    assert!(response.success, "mutate result: {:?}", response.error);
+
+    let chain = srv.engine.event_chain.read().await;
+    let event = chain.events().last().expect("mutate audit event");
+    let expected_actor = derive_principal_id(&pubkey);
+    let expected_session = derive_session_id(&pubkey);
+    assert_eq!(event.actor_id, expected_actor);
+    assert_ne!(event.actor_id, "spoofed-mutate-actor");
+    assert_eq!(event.capability_id.as_deref(), Some("human_principal.read"));
+    assert_eq!(event.method_name.as_deref(), Some("resolve_key"));
+    assert_eq!(event.session_id.as_deref(), Some(expected_session.as_str()));
+    assert!(event
+        .session_genesis
+        .as_ref()
+        .is_some_and(|value| !value.is_empty()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_batch_preserves_verified_identity_for_every_nested_request() {
+    let (srv, env) = start_server(false).await;
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(72);
+    register_human(channel.clone(), &env, &pubkey, "batch-route", [0x72; 16]).await;
+    env.grant_human(&pubkey, &["human_principal.read"]);
+    let before = srv.engine.event_chain.read().await.events().len();
+
+    let mut request = Request::new(BatchMutateRequest {
+        mutations: vec![
+            resolve_key_mutation(&pubkey, "spoofed-nested-one"),
+            resolve_key_mutation(&pubkey, "spoofed-nested-two"),
+        ],
+        atomic: false,
+        actor_id: "spoofed-batch-actor".to_string(),
+    });
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x73; 16]).to_wire(),
+    );
+    attach_capability(request.metadata_mut(), "human_principal.read");
+    let response = StateSyncClient::new(channel)
+        .batch_mutate(request)
+        .await
+        .expect("canonical batch route")
+        .into_inner();
+    assert!(response.success);
+    assert_eq!(response.results.len(), 2);
+    assert!(response.results.iter().all(|result| result.success));
+
+    let chain = srv.engine.event_chain.read().await;
+    let events = &chain.events()[before..];
+    let expected_actor = derive_principal_id(&pubkey);
+    let expected_session = derive_session_id(&pubkey);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| {
+        event.actor_id == expected_actor
+            && event.capability_id.as_deref() == Some("human_principal.read")
+            && event.method_name.as_deref() == Some("resolve_key")
+            && event.session_id.as_deref() == Some(expected_session.as_str())
+            && event
+                .session_genesis
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn raw_patch_and_atomic_batch_reject_before_any_effect() {
+    let (srv, env) = start_server(false).await;
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(74);
+    register_human(channel.clone(), &env, &pubkey, "rejected-route", [0x74; 16]).await;
+    env.grant_human(&pubkey, &["human_principal.read"]);
+    let before = srv.engine.event_chain.read().await.events().len();
+
+    let mut raw = Request::new(MutateRequest {
+        operation: OperationType::ApplyPatch as i32,
+        value: Some(prost_struct(BTreeMap::from([(
+            "status".to_string(),
+            prost_str("forged"),
+        )]))),
+        ..resolve_key_mutation(&pubkey, "spoofed-raw-actor")
+    });
+    attach_assertion(
+        raw.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x75; 16]).to_wire(),
+    );
+    attach_capability(raw.metadata_mut(), "human_principal.read");
+    let status = StateSyncClient::new(channel.clone())
+        .mutate(raw)
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::FailedPrecondition);
+    assert_eq!(srv.engine.event_chain.read().await.events().len(), before);
+
+    let mut atomic = Request::new(BatchMutateRequest {
+        mutations: vec![resolve_key_mutation(&pubkey, "spoofed-atomic-actor")],
+        atomic: true,
+        actor_id: "spoofed-batch-actor".to_string(),
+    });
+    attach_assertion(
+        atomic.metadata_mut(),
+        &fresh_signed(&env.issuer, &pubkey, [0x76; 16]).to_wire(),
+    );
+    attach_capability(atomic.metadata_mut(), "human_principal.read");
+    let status = StateSyncClient::new(channel)
+        .batch_mutate(atomic)
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::Unimplemented);
+    assert_eq!(srv.engine.event_chain.read().await.events().len(), before);
 }
 
 // ?? VAL-E2E-024 ?????????????????????????????????????????????????????????????
@@ -2630,5 +2869,555 @@ async fn e2e_replay_nonce_remains_consumed_after_server_restart() {
 
 #[test]
 fn battery_test_count_is_pinned() {
-    assert_eq!(EXPECTED_TEST_COUNT, 34);
+    assert_eq!(EXPECTED_TEST_COUNT, 41);
+}
+
+/// Exercise the shipped client against the real TLS interceptor, identity sled
+/// validator, grants and dispatcher. The identity subsystem authors the bytes.
+#[tokio::test(flavor = "multi_thread")]
+async fn built_in_client_forwards_authored_identity_and_preserves_grant_gate() {
+    use op_grpc_bridge::{GhostbridgeCallMetadata, GrpcClientPool, RemoteOperationClient};
+
+    struct RestoreEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnvironment {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    let (srv, env) = start_server(false).await;
+    let _restore = RestoreEnvironment(
+        [
+            "OP_DBUS_GRPC_CA_FILE",
+            "OP_DBUS_GRPC_TLS_DOMAIN",
+            "OP_IDENTITY_SESSION_ID",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect(),
+    );
+    let ca = env._root.path().join("client-ca.pem");
+    std::fs::write(&ca, &srv.ca_pem).unwrap();
+    std::env::set_var("OP_DBUS_GRPC_CA_FILE", &ca);
+    std::env::set_var("OP_DBUS_GRPC_TLS_DOMAIN", "localhost");
+    let pubkey = pk(91);
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    register_human(channel, &env, &pubkey, "built-in-client", [0x91; 16]).await;
+    env.grant_human(&pubkey, &["human_principal.read"]);
+    let session_id = derive_session_id(&pubkey);
+    std::env::set_var("OP_IDENTITY_SESSION_ID", &session_id);
+    let projection = op_identity::resolve_identity_credential_session(Some(&session_id)).unwrap();
+    let encoded = projection.sealed_id_header_for_transport("grpc").unwrap();
+    let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .unwrap();
+    let mut identity = GhostbridgeCallMetadata {
+        sealed_id: Some(wire.clone()),
+        oracle_assertion: None,
+        session_genesis: None,
+        trace_id: None,
+        wireguard_pubkey: None,
+    };
+    let client = RemoteOperationClient::new(
+        Arc::new(GrpcClientPool::new()),
+        &format!("https://{}", srv.addr),
+        "identity-test",
+    );
+    let args = || vec![simd_json::json!({"human_pubkey": pubkey.clone()})];
+    async fn client_call(
+        client: &RemoteOperationClient,
+        pubkey: &str,
+        identity: &GhostbridgeCallMetadata,
+    ) -> Result<simd_json::OwnedValue, op_grpc_bridge::grpc_client::GrpcClientError> {
+        client
+            .call_method_with_metadata(
+                "human_principal",
+                "/org/opdbus/v1/plugins/human_principal",
+                "org.opdbus.v1.PluginV1",
+                "resolve_key",
+                vec![simd_json::json!({"human_pubkey": pubkey})],
+                "",
+                "human_principal.read",
+                identity,
+            )
+            .await
+    }
+    client_call(&client, &pubkey, &identity)
+        .await
+        .expect("exact authored SID1 passes the receiver");
+    client
+        .call_method(
+            "human_principal",
+            "/org/opdbus/v1/plugins/human_principal",
+            "org.opdbus.v1.PluginV1",
+            "resolve_key",
+            args(),
+            "",
+            "human_principal.read",
+        )
+        .await
+        .expect("native client reads the configured private credential");
+
+    // Even a well-formed envelope with a recomputed integrity trailer cannot
+    // replace the credential authored and stored by the identity subsystem.
+    let mut forged = op_identity::sealed_id::SealedId::open(&wire).unwrap();
+    forged.trace_id = "caller-reconstructed".into();
+    identity.sealed_id = Some(forged.seal().unwrap());
+    let error = client_call(&client, &pubkey, &identity)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.to_lowercase().contains("unauthenticated"), "{error}");
+    identity.sealed_id = Some(wire.clone());
+    identity.oracle_assertion = Some(fresh_signed(&env.issuer, &pubkey, [0x92; 16]).to_wire());
+    assert!(client_call(&client, &pubkey, &identity)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("multiple identity"));
+    identity.sealed_id = None;
+    client_call(&client, &pubkey, &identity)
+        .await
+        .expect("exact caller OIA1 passes the same receiver");
+    identity.oracle_assertion = None;
+    assert!(client_call(&client, &pubkey, &identity)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("missing identity"));
+
+    identity.sealed_id = Some(wire);
+    env.set_grants(&empty_grants());
+    assert!(
+        client_call(&client, &pubkey, &identity).await.is_err(),
+        "valid identity cannot bypass principal grants"
+    );
+}
+
+/// The explicit decoy path acquires one OIA1 wire envelope and exercises the
+/// receiver's trust, registration, provisioning, signature and grant gates.
+#[tokio::test(flavor = "multi_thread")]
+async fn built_in_client_acquires_oia1_from_decoy() {
+    use op_grpc_bridge::{DecoyAssertionClient, GrpcClientPool, RemoteOperationClient};
+
+    struct RestoreEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnvironment {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    let (srv, env) = start_server(false).await;
+    let _restore = RestoreEnvironment(
+        ["OP_DBUS_GRPC_CA_FILE", "OP_DBUS_GRPC_TLS_DOMAIN"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+    );
+    let ca = env._root.path().join("decoy-client-ca.pem");
+    std::fs::write(&ca, &srv.ca_pem).expect("client CA");
+    std::env::set_var("OP_DBUS_GRPC_CA_FILE", &ca);
+    std::env::set_var("OP_DBUS_GRPC_TLS_DOMAIN", "localhost");
+
+    let pubkey = pk(93);
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    register_human(channel, &env, &pubkey, "decoy-client", [0x93; 16]).await;
+
+    let signed = env
+        .issuer
+        .issue(&pubkey, test_ip(), Duration::from_secs(60))
+        .expect("fresh decoy assertion");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(signed.to_wire());
+    let (issuer_addr, issuer_task) = start_assertion_issuer(encoded).await;
+    let issuer = DecoyAssertionClient::new(issuer_addr, test_ip()).expect("decoy client");
+    let client = RemoteOperationClient::new(
+        Arc::new(GrpcClientPool::new()),
+        &format!("https://{}", srv.addr),
+        "decoy-client",
+    );
+    let result = client
+        .call_method_via_decoy(
+            "human_principal",
+            "/org/opdbus/v1/plugins/human_principal",
+            "org.opdbus.v1.PluginV1",
+            "resolve_key",
+            vec![simd_json::json!({"human_pubkey": pubkey.clone()})],
+            "",
+            "human_principal.read",
+            &issuer,
+        )
+        .await
+        .expect("decoy OIA1 reaches canonical human resolve");
+    let rendered = serde_json::to_string(&result).expect("render resolve result");
+    assert!(
+        rendered.contains(&pubkey),
+        "canonical result omitted pubkey: {rendered}"
+    );
+    issuer_task.abort();
+
+    // A validly framed assertion from a key absent from the receiver trust
+    // store is acquired, then rejected by the server's native validator.
+    let untrusted = DecoyIssuer::new(
+        SigningKey::from_bytes(&[8u8; 32]),
+        "untrusted-decoy",
+        Duration::from_secs(900),
+    );
+    let forged = untrusted
+        .issue(&pubkey, test_ip(), Duration::from_secs(60))
+        .expect("fresh untrusted assertion");
+    let forged_body = base64::engine::general_purpose::STANDARD.encode(forged.to_wire());
+    let (forged_addr, forged_task) = start_assertion_issuer(forged_body).await;
+    let forged_client = DecoyAssertionClient::new(forged_addr, test_ip()).expect("decoy client");
+    let error = client
+        .call_method_via_decoy(
+            "human_principal",
+            "/org/opdbus/v1/plugins/human_principal",
+            "org.opdbus.v1.PluginV1",
+            "resolve_key",
+            vec![simd_json::json!({"human_pubkey": pubkey})],
+            "",
+            "human_principal.read",
+            &forged_client,
+        )
+        .await
+        .expect_err("untrusted issuer must be denied by receiver");
+    assert!(error.to_string().contains("UnknownDecoyKey"), "{error}");
+    forged_task.abort();
+}
+
+fn audit_request<T>(
+    env: &TestEnv,
+    pubkey: &str,
+    nonce: u8,
+    capability: Option<&str>,
+    body: T,
+) -> Request<T> {
+    let mut request = Request::new(body);
+    attach_assertion(
+        request.metadata_mut(),
+        &fresh_signed(&env.issuer, pubkey, [nonce; 16]).to_wire(),
+    );
+    if let Some(capability) = capability {
+        attach_capability(request.metadata_mut(), capability);
+    }
+    request
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn event_chain_rpc_rejects_missing_grants_and_unbacked_private_aliases() {
+    use op_grpc_bridge::proto::{event_chain_service_client::EventChainServiceClient, *};
+    let (srv, env) = start_server(false).await;
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(202);
+    register_human(channel.clone(), &env, &pubkey, "audit-reader", [0xc0; 16]).await;
+    let mut client = EventChainServiceClient::new(channel);
+    let status = client
+        .get_events(Request::new(GetEventsRequest::default()))
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::Unauthenticated);
+    let status = client
+        .get_events(audit_request(
+            &env,
+            &pubkey,
+            0xc1,
+            Some("snowball.read"),
+            GetEventsRequest::default(),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        status.code(),
+        Code::PermissionDenied,
+        "transport identity is not an audit grant"
+    );
+    env.grant_human(&pubkey, &["snowball.read", "snowball.invoke"]);
+    let status = client
+        .get_events(audit_request(
+            &env,
+            &pubkey,
+            0xc2,
+            None,
+            GetEventsRequest::default(),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let status = client
+        .get_events(audit_request(
+            &env,
+            &pubkey,
+            0xc3,
+            Some("snowball.invoke"),
+            GetEventsRequest::default(),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        status.code(),
+        Code::PermissionDenied,
+        "capability must match the pinned query method"
+    );
+    let mut duplicate = audit_request(
+        &env,
+        &pubkey,
+        0xc4,
+        Some("snowball.read"),
+        GetEventsRequest::default(),
+    );
+    duplicate.metadata_mut().append(
+        DECLARED_CAPABILITY_HEADER,
+        MetadataValue::from_static("snowball.read"),
+    );
+    assert_eq!(
+        client.get_events(duplicate).await.unwrap_err().code(),
+        Code::PermissionDenied
+    );
+
+    let page = client
+        .get_events(audit_request(
+            &env,
+            &pubkey,
+            0xc5,
+            Some("snowball.read"),
+            GetEventsRequest {
+                limit: 1,
+                ..Default::default()
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(page.events.len(), 1);
+    assert!(page.has_more);
+    let verification = client
+        .verify_chain(audit_request(
+            &env,
+            &pubkey,
+            0xc6,
+            Some("snowball.read"),
+            VerifyChainRequest::default(),
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(verification.valid);
+    let proof = client
+        .get_proof(audit_request(
+            &env,
+            &pubkey,
+            0xc7,
+            Some("snowball.read"),
+            GetProofRequest {
+                event_id: page.events[0].event_id,
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(proof.event_hash, page.events[0].event_hash);
+    assert!(proof.batch_first_event_id > 0);
+    client
+        .prove_tag_immutability(audit_request(
+            &env,
+            &pubkey,
+            0xc8,
+            Some("snowball.read"),
+            ProveTagImmutabilityRequest {
+                plugin_id: "snowball".into(),
+                tag: "fixture-tag".into(),
+            },
+        ))
+        .await
+        .unwrap();
+
+    let head = srv.engine.event_chain.read().await.last_hash().to_owned();
+    assert_eq!(
+        client
+            .get_snapshot(audit_request(
+                &env,
+                &pubkey,
+                0xc9,
+                Some("snowball.read"),
+                GetSnapshotRequest {
+                    snapshot_id: "unbacked".into()
+                }
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        client
+            .create_snapshot(audit_request(
+                &env,
+                &pubkey,
+                0xca,
+                Some("snowball.read"),
+                CreateSnapshotRequest {
+                    plugin_id: "identity_sled".into()
+                }
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::PermissionDenied
+    );
+    assert_eq!(
+        client
+            .create_snapshot(audit_request(
+                &env,
+                &pubkey,
+                0xcb,
+                Some("snowball.invoke"),
+                CreateSnapshotRequest {
+                    plugin_id: "identity_sled".into()
+                }
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        client
+            .search_semantic_trace(audit_request(
+                &env,
+                &pubkey,
+                0xcc,
+                None,
+                SearchSemanticTraceRequest::default()
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        srv.engine.event_chain.read().await.last_hash(),
+        head,
+        "unsupported aliases must have no backend effects"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn event_chain_rpc_stream_uses_engine_replays_and_rechecks_revocation() {
+    use op_grpc_bridge::proto::{
+        event_chain_service_client::EventChainServiceClient, SubscribeEventsRequest,
+    };
+    let (srv, env) = start_server(false).await;
+    let channel = tls_channel(srv.addr, &srv.ca_pem).await;
+    let pubkey = pk(203);
+    register_human(channel.clone(), &env, &pubkey, "audit-stream", [0xd0; 16]).await;
+    env.grant_human(&pubkey, &["snowball.read"]);
+    let mut client = EventChainServiceClient::new(channel);
+    let mut stream = client
+        .subscribe_events(audit_request(
+            &env,
+            &pubkey,
+            0xd1,
+            Some("snowball.read"),
+            SubscribeEventsRequest::default(),
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    // Real MutationEngine append, not a separately fabricated service channel.
+    srv.engine
+        .dispatch_method_call(
+            "snowball",
+            "verify_chain",
+            "{}",
+            Some("snowball.read"),
+            &principal_id_for(&pubkey),
+        )
+        .await
+        .unwrap();
+    let observed = tokio::time::timeout(Duration::from_secs(5), stream.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.plugin_id, "snowball");
+    assert_eq!(
+        observed.event_hash,
+        srv.engine
+            .event_chain
+            .read()
+            .await
+            .events()
+            .last()
+            .unwrap()
+            .event_hash
+    );
+
+    let mut replay = client
+        .subscribe_events(audit_request(
+            &env,
+            &pubkey,
+            0xd2,
+            Some("snowball.read"),
+            SubscribeEventsRequest {
+                from_event_id: observed.event_id,
+                ..Default::default()
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let replayed = tokio::time::timeout(Duration::from_secs(5), replay.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(replayed.event_id, observed.event_id);
+    assert_eq!(replayed.event_hash, observed.event_hash);
+    let invalid_cursor = audit_request(
+        &env,
+        &pubkey,
+        0xd3,
+        Some("snowball.read"),
+        SubscribeEventsRequest {
+            from_event_id: u64::MAX,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        client
+            .subscribe_events(invalid_cursor)
+            .await
+            .unwrap_err()
+            .code(),
+        Code::OutOfRange
+    );
+
+    env.set_grants(&empty_grants());
+    srv.engine
+        .dispatch_method_call(
+            "snowball",
+            "verify_chain",
+            "{}",
+            Some("snowball.read"),
+            "internal-fixture",
+        )
+        .await
+        .unwrap();
+    let revoked = tokio::time::timeout(Duration::from_secs(5), stream.message())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(revoked.code(), Code::PermissionDenied);
 }

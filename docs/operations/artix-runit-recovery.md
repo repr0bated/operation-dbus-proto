@@ -94,10 +94,14 @@ Deployment is **btrfs send/receive** of subvolume snapshots — see
 `deploy/btrfs-layout.sh` for the base/modules/snapshots/staging layout. A release
 is a snapshot sent to the target, not a file copy onto a live host.
 
-`deploy/runit/build-golden.sh` publishes a release both ways from one build: it
-populates the golden subvolume and installs the same binaries into
-`/usr/local/bin`, restarting only the services whose binary actually changed.
-Network-critical services are reported rather than restarted.
+`deploy/runit/build-golden.sh` only populates and validates the golden
+subvolume, including the committed persisted plugin catalog. Use
+`OP_PERSISTED_CATALOG_SOURCE` when preparing from an isolated catalog. The
+builder validates that input and never reseals it, installs into the running
+host, or restarts services. After
+reviewing its manifest, an operator creates a read-only snapshot and transfers
+that snapshot with `btrfs send/receive`. Receiving, activating, and restarting
+the target are separate recovery or release steps.
 
 ## Third-party installers that expect systemd
 

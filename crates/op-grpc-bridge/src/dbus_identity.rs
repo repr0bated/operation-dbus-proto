@@ -192,7 +192,7 @@ impl DbusIdentityResolver {
 
         let session = self
             .verified_session_for_activation(&pending.identity().human_pubkey)
-            .await
+            .await?
             .ok_or(DbusIdentityError::SessionUnavailable)?;
         pending.identity_mut().session_id = session.session_id.clone();
         pending.identity_mut().session_genesis = session.genesis_hex.clone();
@@ -581,17 +581,23 @@ impl DbusIdentityResolver {
     async fn verified_session_for_activation(
         &self,
         wireguard_pubkey: &str,
-    ) -> Option<crate::mutation_engine::SessionContext> {
+    ) -> Result<Option<crate::mutation_engine::SessionContext>, DbusIdentityError> {
         let valid_wireguard_key = base64::engine::general_purpose::STANDARD
             .decode(wireguard_pubkey.trim())
             .is_ok_and(|raw| raw.len() == 32);
         if !valid_wireguard_key {
-            return None;
+            return Ok(None);
         }
         let session_id = op_identity::session::derive_session_id(wireguard_pubkey);
-        if let Some(record) =
-            crate::identity_sled_dispatch::stored_session(self.engine.as_ref(), &session_id).await
-        {
+        if let Some(record) = crate::identity_sled_dispatch::stored_session(
+            self.engine.as_ref(),
+            &session_id,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %session_id, "identity credential projection unavailable");
+            DbusIdentityError::SessionUnavailable
+        })? {
             let now = chrono::Utc::now().timestamp();
             if !record.is_anchored()
                 || record.wireguard_pubkey != wireguard_pubkey
@@ -599,19 +605,19 @@ impl DbusIdentityResolver {
                     .expires_at
                     .is_none_or(|expires_at| expires_at == 0 || expires_at > now)
             {
-                return None;
+                return Ok(None);
             }
             let context = crate::mutation_engine::SessionContext {
                 genesis_hex: record.genesis.unwrap_or_default(),
                 session_id: record.session_id,
                 wireguard_pubkey: record.wireguard_pubkey,
             };
-            return Some(context);
+            return Ok(Some(context));
         }
         // D-Bus login activates an already provisioned/authored sled. Minting
         // here would cache a SessionContext before nonce consumption and the
         // final peer-credential check; provisioning/arrival owns that step.
-        None
+        Ok(None)
     }
 
     async fn authoritative_identity(
@@ -620,17 +626,23 @@ impl DbusIdentityResolver {
         session_id: &str,
         require_active: bool,
     ) -> Result<GhostbridgeIdentity, DbusIdentityError> {
-        let session =
-            crate::identity_sled_dispatch::stored_session(self.engine.as_ref(), session_id)
-                .await
-                .filter(|session| session.is_anchored())
-                .filter(|session| !require_active || session.active)
-                .filter(|session| {
-                    session.expires_at.is_none_or(|expires| {
-                        expires == 0 || expires > chrono::Utc::now().timestamp()
-                    })
-                })
-                .ok_or(DbusIdentityError::SessionUnavailable)?;
+        let session = crate::identity_sled_dispatch::stored_session(
+            self.engine.as_ref(),
+            session_id,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %session_id, "identity credential projection unavailable");
+            DbusIdentityError::SessionUnavailable
+        })?
+        .filter(|session| session.is_anchored())
+        .filter(|session| !require_active || session.active)
+        .filter(|session| {
+            session
+                .expires_at
+                .is_none_or(|expires| expires == 0 || expires > chrono::Utc::now().timestamp())
+        })
+        .ok_or(DbusIdentityError::SessionUnavailable)?;
         let session_genesis = session
             .genesis
             .filter(|genesis| !genesis.is_empty())

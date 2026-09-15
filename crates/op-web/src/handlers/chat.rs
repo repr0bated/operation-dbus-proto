@@ -136,7 +136,7 @@ pub async fn chat_handler(
     };
 
     if requested_provider.is_none() {
-        if let Err(e) = crate::tched_router_routes::ensure_model_available(&selected_model) {
+        if let Err(e) = crate::tched_router_routes::ensure_model_available(&selected_model).await {
             return Json(ChatResponse {
                 success: false,
                 message: String::new(),
@@ -181,8 +181,8 @@ pub async fn chat_handler(
             )),
             Err(_) => Err(anyhow::anyhow!("Unknown provider: {}", provider)),
         },
-        (None, Some(model)) => match crate::tched_router_routes::route_for_model(model) {
-            Some(route) => match ProviderType::from_str(&route.upstream_provider) {
+        (None, Some(model)) => match crate::tched_router_routes::route_for_model(model).await {
+            Ok(Some(route)) => match ProviderType::from_str(&route.upstream_provider) {
                 Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => {
                     state
                         .chat_manager
@@ -198,7 +198,10 @@ pub async fn chat_handler(
                     route.upstream_provider
                 )),
             },
-            None => Err(anyhow::anyhow!("Model is not routed by 3tched Router")),
+            Ok(None) => Err(anyhow::anyhow!("Model is not routed by 3tched Router")),
+            Err(error) => Err(anyhow::anyhow!(
+                "committed tched_router state unavailable: {error}"
+            )),
         },
         _ => state.chat_manager.chat(messages).await,
     };

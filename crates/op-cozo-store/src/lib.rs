@@ -1,6 +1,6 @@
 use anyhow::Result;
-pub use cozo::{DataValue, Num};
-use cozo::{DbInstance, NamedRows, ScriptMutability};
+use cozo::DbInstance;
+pub use cozo::{DataValue, NamedRows, Num, ScriptMutability, Vector};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -9,12 +9,31 @@ use tracing::{info, warn};
 
 type Params = BTreeMap<String, DataValue>;
 
+mod identity_transactions;
+pub use identity_transactions::{
+    IdentityCommit, IdentityCompareExchange, IdentityIntent, IdentityRecoverySnapshot,
+    IdentityRevision,
+};
+mod runtime_document_transactions;
+pub use runtime_document_transactions::{
+    RuntimeDocumentCommit, RuntimeDocumentFailure, RuntimeDocumentRecord,
+    RuntimeDocumentUncertainPhase,
+};
+mod ctl_plane_chatbot_episodes;
+pub use ctl_plane_chatbot_episodes::{
+    EpisodeEmbeddingRecord, EpisodePage, EpisodeScope, EpisodeSnapshot, ScopedEpisodeRecord,
+    MAX_CHATBOT_EPISODE_BYTES, MAX_CHATBOT_SNAPSHOT_BYTES,
+};
+
 /// Strongly-typed error for CozoDB graph operations.
 ///
 /// Keeps `anyhow` out of the public API surface while preserving
 /// ergonomic `?` propagation inside the crate.
 #[derive(Debug, thiserror::Error)]
 pub enum CozoError {
+    #[error("{0}")]
+    RuntimeDocument(#[from] RuntimeDocumentFailure),
+
     #[error("CozoDB error: {0}")]
     Database(String),
 
@@ -66,7 +85,7 @@ pub struct WgSessionRecord {
 /// One container identity sled row (mirrors op-plugins' `ContainerIdentitySled`).
 /// `btrfs_device_json` is the sled's btrfs device record pre-serialized to JSON;
 /// `peer_ip`, `sealed_id`, and `btrfs_device_json` use `""` for absent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentitySledRecord {
     pub session_id: String,
     pub wireguard_pubkey: String,
@@ -78,6 +97,9 @@ pub struct IdentitySledRecord {
     pub schema_version: i64,
     pub vector_id: String,
     pub sealed_id: String,
+    /// Actor class is persisted with the atomic identity revision metadata.
+    /// It is distinct from SID1's transport principal_kind.
+    pub principal_kind: Option<String>,
     pub btrfs_device_json: String,
     pub instance_json: String,
     pub session_started_at: i64,
@@ -155,24 +177,76 @@ pub fn human_principal_cozo_db_path() -> PathBuf {
 #[derive(Clone)]
 pub struct CozoGraphShuttle {
     pub(crate) db: Arc<DbInstance>,
+    identity_directory: Option<Arc<identity_transactions::PersistentIdentityBoundary>>,
+    identity_transaction: Arc<std::sync::Mutex<()>>,
+    runtime_document_transaction: Arc<std::sync::Mutex<()>>,
+    episode_transaction: Arc<std::sync::Mutex<()>>,
 }
 
 impl CozoGraphShuttle {
+    /// Fail closed when domain owners share one database handle or when two
+    /// persistent handles resolve to the same held root or data directory.
+    pub fn ensure_distinct_from(&self, other: &Self) -> std::result::Result<(), CozoError> {
+        if Arc::ptr_eq(&self.db, &other.db) {
+            return Err(CozoError::Other(
+                "Cozo domain owners must not share a database handle".into(),
+            ));
+        }
+        match (&self.identity_directory, &other.identity_directory) {
+            (Some(left), Some(right)) => left.ensure_distinct_from(right),
+            _ => Ok(()),
+        }
+    }
+
     pub fn new_in_memory() -> std::result::Result<Self, CozoError> {
         let db = DbInstance::new("mem", "", Default::default()).map_err(|e| {
             CozoError::Other(format!("failed to create CozoDB in-memory instance: {e}"))
         })?;
-        let s = Self { db: Arc::new(db) };
+        let s = Self {
+            db: Arc::new(db),
+            identity_directory: None,
+            identity_transaction: Arc::new(std::sync::Mutex::new(())),
+            runtime_document_transaction: Arc::new(std::sync::Mutex::new(())),
+            episode_transaction: Arc::new(std::sync::Mutex::new(())),
+        };
         s.seed_schema().map_err(CozoError::from)?;
         Ok(s)
     }
 
     pub fn new_persistent(path: PathBuf) -> std::result::Result<Self, CozoError> {
-        let ps = path.to_string_lossy().to_string();
+        Self::open_persistent(path, false)
+    }
+
+    /// Open a credential-bearing store beneath service-only root/data
+    /// directories. Restricts their held, nofollow-validated descriptors to
+    ///0700 before Cozo can create/read its files; never changes process umask
+    /// or generic store permissions. Custom options that could redirect data
+    /// outside this private boundary are rejected before opening Cozo.
+    pub fn new_persistent_private(path: PathBuf) -> std::result::Result<Self, CozoError> {
+        Self::open_persistent(path, true)
+    }
+
+    fn open_persistent(path: PathBuf, private: bool) -> std::result::Result<Self, CozoError> {
+        let ps = path
+            .to_str()
+            .ok_or_else(|| CozoError::Other("Cozo database path must be valid UTF-8".into()))?
+            .to_string();
+        let directory = if private {
+            identity_transactions::PersistentIdentityBoundary::open_private(&path)?
+        } else {
+            identity_transactions::PersistentIdentityBoundary::open(&path)?
+        };
         // RocksDB is the durable storage engine beneath CozoDB.
         let db = DbInstance::new("rocksdb", &ps, Default::default())
             .map_err(|e| CozoError::Other(format!("failed to open CozoDB at {ps}: {e}")))?;
-        let s = Self { db: Arc::new(db) };
+        directory.verify()?;
+        let s = Self {
+            db: Arc::new(db),
+            identity_directory: Some(Arc::new(directory)),
+            identity_transaction: Arc::new(std::sync::Mutex::new(())),
+            runtime_document_transaction: Arc::new(std::sync::Mutex::new(())),
+            episode_transaction: Arc::new(std::sync::Mutex::new(())),
+        };
         s.seed_schema().map_err(CozoError::from)?;
         Ok(s)
     }
@@ -195,6 +269,9 @@ impl CozoGraphShuttle {
             r#":create project_catalog { project_id: String => document: String }"#,
             r#":create project_documents { collection: String, document_id: String => document: String }"#,
             r#":create notebooklm_selection { session_id: String => notebook_id: String }"#,
+            // Durable plugin-owned runtime values. These documents contain no
+            // method schemas and never participate in plugin discovery.
+            r#":create plugin_runtime_documents { plugin_id: String => revision: Int, document: String }"#,
             // plugin × op → action(Deny/Allow) + reason + control_ref
             r#":create compliance_rule {
                 plugin: String, op: String, action: String
@@ -402,6 +479,15 @@ impl CozoGraphShuttle {
                 catalog_hash_at_arrival: String default "",
                 head_timestamp_at_arrival: Int default 0,
                 schema_content_hash: String default ""
+            }"#,
+            // Atomic revision/actor metadata, joined with identity_sessions.
+            // Actor class is stored once here: adding it does not rewrite the
+            // existing16-column relation or its uninspectable default expressions.
+            // Tombstones prevent stale expected-row/legacy resurrection.
+            r#":create identity_revisions {
+                session_id: String => revision: Int,
+                operation_id: String, intent_kind: String, intent_value: Int,
+                principal_kind: String default ""
             }"#,
             // append-only per-session "snowball" event ledger archive
             // (the immutable event chain is the proof; this is the queryable copy)
@@ -1411,6 +1497,12 @@ impl CozoGraphShuttle {
         &self,
         rec: &IdentitySledRecord,
     ) -> std::result::Result<(), CozoError> {
+        let _guard = self.legacy_identity_write_guard(&rec.session_id)?;
+        if rec.principal_kind.is_some() {
+            return Err(CozoError::Other(
+                "actor classification requires atomic identity intent".into(),
+            ));
+        }
         let query = r#"
             ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index,
               session_genesis, trace_id, schema_version, vector_id, sealed_id,
@@ -1478,6 +1570,7 @@ impl CozoGraphShuttle {
         &self,
         rec: &GenesisInputsRecord,
     ) -> std::result::Result<(), CozoError> {
+        let _guard = self.legacy_identity_write_guard(&rec.session_id)?;
         let query = r#"
             ?[session_id, arrival_timestamp, chain_head_at_arrival,
               catalog_hash_at_arrival, head_timestamp_at_arrival, schema_content_hash]
@@ -1533,14 +1626,16 @@ impl CozoGraphShuttle {
         p.insert("sid".into(), DataValue::Str(session_id.into()));
         let r = cozo_run(
             &self.db,
-            "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+            "actor[session_id, principal_kind] := *identity_revisions{session_id, principal_kind}\n\
+             actor[session_id, principal_kind] := *identity_sessions{session_id}, not *identity_revisions{session_id}, principal_kind = ''\n\
+             ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
-             expires_at] := \
+             expires_at, principal_kind] := \
              *identity_sessions[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
-             expires_at], \
+             expires_at], actor[session_id, principal_kind], \
              session_id = $sid",
             p,
         )
@@ -1557,14 +1652,16 @@ impl CozoGraphShuttle {
     ) -> std::result::Result<Vec<IdentitySledRecord>, CozoError> {
         let r = cozo_run(
             &self.db,
-            "?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
+            "actor[session_id, principal_kind] := *identity_revisions{session_id, principal_kind}\n\
+             actor[session_id, principal_kind] := *identity_sessions{session_id}, not *identity_revisions{session_id}, principal_kind = ''\n\
+             ?[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
-             expires_at] := \
+             expires_at, principal_kind] := \
              *identity_sessions[session_id, wireguard_pubkey, interface, peer_ip, mutation_index, \
              session_genesis, trace_id, schema_version, vector_id, sealed_id, \
              btrfs_device_json, instance_json, session_started_at, last_seen_at, active, \
-             expires_at]",
+             expires_at], actor[session_id, principal_kind]",
             BTreeMap::new(),
         )
         .map_err(|e| CozoError::Other(format!("list identity sleds: {e}")))?;
@@ -1583,6 +1680,7 @@ impl CozoGraphShuttle {
         last_seen_at: i64,
         active: bool,
     ) -> std::result::Result<(), CozoError> {
+        let _guard = self.legacy_identity_write_guard(session_id)?;
         let mut p: Params = BTreeMap::new();
         p.insert("sid".into(), DataValue::Str(session_id.into()));
         p.insert("seen".into(), dv_int(last_seen_at));
@@ -1599,6 +1697,7 @@ impl CozoGraphShuttle {
 
     /// Remove one identity sled and its genesis/snowball archive rows.
     pub fn delete_identity_sled(&self, session_id: &str) -> std::result::Result<(), CozoError> {
+        let _guard = self.legacy_identity_write_guard(session_id)?;
         let mut p: Params = BTreeMap::new();
         p.insert("sid".into(), DataValue::Str(session_id.into()));
         cozo_run(
@@ -1807,50 +1906,7 @@ impl CozoGraphShuttle {
         content: &str,
         created_at: i64,
     ) -> std::result::Result<i64, CozoError> {
-        let txn = self.db.multi_transaction(true);
-
-        let mut mp: Params = BTreeMap::new();
-        mp.insert("sid".into(), DataValue::Str(session_id.into()));
-        let seq = match txn.run_script(
-            "?[max(seq)] := *session_events[session_id, seq, kind, subid, content, created_at], \
-             session_id = $sid",
-            mp,
-        ) {
-            Ok(r) => r
-                .rows
-                .first()
-                .map(|row| match &row[0] {
-                    // max() over an empty set yields a Null row → first seq is 0
-                    DataValue::Null => 0,
-                    v => dv_as_int(v) + 1,
-                })
-                .unwrap_or(0),
-            Err(e) => {
-                let _ = txn.abort();
-                return Err(CozoError::Other(format!("session event max seq: {e}")));
-            }
-        };
-
-        let mut p: Params = BTreeMap::new();
-        p.insert("sid".into(), DataValue::Str(session_id.into()));
-        p.insert("seq".into(), dv_int(seq));
-        p.insert("kind".into(), DataValue::Str(kind.into()));
-        p.insert("subid".into(), DataValue::Str(subid.into()));
-        p.insert("content".into(), DataValue::Str(content.into()));
-        p.insert("created".into(), dv_int(created_at));
-        if let Err(e) = txn.run_script(
-            "?[session_id, seq, kind, subid, content, created_at] \
-             <- [[$sid, $seq, $kind, $subid, $content, $created]] \
-             :put session_events { session_id, seq => kind, subid, content, created_at }",
-            p,
-        ) {
-            let _ = txn.abort();
-            return Err(CozoError::Other(format!("append session event: {e}")));
-        }
-
-        txn.commit()
-            .map_err(|e| CozoError::Other(format!("commit session event: {e}")))?;
-        Ok(seq)
+        self.append_session_event_durable(session_id, kind, subid, content, created_at)
     }
 
     /// List a session's events, newest first; `limit` 0 = all.
@@ -2021,6 +2077,10 @@ fn row_to_identity_sled(headers: &[String], row: &[DataValue]) -> IdentitySledRe
             .unwrap_or(0),
         vector_id: row_str(headers, row, "vector_id"),
         sealed_id: row_str(headers, row, "sealed_id"),
+        principal_kind: {
+            let value = row_str(headers, row, "principal_kind");
+            (!value.is_empty()).then_some(value)
+        },
         btrfs_device_json: row_text(headers, row, "btrfs_device_json"),
         instance_json: row_text(headers, row, "instance_json"),
         session_started_at: row_cell(headers, row, "session_started_at")
@@ -2143,6 +2203,7 @@ mod identity_sled_tests {
             schema_version: 1,
             vector_id: "".to_string(),
             sealed_id: "sid1:abc".to_string(),
+            principal_kind: None,
             btrfs_device_json: r#"{"device_path":"/dev/loop9","mount_point":"/mnt/x","btrfs_uuid":"","cozo_id":"","attached":false}"#.to_string(),
             instance_json: r#"{"name":"sid-1","status":"Stopped","type":"container"}"#.to_string(),
             session_started_at: 100,

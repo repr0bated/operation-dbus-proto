@@ -10,7 +10,6 @@ use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use sysinfo::System;
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
@@ -81,8 +80,6 @@ pub struct AppState {
     pub broadcast_tx: broadcast::Sender<String>,
     /// SSE event broadcaster
     pub sse_broadcaster: Arc<SseEventBroadcaster>,
-    /// Replayable hydration cache for fresh dashboard connections
-    pub hydration: Arc<crate::sse::HydrationCache>,
     /// Server start time
     pub start_time: std::time::Instant,
     /// Conversation history — JSON flat file, no SQLite, no drift.
@@ -101,8 +98,6 @@ pub struct AppState {
     pub csrf_tokens: Arc<RwLock<HashMap<String, String>>>,
     /// Remote operation client (gRPC)
     pub grpc_client: Arc<RemoteOperationClient>,
-    /// Cached system stats from live monitor (procfs/D-Bus projection tree)
-    pub system_stats: Arc<RwLock<simd_json::OwnedValue>>,
     /// Recent activity feed from projection/D-Bus events
     pub activity_log: Arc<RwLock<Vec<simd_json::OwnedValue>>>,
 }
@@ -188,7 +183,6 @@ impl AppState {
 
         // Create SSE broadcaster
         let sse_broadcaster = Arc::new(SseEventBroadcaster::new());
-        let hydration = Arc::new(crate::sse::HydrationCache::default());
 
         // Initialize privacy router components
         // User database in CozoDB — graph-native, no JSON drift.
@@ -266,7 +260,6 @@ impl AppState {
             provider_name,
             broadcast_tx,
             sse_broadcaster,
-            hydration,
             start_time: std::time::Instant::now(),
             conversations: Arc::new(crate::chat_store::ChatSessionStore::default_store().await?),
             user_store,
@@ -276,7 +269,6 @@ impl AppState {
             google_oauth_config,
             csrf_tokens: Arc::new(RwLock::new(HashMap::new())),
             grpc_client,
-            system_stats: Arc::new(RwLock::new(simd_json::json!(null))),
             activity_log: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -289,34 +281,6 @@ impl AppState {
     /// Get uptime in seconds
     pub fn uptime_secs(&self) -> u64 {
         self.start_time.elapsed().as_secs()
-    }
-
-    /// Start the system monitor for live metrics
-    pub fn start_system_monitor(self: Arc<Self>) {
-        let state = self.clone();
-        tokio::spawn(async move {
-            let mut sys = System::new_all();
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-            loop {
-                interval.tick().await;
-                sys.refresh_all();
-
-                let memory_total_mb = sys.total_memory() / 1024 / 1024;
-                let memory_used_mb = sys.used_memory() / 1024 / 1024;
-                let cpu_usage = sys.global_cpu_info().cpu_usage();
-
-                let data = simd_json::json!({
-                    "uptime_secs": state.uptime_secs(),
-                    "memory_total_mb": memory_total_mb,
-                    "memory_used_mb": memory_used_mb,
-                    "cpu_usage": cpu_usage,
-                });
-
-                if let Ok(json_str) = simd_json::to_string(&data) {
-                    state.sse_broadcaster.broadcast("system_stats", &json_str);
-                }
-            }
-        });
     }
 
     /// Start the event bridge from gRPC to SSE
@@ -335,81 +299,46 @@ impl AppState {
                 {
                     Ok(mut stream) => {
                         info!("Subscribed to gRPC state updates");
+                        state_clone
+                            .sse_broadcaster
+                            .broadcast("state_resync", "{\"reason\":\"upstream_connected\"}");
                         while let Some(msg_result) = stream.next().await {
                             match msg_result {
-                                Ok(msg) => {
-                                    let data = simd_json::json!({
-                                        "plugin_id": msg.plugin_id,
-                                        "object_path": msg.object_path,
-                                        "property_name": msg.property_name,
-                                        "new_value": msg.new_value,
-                                        "event_id": msg.event_id,
-                                        "tags": msg.tags_touched,
-                                    });
-                                    if let Ok(json_str) = simd_json::to_string(&data) {
-                                        state_clone
-                                            .sse_broadcaster
-                                            .broadcast("state_update", &json_str);
+                                Ok(msg) => match crate::sse::state_message_event(&msg) {
+                                    Ok(event) => state_clone
+                                        .sse_broadcaster
+                                        .broadcast(&event.event_type, &event.data),
+                                    Err(error) => {
+                                        warn!(%error, "Invalid committed state frame; reconnecting");
+                                        break;
                                     }
-                                }
+                                },
                                 Err(e) => {
                                     warn!("gRPC subscription stream error: {}", e);
                                     break;
                                 }
                             }
                         }
+                        state_clone.sse_broadcaster.broadcast(
+                            "state_unavailable",
+                            "{\"reason\":\"upstream_disconnected\"}",
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                     Err(e) => {
                         warn!("Failed to subscribe to gRPC updates: {}. Retrying...", e);
+                        state_clone.sse_broadcaster.broadcast(
+                            "state_unavailable",
+                            "{\"reason\":\"upstream_unavailable\"}",
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                 }
             }
         });
 
-        // 2. Event chain bridge
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            info!("Starting gRPC -> SSE event chain bridge...");
-            loop {
-                match state_clone
-                    .grpc_client
-                    .stream_events(None, vec![], vec![])
-                    .await
-                {
-                    Ok(mut stream) => {
-                        info!("Subscribed to gRPC event chain");
-                        while let Some(msg_result) = stream.next().await {
-                            match msg_result {
-                                Ok(msg) => {
-                                    let data = simd_json::json!({
-                                        "event_id": msg.event_id,
-                                        "plugin_id": msg.plugin_id,
-                                        "operation": msg.operation_type,
-                                        "target": msg.target,
-                                        "decision": msg.decision,
-                                        "tags": msg.tags_touched,
-                                    });
-                                    if let Ok(json_str) = simd_json::to_string(&data) {
-                                        state_clone
-                                            .sse_broadcaster
-                                            .broadcast("audit_event", &json_str);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("gRPC event stream error: {}", e);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to stream gRPC events: {}. Retrying...", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                }
-            }
-        });
+        // Audit history is privileged and is never subscribed with the web
+        // service identity for this shared, unauthenticated SSE endpoint.
     }
 }
 

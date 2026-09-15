@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde = { workspace = true }
+nix = { version = "0.28", features = ["fs", "user"] }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 cozo = { workspace = true }

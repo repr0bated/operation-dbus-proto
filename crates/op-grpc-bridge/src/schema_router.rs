@@ -70,6 +70,8 @@ pub struct SchemaRouter {
     dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
     /// Catalog path: blob-catalog dir in production (default [`BLOB_CATALOG_DIR`]), or a monolith file in tests.
     monolith_path: PathBuf,
+    /// Directory containing MutationEngine's committed public projections.
+    state_dir: PathBuf,
     /// Producer manifest path (default [`MANIFEST_PATH`]).
     manifest_path: PathBuf,
     /// Last-seen `catalog_hash` read from the manifest. Compared on each
@@ -130,7 +132,7 @@ impl SchemaRouter {
     pub fn with_paths(
         dbus_connection: Arc<tokio::sync::OnceCell<Connection>>,
         monolith_path: PathBuf,
-        _state_dir: PathBuf,
+        state_dir: PathBuf,
         manifest_path: PathBuf,
     ) -> Self {
         let routes = Self::load_routes_from(&monolith_path);
@@ -143,6 +145,7 @@ impl SchemaRouter {
             routes: Arc::new(RwLock::new(routes)),
             dbus_connection,
             monolith_path,
+            state_dir,
             manifest_path,
             cached_hash: Arc::new(RwLock::new(cached_hash)),
             engine: None,
@@ -162,10 +165,12 @@ impl SchemaRouter {
 
         let routes = self.routes.read().await;
         for (plugin_id, route) in routes.iter() {
-            let mut interface = SchemaBackedInterface::with_engine(
+            let mut interface = SchemaBackedInterface::with_engine_and_storage(
                 plugin_id.clone(),
                 route.clone(),
                 self.engine.clone(),
+                &self.state_dir,
+                &self.monolith_path,
             );
             interface.identity_resolver = self.identity_resolver.clone();
             let path = route.dbus_path.clone();
@@ -182,7 +187,11 @@ impl SchemaRouter {
     pub async fn reload(&self) -> anyhow::Result<()> {
         let count = self.reload_routes_only().await;
         info!(count, "SchemaRouter reloaded plugin routes");
-        self.register_objects().await
+        self.register_objects().await?;
+        if let Some(engine) = &self.engine {
+            engine.notify_catalog_changed();
+        }
+        Ok(())
     }
 
     /// Reload routes from the SHM catalog into the in-memory route table
@@ -241,6 +250,9 @@ impl SchemaRouter {
         // route reload and hash advance remain observable without a live bus.
         if self.dbus_connection.get().is_some() {
             self.register_objects().await?;
+        }
+        if let Some(engine) = &self.engine {
+            engine.notify_catalog_changed();
         }
         Ok(true)
     }
@@ -530,16 +542,16 @@ const DEFAULT_SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
 /// This struct is registered on the bus for every plugin, making the bridge
 /// the authoritative owner of the D-Bus objects defined in the schema.
 ///
-/// Present-state is read directly from SHM
-/// (`/dev/shm/opdbus/state/<plugin_id>.json`) on each property access.
-/// There is no in-memory cache, no D-Bus `PropertiesChanged` signal watching,
-/// and no timer-based polling. If the state file does not exist, an empty
-/// properties object (`{}`) is returned, not an error.
+/// Present-state is read from MutationEngine's committed SHM transaction on
+/// each property access. The sealed catalog is pinned before and after that
+/// transaction so a stale in-memory route cannot expose removed plugin state.
 pub struct SchemaBackedInterface {
     plugin_id: String,
     route: PluginRoute,
     /// Directory containing per-plugin present-state JSON files.
     shm_state_dir: PathBuf,
+    /// Sealer-owned plugin catalog used only to prove current membership.
+    blob_catalog_dir: PathBuf,
     /// The MutationEngine for real method dispatch (Requirement 5).
     /// `None` when no engine is wired (unit tests that only exercise
     /// method-existence / property-read paths).
@@ -574,6 +586,18 @@ impl SchemaBackedInterface {
         iface
     }
 
+    fn with_engine_and_storage(
+        plugin_id: String,
+        route: PluginRoute,
+        engine: Option<Arc<MutationEngine>>,
+        shm_state_dir: impl AsRef<Path>,
+        blob_catalog_dir: impl AsRef<Path>,
+    ) -> Self {
+        let mut iface = Self::with_storage_paths(plugin_id, route, shm_state_dir, blob_catalog_dir);
+        iface.engine = engine;
+        iface
+    }
+
     /// Creates a new `SchemaBackedInterface` with a custom SHM state directory.
     ///
     /// In production, use [`new`](Self::new) which targets `/dev/shm/opdbus/state`.
@@ -583,29 +607,93 @@ impl SchemaBackedInterface {
         route: PluginRoute,
         shm_state_dir: impl AsRef<Path>,
     ) -> Self {
+        Self::with_storage_paths(plugin_id, route, shm_state_dir, BLOB_CATALOG_DIR)
+    }
+
+    /// Creates an interface with isolated committed-state and sealed-catalog
+    /// roots. Production registration supplies the router's configured roots;
+    /// tests use this constructor to avoid consulting live host state.
+    pub fn with_storage_paths(
+        plugin_id: String,
+        route: PluginRoute,
+        shm_state_dir: impl AsRef<Path>,
+        blob_catalog_dir: impl AsRef<Path>,
+    ) -> Self {
         Self {
             plugin_id,
             route,
             shm_state_dir: shm_state_dir.as_ref().to_path_buf(),
+            blob_catalog_dir: blob_catalog_dir.as_ref().to_path_buf(),
             engine: None,
             identity_resolver: None,
         }
     }
 
-    /// Reads the present-state JSON for this plugin from SHM.
-    ///
-    /// The file is read directly from `<shm_state_dir>/<plugin_id>.json`.
-    /// If the file does not exist, an empty JSON object (`{}`) is returned,
-    /// not an error. This is a direct file read — no polling, no caching,
-    /// no D-Bus signal watching.
-    pub fn read_present_state(&self) -> JsonValue {
-        let path = self.shm_state_dir.join(format!("{}.json", self.plugin_id));
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                serde_json::from_str(&text).unwrap_or(JsonValue::Object(serde_json::Map::new()))
+    /// Reads one complete committed projection through the exact sealed
+    /// schema's public-state policy. A missing projection is projected from an
+    /// empty object; an absent policy returns `None`. Catalog, policy,
+    /// transaction and JSON errors remain errors.
+    pub async fn read_present_state(&self) -> anyhow::Result<Option<JsonValue>> {
+        self.read_present_state_for(None).await
+    }
+
+    async fn read_present_state_for(
+        &self,
+        property: Option<String>,
+    ) -> anyhow::Result<Option<JsonValue>> {
+        let plugin_id = self.plugin_id.clone();
+        let state_dir = self.shm_state_dir.clone();
+        let catalog_dir = self.blob_catalog_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let before = crate::sealed_schema_reader::manifest_plugins(&catalog_dir)?;
+            anyhow::ensure!(
+                before.contains_key(&plugin_id),
+                "plugin '{plugin_id}' is not a current sealed catalog member"
+            );
+            // Validate the member's manifest-pinned blob as well as its name.
+            let schema = crate::sealed_schema_reader::read_manifest_pinned_plugin_schema(
+                &catalog_dir,
+                &plugin_id,
+            )?;
+            anyhow::ensure!(
+                crate::sealed_schema_reader::manifest_plugins(&catalog_dir)? == before,
+                "sealed catalog changed before state read"
+            );
+            if let Some(property) = property.as_deref() {
+                if !schema.public_state_exposes_top_level(property)? {
+                    return Ok(None);
+                }
             }
-            Err(_) => JsonValue::Object(serde_json::Map::new()),
-        }
+            let state_root = state_dir
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("projection path is not valid UTF-8"))?;
+            let snapshot = op_core::projection_shm::read_projection_snapshot_in(
+                state_root,
+                std::slice::from_ref(&plugin_id),
+            )?;
+            anyhow::ensure!(
+                crate::sealed_schema_reader::manifest_plugins(&catalog_dir)? == before,
+                "sealed catalog changed during state read"
+            );
+            let mut bytes = snapshot
+                .states
+                .get(&plugin_id)
+                .cloned()
+                .unwrap_or_else(|| b"{}".to_vec());
+            let private = simd_json::to_owned_value(&mut bytes)?;
+            let Some(projected) = schema.project_public_state(&private)? else {
+                return Ok(None);
+            };
+            let public = crate::mutation_engine::public_plugin_value(&plugin_id, &projected);
+            let state = serde_json::to_value(public)?;
+            anyhow::ensure!(
+                state.is_object(),
+                "committed plugin state is not a JSON object"
+            );
+            Ok(Some(state))
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("committed state reader task failed: {error}"))?
     }
 
     /// The canonical D-Bus object path this interface is registered at
@@ -836,21 +924,38 @@ impl SchemaBackedInterface {
 
     /// Get a property value from SHM present-state.
     ///
-    /// Reads `/dev/shm/opdbus/state/<plugin_id>.json` on each call.
-    /// If the state file does not exist, returns an empty value for the
-    /// requested property (not an error).
+    /// Reads the current committed projection on each call. If the sealed
+    /// plugin has no committed projection, the requested property is `null`.
     async fn get_property(&self, name: String) -> zbus::fdo::Result<String> {
-        let state = self.read_present_state();
+        let state = self
+            .read_present_state_for(Some(name.clone()))
+            .await
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?
+            .ok_or_else(|| {
+                zbus::fdo::Error::AccessDenied(format!(
+                    "plugin '{}' does not expose public state",
+                    self.plugin_id
+                ))
+            })?;
         let val = state.get(&name).unwrap_or(&JsonValue::Null);
         serde_json::to_string(val).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
     /// Get all present-state properties as a JSON object.
     ///
-    /// Reads `/dev/shm/opdbus/state/<plugin_id>.json` on each call.
-    /// If the state file does not exist, returns `{}`.
+    /// Reads the current committed projection on each call. If the sealed
+    /// plugin has no committed projection, returns `{}`.
     async fn get_all_properties(&self) -> zbus::fdo::Result<String> {
-        let state = self.read_present_state();
+        let state = self
+            .read_present_state()
+            .await
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?
+            .ok_or_else(|| {
+                zbus::fdo::Error::AccessDenied(format!(
+                    "plugin '{}' does not expose public state",
+                    self.plugin_id
+                ))
+            })?;
         serde_json::to_string(&state).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
@@ -982,273 +1087,300 @@ mod tests {
         }
     }
 
-    /// Creates a unique temp directory under `/dev/shm` for SHM state files.
-    fn test_state_dir() -> PathBuf {
-        let id = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = PathBuf::from(format!("/dev/shm/opdbus-test-state-{}-{}", id, nanos));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("create test state dir");
-        dir
-    }
-
     fn cleanup(dir: &Path) {
         let _ = fs::remove_dir_all(dir);
     }
 
-    // ── R9.5 / VAL-PROD-007: Missing state file returns empty object ──
+    struct StateFixture {
+        state: tempfile::TempDir,
+        catalog: tempfile::TempDir,
+    }
 
-    #[test]
-    fn should_return_empty_object_when_state_file_missing() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
+    impl StateFixture {
+        fn sealed(plugin_id: &str) -> Self {
+            let schema = if plugin_id == "identity_sled" {
+                let mut identity = HashMap::new();
+                identity.insert(
+                    "principal_id".to_string(),
+                    op_state_store::FieldSchema {
+                        field_type: op_state_store::FieldType::String,
+                        required: false,
+                        description: String::new(),
+                        default: None,
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                );
+                identity.insert(
+                    "sealed_id".to_string(),
+                    op_state_store::FieldSchema {
+                        field_type: op_state_store::FieldType::String,
+                        required: false,
+                        description: String::new(),
+                        default: None,
+                        example: None,
+                        constraints: Vec::new(),
+                        read_only: false,
+                        read_only_when: None,
+                    },
+                );
+                op_state_store::PluginSchema::builder(plugin_id)
+                    .object_field("identity", identity, false, "public identity")
+                    .public_state_path("/identity")
+                    .build()
+            } else {
+                op_state_store::PluginSchema::builder(plugin_id)
+                    .string_field("status", false, "status")
+                    .integer_field("uptime", false, "uptime")
+                    .string_field("extra_field", false, "private fixture field")
+                    .public_state_paths(&["/status", "/uptime"])
+                    .build()
+            };
+            Self::sealed_schema(schema)
+        }
 
-        // read_present_state returns empty object when file is missing
-        let state = iface.read_present_state();
+        fn sealed_schema(schema: op_state_store::PluginSchema) -> Self {
+            let state = tempfile::tempdir().unwrap();
+            let catalog = tempfile::tempdir().unwrap();
+            let plugin_id = schema.name.clone();
+            op_blob::BlobStore::open(catalog.path())
+                .unwrap()
+                .write(&op_blob::blobify_plugin_schema(&plugin_id, schema))
+                .unwrap();
+            Self { state, catalog }
+        }
+
+        fn interface(&self, plugin_id: &str) -> SchemaBackedInterface {
+            SchemaBackedInterface::with_storage_paths(
+                plugin_id.to_string(),
+                test_route(),
+                self.state.path(),
+                self.catalog.path(),
+            )
+        }
+
+        fn commit(&self, plugin_id: &str, value: JsonValue) {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            op_core::projection_shm::update_projection_in(
+                self.state.path().to_str().unwrap(),
+                plugin_id,
+                |_| Ok(Some(bytes)),
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_committed_state_is_an_explicit_empty_object() {
+        let fixture = StateFixture::sealed("test_plugin");
+        let state = fixture
+            .interface("test_plugin")
+            .read_present_state()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state, json!({}));
+    }
+
+    #[tokio::test]
+    async fn reads_only_committed_projection_updates() {
+        let fixture = StateFixture::sealed("test_plugin");
+        let iface = fixture.interface("test_plugin");
+        fixture.commit(
+            "test_plugin",
+            json!({"status":"active","uptime":42,"extra_field":"preserved"}),
+        );
         assert_eq!(
-            state,
-            json!({}),
-            "missing state file must return empty object, not error"
+            iface.read_present_state().await.unwrap().unwrap(),
+            json!({"status":"active","uptime":42})
         );
-
-        // Verify it's a JSON object (not null, not error)
-        assert!(
-            state.is_object(),
-            "missing state file must return a JSON object"
-        );
-        assert!(
-            state.as_object().unwrap().is_empty(),
-            "missing state file must return an empty JSON object"
-        );
-
-        cleanup(&state_dir);
-    }
-
-    // ── R9.2 / VAL-PROD-007: Present-state read from SHM, not D-Bus ─────
-
-    #[test]
-    fn should_read_present_state_from_shm() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-
-        // Write a present-state file to SHM
-        let state_path = state_dir.join("test_plugin.json");
-        let state_json = json!({
-            "status": "active",
-            "uptime": 42,
-            "extra_field": "not_in_schema"
-        });
-        fs::write(&state_path, serde_json::to_vec_pretty(&state_json).unwrap())
-            .expect("write state file");
-
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        // read_present_state returns the full state from SHM
-        let state = iface.read_present_state();
+        fixture.commit("test_plugin", json!({"status":"down","uptime":43}));
         assert_eq!(
-            state["status"],
-            json!("active"),
-            "present-state must be read from SHM file"
+            iface.read_present_state().await.unwrap().unwrap()["status"],
+            "down"
         );
+    }
+
+    #[tokio::test]
+    async fn dbus_property_reads_use_the_committed_snapshot() {
+        let fixture = StateFixture::sealed("test_plugin");
+        let iface = fixture.interface("test_plugin");
+        fixture.commit(
+            "test_plugin",
+            json!({"status":"running","uptime":100,"extra_field":"private"}),
+        );
+
+        let property: JsonValue =
+            serde_json::from_str(&iface.get_property("status".into()).await.unwrap()).unwrap();
+        assert_eq!(property, json!("running"));
+        let all: JsonValue =
+            serde_json::from_str(&iface.get_all_properties().await.unwrap()).unwrap();
+        assert_eq!(all, json!({"status":"running","uptime":100}));
+    }
+
+    #[tokio::test]
+    async fn missing_committed_property_is_null() {
+        let fixture = StateFixture::sealed("test_plugin");
+        let value: JsonValue = serde_json::from_str(
+            &fixture
+                .interface("test_plugin")
+                .get_property("status".into())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value, JsonValue::Null);
+    }
+
+    #[tokio::test]
+    async fn declared_but_unexposed_property_is_access_denied() {
+        let fixture = StateFixture::sealed_schema(
+            op_state_store::PluginSchema::builder("partial_policy")
+                .string_field("status", false, "public status")
+                .integer_field("uptime", false, "private uptime")
+                .public_state_path("/status")
+                .build(),
+        );
+        fixture.commit("partial_policy", json!({"status":"running","uptime":100}));
+        let iface = fixture.interface("partial_policy");
+        assert!(matches!(
+            iface.get_property("uptime".into()).await,
+            Err(zbus::fdo::Error::AccessDenied(_))
+        ));
         assert_eq!(
-            state["uptime"],
-            json!(42),
-            "present-state must be read from SHM file"
+            serde_json::from_str::<JsonValue>(&iface.get_all_properties().await.unwrap()).unwrap(),
+            json!({"status":"running"})
         );
-        assert_eq!(
-            state["extra_field"],
-            json!("not_in_schema"),
-            "present-state includes all fields from SHM, even those not in schema"
-        );
-
-        // Verify the data came from the file, not from schema defaults
-        assert_ne!(
-            state["status"],
-            JsonValue::Null,
-            "status must come from SHM file, not default"
-        );
-
-        cleanup(&state_dir);
     }
-
-    // ── R9.2: get_property reads from SHM ───────────────────────────────
 
     #[tokio::test]
-    async fn should_get_property_from_shm() {
-        let state_dir = test_state_dir();
-        let route = test_route();
+    async fn malformed_or_non_object_committed_state_is_a_dbus_failure() {
+        let fixture = StateFixture::sealed("test_plugin");
+        let root = fixture.state.path().to_str().unwrap();
+        op_core::projection_shm::update_projection_in(root, "test_plugin", |_| {
+            Ok(Some(b"{bad-json".to_vec()))
+        })
+        .unwrap();
+        assert!(fixture
+            .interface("test_plugin")
+            .get_all_properties()
+            .await
+            .is_err());
 
-        let state_json = json!({ "status": "running", "uptime": 100 });
-        let state_path = state_dir.join("test_plugin.json");
-        fs::write(&state_path, serde_json::to_vec_pretty(&state_json).unwrap())
-            .expect("write state file");
-
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        let result = iface.get_property("status".to_string()).await;
-        assert!(
-            result.is_ok(),
-            "get_property should succeed when state file exists"
-        );
-        let val: serde_json::Value = serde_json::from_str(&result.unwrap()).expect("parse result");
-        assert_eq!(val, json!("running"));
-
-        cleanup(&state_dir);
+        fixture.commit("test_plugin", json!(["not", "an", "object"]));
+        assert!(fixture
+            .interface("test_plugin")
+            .get_property("status".into())
+            .await
+            .is_err());
     }
-
-    // ── R9.5: get_property on missing file returns null, not error ──────
 
     #[tokio::test]
-    async fn should_get_property_return_null_when_state_file_missing() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        let result = iface.get_property("status".to_string()).await;
-        assert!(
-            result.is_ok(),
-            "get_property must not error when state file is missing"
-        );
-        let val: serde_json::Value = serde_json::from_str(&result.unwrap()).expect("parse result");
-        assert_eq!(val, JsonValue::Null);
-
-        cleanup(&state_dir);
+    async fn public_policy_type_drift_is_a_dbus_failure() {
+        let fixture = StateFixture::sealed("test_plugin");
+        fixture.commit("test_plugin", json!({"status": 7}));
+        assert!(matches!(
+            fixture.interface("test_plugin").get_all_properties().await,
+            Err(zbus::fdo::Error::Failed(_))
+        ));
     }
-
-    // ── R9.2: get_all_properties reads full state from SHM ─────────────
 
     #[tokio::test]
-    async fn should_get_all_properties_from_shm() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-
-        let state_json = json!({ "status": "active", "uptime": 7 });
-        let state_path = state_dir.join("test_plugin.json");
-        fs::write(&state_path, serde_json::to_vec_pretty(&state_json).unwrap())
-            .expect("write state file");
-
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        let result = iface.get_all_properties().await;
-        assert!(result.is_ok());
-        let val: serde_json::Value = serde_json::from_str(&result.unwrap()).expect("parse result");
-        assert_eq!(val["status"], json!("active"));
-        assert_eq!(val["uptime"], json!(7));
-
-        cleanup(&state_dir);
+    async fn invalid_public_policy_is_a_dbus_failure() {
+        let mut schema = op_state_store::PluginSchema::builder("invalid_policy")
+            .string_field("status", false, "status")
+            .build();
+        schema.public_state = op_state_store::PublicStatePolicy {
+            paths: vec!["/undeclared".into()],
+        };
+        let fixture = StateFixture::sealed_schema(schema);
+        fixture.commit("invalid_policy", json!({"status":"private"}));
+        assert!(matches!(
+            fixture
+                .interface("invalid_policy")
+                .get_all_properties()
+                .await,
+            Err(zbus::fdo::Error::Failed(_))
+        ));
     }
-
-    // ── R9.5: get_all_properties on missing file returns empty object ──
 
     #[tokio::test]
-    async fn should_get_all_properties_empty_when_state_file_missing() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        let result = iface.get_all_properties().await;
-        assert!(
-            result.is_ok(),
-            "get_all_properties must not error when state file is missing"
-        );
-        let val: serde_json::Value = serde_json::from_str(&result.unwrap()).expect("parse result");
-        assert_eq!(val, json!({}));
-        assert!(val.as_object().unwrap().is_empty());
-
-        cleanup(&state_dir);
+    async fn incomplete_projection_transaction_is_a_dbus_failure() {
+        let fixture = StateFixture::sealed("test_plugin");
+        fixture.commit("test_plugin", json!({"status":"committed"}));
+        // Fault injection models a writer that crashed after publishing its
+        // transaction marker. Production writes still use the core API.
+        fs::write(
+            fixture.state.path().join(".manifest.json"),
+            br#"{"generation":2,"publishing":true}"#,
+        )
+        .unwrap();
+        assert!(fixture
+            .interface("test_plugin")
+            .get_all_properties()
+            .await
+            .is_err());
     }
-
-    // ── R9.3: set_property is not supported (present-state managed by producer)
 
     #[tokio::test]
-    async fn should_reject_set_property_as_shm_is_authoritative() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        let result = iface
-            .set_property("status".to_string(), "\"x\"".to_string())
-            .await;
-        assert!(
-            result.is_err(),
-            "set_property should be rejected — present-state is managed by producer via SHM"
-        );
-
-        cleanup(&state_dir);
+    async fn stale_route_cannot_read_state_after_sealed_membership_removal() {
+        let fixture = StateFixture::sealed("another_plugin");
+        fixture.commit("test_plugin", json!({"status":"must-not-leak"}));
+        let error = fixture
+            .interface("test_plugin")
+            .read_present_state()
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not a current sealed catalog member"));
     }
 
-    // ── R9.4 / NFR1.1: No timer-based polling constructs ────────────────
-    //
-    // This is a structural test: it verifies that SchemaBackedInterface does
-    // not contain any polling-related fields or methods. The absence of
-    // tokio::time::interval, sleep, tick, etc. is verified by grep checks
-    // in the validation contract. Here we verify the struct has no
-    // timer/interval fields.
-
-    #[test]
-    fn should_not_have_polling_constructs_in_interface() {
-        // The SchemaBackedInterface struct should not contain any RwLock,
-        // Mutex, interval, or timer fields — it is a pure SHM reader.
-        // We verify this by checking that read_present_state is a direct
-        // file read (synchronous, no async primitives).
-        let state_dir = test_state_dir();
-        let route = test_route();
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        // read_present_state is synchronous — no async runtime needed
-        let state = iface.read_present_state();
-        assert!(
-            state.is_object(),
-            "read_present_state must work synchronously"
+    #[tokio::test]
+    async fn identity_state_is_redacted_at_the_public_read_boundary() {
+        let fixture = StateFixture::sealed("identity_sled");
+        fixture.commit(
+            "identity_sled",
+            json!({
+                "identity": {"principal_id":"alice", "sealed_id":"SID1-secret"},
+                "sealed_id":"SID1-root-secret"
+            }),
         );
-
-        cleanup(&state_dir);
+        let state = fixture
+            .interface("identity_sled")
+            .read_present_state()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state, json!({"identity":{"principal_id":"alice"}}));
     }
 
-    // ── R9.2: Data changes in SHM are reflected without restart ────────
+    #[tokio::test]
+    async fn absent_public_policy_withholds_state_and_dbus_denies_access() {
+        let fixture = StateFixture::sealed_schema(
+            op_state_store::PluginSchema::builder("closed_plugin")
+                .string_field("status", false, "private status")
+                .build(),
+        );
+        fixture.commit("closed_plugin", json!({"status":"private"}));
+        let iface = fixture.interface("closed_plugin");
+        assert_eq!(iface.read_present_state().await.unwrap(), None);
+        assert!(matches!(
+            iface.get_all_properties().await,
+            Err(zbus::fdo::Error::AccessDenied(_))
+        ));
+    }
 
-    #[test]
-    fn should_reflect_shm_changes_without_restart() {
-        let state_dir = test_state_dir();
-        let route = test_route();
-        let iface =
-            SchemaBackedInterface::with_shm_state_dir("test_plugin".to_string(), route, &state_dir);
-
-        // Initially missing → empty
-        let state1 = iface.read_present_state();
-        assert_eq!(state1, json!({}));
-
-        // Write state file
-        let state_path = state_dir.join("test_plugin.json");
-        fs::write(&state_path, r#"{"status":"up"}"#).unwrap();
-
-        // Read again — reflects new state immediately (direct read, no cache)
-        let state2 = iface.read_present_state();
-        assert_eq!(state2["status"], json!("up"));
-
-        // Update state file
-        fs::write(&state_path, r#"{"status":"down"}"#).unwrap();
-
-        // Read again — reflects updated state
-        let state3 = iface.read_present_state();
-        assert_eq!(state3["status"], json!("down"));
-
-        cleanup(&state_dir);
+    #[tokio::test]
+    async fn set_property_remains_rejected() {
+        let fixture = StateFixture::sealed("test_plugin");
+        assert!(fixture
+            .interface("test_plugin")
+            .set_property("status".into(), "\"x\"".into())
+            .await
+            .is_err());
     }
 
     // ── R4.1-R4.4 / VAL-BRIDGE-003/004/005 — Bridge registration from SHM ──
@@ -1616,6 +1748,65 @@ mod tests {
         cleanup(&base);
     }
 
+    #[tokio::test]
+    async fn sealed_catalog_change_wakes_state_consumers_once() {
+        let catalog = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let alpha = op_state_store::PluginSchema::builder("alpha")
+            .string_field("status", false, "status")
+            .public_state_path("/status")
+            .build();
+        let mut store = op_blob::BlobStore::open(catalog.path()).unwrap();
+        store
+            .write(&op_blob::blobify_plugin_schema("alpha", alpha))
+            .unwrap();
+
+        let engine = test_engine();
+        let mut wakeups = engine.change_tx().subscribe();
+        let mut router = SchemaRouter::with_paths(
+            Arc::new(tokio::sync::OnceCell::new()),
+            catalog.path().to_path_buf(),
+            state.path().to_path_buf(),
+            catalog.path().join(".manifest.json"),
+        );
+        router.engine = Some(engine);
+
+        assert!(!router.refresh_if_changed().await.unwrap());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), wakeups.recv())
+                .await
+                .is_err()
+        );
+
+        let beta = op_state_store::PluginSchema::builder("beta")
+            .string_field("status", false, "status")
+            .public_state_path("/status")
+            .build();
+        store
+            .write(&op_blob::blobify_plugin_schema("beta", beta))
+            .unwrap();
+
+        assert!(router.refresh_if_changed().await.unwrap());
+        let wakeup = tokio::time::timeout(std::time::Duration::from_secs(1), wakeups.recv())
+            .await
+            .expect("catalog change wakeup timeout")
+            .expect("catalog change wakeup channel");
+        assert_eq!(
+            wakeup.change_type,
+            crate::mutation_engine::ChangeType::SchemaMigration
+        );
+        assert_eq!(wakeup.object_path, canonical::DBUS_ROOT_PATH);
+        assert_eq!(wakeup.actor_id, "sealed-catalog");
+        assert!(router.list_plugin_ids().await.contains(&"beta".to_string()));
+
+        assert!(!router.refresh_if_changed().await.unwrap());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), wakeups.recv())
+                .await
+                .is_err()
+        );
+    }
+
     // ── VAL-NFR-002: hash compared on inbound arrival, not on a timer ──
 
     #[tokio::test]
@@ -1757,8 +1948,25 @@ mod tests {
         }
     }
 
+    /// A sealed fixture has a real declaration but no compiled executor.
+    /// Transport admission must reach the engine and then fail at that boundary.
+    fn dispatch_test_catalog() -> crate::human_principal_dispatch::tests::TempShm {
+        let route = dispatch_test_route();
+        let mut schema = op_state_store::PluginSchema::builder("beta").build();
+        for (name, declaration) in route.methods {
+            schema
+                .methods
+                .insert(name, serde_json::from_value(declaration).unwrap());
+        }
+        let mut get_key = schema.methods["GetStatus"].clone();
+        get_key.name = "GetKey".into();
+        schema.methods.insert("GetKey".into(), get_key);
+        crate::human_principal_dispatch::tests::temp_shm_with_schemas(&[schema])
+    }
+
     #[tokio::test]
     async fn bridge_dispatches_to_schema_engine_mutate() {
+        let _catalog = dispatch_test_catalog();
         // VAL-DISPATCH-001: call() dispatches to MutationEngine, not a stub.
         let engine = test_engine();
         let route = dispatch_test_route();
@@ -1768,21 +1976,13 @@ mod tests {
         let result = iface
             .call_in_test("GetStatus".to_string(), r#"{"verbose":true}"#.to_string())
             .await;
-        assert!(result.is_ok(), "dispatch should succeed: {:?}", result);
-        let body: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
-        assert_eq!(body["success"], json!(true));
-        assert_eq!(body["plugin_id"], json!("beta"));
-        assert_eq!(body["method"], json!("GetStatus"));
-        assert!(
-            body["event_id"].as_u64().unwrap() > 0,
-            "event_id must be set"
-        );
-        assert!(
-            !body["event_hash"].as_str().unwrap().is_empty(),
-            "event_hash must be set"
-        );
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
-        // The event chain must have a recorded event for this dispatch.
+        // The admitted call reaches the canonical engine and is audit-recorded
+        // even though beta has no production backend dispatch.
         let chain = engine.event_chain.read().await;
         assert_eq!(
             chain.events().len(),
@@ -1795,29 +1995,26 @@ mod tests {
 
     #[tokio::test]
     async fn stub_success_true_removed_from_call_path() {
+        let _catalog = dispatch_test_catalog();
         // VAL-DISPATCH-002: the old stub returned {"success": true, ...}
-        // without an event_id/event_hash. The real dispatch returns a result
-        // carrying event accountability proof.
+        // without an event_id/event_hash. The admitted call now reaches the real
+        // dispatch path and records accountability before failing closed.
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
-        let body: serde_json::Value = serde_json::from_str(
-            &iface
-                .call_in_test("GetStatus".to_string(), "{}".to_string())
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-
-        assert!(
-            body.get("event_id").is_some(),
-            "real dispatch must include event_id (stub did not)"
-        );
-        assert!(
-            body.get("event_hash").is_some(),
-            "real dispatch must include event_hash (stub did not)"
+        let result = iface
+            .call_in_test("GetStatus".to_string(), "{}".to_string())
+            .await;
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
+        assert_eq!(
+            engine.event_chain.read().await.events().len(),
+            1,
+            "admitted unsupported call must still be audit-recorded"
         );
     }
 
@@ -1825,6 +2022,7 @@ mod tests {
 
     #[tokio::test]
     async fn mutate_error_propagated_to_caller() {
+        let _catalog = dispatch_test_catalog();
         // VAL-DISPATCH-003: if MutationEngine returns an error, the bridge
         // propagates it as zbus::fdo::Error::Failed.
         // Uses ForceDispatchError method with valid JSON args to trigger dispatch error
@@ -1852,6 +2050,7 @@ mod tests {
 
     #[tokio::test]
     async fn mutate_receives_verbatim_json_args() {
+        let _catalog = dispatch_test_catalog();
         // VAL-DISPATCH-004: the json_args argument is the verbatim string
         // from the caller. We verify the parsed value is carried directly in
         // the canonical event payload.
@@ -1885,10 +2084,13 @@ mod tests {
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
         let verbatim = r#"{"verbose":false}"#;
-        iface
+        let result = iface
             .call_in_test("GetStatus".to_string(), verbatim.to_string())
-            .await
-            .unwrap();
+            .await;
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
         let chain = engine.event_chain.read().await;
         let event = chain.events().last().unwrap();
@@ -1900,6 +2102,7 @@ mod tests {
 
     #[tokio::test]
     async fn mutate_appends_event_chain_record() {
+        let _catalog = dispatch_test_catalog();
         // VAL-DISPATCH-005: the event chain record includes actor_id,
         // plugin_id, method_name, capability_id, and canonical input payload.
         // Uses GetStatus (null required_capability) to avoid capability check.
@@ -1931,10 +2134,13 @@ mod tests {
         let iface =
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
-        iface
+        let result = iface
             .call_in_test("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
-            .await
-            .unwrap();
+            .await;
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
         let chain = engine.event_chain.read().await;
         let event = chain.events().last().unwrap();
@@ -1957,9 +2163,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mutation_appended_before_success() {
-        // VAL-NFR-003: the event chain append occurs before the call returns
-        // success.
+    async fn mutation_appended_before_dispatch_error() {
+        let _catalog = dispatch_test_catalog();
+        // VAL-NFR-003: the event chain append occurs before the call returns its
+        // explicit unsupported-backend error.
         let engine = test_engine();
         let route = dispatch_test_route();
         let iface =
@@ -1974,12 +2181,15 @@ mod tests {
             .call_in_test("GetStatus".to_string(), "{}".to_string())
             .await;
 
-        assert!(result.is_ok(), "dispatch must succeed");
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
         let chain = engine.event_chain.read().await;
         assert_eq!(
             chain.events().len(),
             1,
-            "event must be appended before success is returned"
+            "event must be appended before the dispatch error is returned"
         );
     }
 
@@ -1987,6 +2197,7 @@ mod tests {
 
     #[tokio::test]
     async fn null_required_capability_dispatched_without_capability() {
+        let _catalog = dispatch_test_catalog();
         // VAL-ENFORCE-005: where required_capability is null, the dispatch
         // still proceeds and the event records capability_id as None.
         let engine = test_engine();
@@ -1994,10 +2205,13 @@ mod tests {
         let iface =
             SchemaBackedInterface::with_engine("beta".to_string(), route, Some(engine.clone()));
 
-        iface
+        let result = iface
             .call_in_test("GetStatus".to_string(), "{}".to_string())
-            .await
-            .unwrap();
+            .await;
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
         let chain = engine.event_chain.read().await;
         let event = chain.events().last().unwrap();
@@ -2037,6 +2251,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_looks_up_method_decl_before_dispatch() {
+        let _catalog = dispatch_test_catalog();
         // VAL-VALIDATE-001: the bridge must look up the MethodDecl in
         // PluginSchema.methods before dispatching to MutationEngine.
         let base = test_base_dir();
@@ -2054,11 +2269,10 @@ mod tests {
         let result = iface
             .call_in_test("GetKey".to_string(), "{}".to_string())
             .await;
-        assert!(
-            result.is_ok(),
-            "call should succeed after method lookup and validation: {:?}",
-            result
-        );
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
         let chain = engine.event_chain.read().await;
         assert_eq!(
@@ -2102,8 +2316,9 @@ mod tests {
 
     #[tokio::test]
     async fn valid_args_pass_to_mutate() {
-        // Valid args conform to the schema and should dispatch successfully.
-        // Uses GetStatus (null required_capability) to avoid sled check issues.
+        let _catalog = dispatch_test_catalog();
+        // Valid args conform to the schema and reach dispatch. The declared beta
+        // method then fails explicitly because no canonical backend is wired.
         let engine = test_engine();
         let route = PluginRoute {
             plugin_id: "beta".to_string(),
@@ -2135,13 +2350,12 @@ mod tests {
         let result = iface
             .call_in_test("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
             .await;
-        assert!(
-            result.is_ok(),
-            "valid args should dispatch successfully: {:?}",
-            result
-        );
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
-        // Event should have been recorded
+        // The valid call reached the engine and was audit-recorded.
         let chain = engine.event_chain.read().await;
         assert_eq!(
             chain.events().len(),
@@ -2298,6 +2512,7 @@ mod tests {
     #[tokio::test]
     async fn required_capability_check_allows_granted() {
         let _env_guard = test_registry_guard();
+        let _catalog = dispatch_test_catalog();
         // VAL-ENFORCE-002: When required_capability is declared and the caller's
         // principal grants it, the call proceeds to mutate.
         let base = test_base_dir();
@@ -2331,14 +2546,14 @@ mod tests {
             .call_in_test("SetKey".to_string(), r#"{"key":"test"}"#.to_string())
             .await;
 
-        // Should succeed (and mutate be called)
-        assert!(
-            result.is_ok(),
-            "granted capability should allow dispatch: {:?}",
-            result
-        );
+        // The grant admits the call; beta then fails closed because it has no
+        // canonical backend dispatch.
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
-        // Event should have been recorded
+        // Event should have been recorded after capability admission.
         let chain = engine.event_chain.read().await;
         assert_eq!(
             chain.events().len(),
@@ -2417,6 +2632,7 @@ mod tests {
     #[tokio::test]
     async fn null_required_capability_allows_authenticated_caller() {
         let _env_guard = test_registry_guard();
+        let _catalog = dispatch_test_catalog();
         // VAL-ENFORCE-005: Where required_capability is null, the bridge allows
         // invocation by any authenticated caller without a capability check.
         let base = test_base_dir();
@@ -2437,13 +2653,12 @@ mod tests {
             .call_in_test("GetStatus".to_string(), r#"{"verbose":false}"#.to_string())
             .await;
 
-        assert!(
-            result.is_ok(),
-            "null required_capability should allow any authenticated caller: {:?}",
-            result
-        );
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
 
-        // Event should have been recorded
+        // The authenticated call was admitted and then failed closed at dispatch.
         let chain = engine.event_chain.read().await;
         assert_eq!(
             chain.events().len(),
@@ -2460,6 +2675,7 @@ mod tests {
     #[tokio::test]
     async fn full_dispatch_pipeline_ordering() {
         let _env_guard = test_registry_guard();
+        let _catalog = dispatch_test_catalog();
         // VAL-CROSS-003: Full pipeline ordering:
         // method lookup → arg validation → capability enforcement → mutate → event chain
         // This test verifies the ordering using the already-tested building blocks.
@@ -2517,7 +2733,8 @@ mod tests {
             "missing capability: no mutate"
         );
 
-        // Test 4: Null required_capability → mutate succeeds (capability check skipped when null)
+        // Test 4: Null required_capability → dispatch is admitted, then the
+        // declared-but-unwired backend fails explicitly.
         let engine4 = test_engine();
         let route_no_cap = PluginRoute {
             plugin_id: "beta".to_string(),
@@ -2551,15 +2768,14 @@ mod tests {
         let result = iface4
             .call_in_test("GetStatus".to_string(), "{}".to_string())
             .await;
-        assert!(
-            result.is_ok(),
-            "null required_capability should succeed: {:?}",
-            result
-        );
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message.contains("no compiled method compatibility evidence for sealed plugin beta")
+        ));
         assert_eq!(
             engine4.event_chain.read().await.events().len(),
             1,
-            "null required_capability: mutate called"
+            "null required_capability: admitted call reached mutate"
         );
     }
 }

@@ -94,25 +94,25 @@ pub mod attorneys {
 pub struct LawFirm;
 
 impl LawFirm {
+    /// Review the canonical typed plugin schema. The generated JSON schema is
+    /// only a view for the attorney checks; no repository schema file is read.
+    pub fn review_plugin_schema(
+        schema: &op_state_store::PluginSchema,
+    ) -> std::result::Result<(), ComplianceError> {
+        let mut v = serde_json::to_value(schema)?;
+        v["plugin_type"] = serde_json::Value::String(schema.category.clone());
+        v["schema"] = serde_json::to_value(schema.to_json_schema())?;
+        Self::validate_structure(&v)?;
+        attorneys::OliviaScal::validate_controls(&v)?;
+        attorneys::EugeneRisk::validate_ai_risk(&v)?;
+        attorneys::PennyPrivacy::validate_privacy(&v)?;
+        attorneys::ReggieOpa::validate_policy(&v)?;
+        Ok(())
+    }
+
     pub fn review_schema(schema_json: &str) -> std::result::Result<(), ComplianceError> {
         let v: Value = serde_json::from_str(schema_json)?;
-
-        // 1. Structural Validation via JSON Schema
-        let meta_schema = include_str!("../../../schemas/opdbus-plugin-schema.json");
-        let meta_v: Value = serde_json::from_str(meta_schema)?;
-
-        let compiled = jsonschema::validator_for(&meta_v)
-            .map_err(|e| ComplianceError::Validation(format!("Schema error: {e}")))?;
-
-        // jsonschema >= 0.20: `validate` yields one error; `iter_errors` is the
-        // all-errors iterator the old `JSONSchema::validate` returned.
-        let error_msgs: Vec<String> = compiled.iter_errors(&v).map(|e| e.to_string()).collect();
-        if !error_msgs.is_empty() {
-            return Err(ComplianceError::Validation(format!(
-                "Structural validation failed: {}",
-                error_msgs.join(", ")
-            )));
-        }
+        Self::validate_legacy_structure(&v)?;
 
         // 2. Attorney Reviews
         attorneys::OliviaScal::validate_controls(&v)?;
@@ -120,6 +120,118 @@ impl LawFirm {
         attorneys::PennyPrivacy::validate_privacy(&v)?;
         attorneys::ReggieOpa::validate_policy(&v)?;
 
+        Ok(())
+    }
+
+    fn validate_structure(schema: &Value) -> std::result::Result<(), ComplianceError> {
+        let object = schema.as_object().ok_or_else(|| {
+            ComplianceError::Validation("Plugin schema must be a JSON object".into())
+        })?;
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if name.is_empty() {
+            return Err(ComplianceError::Validation(
+                "Plugin schema missing required field: name".into(),
+            ));
+        }
+        let version = object
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let valid_version = version.split('.').count() == 3
+            && version
+                .split('.')
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+        if !valid_version {
+            return Err(ComplianceError::Validation(format!(
+                "Invalid plugin schema version: {version}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Preserve the legacy JSON review contract while its source is migrated
+    /// away from the deleted repository meta-schema file.
+    fn validate_legacy_structure(schema: &Value) -> std::result::Result<(), ComplianceError> {
+        Self::validate_structure(schema)?;
+        let object = schema.as_object().expect("validated object");
+        let name = object["name"].as_str().unwrap();
+        if name.len() > 64
+            || name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        {
+            return Err(ComplianceError::Validation(
+                "Invalid plugin schema name".into(),
+            ));
+        }
+        let plugin_type = object
+            .get("plugin_type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ComplianceError::Validation("Missing plugin_type".into()))?;
+        if !matches!(
+            plugin_type,
+            "service" | "network" | "storage" | "system" | "custom"
+        ) {
+            return Err(ComplianceError::Validation("Invalid plugin_type".into()));
+        }
+        if let Some(caps) = object.get("capabilities") {
+            let caps = caps.as_object().ok_or_else(|| {
+                ComplianceError::Validation("capabilities must be an object".into())
+            })?;
+            for (key, value) in caps {
+                if matches!(
+                    key.as_str(),
+                    "can_read"
+                        | "can_write"
+                        | "can_delete"
+                        | "supports_rollback"
+                        | "supports_checkpoints"
+                        | "requires_root"
+                ) && !value.is_boolean()
+                {
+                    return Err(ComplianceError::Validation(
+                        "Invalid capabilities field".into(),
+                    ));
+                }
+            }
+        }
+        if let Some(dependencies) = object.get("dependencies") {
+            let dependencies = dependencies.as_array().ok_or_else(|| {
+                ComplianceError::Validation("dependencies must be an array".into())
+            })?;
+            for dependency in dependencies {
+                let dependency = dependency.as_object().ok_or_else(|| {
+                    ComplianceError::Validation("dependency must be an object".into())
+                })?;
+                if dependency.get("name").and_then(Value::as_str).is_none() {
+                    return Err(ComplianceError::Validation(
+                        "dependency missing name".into(),
+                    ));
+                }
+                for key in ["version", "required"] {
+                    if let Some(value) = dependency.get(key) {
+                        let valid = (key == "version" && value.is_string())
+                            || (key == "required" && value.is_boolean());
+                        if !valid {
+                            return Err(ComplianceError::Validation(
+                                "Invalid dependency field".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(plugin_schema) = object.get("schema") {
+            if !plugin_schema.is_object() {
+                return Err(ComplianceError::Validation(
+                    "schema must be an object".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -153,6 +265,28 @@ mod tests {
     }
 
     #[test]
+    fn legacy_shape_rules_are_preserved_without_a_meta_schema_file() {
+        for (field, value) in [
+            ("name", json!("BadName")),
+            ("plugin_type", json!("unknown")),
+            ("capabilities", json!({"can_read": "yes"})),
+            ("dependencies", json!(["not-an-object"])),
+            ("schema", json!("not-an-object")),
+        ] {
+            let mut schema = json!({
+                "name": "valid-plugin",
+                "version": "1.0.0",
+                "plugin_type": "service"
+            });
+            schema[field] = value;
+            assert!(
+                LawFirm::review_schema(&schema.to_string()).is_err(),
+                "legacy field {field} should be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn test_gdpr_violation() {
         let schema = json!({
             "name": "pii-plugin",
@@ -180,5 +314,14 @@ mod tests {
         let result = LawFirm::review_schema(&schema.to_string());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("AI Act"));
+    }
+
+    #[test]
+    fn typed_plugin_schema_is_reviewed_without_meta_schema_file() {
+        let schema = op_state_store::PluginSchema::builder("typed-plugin")
+            .version("1.0.0")
+            .description("A typed test plugin")
+            .build();
+        assert!(LawFirm::review_plugin_schema(&schema).is_ok());
     }
 }

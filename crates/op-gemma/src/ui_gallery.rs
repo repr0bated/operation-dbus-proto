@@ -1888,9 +1888,10 @@ fn field_type_label(ft: &FieldType) -> (&'static str, Option<Value>) {
         FieldType::Float => ("number", None),
         FieldType::Boolean => ("boolean", None),
         FieldType::Array(_) => ("array", None),
-        FieldType::Object(_) => ("object", None),
+        FieldType::Object(_) | FieldType::Map(_) => ("object", None),
         FieldType::Enum(values) => ("string", Some(json!(values))),
         FieldType::OneOf(_) => ("object", None),
+        FieldType::JsonSchema(_) => ("json_schema", None),
         FieldType::Any => ("string", None),
     }
 }

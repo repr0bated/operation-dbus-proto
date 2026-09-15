@@ -1,128 +1,95 @@
+//! Deterministic schema summaries rendered through the pinned runnable Canvas profile.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::{CapabilityDecl, PluginSchema};
+use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
-/// Runtime state of the schema renderer plugin.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.schema-renderer.schema@v3"))]
+pub struct SchemaRendererState {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.schema-renderer.schema@v1"))]
-#[schemars(extend("x-oscal-category" = "software"))]
-pub struct SchemaRendererState {
-    /// Operational status.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.schema-renderer.status@v1"))]
-    pub status: String,
-    /// Supported UI element types.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.schema-renderer.element-types@v1"))]
-    pub element_types: serde_json::Value,
-    /// JSON Schema type to component mappings.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.schema-renderer.field-mappings@v1"))]
-    pub field_mappings: serde_json::Value,
-    /// Supported layout modes.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.schema-renderer.layouts@v1"))]
-    pub layouts: serde_json::Value,
-    /// Rendering configuration.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.schema-renderer.render-config@v1"))]
-    pub render_config: serde_json::Value,
-    /// Auto-gallery configuration.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.schema-renderer.gallery-config@v1"))]
-    pub gallery_config: serde_json::Value,
-    /// Sub-view templates.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.schema-renderer.sub-views@v1"))]
-    pub sub_views: serde_json::Value,
+#[serde(deny_unknown_fields)]
+pub struct TargetPluginInput {
+    pub plugin_id: String,
 }
 
-impl Default for SchemaRendererState {
-    fn default() -> Self {
-        Self {
-            status: "active".to_string(),
-            element_types: serde_json::json!([
-                {"id": "form", "label": "Form", "icon": "Form", "schema_type": "object", "default_layout": "grid", "description": "Input form with validation from schema"},
-                {"id": "table", "label": "Table", "icon": "Table", "schema_type": "object", "default_layout": "list", "description": "Tabular data display with sort/filter"},
-                {"id": "card", "label": "Card", "icon": "Card", "schema_type": "object", "default_layout": "grid", "description": "Summary card with key fields"},
-                {"id": "dashboard", "label": "Dashboard", "icon": "Dashboard", "schema_type": "object", "default_layout": "masonry", "description": "Multi-element dashboard combining sub-views"},
-                {"id": "chart", "label": "Chart", "icon": "Chart", "schema_type": "object", "default_layout": "grid", "description": "Visual chart from numeric fields"},
-                {"id": "timeline", "label": "Timeline", "icon": "Timeline", "schema_type": "object", "default_layout": "list", "description": "Chronological event display"},
-                {"id": "tree", "label": "Tree", "icon": "Tree", "schema_type": "object", "default_layout": "list", "description": "Hierarchical nested data view"}
-            ]),
-            field_mappings: serde_json::json!({
-                "string": {"component": "Input", "props": {"variant": "text"}, "long_component": "Textarea", "long_threshold": 80},
-                "number": {"component": "NumberInput", "props": {"step": 1}},
-                "integer": {"component": "NumberInput", "props": {"step": 1, "decimal": false}},
-                "boolean": {"component": "Switch", "props": {}},
-                "enum": {"component": "Select", "props": {}},
-                "object": {"component": "ObjectView", "props": {"collapsible": true}},
-                "array": {"component": "ArrayView", "props": {"repeatable": true, "sortable": false}},
-                "date": {"component": "DatePicker", "props": {}},
-                "datetime": {"component": "DateTimePicker", "props": {}},
-                "color": {"component": "ColorPicker", "props": {}},
-                "url": {"component": "Input", "props": {"variant": "url"}},
-                "email": {"component": "Input", "props": {"variant": "email"}}
-            }),
-            layouts: serde_json::json!([
-                {"id": "grid", "name": "Grid", "columns": [1,2,3,4], "default_columns": 3, "gap": "1rem"},
-                {"id": "list", "name": "List", "density": ["compact","comfortable","spacious"], "default_density": "comfortable"},
-                {"id": "tabs", "name": "Tabbed", "tab_position": ["top","left","right"], "default_position": "top"},
-                {"id": "masonry", "name": "Masonry", "column_width": 300, "gap": "1rem"},
-                {"id": "carousel", "name": "Carousel", "items_per_view": [1,2,3], "autoplay": false}
-            ]),
-            render_config: serde_json::json!({
-                "modes": ["compact", "full", "table", "chart"],
-                "default_mode": "compact",
-                "max_fields_per_card": 8,
-                "collapse_depth": 2,
-                "show_field_types": true,
-                "show_examples": true,
-                "show_descriptions": true,
-                "show_required_markers": true,
-                "theme": "system",
-                "animation": "none"
-            }),
-            gallery_config: serde_json::json!({
-                "auto_generate": true,
-                "categories_as_tabs": true,
-                "show_preview": true,
-                "max_preview_fields": 3,
-                "search_enabled": true,
-                "deploy_action": "navigate",
-                "deploy_target": "/plugin/{plugin_id}",
-                "default_element_type": "card",
-                "default_layout": "grid",
-                "group_by_category": true
-            }),
-            sub_views: serde_json::json!([
-                {"id": "table-view", "name": "Table View", "target_type": "table", "description": "Renders object arrays as sortable data tables"},
-                {"id": "chart-view", "name": "Chart View", "target_type": "chart", "description": "Renders numeric data as bar/line/pie charts"},
-                {"id": "timeline-view", "name": "Timeline View", "target_type": "timeline", "description": "Renders timestamped data chronologically"},
-                {"id": "tree-view", "name": "Tree View", "target_type": "tree", "description": "Renders hierarchical data as expandable tree"},
-                {"id": "dashboard-view", "name": "Dashboard View", "target_type": "dashboard", "description": "Composite view combining multiple sub-views"},
-                {"id": "form-view", "name": "Form View", "target_type": "form", "description": "Interactive form with validation"},
-                {"id": "card-view", "name": "Card View", "target_type": "card", "description": "Summary card views in grid/masonry"}
-            ]),
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GalleryLookupInput {
+    pub gallery_id: String,
+    pub rendering_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenderSchemaOutput {
+    pub plugin_id: String,
+    pub schema_version: String,
+    pub schema_hash: String,
+    pub renderer_schema_hash: String,
+    pub canvas_profile_id: String,
+    pub rendering: serde_json::Value,
+    pub field_count: u64,
+    pub method_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ValidateSchemaOutput {
+    pub plugin_id: String,
+    pub schema_version: String,
+    pub schema_hash: String,
+    pub renderer_schema_hash: String,
+    pub valid: bool,
+    pub errors: Vec<String>,
+    pub checked_fields: u64,
+    pub checked_methods: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GalleryDescription {
+    /// `workspace` always selects the verified caller's Gemma workspace.
+    pub gallery_id: String,
+    pub document_revision: u64,
+    pub renderer_schema_hash: String,
+    pub rendering_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListGalleriesOutput {
+    pub galleries: Vec<GalleryDescription>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetRenderingOutput {
+    pub gallery_id: String,
+    pub rendering: Option<super::gemma_brain::workspace::UiSpecRecord>,
+    /// Stale artifacts can be inspected but cannot be rendered or promoted.
+    pub render_admitted: bool,
 }
 
 pub struct SchemaRendererPlugin;
+
 impl Default for SchemaRendererPlugin {
     fn default() -> Self {
         Self
     }
 }
+
 impl SchemaRendererPlugin {
     pub fn new() -> Self {
         Self
-    }
-    pub(crate) fn current_state() -> SchemaRendererState {
-        SchemaRendererState::default()
     }
 }
 
@@ -132,23 +99,27 @@ impl StatePlugin for SchemaRendererPlugin {
         "schema_renderer"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "3.0.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
         Some(schema_renderer_schema())
     }
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
-            plugin: self.name().to_string(),
+            plugin: self.name().into(),
             actions: vec![],
             metadata: DiffMetadata {
                 timestamp: chrono::Utc::now().timestamp(),
-                current_hash: String::new(),
-                desired_hash: String::new(),
+                current_hash: "stateless".into(),
+                desired_hash: "stateless".into(),
             },
         })
     }
-    async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
+    async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
+        anyhow::ensure!(
+            diff.actions.is_empty(),
+            "schema_renderer has no state mutation surface"
+        );
         Ok(ApplyResult {
             success: true,
             changes_applied: vec![],
@@ -156,20 +127,20 @@ impl StatePlugin for SchemaRendererPlugin {
             checkpoint: None,
         })
     }
-    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+    async fn verify_state(&self, desired: &Value) -> Result<bool> {
+        Ok(desired == &simd_json::serde::to_owned_value(SchemaRendererState::default())?)
     }
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
+            plugin: self.name().into(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
+            state_snapshot: simd_json::serde::to_owned_value(SchemaRendererState::default())?,
             backend_checkpoint: None,
         })
     }
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        anyhow::bail!("schema_renderer has no rollback surface")
     }
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
@@ -181,134 +152,61 @@ impl StatePlugin for SchemaRendererPlugin {
     }
 }
 
-/// Derived `schema_renderer` schema from the typed [`SchemaRendererState`] struct via schemars.
 pub(crate) fn schema_renderer_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(SchemaRendererState))
-        .expect("schemars schema serializes to JSON");
+        .expect("schema serializes");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "schema_renderer",
-        "1.0.0",
-        "Schema Renderer - dynamic JSON Schema to React form generation with auto-gallery",
+        "3.0.0",
+        "Pinned PluginSchema rendering and caller-owned Gemma workspace gallery reads",
         &root,
     );
-    let state = simd_json::serde::to_owned_value(&SchemaRendererState::default())
-        .expect("SchemaRendererState default serializes");
-    super::schemars_adapter::apply_state_defaults(&mut schema, &state);
-
-    // Output structs
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct RenderSchemaOutput {
-        pub rendering: serde_json::Value,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListGalleriesOutput {
-        pub galleries: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetRenderingOutput {
-        pub rendering: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ValidateSchemaOutput {
-        pub valid: bool,
-        pub errors: Vec<String>,
-    }
-
-    // Add methods
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
-    use op_state_store::SideEffect;
-
     schema.methods.insert(
-        "render_schema".to_string(),
-        method_decl_from_schemars_with_output::<(), RenderSchemaOutput>(
+        "render_schema".into(),
+        method_decl_from_schemars_with_output::<TargetPluginInput, RenderSchemaOutput>(
             "render_schema",
             SideEffect::Read,
             true,
             "schema_renderer.read",
-            "obs.service.schema.renderer.render@v1",
+            "obs.service.schema.renderer.render@v2",
         ),
     );
     schema.methods.insert(
-        "list_galleries".to_string(),
-        method_decl_from_schemars_with_output::<(), ListGalleriesOutput>(
-            "list_galleries",
-            SideEffect::Read,
-            true,
-            "schema_renderer.read",
-            "obs.service.schema.gallery.list@v1",
-        ),
-    );
-    schema.methods.insert(
-        "get_rendering".to_string(),
-        method_decl_from_schemars_with_output::<(), GetRenderingOutput>(
-            "get_rendering",
-            SideEffect::Read,
-            true,
-            "schema_renderer.read",
-            "obs.service.schema.rendering.get@v1",
-        ),
-    );
-    schema.methods.insert(
-        "validate_schema".to_string(),
-        method_decl_from_schemars_with_output::<(), ValidateSchemaOutput>(
+        "validate_schema".into(),
+        method_decl_from_schemars_with_output::<TargetPluginInput, ValidateSchemaOutput>(
             "validate_schema",
             SideEffect::Read,
             true,
             "schema_renderer.read",
-            "obs.service.schema.validate@v1",
+            "obs.service.schema.validate@v2",
         ),
     );
-
-    schema.capabilities.insert(
-        "schema_renderer.read".to_string(),
-        CapabilityDecl {
-            id: "schema_renderer.read".to_string(),
-            description: "Grants: render_schema, list_galleries, get_rendering, validate_schema."
-                .to_string(),
-        },
+    schema.methods.insert(
+        "list_galleries".into(),
+        method_decl_from_schemars_with_output::<EmptyInput, ListGalleriesOutput>(
+            "list_galleries",
+            SideEffect::Read,
+            true,
+            "schema_renderer.read",
+            "obs.service.schema.gallery.list@v3",
+        ),
     );
-
+    schema.methods.insert(
+        "get_rendering".into(),
+        method_decl_from_schemars_with_output::<GalleryLookupInput, GetRenderingOutput>(
+            "get_rendering",
+            SideEffect::Read,
+            true,
+            "schema_renderer.read",
+            "obs.service.schema.rendering.get@v3",
+        ),
+    );
+    schema.capabilities.insert("schema_renderer.read".into(), CapabilityDecl { id: "schema_renderer.read".into(), description: "Grants deterministic schema reads and caller-owned gallery facades; gallery reads additionally require the exact Gemma workspace grant.".into() });
+    schema.dependencies = vec!["json_render".to_owned(), "gemma_brain".to_owned()];
     schema
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state_plugins::common::oscal::validate_subid;
-    use serde_json::Value as JVal;
-
-    fn collect_subids(value: &JVal, out: &mut Vec<String>) {
-        if let Some(obj) = value.as_object() {
-            if let Some(JVal::String(subid)) = obj.get("x-oscal-subid") {
-                out.push(subid.clone());
-            }
-            for v in obj.values() {
-                collect_subids(v, out);
-            }
-        }
-        if let Some(arr) = value.as_array() {
-            for v in arr {
-                collect_subids(v, out);
-            }
-        }
-    }
-
-    #[test]
-    fn all_subids_are_valid() {
-        let root = serde_json::to_value(schemars::schema_for!(SchemaRendererState))
-            .expect("schemars schema serializes to JSON");
-        let mut subids = Vec::new();
-        collect_subids(&root, &mut subids);
-        assert!(!subids.is_empty(), "expected at least one subid");
-        for subid in subids {
-            assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
-        }
-    }
-}
-
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("schema_renderer", |_ctx| std::sync::Arc::new(SchemaRendererPlugin::new()))
 }

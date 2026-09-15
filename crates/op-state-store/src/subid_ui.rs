@@ -241,7 +241,7 @@ fn shape_from_field_type(ft: &crate::FieldType) -> UiFieldShape {
         FieldType::String | FieldType::Enum(_) => UiFieldShape::String,
         FieldType::Integer => UiFieldShape::Integer,
         FieldType::Float => UiFieldShape::Float,
-        FieldType::Object(_) => UiFieldShape::Record,
+        FieldType::Object(_) | FieldType::Map(_) => UiFieldShape::Record,
         FieldType::Array(inner) => match inner.as_ref() {
             FieldType::Object(_) => UiFieldShape::ListRecord,
             FieldType::String
@@ -251,7 +251,7 @@ fn shape_from_field_type(ft: &crate::FieldType) -> UiFieldShape {
             | FieldType::Enum(_) => UiFieldShape::ListScalar,
             _ => UiFieldShape::ListScalar,
         },
-        FieldType::OneOf(_) | FieldType::Any => UiFieldShape::Any,
+        FieldType::OneOf(_) | FieldType::Any | FieldType::JsonSchema(_) => UiFieldShape::Any,
     }
 }
 

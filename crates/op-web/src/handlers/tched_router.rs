@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use base64::Engine as _;
 use op_grpc_bridge::GhostbridgeCallMetadata;
 use serde::Deserialize;
 use simd_json::prelude::*;
@@ -20,38 +21,79 @@ use tracing::{error, info, warn};
 use crate::state::AppState;
 
 #[allow(clippy::result_large_err)]
-fn identity_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, Response> {
-    headers
-        .get(name)
-        .map(|value| {
-            value.to_str().map(str::to_string).map_err(|_| {
-                json_error_response(
-                    StatusCode::BAD_REQUEST,
-                    &format!("invalid {name} header encoding"),
-                )
-            })
-        })
-        .transpose()
-}
-
-#[allow(clippy::result_large_err)]
 fn ghostbridge_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, Response> {
-    let session_genesis = identity_header(headers, "x-ghostbridge-genesis")?.ok_or_else(|| {
-        json_error_response(StatusCode::UNAUTHORIZED, "missing x-ghostbridge-genesis")
-    })?;
-    let trace_id = identity_header(headers, "x-ghostbridge-trace-id")?;
-    let wireguard_pubkey = identity_header(headers, "x-wireguard-pubkey")?;
-    if trace_id.is_none() && wireguard_pubkey.is_none() {
+    let decode = |name| {
+        decode_identity_header(headers, name)
+            .map_err(|message| json_error_response(StatusCode::BAD_REQUEST, message))
+    };
+    let sid = decode(op_identity::sealed_id::HTTP_HEADER_NAME)?;
+    let oia = decode("x-oracle-identity-assertion-bin")?;
+    if sid.is_some() == oia.is_some() {
         return Err(json_error_response(
             StatusCode::UNAUTHORIZED,
-            "missing Ghostbridge trace or WireGuard identity",
+            "send exactly one identity credential",
         ));
     }
     Ok(GhostbridgeCallMetadata {
-        session_genesis,
-        trace_id,
-        wireguard_pubkey,
+        sealed_id: sid,
+        oracle_assertion: oia,
+        session_genesis: None,
+        trace_id: None,
+        wireguard_pubkey: None,
     })
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn sid1_metadata(headers: &HeaderMap) -> Result<GhostbridgeCallMetadata, Response> {
+    let sid = decode_identity_header(headers, op_identity::sealed_id::HTTP_HEADER_NAME)
+        .map_err(|message| json_error_response(StatusCode::BAD_REQUEST, message))?
+        .ok_or_else(|| {
+            json_error_response(StatusCode::UNAUTHORIZED, "SID1 identity is required")
+        })?;
+    let oracle = decode_identity_header(headers, "x-oracle-identity-assertion-bin")
+        .map_err(|message| json_error_response(StatusCode::BAD_REQUEST, message))?;
+    if oracle.is_some() || !sid.starts_with(b"SID1") {
+        return Err(json_error_response(
+            StatusCode::UNAUTHORIZED,
+            "private UI workspace requires exactly one SID1 identity",
+        ));
+    }
+    Ok(GhostbridgeCallMetadata {
+        sealed_id: Some(sid),
+        oracle_assertion: None,
+        session_genesis: None,
+        trace_id: None,
+        wireguard_pubkey: None,
+    })
+}
+
+fn decode_identity_header(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    let values: Vec<_> = headers.get_all(name).iter().collect();
+    if values.is_empty() {
+        return Ok(None);
+    }
+    if values.len() != 1 {
+        return Err("identity header must occur once");
+    }
+    let encoded = values[0]
+        .to_str()
+        .map_err(|_| "identity header is not valid ASCII")?;
+    if encoded.len() > (16_usize * 1024 * 4).div_ceil(3) {
+        return Err("identity credential is too large");
+    }
+    let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| "identity header is not canonical base64url")?;
+    if wire.is_empty()
+        || wire.len() > 16 * 1024
+        || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&wire) != encoded
+    {
+        return Err("identity header is not canonical base64url");
+    }
+    Ok(Some(wire))
 }
 
 async fn call_tched_router_method(
@@ -87,7 +129,7 @@ async fn call_tched_router_method(
     let payload = envelope.get("result").cloned().ok_or_else(|| {
         json_error_response(
             StatusCode::BAD_GATEWAY,
-            "ZeroClaw method response is missing its result payload",
+            "tched_router method response is missing its result payload",
         )
     })?;
     let json = simd_json::to_string(&payload)
@@ -132,6 +174,12 @@ pub async fn tched_router_chat_handler(
             "use op_chat.chat.ChatService.Send on the gRPC bridge for streaming",
         );
     }
+    let conversation_id = match req.session_id {
+        Some(id) if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) => {
+            return json_error_response(StatusCode::BAD_REQUEST, "invalid conversation_id");
+        }
+        other => other,
+    };
     let messages = if req.messages.is_empty() {
         if req.message.is_empty() {
             return json_error_response(StatusCode::BAD_REQUEST, "messages must not be empty");
@@ -156,6 +204,7 @@ pub async fn tched_router_chat_handler(
             "messages": messages,
             "provider": req.provider.unwrap_or_default(),
             "model": req.model.unwrap_or_default(),
+            "conversation_id": conversation_id,
         }),
     )
     .await
@@ -259,7 +308,7 @@ pub async fn openai_models_handler(
     else {
         return json_error_response(
             StatusCode::BAD_GATEWAY,
-            "ZeroClaw ListModels returned no model_routes",
+            "tched_router ListModels returned no model_routes",
         );
     };
     let mut seen = std::collections::HashSet::new();
@@ -320,12 +369,7 @@ fn json_error_response(status: StatusCode, message: &str) -> Response {
 /// while schema field defaults provide the boot-safe provider/model catalog.
 fn read_tched_router_schema_shm() -> Option<Value> {
     let schema =
-        op_blob::catalog::read_plugin_schema_shm(crate::tched_router_routes::ROUTER_PLUGIN_ID)
-            .or_else(|| {
-                op_blob::catalog::read_plugin_schema_shm(
-                    crate::tched_router_routes::LEGACY_ROUTER_PLUGIN_ID,
-                )
-            })?;
+        op_blob::catalog::read_plugin_schema_shm(crate::tched_router_routes::ROUTER_PLUGIN_ID)?;
     // `PluginSchema` serializes to { name, version, fields, methods, … }.
     let mut v: Value = simd_json::to_owned_value(&mut serde_json::to_vec(&schema).ok()?).ok()?;
     // Stamp the catalog_hash so consumers can verify lineage.
@@ -431,12 +475,12 @@ pub async fn tched_router_schema_handler(Extension(_state): Extension<Arc<AppSta
     // Read 3tched Router state directly from the SHM state tree. Fall back to the
     // sealed PluginSchema blob so the schema surface still renders when no
     // mutation has populated SHM yet.
-    let (router, router_schema) = match crate::tched_router_routes::read_router_plugin() {
-        Some(v) => {
+    let (router, router_schema) = match crate::tched_router_routes::read_router_plugin().await {
+        Ok(Some(v)) => {
             info!("Using tched_router from SHM state tree (live provider/model catalog)");
             (v, read_tched_router_schema_shm())
         }
-        None => match read_tched_router_schema_shm() {
+        Ok(None) => match read_tched_router_schema_shm() {
             Some(schema) => {
                 warn!("3tched Router SHM state unavailable; using PluginSchema only");
                 (schema.clone(), Some(schema))
@@ -449,6 +493,13 @@ pub async fn tched_router_schema_handler(Extension(_state): Extension<Arc<AppSta
                 );
             }
         },
+        Err(error) => {
+            error!(%error, "Committed tched_router state read failed");
+            return json_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "3tched Router projection is unreadable",
+            );
+        }
     };
 
     // Providers + model_routes live under `projection` in the live state.
@@ -590,6 +641,7 @@ pub async fn tched_router_schema_handler(Extension(_state): Extension<Arc<AppSta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     #[test]
     fn schema_field_defaults_supply_boot_catalogs() {
@@ -616,5 +668,70 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    #[test]
+    fn identity_headers_require_one_canonical_bounded_credential() {
+        assert!(ghostbridge_metadata(&HeaderMap::new()).is_err());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            op_identity::sealed_id::HTTP_HEADER_NAME,
+            HeaderValue::from_static("U0lEMXg"),
+        );
+        let metadata = ghostbridge_metadata(&headers).unwrap();
+        assert_eq!(metadata.sealed_id.as_deref(), Some(b"SID1x".as_slice()));
+        assert!(metadata.oracle_assertion.is_none());
+
+        headers.insert(
+            "x-oracle-identity-assertion-bin",
+            HeaderValue::from_static("T0lBMXg"),
+        );
+        assert!(ghostbridge_metadata(&headers).is_err());
+        headers.remove(op_identity::sealed_id::HTTP_HEADER_NAME);
+        let metadata = ghostbridge_metadata(&headers).unwrap();
+        assert_eq!(
+            metadata.oracle_assertion.as_deref(),
+            Some(b"OIA1x".as_slice())
+        );
+        headers.insert(
+            "x-oracle-identity-assertion-bin",
+            HeaderValue::from_static("T0lBMXg="),
+        );
+        assert!(ghostbridge_metadata(&headers).is_err());
+    }
+
+    #[test]
+    fn private_workspace_metadata_requires_the_exact_request_sid1() {
+        let headers = HeaderMap::new();
+        let response = match sid1_metadata(&headers) {
+            Err(response) => response,
+            Ok(_) => panic!("missing SID1 must be rejected"),
+        };
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-oracle-identity-assertion-bin",
+            HeaderValue::from_static("T0lBMXg"),
+        );
+        let response = match sid1_metadata(&headers) {
+            Err(response) => response,
+            Ok(_) => panic!("missing SID1 must be rejected"),
+        };
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        headers.remove("x-oracle-identity-assertion-bin");
+        headers.insert(
+            op_identity::sealed_id::HTTP_HEADER_NAME,
+            HeaderValue::from_static("U0lEMXByaXZhdGU"),
+        );
+        let metadata = sid1_metadata(&headers).unwrap();
+        assert_eq!(
+            metadata.sealed_id.as_deref(),
+            Some(b"SID1private".as_slice())
+        );
+        assert!(metadata.oracle_assertion.is_none());
+        assert!(metadata.session_genesis.is_none());
     }
 }

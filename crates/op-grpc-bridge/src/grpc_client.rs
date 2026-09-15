@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
 use prost_types::{value::Kind as ProstKind, Struct as ProstStruct, Value as ProstValue};
 use tokio::sync::RwLock;
 use tonic::metadata::MetadataValue;
@@ -14,20 +15,21 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tonic::Request;
 use tracing::info;
 
+use crate::oracle_assertion_client::DecoyAssertionClient;
 use crate::proto::{
     event_chain_service_client::EventChainServiceClient,
     plugin_service_client::PluginServiceClient, state_sync_client::StateSyncClient,
-    CallMethodRequest, GetStateRequest, MutateRequest, OperationType as ProtoOperationType,
-    SubscribeEventsRequest, SubscribeRequest,
+    CallMethodRequest, GetStateRequest, GetStateResponse, MutateRequest,
+    OperationType as ProtoOperationType, SubscribeEventsRequest, SubscribeRequest,
 };
-use op_grpc_adapters::proto::{
-    execute_command_request::Command as ExecuteNetclientCommand,
-    netmaker_service_client::NetmakerServiceClient, ConnectRequest, DisconnectRequest,
-    ExecuteCommandRequest, ExecuteCommandResponse, InstallRequest, JoinNetworkRequest,
-    LeaveNetworkRequest, ListRequest, PeersRequest, PingRequest, PullRequest, PushRequest,
-    RegisterRequest, RestartServiceRequest, ServerRequest, UninstallRequest, UseRequest,
-    VersionRequest,
-};
+
+/// Bounded response envelope for complete plugin documents and SHM state.
+/// Native chat can exceed tonic's 4 MiB default; identity admission is unchanged.
+pub const MAX_PLUGIN_STATE_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+#[cfg(test)]
+#[path = "grpc_client_large_response_tests.rs"]
+mod large_response_tests;
 
 /// Configuration for a remote gRPC endpoint
 #[derive(Debug, Clone)]
@@ -40,9 +42,14 @@ pub struct RemoteEndpoint {
 
 /// Caller-supplied Ghostbridge identity forwarded by an HTTP compatibility
 /// adapter into the canonical gRPC method call.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GhostbridgeCallMetadata {
-    pub session_genesis: String,
+    /// Exact caller-supplied SID1 wire bytes, if this is a local identity call.
+    pub sealed_id: Option<Vec<u8>>,
+    /// Exact caller-supplied OIA1 wire bytes, if this is a decoy assertion call.
+    pub oracle_assertion: Option<Vec<u8>>,
+    /// Legacy fields retained for non-plugin Ghostbridge services.
+    pub session_genesis: Option<String>,
     pub trace_id: Option<String>,
     pub wireguard_pubkey: Option<String>,
 }
@@ -190,7 +197,8 @@ impl GrpcClientPool {
         address: &str,
     ) -> Result<PluginServiceClient<Channel>, GrpcClientError> {
         let channel = self.get_channel(address).await?;
-        Ok(PluginServiceClient::new(channel))
+        Ok(PluginServiceClient::new(channel)
+            .max_decoding_message_size(MAX_PLUGIN_STATE_RESPONSE_BYTES))
     }
 
     /// Get a StateSync service client
@@ -199,7 +207,10 @@ impl GrpcClientPool {
         address: &str,
     ) -> Result<StateSyncClient<Channel>, GrpcClientError> {
         let channel = self.get_channel(address).await?;
-        Ok(StateSyncClient::new(channel))
+        Ok(
+            StateSyncClient::new(channel)
+                .max_decoding_message_size(MAX_PLUGIN_STATE_RESPONSE_BYTES),
+        )
     }
 
     /// Get an EventChain service client
@@ -209,15 +220,6 @@ impl GrpcClientPool {
     ) -> Result<EventChainServiceClient<Channel>, GrpcClientError> {
         let channel = self.get_channel(address).await?;
         Ok(EventChainServiceClient::new(channel))
-    }
-
-    /// Get a Netmaker adapter client.
-    pub async fn netmaker_client(
-        &self,
-        address: &str,
-    ) -> Result<NetmakerServiceClient<Channel>, GrpcClientError> {
-        let channel = self.get_channel(address).await?;
-        Ok(NetmakerServiceClient::new(channel))
     }
 
     /// Close all connections
@@ -251,22 +253,34 @@ impl RemoteOperationClient {
         plugin_id: &str,
         object_path: &str,
     ) -> Result<simd_json::OwnedValue, GrpcClientError> {
+        self.get_state_with_identity(plugin_id, object_path, &private_plugin_identity()?, None)
+            .await
+    }
+
+    /// Get public state, or a private workspace descendant when the caller
+    /// supplies its authored credential and the exact declared capability.
+    /// This path never substitutes a process/service identity.
+    pub async fn get_state_with_identity(
+        &self,
+        plugin_id: &str,
+        object_path: &str,
+        identity: &GhostbridgeCallMetadata,
+        capability_id: Option<&str>,
+    ) -> Result<simd_json::OwnedValue, GrpcClientError> {
         let mut client = self.pool.state_sync_client(&self.default_address).await?;
 
         let mut request = Request::new(GetStateRequest {
             plugin_id: plugin_id.to_string(),
             object_path: object_path.to_string(),
         });
-        attach_ghostbridge_metadata(&mut request)?;
+        attach_identity_metadata(&mut request, identity, capability_id)?;
 
         let response = client
             .get_state(request)
             .await
             .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
 
-        let resp = response.into_inner();
-        let state = resp.state.unwrap_or_default();
-        Ok(prost_struct_to_simd(&state))
+        decode_get_state_response(response.into_inner())
     }
 
     /// Set state on a remote endpoint (apply patch)
@@ -277,6 +291,30 @@ impl RemoteOperationClient {
         state: simd_json::OwnedValue,
         actor_id: &str,
         capability_id: &str,
+    ) -> Result<SetStateResult, GrpcClientError> {
+        self.set_state_with_identity(
+            plugin_id,
+            object_path,
+            state,
+            actor_id,
+            capability_id,
+            &private_plugin_identity()?,
+        )
+        .await
+    }
+
+    /// Apply state with the exact caller-supplied SID1/OIA1 credential and
+    /// capability. The request actor remains the caller's asserted actor; the
+    /// server validates that it matches the credential.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn set_state_with_identity(
+        &self,
+        plugin_id: &str,
+        object_path: &str,
+        state: simd_json::OwnedValue,
+        actor_id: &str,
+        capability_id: &str,
+        identity: &GhostbridgeCallMetadata,
     ) -> Result<SetStateResult, GrpcClientError> {
         let mut client = self.pool.state_sync_client(&self.default_address).await?;
 
@@ -290,7 +328,7 @@ impl RemoteOperationClient {
             capability_id: capability_id.to_string(),
             idempotency_key: uuid::Uuid::new_v4().to_string(),
         });
-        attach_ghostbridge_metadata(&mut request)?;
+        attach_identity_metadata(&mut request, identity, Some(capability_id))?;
 
         let response = client
             .mutate(request)
@@ -348,7 +386,7 @@ impl RemoteOperationClient {
             actor_id: actor_id.to_string(),
             capability_id: capability_id.to_string(),
         });
-        attach_ghostbridge_metadata(&mut request)?;
+        attach_plugin_identity_metadata(&mut request, &private_plugin_identity()?, capability_id)?;
 
         let response = client
             .call_method(request)
@@ -410,7 +448,7 @@ impl RemoteOperationClient {
             actor_id: actor_id.to_string(),
             capability_id: capability_id.to_string(),
         });
-        attach_supplied_ghostbridge_metadata(&mut request, identity)?;
+        attach_plugin_identity_metadata(&mut request, identity, capability_id)?;
 
         let response = client
             .call_method(request)
@@ -438,6 +476,36 @@ impl RemoteOperationClient {
         }
     }
 
+    /// Acquire one fresh OIA1 assertion from the caller's explicit decoy
+    /// issuer and forward it through the canonical metadata path.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn call_method_via_decoy(
+        &self,
+        plugin_id: &str,
+        object_path: &str,
+        interface_name: &str,
+        method_name: &str,
+        arguments: Vec<simd_json::OwnedValue>,
+        actor_id: &str,
+        capability_id: &str,
+        issuer: &DecoyAssertionClient,
+    ) -> Result<simd_json::OwnedValue, GrpcClientError> {
+        let identity = issuer.acquire().await.map_err(|error| {
+            GrpcClientError::RequestFailed(format!("OIA1 assertion acquisition failed: {error:#}"))
+        })?;
+        self.call_method_with_metadata(
+            plugin_id,
+            object_path,
+            interface_name,
+            method_name,
+            arguments,
+            actor_id,
+            capability_id,
+            &identity,
+        )
+        .await
+    }
+
     /// Subscribe to state updates from a remote endpoint
     pub async fn subscribe(
         &self,
@@ -448,16 +516,40 @@ impl RemoteOperationClient {
         impl tokio_stream::Stream<Item = Result<StateUpdateMessage, GrpcClientError>>,
         GrpcClientError,
     > {
+        self.subscribe_with_identity(
+            plugin_filters,
+            path_filters,
+            tag_filters,
+            &private_plugin_identity()?,
+            None,
+        )
+        .await
+    }
+
+    /// Subscribe using one explicit authored caller credential. Private
+    /// workspace subscriptions pass their exact capability; public projection
+    /// subscriptions omit it. No service identity is substituted.
+    pub async fn subscribe_with_identity(
+        &self,
+        plugin_filters: Vec<String>,
+        path_filters: Vec<String>,
+        tag_filters: Vec<String>,
+        identity: &GhostbridgeCallMetadata,
+        capability_id: Option<&str>,
+    ) -> Result<
+        impl tokio_stream::Stream<Item = Result<StateUpdateMessage, GrpcClientError>>,
+        GrpcClientError,
+    > {
         let mut client = self.pool.state_sync_client(&self.default_address).await?;
 
         let mut request = Request::new(SubscribeRequest {
             plugin_ids: plugin_filters,
             path_patterns: path_filters,
             tags: tag_filters,
-            include_initial_state: false,
-            include_schema: false,
+            include_initial_state: true,
+            include_schema: true,
         });
-        attach_ghostbridge_metadata(&mut request)?;
+        attach_identity_metadata(&mut request, identity, capability_id)?;
 
         let response = client
             .subscribe(request)
@@ -468,23 +560,13 @@ impl RemoteOperationClient {
 
         Ok(tokio_stream::StreamExt::map(stream, |result| {
             result
-                .map(|update| StateUpdateMessage {
-                    plugin_id: update.plugin_id,
-                    object_path: update.object_path,
-                    property_name: if update.member_name.is_empty() {
-                        None
-                    } else {
-                        Some(update.member_name)
-                    },
-                    new_value: update.new_value.as_ref().map(prost_value_to_simd),
-                    event_id: update.event_id.to_string(),
-                    tags_touched: update.tags_touched,
-                })
+                .map(state_update_message)
                 .map_err(|e| GrpcClientError::StreamError(e.to_string()))
         }))
     }
 
-    /// Subscribe to chain events from a remote endpoint
+    /// Subscribe to privileged audit metadata using this explicitly configured
+    /// session's authored credential and existing snowball.read grant.
     pub async fn stream_events(
         &self,
         from_event_id: Option<u64>,
@@ -494,14 +576,40 @@ impl RemoteOperationClient {
         impl tokio_stream::Stream<Item = Result<ChainEventMessage, GrpcClientError>>,
         GrpcClientError,
     > {
-        let mut client = self.pool.event_chain_client(&self.default_address).await?;
+        self.stream_events_with_identity(
+            from_event_id,
+            plugin_filters,
+            tag_filters,
+            &private_plugin_identity()?,
+        )
+        .await
+    }
 
+    /// Forward an explicit caller credential; never substitute the service
+    /// identity when adapting an authenticated outer request.
+    pub async fn stream_events_with_identity(
+        &self,
+        from_event_id: Option<u64>,
+        plugin_filters: Vec<String>,
+        tag_filters: Vec<String>,
+        identity: &GhostbridgeCallMetadata,
+    ) -> Result<
+        impl tokio_stream::Stream<Item = Result<ChainEventMessage, GrpcClientError>>,
+        GrpcClientError,
+    > {
+        if plugin_filters.len() > 1 {
+            return Err(GrpcClientError::RequestFailed(
+                "audit subscription supports at most one plugin filter".into(),
+            ));
+        }
         let mut request = Request::new(SubscribeEventsRequest {
             from_event_id: from_event_id.unwrap_or_default(),
             plugin_id: plugin_filters.first().cloned().unwrap_or_default(),
             tags: tag_filters,
         });
-        attach_ghostbridge_metadata(&mut request)?;
+        attach_plugin_identity_metadata(&mut request, identity, "snowball.read")?;
+
+        let mut client = self.pool.event_chain_client(&self.default_address).await?;
 
         let response = client
             .subscribe_events(request)
@@ -543,6 +651,31 @@ pub struct StateUpdateMessage {
     pub new_value: Option<simd_json::OwnedValue>,
     pub event_id: String,
     pub tags_touched: Vec<String>,
+    pub change_type: i32,
+    pub frame_kind: i32,
+    pub schema_hash: String,
+    pub catalog_hash: String,
+    pub state_generation: u64,
+}
+
+fn state_update_message(update: crate::proto::StateChange) -> StateUpdateMessage {
+    StateUpdateMessage {
+        plugin_id: update.plugin_id,
+        object_path: update.object_path,
+        property_name: if update.member_name.is_empty() {
+            None
+        } else {
+            Some(update.member_name)
+        },
+        new_value: update.new_value.as_ref().map(prost_value_to_simd),
+        event_id: update.event_id.to_string(),
+        tags_touched: update.tags_touched,
+        change_type: update.change_type,
+        frame_kind: update.frame_kind,
+        schema_hash: update.schema_hash,
+        catalog_hash: update.catalog_hash,
+        state_generation: update.state_generation,
+    }
 }
 
 /// Chain event message from event stream
@@ -584,65 +717,149 @@ impl std::fmt::Display for GrpcClientError {
 
 impl std::error::Error for GrpcClientError {}
 
-fn attach_ghostbridge_metadata<T>(request: &mut Request<T>) -> Result<(), GrpcClientError> {
-    let identity = op_identity::configured_identity_session().map_err(|e| {
-        GrpcClientError::RequestFailed(format!("caller identity session unavailable: {e}"))
-    })?;
-    let genesis = identity.genesis().map_err(|e| {
-        GrpcClientError::RequestFailed(format!("caller identity session is not anchored: {e}"))
-    })?;
-    let metadata = request.metadata_mut();
-    metadata.insert(
-        "x-ghostbridge-genesis",
-        MetadataValue::try_from(genesis).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
-        })?,
-    );
-    metadata.insert(
-        "x-ghostbridge-trace-id",
-        MetadataValue::try_from(identity.trace_id)
-            .map_err(|e| GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}")))?,
-    );
-    if !identity.wireguard_pubkey.is_empty() {
-        metadata.insert(
-            "x-wireguard-pubkey",
-            MetadataValue::try_from(identity.wireguard_pubkey).map_err(|e| {
-                GrpcClientError::RequestFailed(format!("Invalid WireGuard metadata: {e}"))
+fn private_plugin_identity() -> Result<GhostbridgeCallMetadata, GrpcClientError> {
+    let selector = std::env::var(op_identity::session_projection::SESSION_SELECTOR_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("IDENTITY_SLED_HOST_SESSION_ID")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            GrpcClientError::RequestFailed(
+                "plugin calls require an explicitly configured identity session".into(),
+            )
+        })?;
+    let identity =
+        op_identity::resolve_identity_credential_session(Some(&selector)).map_err(|e| {
+            GrpcClientError::RequestFailed(format!("private identity unavailable: {e}"))
+        })?;
+    let encoded = identity
+        .sealed_id_header_for_transport("grpc")
+        .map_err(|e| GrpcClientError::RequestFailed(format!("private SID1 unavailable: {e}")))?;
+    let wire = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|e| {
+            GrpcClientError::RequestFailed(format!("private SID1 is not canonical: {e}"))
+        })?;
+    Ok(GhostbridgeCallMetadata {
+        sealed_id: Some(wire),
+        oracle_assertion: None,
+        session_genesis: None,
+        trace_id: None,
+        wireguard_pubkey: None,
+    })
+}
+
+fn attach_plugin_identity_metadata<T>(
+    request: &mut Request<T>,
+    identity: &GhostbridgeCallMetadata,
+    capability_id: &str,
+) -> Result<(), GrpcClientError> {
+    attach_identity_metadata(request, identity, Some(capability_id))
+}
+
+fn attach_identity_metadata<T>(
+    request: &mut Request<T>,
+    identity: &GhostbridgeCallMetadata,
+    capability_id: Option<&str>,
+) -> Result<(), GrpcClientError> {
+    let validate_wire =
+        |wire: &[u8], magic: &[u8; 4]| wire.len() <= 16 * 1024 && wire.starts_with(magic);
+    match (
+        identity.sealed_id.as_deref(),
+        identity.oracle_assertion.as_deref(),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err(GrpcClientError::RequestFailed(
+                "multiple identity credentials".into(),
+            ))
+        }
+        (None, None) => {
+            return Err(GrpcClientError::RequestFailed(
+                "missing identity credential".into(),
+            ))
+        }
+        (Some(wire), None) => {
+            if !validate_wire(wire, b"SID1") {
+                return Err(GrpcClientError::RequestFailed(
+                    "invalid SID1 credential".into(),
+                ));
+            }
+            request.metadata_mut().insert_bin(
+                op_identity::sealed_id::HTTP_HEADER_NAME,
+                MetadataValue::from_bytes(wire),
+            )
+        }
+        (None, Some(wire)) => {
+            if !validate_wire(wire, b"OIA1") {
+                return Err(GrpcClientError::RequestFailed(
+                    "invalid OIA1 credential".into(),
+                ));
+            }
+            request.metadata_mut().insert_bin(
+                "x-oracle-identity-assertion-bin",
+                MetadataValue::from_bytes(wire),
+            )
+        }
+    };
+    if let Some(capability_id) = capability_id {
+        if capability_id.is_empty() {
+            return Err(GrpcClientError::RequestFailed(
+                "capability metadata cannot be empty".into(),
+            ));
+        }
+        request.metadata_mut().insert(
+            "x-opdbus-capability",
+            MetadataValue::try_from(capability_id).map_err(|e| {
+                GrpcClientError::RequestFailed(format!("Invalid capability metadata: {e}"))
             })?,
         );
     }
-
     Ok(())
 }
 
-fn attach_supplied_ghostbridge_metadata<T>(
-    request: &mut Request<T>,
-    identity: &GhostbridgeCallMetadata,
-) -> Result<(), GrpcClientError> {
-    let metadata = request.metadata_mut();
-    metadata.insert(
-        "x-ghostbridge-genesis",
-        MetadataValue::try_from(identity.session_genesis.as_str()).map_err(|e| {
-            GrpcClientError::RequestFailed(format!("Invalid genesis metadata: {e}"))
-        })?,
-    );
-    if let Some(trace_id) = identity.trace_id.as_deref() {
-        metadata.insert(
-            "x-ghostbridge-trace-id",
-            MetadataValue::try_from(trace_id).map_err(|e| {
-                GrpcClientError::RequestFailed(format!("Invalid trace metadata: {e}"))
-            })?,
-        );
+fn decode_get_state_response(
+    response: GetStateResponse,
+) -> Result<simd_json::OwnedValue, GrpcClientError> {
+    if let Some(value) = response.value {
+        validate_prost_value(&value)?;
+        return Ok(prost_value_to_simd(&value));
     }
-    if let Some(pubkey) = identity.wireguard_pubkey.as_deref() {
-        metadata.insert(
-            "x-wireguard-pubkey",
-            MetadataValue::try_from(pubkey).map_err(|e| {
-                GrpcClientError::RequestFailed(format!("Invalid WireGuard metadata: {e}"))
-            })?,
-        );
+    if let Some(state) = response.state {
+        for value in state.fields.values() {
+            validate_prost_value(value)?;
+        }
+        return Ok(prost_struct_to_simd(&state));
     }
-    Ok(())
+    Err(GrpcClientError::ParseError(
+        "GetStateResponse omitted both value and legacy state payloads".into(),
+    ))
+}
+
+fn validate_prost_value(value: &ProstValue) -> Result<(), GrpcClientError> {
+    match value.kind.as_ref() {
+        None => Err(GrpcClientError::ParseError(
+            "protobuf value has no kind".into(),
+        )),
+        Some(ProstKind::NumberValue(number)) if !number.is_finite() => Err(
+            GrpcClientError::ParseError("protobuf value contains a non-finite number".into()),
+        ),
+        Some(ProstKind::StructValue(object)) => {
+            for nested in object.fields.values() {
+                validate_prost_value(nested)?;
+            }
+            Ok(())
+        }
+        Some(ProstKind::ListValue(list)) => {
+            for nested in &list.values {
+                validate_prost_value(nested)?;
+            }
+            Ok(())
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 fn prost_value_to_simd(value: &ProstValue) -> simd_json::OwnedValue {
@@ -719,213 +936,203 @@ fn serde_to_prost_value(value: &serde_json::Value) -> ProstValue {
     }
 }
 
-impl RemoteOperationClient {
-    /// Join a Netmaker network through the Netmaker adapter gRPC service.
-    pub async fn netmaker_join(&self, network: &str, token: &str) -> Result<bool, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .join_network(Request::new(JoinNetworkRequest {
-                network: network.to_string(),
-                token: token.to_string(),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner().success)
+#[cfg(test)]
+mod identity_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn plugin_metadata_forwards_exact_sid1_and_capability() {
+        let wire = b"SID1-authored".to_vec();
+        let identity = GhostbridgeCallMetadata {
+            sealed_id: Some(wire.clone()),
+            oracle_assertion: None,
+            session_genesis: None,
+            trace_id: None,
+            wireguard_pubkey: None,
+        };
+        let mut request = Request::new(());
+        attach_plugin_identity_metadata(&mut request, &identity, "router.invoke").unwrap();
+        assert_eq!(
+            request
+                .metadata()
+                .get_bin(op_identity::sealed_id::HTTP_HEADER_NAME)
+                .unwrap()
+                .to_bytes()
+                .unwrap(),
+            wire.as_slice()
+        );
+        assert_eq!(
+            request.metadata().get("x-opdbus-capability").unwrap(),
+            "router.invoke"
+        );
     }
 
-    /// Leave a Netmaker network through the Netmaker adapter gRPC service.
-    pub async fn netmaker_leave(&self, network: &str) -> Result<bool, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .leave_network(Request::new(LeaveNetworkRequest {
-                network: network.to_string(),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner().success)
+    #[test]
+    fn plugin_metadata_rejects_missing_or_dual_credentials() {
+        for identity in [
+            GhostbridgeCallMetadata {
+                sealed_id: None,
+                oracle_assertion: None,
+                session_genesis: None,
+                trace_id: None,
+                wireguard_pubkey: None,
+            },
+            GhostbridgeCallMetadata {
+                sealed_id: Some(vec![1]),
+                oracle_assertion: Some(vec![2]),
+                session_genesis: None,
+                trace_id: None,
+                wireguard_pubkey: None,
+            },
+        ] {
+            let mut request = Request::new(());
+            assert!(attach_plugin_identity_metadata(&mut request, &identity, "x").is_err());
+        }
     }
 
-    /// Restart a netclient-backed service through the adapter gRPC service.
-    pub async fn netmaker_restart(&self, service: &str) -> Result<bool, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .execute_command(Request::new(ExecuteCommandRequest {
-                command: Some(ExecuteNetclientCommand::Restart(RestartServiceRequest {
-                    service: service.to_string(),
-                })),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner().success)
+    #[test]
+    fn state_metadata_accepts_explicit_sid1_with_optional_exact_capability() {
+        let identity = GhostbridgeCallMetadata {
+            sealed_id: Some(b"SID1-authored-state-reader".to_vec()),
+            oracle_assertion: None,
+            session_genesis: None,
+            trace_id: None,
+            wireguard_pubkey: None,
+        };
+        let mut public = Request::new(GetStateRequest::default());
+        attach_identity_metadata(&mut public, &identity, None).unwrap();
+        assert!(public
+            .metadata()
+            .get_bin(op_identity::sealed_id::HTTP_HEADER_NAME)
+            .is_some());
+        assert!(public.metadata().get("x-opdbus-capability").is_none());
+
+        let mut private = Request::new(SubscribeRequest::default());
+        attach_identity_metadata(&mut private, &identity, Some("gemma.read")).unwrap();
+        assert_eq!(
+            private.metadata().get("x-opdbus-capability").unwrap(),
+            "gemma.read"
+        );
     }
 
-    pub async fn netclient_join(
-        &self,
-        network: &str,
-        token: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .execute_command(Request::new(ExecuteCommandRequest {
-                command: Some(ExecuteNetclientCommand::Join(JoinNetworkRequest {
-                    network: network.to_string(),
-                    token: token.to_string(),
-                })),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner())
+    #[test]
+    fn state_metadata_rejects_malformed_multiple_and_empty_capability() {
+        let malformed = GhostbridgeCallMetadata {
+            sealed_id: Some(b"not-sid1".to_vec()),
+            oracle_assertion: None,
+            session_genesis: None,
+            trace_id: None,
+            wireguard_pubkey: None,
+        };
+        let mut request = Request::new(());
+        assert!(attach_identity_metadata(&mut request, &malformed, None).is_err());
+
+        let multiple = GhostbridgeCallMetadata {
+            sealed_id: Some(b"SID1-one".to_vec()),
+            oracle_assertion: Some(b"OIA1-two".to_vec()),
+            session_genesis: None,
+            trace_id: None,
+            wireguard_pubkey: None,
+        };
+        let mut request = Request::new(());
+        assert!(attach_identity_metadata(&mut request, &multiple, None).is_err());
+
+        let valid = GhostbridgeCallMetadata {
+            sealed_id: Some(b"SID1-one".to_vec()),
+            oracle_assertion: None,
+            session_genesis: None,
+            trace_id: None,
+            wireguard_pubkey: None,
+        };
+        let mut request = Request::new(());
+        assert!(attach_identity_metadata(&mut request, &valid, Some("")).is_err());
     }
 
-    pub async fn netclient_leave(
-        &self,
-        network: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .execute_command(Request::new(ExecuteCommandRequest {
-                command: Some(ExecuteNetclientCommand::Leave(LeaveNetworkRequest {
-                    network: network.to_string(),
-                })),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner())
+    #[test]
+    fn get_state_prefers_exact_value_and_falls_back_to_legacy_object() {
+        let scalar = GetStateResponse {
+            value: Some(serde_to_prost_value(&serde_json::json!("leaf"))),
+            state: Some(ProstStruct {
+                fields: [(
+                    "legacy".into(),
+                    serde_to_prost_value(&serde_json::json!(true)),
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            decode_get_state_response(scalar).unwrap(),
+            simd_json::json!("leaf")
+        );
+
+        let array = GetStateResponse {
+            value: Some(serde_to_prost_value(&serde_json::json!([1, 2, 3]))),
+            ..Default::default()
+        };
+        assert_eq!(
+            decode_get_state_response(array).unwrap(),
+            // google.protobuf.Value numbers use the double-precision wire form.
+            simd_json::json!([1.0, 2.0, 3.0])
+        );
+
+        let legacy = GetStateResponse {
+            state: Some(ProstStruct {
+                fields: [(
+                    "legacy".into(),
+                    serde_to_prost_value(&serde_json::json!(true)),
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            decode_get_state_response(legacy).unwrap(),
+            simd_json::json!({"legacy": true})
+        );
     }
 
-    pub async fn netclient_connect(
-        &self,
-        network: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .execute_command(Request::new(ExecuteCommandRequest {
-                command: Some(ExecuteNetclientCommand::Connect(ConnectRequest {
-                    network: network.to_string(),
-                })),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner())
-    }
-
-    pub async fn netclient_disconnect(
-        &self,
-        network: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .execute_command(Request::new(ExecuteCommandRequest {
-                command: Some(ExecuteNetclientCommand::Disconnect(DisconnectRequest {
-                    network: network.to_string(),
-                })),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner())
-    }
-
-    pub async fn netclient_list(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::List(ListRequest {}))
-            .await
-    }
-
-    pub async fn netclient_peers(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Peers(PeersRequest {}))
-            .await
-    }
-
-    pub async fn netclient_ping(
-        &self,
-        peer: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Ping(PingRequest {
-            peer: peer.to_string(),
-        }))
-        .await
-    }
-
-    pub async fn netclient_pull(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Pull(PullRequest {}))
-            .await
-    }
-
-    pub async fn netclient_push(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Push(PushRequest {}))
-            .await
-    }
-
-    pub async fn netclient_register(
-        &self,
-        instance: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Register(RegisterRequest {
-            instance: instance.to_string(),
-        }))
-        .await
-    }
-
-    pub async fn netclient_server(
-        &self,
-        subcommand: &str,
-        args: Vec<String>,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Server(ServerRequest {
-            subcommand: subcommand.to_string(),
-            args,
-        }))
-        .await
-    }
-
-    pub async fn netclient_install(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Install(InstallRequest {}))
-            .await
-    }
-
-    pub async fn netclient_uninstall(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Uninstall(UninstallRequest {}))
-            .await
-    }
-
-    pub async fn netclient_use(
-        &self,
-        version: &str,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Use(UseRequest {
-            version: version.to_string(),
-        }))
-        .await
-    }
-
-    pub async fn netclient_version(&self) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        self.netclient_noargs(ExecuteNetclientCommand::Version(VersionRequest {}))
-            .await
-    }
-
-    pub async fn netclient_daemon(
-        &self,
-        _args: Vec<String>,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        let ok = self.netmaker_restart("netclient").await?;
-        Ok(ExecuteCommandResponse {
-            success: ok,
-            exit_code: if ok { 0 } else { 1 },
-            stdout: String::new(),
-            stderr: String::new(),
+    #[test]
+    fn get_state_rejects_missing_or_malformed_payloads() {
+        assert!(decode_get_state_response(GetStateResponse::default()).is_err());
+        assert!(decode_get_state_response(GetStateResponse {
+            value: Some(ProstValue { kind: None }),
+            ..Default::default()
         })
+        .is_err());
+        assert!(decode_get_state_response(GetStateResponse {
+            value: Some(ProstValue {
+                kind: Some(ProstKind::NumberValue(f64::NAN)),
+            }),
+            ..Default::default()
+        })
+        .is_err());
     }
 
-    async fn netclient_noargs(
-        &self,
-        command: ExecuteNetclientCommand,
-    ) -> Result<ExecuteCommandResponse, GrpcClientError> {
-        let mut client = self.pool.netmaker_client(&self.default_address).await?;
-        let response = client
-            .execute_command(Request::new(ExecuteCommandRequest {
-                command: Some(command),
-            }))
-            .await
-            .map_err(|e| GrpcClientError::RequestFailed(e.to_string()))?;
-        Ok(response.into_inner())
+    #[test]
+    fn subscription_conversion_preserves_state_and_contract_generations() {
+        let message = state_update_message(crate::proto::StateChange {
+            event_id: 17,
+            plugin_id: "web_ui".into(),
+            object_path: "/org/opdbus/v1/plugins/web_ui/page".into(),
+            member_name: "spec".into(),
+            new_value: Some(serde_to_prost_value(&serde_json::json!(["child"]))),
+            tags_touched: vec!["ui".into()],
+            change_type: 6,
+            frame_kind: 2,
+            schema_hash: "ab".repeat(32),
+            catalog_hash: "cd".repeat(32),
+            state_generation: 42,
+            ..Default::default()
+        });
+        assert_eq!(message.event_id, "17");
+        assert_eq!(message.property_name.as_deref(), Some("spec"));
+        assert_eq!(message.new_value, Some(simd_json::json!(["child"])));
+        assert_eq!(message.frame_kind, 2);
+        assert_eq!(message.schema_hash, "ab".repeat(32));
+        assert_eq!(message.catalog_hash, "cd".repeat(32));
+        assert_eq!(message.state_generation, 42);
     }
 }

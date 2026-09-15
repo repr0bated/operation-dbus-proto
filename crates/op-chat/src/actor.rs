@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
 use crate::forced_tool_pipeline::ForcedToolPipeline;
-use crate::memory_loop::{MemoryLoop, CHATBOT_CONTAINER_ID};
+use crate::memory_loop::{MemoryLoop, CHATBOT_SOUL_ID};
 use crate::session::SessionManager;
 use crate::system_prompt::generate_system_prompt;
 use crate::tool_executor::TrackedToolExecutor;
@@ -597,7 +597,7 @@ impl ChatActor {
         let session_memory =
             if let (Some(c_id), Some(mem_loop)) = (&container_id, &self.memory_loop) {
                 match mem_loop
-                    .inject_session_memory(CHATBOT_CONTAINER_ID, c_id, message)
+                    .inject_session_memory(CHATBOT_SOUL_ID, c_id, message)
                     .await
                 {
                     Ok(mem) => {

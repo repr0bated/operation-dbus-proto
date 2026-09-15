@@ -1,4 +1,7 @@
-//! login1 plugin - read-only D-Bus snapshot for sessions/seats
+//! Login/session management through the upstream login1 D-Bus interface.
+
+mod methods;
+pub use methods::*;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -67,7 +70,7 @@ impl StatePlugin for Login1Plugin {
         "login1"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -166,7 +169,8 @@ pub struct CreateSessionInput {
     pub remote: bool,
     pub remote_user: String,
     pub remote_host: String,
-    pub properties: Vec<std::collections::BTreeMap<String, Vec<u8>>>,
+    #[serde(default)]
+    pub properties: Vec<SessionProperty>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -218,14 +222,15 @@ pub struct InteractiveInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SleepInput {
-    pub sleep_operation: u64,
+    /// login1 Sleep flags, not an operation selector.
+    pub flags: u64,
 }
 
 pub(crate) fn login1_schema() -> PluginSchema {
     let mut schema = PluginSchema::builder("login1")
         .category("service")
-        .version("1.0.0")
-        .description("Runtime login sessions")
+        .version("2.0.0")
+        .description("Login sessions, users and seats through the upstream login1 D-Bus API")
         .field(
             "sessions",
             FieldSchema {
@@ -247,7 +252,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "list_sessions".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             (),
-            super::plugin_scaffold_helpers::AckOutput,
+            ListSessionsOutput,
         >(
             "ListSessions",
             op_state_store::SideEffect::Read,
@@ -260,7 +265,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "list_users".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             (),
-            super::plugin_scaffold_helpers::AckOutput,
+            ListUsersOutput,
         >(
             "ListUsers",
             op_state_store::SideEffect::Read,
@@ -273,7 +278,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "list_seats".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             (),
-            super::plugin_scaffold_helpers::AckOutput,
+            ListSeatsOutput,
         >(
             "ListSeats",
             op_state_store::SideEffect::Read,
@@ -286,7 +291,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "get_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             GetSessionInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetObjectOutput,
         >(
             "GetSession",
             op_state_store::SideEffect::Read,
@@ -299,7 +304,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "get_user".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             GetUserInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetObjectOutput,
         >(
             "GetUser",
             op_state_store::SideEffect::Read,
@@ -312,7 +317,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "get_seat".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             GetSeatInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetObjectOutput,
         >(
             "GetSeat",
             op_state_store::SideEffect::Read,
@@ -325,7 +330,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "power_off".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             PowerOffInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "PowerOff",
             op_state_store::SideEffect::Mutation,
@@ -338,7 +343,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "reboot".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             PowerOffInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "Reboot",
             op_state_store::SideEffect::Mutation,
@@ -351,7 +356,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "create_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             CreateSessionInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            CreateSessionOutput,
         >(
             "CreateSession",
             op_state_store::SideEffect::Mutation,
@@ -364,7 +369,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "release_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SessionIdInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "ReleaseSession",
             op_state_store::SideEffect::Mutation,
@@ -377,7 +382,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "terminate_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SessionIdInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "TerminateSession",
             op_state_store::SideEffect::Mutation,
@@ -390,7 +395,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "lock_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SessionIdInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "LockSession",
             op_state_store::SideEffect::Mutation,
@@ -403,7 +408,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "unlock_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SessionIdInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "UnlockSession",
             op_state_store::SideEffect::Mutation,
@@ -416,7 +421,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "kill_session".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             KillSessionInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "KillSession",
             op_state_store::SideEffect::Mutation,
@@ -429,7 +434,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "terminate_user".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             UidInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "TerminateUser",
             op_state_store::SideEffect::Mutation,
@@ -442,7 +447,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "kill_user".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             KillUserInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "KillUser",
             op_state_store::SideEffect::Mutation,
@@ -455,7 +460,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "set_user_linger".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SetUserLingerInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "SetUserLinger",
             op_state_store::SideEffect::Mutation,
@@ -468,7 +473,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "terminate_seat".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SeatIdInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "TerminateSeat",
             op_state_store::SideEffect::Mutation,
@@ -481,7 +486,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "attach_device".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             AttachDeviceInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "AttachDevice",
             op_state_store::SideEffect::Mutation,
@@ -494,7 +499,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "flush_devices".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             InteractiveInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "FlushDevices",
             op_state_store::SideEffect::Mutation,
@@ -507,7 +512,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "suspend".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             InteractiveInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "Suspend",
             op_state_store::SideEffect::Mutation,
@@ -520,7 +525,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "hibernate".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             InteractiveInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "Hibernate",
             op_state_store::SideEffect::Mutation,
@@ -533,7 +538,7 @@ pub(crate) fn login1_schema() -> PluginSchema {
         "sleep".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             SleepInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            LoginOperationOutput,
         >(
             "Sleep",
             op_state_store::SideEffect::Mutation,

@@ -63,6 +63,32 @@ pub struct MethodReflectionMeta {
 }
 
 impl PerMethodReflectionRegistry {
+    /// Import the exact service identity and authority metadata from a pinned
+    /// sealed manifest; do not synthesize a consumer-side service name.
+    pub async fn register_sealed(
+        &self,
+        plugin_id: String,
+        method: &op_blob::BlobMethod,
+        schema_version: String,
+    ) -> MethodReflectionMeta {
+        let method_path = format!("{plugin_id}.{}", method.schema_name);
+        let meta = MethodReflectionMeta {
+            method_path: method_path.clone(),
+            plugin_id,
+            method_name: method.schema_name.clone(),
+            service_name: method.grpc_service.clone(),
+            schema_version,
+            subid: method.subid.clone(),
+            required_capability: method.required_capability.clone(),
+            registered_at: std::time::Instant::now(),
+        };
+        self.services
+            .write()
+            .await
+            .insert(method_path, meta.clone());
+        meta
+    }
+
     /// Create a new registry.
     pub fn new() -> Self {
         Self::default()

@@ -1,5 +1,5 @@
 //! Client for xray-core's own commander API (StatsService/RoutingService/
-//! LoggerService), dialed over the abstract-namespace Unix socket xray binds
+//! LoggerService/HandlerService), dialed over the Unix socket xray binds
 //! when `api.listen` is configured in its JSON config. See proto/VENDORED.md
 //! for exact source provenance.
 //!
@@ -32,6 +32,12 @@ pub mod xray {
                 tonic::include_proto!("xray.app.log.command");
             }
         }
+        pub mod proxyman {
+            tonic::include_proto!("xray.app.proxyman");
+            pub mod command {
+                tonic::include_proto!("xray.app.proxyman.command");
+            }
+        }
     }
     pub mod common {
         pub mod net {
@@ -40,10 +46,42 @@ pub mod xray {
         pub mod serial {
             tonic::include_proto!("xray.common.serial");
         }
+        pub mod protocol {
+            tonic::include_proto!("xray.common.protocol");
+        }
+    }
+    pub mod core {
+        tonic::include_proto!("xray.core");
+    }
+    pub mod proxy {
+        pub mod vless {
+            tonic::include_proto!("xray.proxy.vless");
+            pub mod inbound {
+                tonic::include_proto!("xray.proxy.vless.inbound");
+            }
+        }
+        pub mod vmess {
+            tonic::include_proto!("xray.proxy.vmess");
+            pub mod inbound {
+                tonic::include_proto!("xray.proxy.vmess.inbound");
+            }
+        }
+        pub mod trojan {
+            tonic::include_proto!("xray.proxy.trojan");
+        }
+    }
+    pub mod transport {
+        pub mod internet {
+            tonic::include_proto!("xray.transport.internet");
+            pub mod tls {
+                tonic::include_proto!("xray.transport.internet.tls");
+            }
+        }
     }
 }
 
 pub use xray::app::log::command as logger;
+pub use xray::app::proxyman::command as handler;
 pub use xray::app::router::command as router;
 pub use xray::app::stats::command as stats;
 
@@ -87,6 +125,23 @@ pub async fn connect(socket_path: &str) -> Result<Channel> {
         }))
         .await
         .with_context(|| format!("failed to connect to xray commander socket at {socket_path}"))
+}
+
+/// HandlerService shares the existing container commander socket. It must be
+/// enabled by the prepared Xray configuration; connection/Unimplemented errors
+/// are propagated rather than modifying that configuration or reloading Xray.
+pub async fn handler_client(
+    socket_path: &str,
+    timeout: std::time::Duration,
+) -> Result<handler::handler_service_client::HandlerServiceClient<Channel>> {
+    let channel = tokio::time::timeout(timeout, connect(socket_path))
+        .await
+        .context("Xray commander connection timed out")??;
+    Ok(
+        handler::handler_service_client::HandlerServiceClient::new(channel)
+            .max_decoding_message_size(1024 * 1024)
+            .max_encoding_message_size(8 * 1024 * 1024),
+    )
 }
 
 pub async fn stats_client(

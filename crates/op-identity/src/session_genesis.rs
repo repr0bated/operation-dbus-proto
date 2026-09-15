@@ -20,8 +20,10 @@ use blake3::Hasher;
 /// # Arguments
 ///
 /// * `wg_pubkey` — WireGuard public key, decoded from base64 to 32 bytes.
-/// * `chain_head_hash` — Hash of the chain head at mint time, decoded from hex
-///   to 32 bytes (`EventChain::last_hash()`).
+/// * `chain_head_hash` — Exact native chain-head digest, decoded from hex.
+///   The current EventChain uses 16 bytes; existing 32-byte callers retain
+///   their original output. The identity producer validates the native width
+///   before calling, and stores the original hash alongside the minted anchor.
 /// * `head_timestamp` — Unix seconds of the chain head event.
 /// * `catalog_hash` — Schema catalog hash, decoded from hex to 32 bytes
 ///   (`schema_catalog_hash()`).
@@ -38,7 +40,7 @@ use blake3::Hasher;
 /// - Different `arrival_timestamp` → different output (uniqueness term).
 pub fn mint_genesis(
     wg_pubkey: &[u8; 32],
-    chain_head_hash: &[u8; 32],
+    chain_head_hash: &[u8],
     head_timestamp: i64,
     catalog_hash: &[u8; 32],
     arrival_timestamp: i64,
@@ -55,6 +57,21 @@ pub fn mint_genesis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_sixteen_byte_chain_heads_are_bound_without_zero_padding_or_substitution() {
+        let key = [0x42; 32];
+        let catalog = [0x77; 32];
+        let head = [0x55; 16];
+        let native = mint_genesis(&key, &head, 10, &catalog, 11);
+        let mut changed = head;
+        changed[15] ^= 1;
+        assert_ne!(native, mint_genesis(&key, &changed, 10, &catalog, 11));
+        assert_ne!(native, mint_genesis(&key, &[0; 32], 10, &catalog, 11));
+        let mut padded = [0; 32];
+        padded[..16].copy_from_slice(&head);
+        assert_ne!(native, mint_genesis(&key, &padded, 10, &catalog, 11));
+    }
 
     /// VAL-GENESIS-001: Same inputs produce identical output.
     #[test]

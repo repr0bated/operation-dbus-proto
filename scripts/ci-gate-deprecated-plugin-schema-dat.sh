@@ -6,6 +6,11 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+set --
+if [ -e 3tched-artix-runit-install.sh ]; then
+    set -- 3tched-artix-runit-install.sh
+fi
+
 if rg -n \
     -g '!scripts/ci-gate-deprecated-plugin-schema-dat.sh' \
     -g '!crates/audits/**' \
@@ -18,9 +23,15 @@ if rg -n \
     -e 'op-identity-shuttle' \
     -e 'op-sled-top' \
     -e 'schema_bridge::(read_sled|write_sled|read_schema_blob|write_schema_blob)' \
-    crates deploy scripts 3tched-artix-runit-install.sh Cargo.toml; then
+    crates deploy scripts "$@" Cargo.toml; then
     echo "deprecated plugin_schema.dat surface found" >&2
     exit 1
+else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+        echo "deprecated plugin_schema.dat gate could not scan required inputs" >&2
+        exit "$status"
+    fi
 fi
 
 echo "deprecated plugin_schema.dat gate: clean"

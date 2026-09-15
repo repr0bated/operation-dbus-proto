@@ -2,22 +2,36 @@
 //!
 //! The projected plugin tree lives in tmpfs (`/dev/shm/opdbus/state/`).
 //! The MutationEngine writes one file per plugin on every mutation (atomic
-//! temp+rename). Readers (the `schema_router` D-Bus surface and op-web's
-//! `state_tree`) read 1:1 from these files — zero-copy, memory-speed,
-//! no held cache, no polling.
+//! temp+rename). These helpers read the raw JSON files without a held cache or
+//! polling, and cooperate through one private service-owned advisory lock
+//! around data plus manifest access.
 //!
 //! This module is the shared contract between the **writer** (op-grpc-bridge
 //! MutationEngine, the single write door) and the **readers**. The old
-//! op-projection D-Bus server is deleted; `/dev/shm/opdbus/projections/` is
-//! kept only as a legacy read fallback for one deploy cycle.
+//! op-projection D-Bus server is deleted. Retired projection paths are never a
+//! fallback or a source of plugin existence.
+//!
+//! General raw state files are service-only (0600). Their location does not
+//! authorize outward disclosure: wire consumers must apply the exact sealed
+//! plugin's state-exposure policy. Identity has a separately redacted public
+//! file (0644) paired transactionally with its protected credential file.
 
-use simd_json::prelude::*;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+
+#[path = "projection_transactions.rs"]
+mod transactions;
+pub use transactions::{
+    commit_identity_projection_durable_in, pending_identity_publication_in,
+    prepare_projection_directory_in, read_projection_snapshot, read_projection_snapshot_in,
+    recover_identity_projection_in, restrict_projection_file_in, update_projection,
+    update_projection_in, update_projection_with_credentials_in, CredentialPublication,
+    PendingCredentialPublication, PendingDocumentPublication, PrivateDocumentCommit,
+    PrivateDocumentPublication, PrivateProjectionDirectory, ProjectionCommit, ProjectionSnapshot,
+};
 
 /// Canonical directory for per-plugin present-state files (one JSON file per
 /// plugin). This is the static tree that `write_projection` maintains and all
@@ -27,28 +41,22 @@ pub const SHM_STATE_DIR: &str = "/dev/shm/opdbus/state";
 /// not part of the generic state tree and must never be served by schema
 /// routing, state sync, snapshots, or web projection readers.
 pub const SHM_CREDENTIAL_DIR: &str = "/dev/shm/opdbus/credentials";
-/// Legacy directory written before the projection layer was removed. Read
-/// fallback only — never written.
+/// Retired path constant retained only for source references. Never read as a
+/// fallback by the current projection API.
 pub const SHM_PROJECTION_DIR: &str = "/dev/shm/opdbus/projections";
 
 /// Manifest carrying the monotonic `generation` counter. Written LAST as the
-/// atomic commit point after each projection write. Consumers read it to
-/// detect staleness (compare generation before/after a read).
+/// atomic commit point after each projection write. Readers hold a shared lock
+/// across manifest and data reads and reject an in-progress transaction.
 pub const SHM_PROJECTION_MANIFEST: &str = "/dev/shm/opdbus/state/.manifest.json";
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-static MANIFEST_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// The state tree root: the canonical [`SHM_STATE_DIR`] in production.
 /// `OP_SHM_STATE_DIR` overrides it so tests that drive the MutationEngine
 /// never write the live projection tree.
 pub fn shm_state_dir() -> String {
     std::env::var("OP_SHM_STATE_DIR").unwrap_or_else(|_| SHM_STATE_DIR.to_string())
-}
-
-/// Manifest path inside the (possibly overridden) state dir.
-fn manifest_path_in(state_dir: &str) -> String {
-    format!("{state_dir}/.manifest.json")
 }
 
 /// Atomically publish `bytes` to a `/dev/shm` path via a sibling temp file +
@@ -162,7 +170,7 @@ pub fn projection_file_path_in(state_dir: &str, plugin_id: &str) -> String {
 /// roots keep credentials beneath the same temporary root; production uses a
 /// separate non-enumerated tmpfs directory.
 pub fn credential_projection_dir_for_state_dir(state_dir: &str) -> String {
-    if state_dir == SHM_STATE_DIR {
+    if Path::new(state_dir) == Path::new(SHM_STATE_DIR) {
         SHM_CREDENTIAL_DIR.to_string()
     } else {
         format!("{state_dir}/.credentials")
@@ -185,112 +193,70 @@ pub fn credential_projection_file_path_in(state_dir: &str, plugin_id: &str) -> S
     format!("{directory}/{}.json", safe_filename(plugin_id))
 }
 
-/// Pre-removal location under `/dev/shm/opdbus/projections/`. Read fallback only.
-fn legacy_projection_file_path(plugin_id: &str) -> String {
-    format!("{}/{}.json", SHM_PROJECTION_DIR, safe_filename(plugin_id))
-}
-
 /// Write a plugin's full projected state to shm and bump the manifest
 /// generation.
 ///
-/// Called by the MutationEngine on every mutation that changes a plugin's
-/// state. `json_bytes` is the JSON serialization of the plugin's current state
-/// (the mutation fold from `state_cache`).
+/// Called by the MutationEngine for an already-completed state value. Opaque
+/// configuration values remain service-only raw state until a schema-owned
+/// projector explicitly selects the public wire view.
 pub fn write_projection(plugin_id: &str, json_bytes: &[u8]) -> anyhow::Result<()> {
-    let state_dir = shm_state_dir();
-    fs::create_dir_all(&state_dir)
-        .map_err(|e| anyhow::anyhow!("Cannot create projection dir {}: {}", state_dir, e))?;
-
-    let path = projection_file_path_in(&state_dir, plugin_id);
-    atomic_write_shm(&path, json_bytes)?;
-
-    // Bump manifest generation (atomic commit point, written last).
-    let generation = bump_manifest_generation_in(&state_dir)?;
-
-    tracing::debug!(plugin_id, generation, "Projection written to shm");
+    let commit = update_projection(plugin_id, |_| Ok(Some(json_bytes.to_vec())))?;
+    tracing::debug!(
+        plugin_id,
+        generation = commit.generation,
+        "Projection committed to shm"
+    );
     Ok(())
 }
 
-/// Advance the public projection generation after a caller has atomically
-/// installed a projection using stricter file permissions.
+/// This former API cannot safely commit independently installed files. Callers
+/// must use update_projection or update_projection_with_credentials_in.
 pub fn bump_manifest_generation() -> anyhow::Result<u64> {
     bump_manifest_generation_in(&shm_state_dir())
 }
 
-/// Advance the generation for one already-resolved state directory.
-pub fn bump_manifest_generation_in(state_dir: &str) -> anyhow::Result<u64> {
-    let _guard = MANIFEST_WRITE_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let generation = read_manifest_generation_in(state_dir).wrapping_add(1);
-    let manifest = format!("{{\"generation\":{generation}}}");
-    atomic_write_shm(&manifest_path_in(state_dir), manifest.as_bytes())?;
-    Ok(generation)
+/// Fail closed rather than certify state written outside a transaction.
+pub fn bump_manifest_generation_in(_state_dir: &str) -> anyhow::Result<u64> {
+    anyhow::bail!(
+        "standalone projection generation bumps are unsafe; use the transactional projection API"
+    )
 }
 
 /// Read the raw bytes of a plugin's projection from shm.
 pub fn read_projection_bytes(plugin_id: &str) -> Option<Vec<u8>> {
-    fs::read(projection_file_path(plugin_id))
-        .or_else(|_| fs::read(legacy_projection_file_path(plugin_id)))
-        .ok()
+    read_projection_snapshot(&[plugin_id.to_string()])
+        .ok()?
+        .states
+        .remove(plugin_id)
 }
 
 /// Read a protected local credential projection. There is deliberately no
 /// legacy or public-state fallback: callers requesting possession material
 /// must fail closed when the private projection is absent.
 pub fn read_credential_projection_bytes(plugin_id: &str) -> Option<Vec<u8>> {
-    fs::read(credential_projection_file_path(plugin_id)).ok()
+    read_credential_projection_bytes_in(&shm_state_dir(), plugin_id)
+        .ok()
+        .flatten()
 }
 
-/// Read the current manifest `generation`, or 0 if no manifest exists yet.
+/// Strict privileged credential read under the shared transaction lock. The
+/// caller resolves the state directory once; absence remains distinct from
+/// unsafe or incomplete publication. Existing protected-group OS permissions
+/// apply. Generic state readers never call this helper.
+pub fn read_credential_projection_bytes_in(
+    state_dir: &str,
+    plugin_id: &str,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    transactions::read_credential_in(state_dir, plugin_id)
+}
+
+/// Legacy best-effort generation read (0 on absence or error). Authoritative
+/// consumers use read_projection_snapshot so malformed/incomplete publication
+/// remains an error rather than looking like generation zero.
 pub fn read_manifest_generation() -> u64 {
-    read_manifest_generation_in(&shm_state_dir())
-}
-
-fn read_manifest_generation_in(state_dir: &str) -> u64 {
-    let mut bytes = match fs::read(manifest_path_in(state_dir)) {
-        Ok(b) => b,
-        Err(_) => return 0,
-    };
-    let value = match simd_json::from_slice::<simd_json::OwnedValue>(&mut bytes) {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-    match value.get("generation") {
-        Some(g) => g.as_u64().unwrap_or(0),
-        None => 0,
-    }
-}
-
-/// List all plugin ids that currently have projection files in shm.
-///
-/// The manifest file (`.manifest.json`) is excluded. Plugin filenames are
-/// unsanitized back to their original form (the safe-filename transform is
-/// lossless for valid plugin ids).
-pub fn list_projected_plugins() -> Vec<String> {
-    let mut plugins = list_plugin_files(&shm_state_dir());
-    if plugins.is_empty() {
-        plugins = list_plugin_files(SHM_PROJECTION_DIR);
-    }
-    plugins.sort();
-    plugins
-}
-
-fn list_plugin_files(dir: &str) -> Vec<String> {
-    let mut plugins = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Some(plugin) = name.strip_suffix(".json") {
-                    // Skip the manifest (`.manifest.json` → `.manifest`)
-                    if !plugin.starts_with('.') {
-                        plugins.push(plugin.to_string());
-                    }
-                }
-            }
-        }
-    }
-    plugins
+    read_projection_snapshot(&[])
+        .map(|snapshot| snapshot.generation)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

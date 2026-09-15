@@ -186,6 +186,39 @@ impl Default for EmqxPlugin {
     }
 }
 
+#[derive(Clone)]
+struct EmqxNativeTransport {
+    runit_connection: Option<Connection>,
+    api_base: String,
+    api_credentials: Option<(String, String)>,
+}
+
+impl EmqxNativeTransport {
+    fn production() -> Self {
+        Self {
+            runit_connection: None,
+            api_base: EMQX_API_BASE.to_string(),
+            api_credentials: None,
+        }
+    }
+
+    async fn runit_connection(&self) -> Result<Connection> {
+        match &self.runit_connection {
+            Some(connection) => Ok(connection.clone()),
+            None => Connection::system()
+                .await
+                .context("runit D-Bus boundary is unavailable"),
+        }
+    }
+
+    fn credentials(&self) -> Result<(String, String)> {
+        match &self.api_credentials {
+            Some(credentials) => Ok(credentials.clone()),
+            None => api_credentials_from_files(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GetStatusInput {}
 
@@ -349,10 +382,8 @@ fn parse_uptime_seconds(value: &str) -> Option<u64> {
     token.trim_end_matches('s').parse().ok()
 }
 
-async fn runit_status() -> Result<RunitStatus> {
-    let connection = Connection::system()
-        .await
-        .context("runit D-Bus boundary is unavailable")?;
+async fn runit_status(transport: &EmqxNativeTransport) -> Result<RunitStatus> {
+    let connection = transport.runit_connection().await?;
     let proxy = Proxy::new(
         &connection,
         RUNIT_BUS_NAME,
@@ -373,11 +404,9 @@ async fn runit_status() -> Result<RunitStatus> {
 /// `#[interface]` macro converts those to `Start`/`Stop`/`Restart`. `Proxy::call`
 /// sends the literal member name it is given, so the caller must match the
 /// converted spelling exactly or the call fails with UnknownMethod.
-async fn runit_lifecycle(action: &'static str) -> Result<String> {
+async fn runit_lifecycle(transport: &EmqxNativeTransport, action: &'static str) -> Result<String> {
     debug_assert!(matches!(action, "Start" | "Stop" | "Restart"));
-    let connection = Connection::system()
-        .await
-        .context("runit D-Bus boundary is unavailable")?;
+    let connection = transport.runit_connection().await?;
     let proxy = Proxy::new(
         &connection,
         RUNIT_BUS_NAME,
@@ -406,7 +435,7 @@ fn api_client() -> Result<reqwest::Client> {
         .context("failed to construct bounded EMQX API client")
 }
 
-fn api_credentials() -> Result<(String, String)> {
+fn api_credentials_from_files() -> Result<(String, String)> {
     let key =
         std::fs::read_to_string(API_KEY_FILE).context("EMQX management API key is unavailable")?;
     let secret = std::fs::read_to_string(API_SECRET_FILE)
@@ -420,12 +449,13 @@ fn api_credentials() -> Result<(String, String)> {
 }
 
 async fn emqx_api(
+    transport: &EmqxNativeTransport,
     method: Method,
     path: &'static str,
     body: Option<JsonValue>,
 ) -> Result<JsonValue> {
-    let (api_key, api_secret) = api_credentials()?;
-    let url = format!("{EMQX_API_BASE}{path}");
+    let (api_key, api_secret) = transport.credentials()?;
+    let url = format!("{}{path}", transport.api_base.trim_end_matches('/'));
     let mut request = api_client()?
         .request(method, &url)
         .basic_auth(api_key, Some(api_secret));
@@ -504,8 +534,8 @@ fn local_endpoint(value: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn query_listeners() -> Result<ListListenersOutput> {
-    let status = runit_status().await?;
+async fn query_listeners(transport: &EmqxNativeTransport) -> Result<ListListenersOutput> {
+    let status = runit_status(transport).await?;
     if !status.running() {
         let listeners = EmqxState::declared()
             .listeners
@@ -527,7 +557,7 @@ async fn query_listeners() -> Result<ListListenersOutput> {
         });
     }
 
-    let payload = emqx_api(Method::GET, "/listeners", None).await?;
+    let payload = emqx_api(transport, Method::GET, "/listeners", None).await?;
     let listeners = response_array(&payload)?
         .iter()
         .map(|item| {
@@ -607,15 +637,15 @@ fn exhook_from_json(item: &JsonValue) -> EmqxExhookServer {
     }
 }
 
-async fn query_hooks() -> Result<ListHooksOutput> {
-    let status = runit_status().await?;
+async fn query_hooks(transport: &EmqxNativeTransport) -> Result<ListHooksOutput> {
+    let status = runit_status(transport).await?;
     if !status.running() {
         return Ok(ListHooksOutput {
             exhook_servers: vec![],
             total_hooks: 0,
         });
     }
-    let payload = emqx_api(Method::GET, "/exhooks", None).await?;
+    let payload = emqx_api(transport, Method::GET, "/exhooks", None).await?;
     let servers = response_array(&payload)?
         .iter()
         .map(exhook_from_json)
@@ -650,7 +680,10 @@ fn validate_hook_selection(input: &ConfigureHooksInput) -> Result<()> {
     Ok(())
 }
 
-async fn configure_hooks(input: ConfigureHooksInput) -> Result<ConfigureHooksOutput> {
+async fn configure_hooks(
+    transport: &EmqxNativeTransport,
+    input: ConfigureHooksInput,
+) -> Result<ConfigureHooksOutput> {
     validate_hook_selection(&input)?;
     let body = serde_json::json!({
         "name": EXHOOK_SERVER_NAME,
@@ -668,8 +701,8 @@ async fn configure_hooks(input: ConfigureHooksInput) -> Result<ConfigureHooksOut
             "keyfile": "/etc/op-dbus/tls/emqx-exhook-client.key"
         }
     });
-    let _ = emqx_api(Method::PUT, "/exhooks/opdbus", Some(body)).await?;
-    let verified = query_hooks()
+    let _ = emqx_api(transport, Method::PUT, "/exhooks/opdbus", Some(body)).await?;
+    let verified = query_hooks(transport)
         .await?
         .exhook_servers
         .into_iter()
@@ -687,8 +720,8 @@ async fn configure_hooks(input: ConfigureHooksInput) -> Result<ConfigureHooksOut
     })
 }
 
-async fn query_status() -> Result<GetStatusOutput> {
-    let runit = runit_status().await?;
+async fn query_status(transport: &EmqxNativeTransport) -> Result<GetStatusOutput> {
+    let runit = runit_status(transport).await?;
     if !runit.running() {
         return Ok(GetStatusOutput {
             running: false,
@@ -705,8 +738,8 @@ async fn query_status() -> Result<GetStatusOutput> {
     }
     // /status defaults to plain text in pinned EMQX 6.2.2. The health JSON
     // omits the version, which must come from the actual node inventory.
-    let api = emqx_api(Method::GET, "/status?format=json", None).await?;
-    let nodes = emqx_api(Method::GET, "/nodes", None).await?;
+    let api = emqx_api(transport, Method::GET, "/status?format=json", None).await?;
+    let nodes = emqx_api(transport, Method::GET, "/nodes", None).await?;
     let node_name = api["node_name"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("EMQX health response has no node_name"))?;
@@ -720,7 +753,7 @@ async fn query_status() -> Result<GetStatusOutput> {
     let app_status = api["app_status"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("EMQX health response has no app_status"))?;
-    let listeners = query_listeners().await?;
+    let listeners = query_listeners(transport).await?;
     Ok(GetStatusOutput {
         running: app_status == "running" && node["node_status"].as_str() == Some("running"),
         pid: runit.main_pid,
@@ -741,10 +774,18 @@ async fn query_status() -> Result<GetStatusOutput> {
 
 /// Typed standalone-EMQX dispatcher used by every projected transport.
 pub async fn dispatch_emqx_method(method: &str, args: &JsonValue) -> Result<JsonValue> {
+    dispatch_emqx_method_on(&EmqxNativeTransport::production(), method, args).await
+}
+
+async fn dispatch_emqx_method_on(
+    transport: &EmqxNativeTransport,
+    method: &str,
+    args: &JsonValue,
+) -> Result<JsonValue> {
     let output = match method {
         "get_status" => {
             let _: GetStatusInput = typed_input(args)?;
-            serde_json::to_value(query_status().await?)?
+            serde_json::to_value(query_status(transport).await?)?
         }
         "get_mcp_status" => {
             let _: GetMcpStatusInput = typed_input(args)?;
@@ -759,15 +800,15 @@ pub async fn dispatch_emqx_method(method: &str, args: &JsonValue) -> Result<Json
         }
         "list_listeners" => {
             let _: ListListenersInput = typed_input(args)?;
-            serde_json::to_value(query_listeners().await?)?
+            serde_json::to_value(query_listeners(transport).await?)?
         }
         "list_hooks" => {
             let _: ListHooksInput = typed_input(args)?;
-            serde_json::to_value(query_hooks().await?)?
+            serde_json::to_value(query_hooks(transport).await?)?
         }
         "get_hook_status" => {
             let input: GetHookStatusInput = typed_input(args)?;
-            let server = query_hooks()
+            let server = query_hooks(transport)
                 .await?
                 .exhook_servers
                 .into_iter()
@@ -779,38 +820,40 @@ pub async fn dispatch_emqx_method(method: &str, args: &JsonValue) -> Result<Json
         }
         "configure_hooks" => {
             let input: ConfigureHooksInput = typed_input(args)?;
-            serde_json::to_value(configure_hooks(input).await?)?
+            serde_json::to_value(configure_hooks(transport, input).await?)?
         }
         "start" => {
             let _: StartInput = typed_input(args)?;
-            let before = runit_status().await?;
+            let before = runit_status(transport).await?;
             let message = if before.running() {
                 "EMQX was already running".to_string()
             } else {
-                runit_lifecycle("Start").await?
+                runit_lifecycle(transport, "Start").await?
             };
-            let after = runit_status().await?;
-            let node_name = query_status()
+            let after = runit_status(transport).await?;
+            let broker = query_status(transport)
                 .await
-                .map(|status| status.node_name)
-                .unwrap_or_default();
+                .context("EMQX Start was accepted but broker health readback failed")?;
+            if !broker.running {
+                anyhow::bail!("EMQX Start was accepted but broker did not report running");
+            }
             serde_json::to_value(StartOutput {
                 started: after.running(),
                 pid: after.main_pid,
                 uptime_seconds: after.uptime_seconds(),
-                node_name,
+                node_name: broker.node_name,
                 message,
             })?
         }
         "stop" => {
             let _: StopInput = typed_input(args)?;
-            let before = runit_status().await?;
+            let before = runit_status(transport).await?;
             let message = if before.running() {
-                runit_lifecycle("Stop").await?
+                runit_lifecycle(transport, "Stop").await?
             } else {
                 "EMQX was already stopped".to_string()
             };
-            let after = runit_status().await?;
+            let after = runit_status(transport).await?;
             serde_json::to_value(StopOutput {
                 stopped: !after.running(),
                 was_running: before.running(),
@@ -819,18 +862,20 @@ pub async fn dispatch_emqx_method(method: &str, args: &JsonValue) -> Result<Json
         }
         "restart" => {
             let _: RestartInput = typed_input(args)?;
-            let before = runit_status().await?;
-            let message = runit_lifecycle("Restart").await?;
-            let after = runit_status().await?;
-            let node_name = query_status()
+            let before = runit_status(transport).await?;
+            let message = runit_lifecycle(transport, "Restart").await?;
+            let after = runit_status(transport).await?;
+            let broker = query_status(transport)
                 .await
-                .map(|status| status.node_name)
-                .unwrap_or_default();
+                .context("EMQX Restart was accepted but broker health readback failed")?;
+            if !broker.running {
+                anyhow::bail!("EMQX Restart was accepted but broker did not report running");
+            }
             serde_json::to_value(RestartOutput {
                 restarted: after.running(),
                 pid: after.main_pid,
                 uptime_seconds: after.uptime_seconds(),
-                node_name,
+                node_name: broker.node_name,
                 previous_uptime: before.uptime_seconds(),
                 message,
             })?
@@ -1267,3 +1312,7 @@ mod tests {
         assert!(!parsed.transport_authenticated);
     }
 }
+
+#[cfg(test)]
+#[path = "emqx_native_tests.rs"]
+mod native_tests;

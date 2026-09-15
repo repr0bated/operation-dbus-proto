@@ -1,17 +1,18 @@
-//! MCP state plugin - manages MCP server configurations and tool groups
-//! Wires MCP configuration to the state store for auditing and rollback
+//! Native tched_router MCP server facade plus the bridge-owned public gateway
+//! toolset policy.
 
-use anyhow::{Context, Result};
+use crate::state_plugins::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{
-    ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
-};
-use op_state_store::{ExecutionJob, ExecutionStatus, PluginSchema, StateStore};
+use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{PluginSchema, SideEffect, StateStore};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use uuid::Uuid;
+
+#[path = "mcp_methods.rs"]
+pub mod methods;
 
 /// MCP configuration schema - mirrors the state JSON structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -67,6 +68,38 @@ pub struct ToolGroupsConfig {
     /// Trusted network prefixes
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_networks: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolsetTemperature {
+    Hot,
+    Warm,
+    Cold,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolsetConfig {
+    pub id: String,
+    pub temperature: ToolsetTemperature,
+    pub provider: String,
+    pub requires_provider_health: bool,
+    pub tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureToolGroupsInput {
+    pub expected_generation: u64,
+    pub toolsets: Vec<ToolsetConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureToolGroupsOutput {
+    pub generation: u64,
+    pub toolsets: Vec<ToolsetConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -138,201 +171,25 @@ pub struct ExecutionResult {
 
 /// MCP state plugin
 pub struct McpStatePlugin {
-    /// State store for execution tracking
-    state_store: Arc<dyn StateStore>,
-    /// Configuration file path
-    config_path: String,
+    // Retained for constructor compatibility. Native ownership belongs to
+    // tched_router; this facade never reads or writes either value.
+    _state_store: Arc<dyn op_state_store::StateStore>,
+    _config_path: String,
 }
 
 impl McpStatePlugin {
     pub fn new(state_store: Arc<dyn StateStore>, config_path: impl Into<String>) -> Self {
         Self {
-            state_store,
-            config_path: config_path.into(),
+            _state_store: state_store,
+            _config_path: config_path.into(),
         }
-    }
-
-    /// Load current MCP configuration from file
-    async fn load_config(&self) -> Result<McpConfig> {
-        let content = tokio::fs::read_to_string(&self.config_path).await;
-
-        match content {
-            Ok(c) => serde_json::from_str(&c).context("Failed to parse MCP config"),
-            Err(_) => {
-                // Return default config with requested agents auto-loaded
-                let mut servers = HashMap::new();
-
-                // simple, flat list of agents to auto-load
-                let agents = vec![
-                    "rust-pro",
-                    "backend-architect",
-                    "network-engineer",
-                    "context-manager",
-                    "memory",
-                    "sequential-thinking",
-                ];
-
-                for agent in agents {
-                    servers.insert(
-                        agent.to_string(),
-                        McpServerConfig {
-                            command: "dbus-agent".to_string(),
-                            args: Some(vec![agent.to_string()]),
-                            env: None,
-                            enabled: true,
-                            transport: "stdio".to_string(),
-                        },
-                    );
-                }
-
-                Ok(McpConfig {
-                    servers: Some(servers),
-                    tool_groups: Some(ToolGroupsConfig {
-                        enabled: vec!["default".to_string()],
-                        max_tools: default_max_tools(),
-                        access_zone: Some("local".to_string()),
-                        trusted_networks: None,
-                    }),
-                    compact_mode: Some(CompactModeConfig {
-                        enabled: true,
-                        meta_tools: default_meta_tools(),
-                    }),
-                })
-            }
-        }
-    }
-
-    /// Save MCP configuration to file
-    async fn save_config(&self, config: &McpConfig) -> Result<()> {
-        let content = simd_json::to_string_pretty(config)?;
-        tokio::fs::write(&self.config_path, content)
-            .await
-            .context("Failed to write MCP config file")
-    }
-
-    /// Apply server configuration changes
-    async fn apply_server_config(&self, server_name: &str, config: &McpServerConfig) -> Result<()> {
-        // Create execution job for state tracking
-        let job = ExecutionJob {
-            id: Uuid::new_v4(),
-            tool_name: format!("mcp:configure_server:{}", server_name),
-            arguments: simd_json::serde::to_owned_value(config)?,
-            status: ExecutionStatus::Running,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            result: None,
-        };
-
-        // Save job to state store
-        self.state_store.save_job(&job).await?;
-
-        // Load current config
-        let mut current = self.load_config().await.unwrap_or_else(|_| McpConfig {
-            servers: Some(HashMap::new()),
-            tool_groups: None,
-            compact_mode: None,
-        });
-
-        // Update server config
-        let servers = current.servers.get_or_insert_with(HashMap::new);
-        servers.insert(server_name.to_string(), config.clone());
-
-        // Save updated config
-        self.save_config(&current).await?;
-
-        // Update job status
-        let mut job = job;
-        job.status = ExecutionStatus::Completed;
-        job.updated_at = chrono::Utc::now();
-        job.result = Some(op_state_store::ExecutionResult {
-            success: true,
-            output: Some(simd_json::serde::to_owned_value(
-                "Server configured successfully",
-            )?),
-            error: None,
-        });
-        self.state_store.update_job(&job).await?;
-
-        log::info!("Configured MCP server: {}", server_name);
-        Ok(())
-    }
-
-    /// Apply tool groups configuration
-    async fn apply_tool_groups_config(&self, config: &ToolGroupsConfig) -> Result<()> {
-        // Create execution job
-        let job = ExecutionJob {
-            id: Uuid::new_v4(),
-            tool_name: "mcp:configure_tool_groups".to_string(),
-            arguments: simd_json::serde::to_owned_value(config)?,
-            status: ExecutionStatus::Running,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            result: None,
-        };
-
-        self.state_store.save_job(&job).await?;
-
-        // Load current config
-        let mut current = self.load_config().await.unwrap_or_else(|_| McpConfig {
-            servers: None,
-            tool_groups: Some(config.clone()),
-            compact_mode: None,
-        });
-
-        // Update tool groups
-        current.tool_groups = Some(config.clone());
-
-        // Save updated config
-        self.save_config(&current).await?;
-
-        // Update job status
-        let mut job = job;
-        job.status = ExecutionStatus::Completed;
-        job.updated_at = chrono::Utc::now();
-        job.result = Some(op_state_store::ExecutionResult {
-            success: true,
-            output: Some(simd_json::serde::to_owned_value(
-                "Tool groups configured successfully",
-            )?),
-            error: None,
-        });
-        self.state_store.update_job(&job).await?;
-
-        log::info!("Configured tool groups: {:?}", config.enabled);
-        Ok(())
     }
 }
 
-// ── Schema-only state (opaque Value fields preserve the hand-rolled contract) ──
+// ── Schema-only borrowed view of the native tched_router MCP section ──
 
 fn default_empty_object() -> serde_json::Value {
     serde_json::json!({})
-}
-
-fn example_servers() -> serde_json::Value {
-    serde_json::json!({
-        "rust-pro": {
-            "command": "dbus-agent",
-            "args": ["rust-pro"],
-            "enabled": true,
-            "transport": "stdio"
-        }
-    })
-}
-
-fn example_tool_groups() -> serde_json::Value {
-    serde_json::json!({
-        "enabled": ["default"],
-        "max_tools": 40,
-        "access_zone": "local"
-    })
-}
-
-fn example_compact_mode() -> serde_json::Value {
-    serde_json::json!({
-        "enabled": true,
-        "meta_tools": ["list_tools", "search_tools", "get_tool_schema", "execute_tool", "respond"]
-    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -341,25 +198,14 @@ fn example_compact_mode() -> serde_json::Value {
 pub struct McpState {
     #[serde(default = "default_empty_object")]
     #[schemars(
-        description = "MCP server map",
-        example = example_servers(),
-        extend("x-oscal-subid" = "exp.software.plugin.mcp.servers@v1")
+        description = "Native tched_router mcp configuration",
+        extend("x-oscal-subid" = "exp.software.plugin.mcp.config@v2")
     )]
-    servers: serde_json::Value,
-    #[serde(default = "default_empty_object")]
-    #[schemars(
-        description = "Tool group config",
-        example = example_tool_groups(),
-        extend("x-oscal-subid" = "exp.software.plugin.mcp.tool-groups@v1")
-    )]
-    tool_groups: serde_json::Value,
-    #[serde(default = "default_empty_object")]
-    #[schemars(
-        description = "Compact mode config",
-        example = example_compact_mode(),
-        extend("x-oscal-subid" = "exp.software.plugin.mcp.compact-mode@v1")
-    )]
-    compact_mode: serde_json::Value,
+    config: serde_json::Value,
+    /// Canonical gateway projection policy, updated only by
+    /// configure_tool_groups after durable readback and live owner swap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    toolsets: Option<ConfigureToolGroupsOutput>,
 }
 
 pub(crate) fn mcp_schema() -> PluginSchema {
@@ -367,51 +213,38 @@ pub(crate) fn mcp_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "mcp",
-        "1.0.0",
+        "3.0.0",
         "MCP server and tool-group configuration",
         &root,
     );
-    schema.dependencies = vec!["agent_config".to_string()];
+    schema
+        .fields
+        .get_mut("config")
+        .expect("MCP config field exists")
+        .field_type =
+        op_state_store::FieldType::exact_json_schema(super::tched_router_contract::section("mcp"))
+            .expect("native MCP section is a self-contained exact schema");
+    schema.dependencies = vec!["tched_router".to_string()];
 
-    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
-    use op_state_store::SideEffect;
-
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ConfigureServerInput {
-        pub server_name: String,
-        pub config: McpServerConfig,
-    }
-
-    // Method dispatch is not wired yet: apply_server_config/apply_tool_groups_config
-    // need this plugin instance's state_store + config_path (constructor
-    // dependencies not available to the free dispatch-function pattern used
-    // elsewhere in this file). Declared so the UI can render/discover the real
-    // config surface; mutations already work via the generic SetProperty/
-    // apply_state path (calculate_diff already detects server/tool_groups/
-    // compact_mode changes and routes them through apply_server_config etc.).
-    schema.methods.insert(
-        "get_config".to_string(),
-        method_decl_from_schemars_with_output::<EmptyInput, McpConfig>(
-            "get_config",
-            SideEffect::Read,
-            true,
-            "mcp.read",
-            "obs.software.plugin.mcp.config.get@v1",
-        ),
-    );
-    schema.methods.insert(
-        "configure_server".to_string(),
-        method_decl_from_schemars_with_output::<ConfigureServerInput, McpConfig>(
-            "configure_server",
-            SideEffect::Mutation,
-            true,
-            "mcp.write",
-            "mut.software.plugin.mcp.server.configure@v1",
-        ),
-    );
+    let native = super::tched_router::tched_router_schema();
+    let mut get_config = native.methods["GetMcpConfig"].clone();
+    get_config.name = "get_config".to_string();
+    get_config.required_capability = Some("mcp.read".to_string());
+    get_config.subid = "obs.software.plugin.mcp.config.get@v2".to_string();
+    schema.methods.insert("get_config".to_string(), get_config);
+    let mut configure_server = native.methods["PatchConfig"].clone();
+    configure_server.name = "configure_server".to_string();
+    configure_server.required_capability = Some("mcp.write".to_string());
+    configure_server.subid = "mut.software.plugin.mcp.server.configure@v2".to_string();
+    schema
+        .methods
+        .insert("configure_server".to_string(), configure_server);
     schema.methods.insert(
         "configure_tool_groups".to_string(),
-        method_decl_from_schemars_with_output::<ToolGroupsConfig, McpConfig>(
+        method_decl_from_schemars_with_output::<
+            ConfigureToolGroupsInput,
+            ConfigureToolGroupsOutput,
+        >(
             "configure_tool_groups",
             SideEffect::Mutation,
             true,
@@ -445,7 +278,7 @@ impl StatePlugin for McpStatePlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "3.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -453,128 +286,33 @@ impl StatePlugin for McpStatePlugin {
     }
 
     async fn calculate_diff(&self, current: &Value, desired: &Value) -> Result<StateDiff> {
-        let current_config: McpConfig = simd_json::serde::from_owned_value(current.clone())?;
-        let desired_config: McpConfig = simd_json::serde::from_owned_value(desired.clone())?;
-
-        let mut actions = Vec::new();
-
-        // Check server changes
-        if let Some(desired_servers) = &desired_config.servers {
-            for (server_name, desired_server) in desired_servers {
-                let current_server = current_config
-                    .servers
-                    .as_ref()
-                    .and_then(|s| s.get(server_name));
-
-                if current_server != Some(desired_server) {
-                    actions.push(StateAction::Modify {
-                        resource: format!("server:{}", server_name),
-                        changes: simd_json::serde::to_owned_value(desired_server)?,
-                    });
-                }
-            }
-        }
-
-        // Check tool groups changes
-        if current_config.tool_groups != desired_config.tool_groups {
-            if let Some(ref desired_groups) = desired_config.tool_groups {
-                actions.push(StateAction::Modify {
-                    resource: "tool_groups".to_string(),
-                    changes: simd_json::serde::to_owned_value(desired_groups)?,
-                });
-            }
-        }
-
-        // Check compact mode changes
-        if current_config.compact_mode != desired_config.compact_mode {
-            if let Some(ref desired_compact) = desired_config.compact_mode {
-                actions.push(StateAction::Modify {
-                    resource: "compact_mode".to_string(),
-                    changes: simd_json::serde::to_owned_value(desired_compact)?,
-                });
-            }
-        }
-
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions,
-            metadata: DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: format!("{:x}", md5::compute(simd_json::to_string(current)?)),
-                desired_hash: format!("{:x}", md5::compute(simd_json::to_string(desired)?)),
-            },
-        })
+        let _ = (current, desired);
+        anyhow::bail!("mcp facade has no local diff owner; use tched_router PatchConfig")
     }
 
     async fn apply_state(&self, diff: &StateDiff) -> Result<ApplyResult> {
-        let mut changes_applied = Vec::new();
-        let mut errors = Vec::new();
-
-        for action in &diff.actions {
-            if let StateAction::Modify { resource, changes } = action {
-                let result = if let Some(server_name) = resource.strip_prefix("server:") {
-                    let server_config: McpServerConfig =
-                        simd_json::serde::from_owned_value(changes.clone())?;
-                    self.apply_server_config(server_name, &server_config).await
-                } else if resource == "tool_groups" {
-                    let groups_config: ToolGroupsConfig =
-                        simd_json::serde::from_owned_value(changes.clone())?;
-                    self.apply_tool_groups_config(&groups_config).await
-                } else if resource == "compact_mode" {
-                    // Compact mode changes don't require action - just config update
-                    Ok(())
-                } else {
-                    Err(anyhow::anyhow!("Unknown resource: {}", resource))
-                };
-
-                match result {
-                    Ok(_) => {
-                        changes_applied.push(format!("Applied MCP config for: {}", resource));
-                    }
-                    Err(e) => {
-                        errors.push(format!("Failed to apply config for {}: {}", resource, e));
-                    }
-                }
-            }
-        }
-
-        Ok(ApplyResult {
-            success: errors.is_empty(),
-            changes_applied,
-            errors,
-            checkpoint: None,
-        })
+        let _ = diff;
+        anyhow::bail!("mcp facade has no local apply owner; use tched_router PatchConfig")
     }
 
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        anyhow::bail!("mcp facade has no local verification owner; use tched_router readback")
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let current = simd_json::json!(null);
-        Ok(Checkpoint {
-            id: format!("mcp-{}", chrono::Utc::now().timestamp()),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: current,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!("mcp facade has no local checkpoint owner")
     }
 
-    async fn rollback(&self, checkpoint: &Checkpoint) -> Result<()> {
-        let old_config: McpConfig =
-            simd_json::serde::from_owned_value(checkpoint.state_snapshot.clone())?;
-        self.save_config(&old_config).await?;
-        log::info!("Rolled back MCP config to checkpoint: {}", checkpoint.id);
-        Ok(())
+    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
+        anyhow::bail!("mcp facade has no local rollback owner")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
-            supports_rollback: true,
-            supports_checkpoints: true,
-            supports_verification: true,
-            atomic_operations: false, // File writes are not atomic
+            supports_rollback: false,
+            supports_checkpoints: false,
+            supports_verification: false,
+            atomic_operations: false,
         }
     }
 }
@@ -625,11 +363,26 @@ mod tests {
         let schema = plugin.schema().expect("mcp schema");
 
         assert_eq!(schema.name, "mcp");
-        assert_eq!(schema.version, "1.0.0");
-        assert_eq!(schema.dependencies, vec!["agent_config".to_string()]);
-        assert!(schema.fields.contains_key("servers"));
-        assert!(schema.fields.contains_key("tool_groups"));
-        assert!(schema.fields.contains_key("compact_mode"));
+        assert_eq!(schema.version, "3.0.0");
+        assert!(schema.fields.contains_key("config"));
+        assert_eq!(schema.dependencies, vec!["tched_router".to_string()]);
+    }
+
+    #[test]
+    fn native_method_contracts_are_cloned_before_facade_renames() {
+        let native = crate::state_plugins::tched_router::tched_router_schema();
+        let facade = mcp_schema();
+        for (facade_name, native_name) in [
+            ("get_config", "GetMcpConfig"),
+            ("configure_server", "PatchConfig"),
+        ] {
+            let lhs = &facade.methods[facade_name];
+            let rhs = &native.methods[native_name];
+            assert_eq!(lhs.args, rhs.args);
+            assert_eq!(lhs.returns, rhs.returns);
+            assert_eq!(lhs.side_effect, rhs.side_effect);
+            assert_eq!(lhs.idempotent, rhs.idempotent);
+        }
     }
 
     #[test]

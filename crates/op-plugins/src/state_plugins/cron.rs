@@ -1,169 +1,366 @@
-use anyhow::Result;
+//! Global operator cron surface backed by the v0.8.4 tched-router gateway.
+//!
+//! The plugin owns this schema. The native gateway owns the install-wide job
+//! store and applies the configured agent's risk/tool policy at execution.
+//! OP-DBUS verifies the current SID1 session and exact method capability before
+//! dispatch; those credentials are never forwarded to the gateway.
+
+use anyhow::{bail, Result};
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
-use op_state_store::PluginSchema;
+use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
+use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
+pub const MAX_CRON_JOBS: usize = 4096;
+pub const MAX_CRON_HISTORY: u32 = 100;
+pub const MAX_CRON_TEXT_BYTES: usize = 256 * 1024;
+pub const MAX_CRON_TOOL_NAMES: usize = 256;
+fn default_true() -> bool {
+    true
+}
 
-/// A single scheduled cron job.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.service.cron.job.schema@v1"))]
-pub struct CronJob {
-    /// Stable job identifier.
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.id@v1"))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CronScope {
+    GlobalDaemon,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CronEventSequencing {
+    Unsequenced,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CronEventDelivery {
+    BestEffort,
+}
+
+/// Integrity of the native wakeup stream, independent of the full snapshot
+/// that follows each wakeup. v0.8.4 has no event IDs or replay cursor, so OP-DBUS
+/// does not claim that every autonomous execution notification was delivered.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CronEventStreamIntegrity {
+    pub sequencing: CronEventSequencing,
+    pub delivery: CronEventDelivery,
+}
+
+impl Default for CronEventStreamIntegrity {
+    fn default() -> Self {
+        Self {
+            sequencing: CronEventSequencing::Unsequenced,
+            delivery: CronEventDelivery::BestEffort,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum CronSchedule {
+    Cron {
+        expr: String,
+        #[serde(default)]
+        tz: Option<String>,
+    },
+    At {
+        at: String,
+    },
+    Every {
+        every_ms: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CronJobType {
+    Shell,
+    Agent,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CronSessionTarget {
+    Isolated,
+    Main,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CronShellOutputFormat {
+    Wrapped,
+    Raw,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CronDelivery {
+    pub mode: String,
     #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub best_effort: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CronJobRecord {
     pub id: String,
-    /// Human-readable job name.
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.name@v1"))]
+    pub expression: String,
+    pub schedule: CronSchedule,
+    pub command: String,
     #[serde(default)]
-    pub name: String,
-    /// Cron expression (e.g. `*/30 * * * *`).
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.schedule@v1"))]
+    pub prompt: Option<String>,
     #[serde(default)]
-    pub schedule: String,
-    /// Agent responsible for executing this job.
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.agent-id@v1"))]
+    pub name: Option<String>,
+    pub job_type: CronJobType,
+    pub session_target: CronSessionTarget,
     #[serde(default)]
-    pub agent_id: String,
-    /// Whether the job is enabled.
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.enabled@v1"))]
-    #[serde(default)]
+    pub model: Option<String>,
+    pub agent_alias: String,
     pub enabled: bool,
-    /// Last execution timestamp (ISO 8601), or null if never run.
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.last-run@v1"))]
+    pub delivery: CronDelivery,
+    pub delete_after_run: bool,
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    pub uses_memory: bool,
+    pub source: String,
+    pub shell_output_format: CronShellOutputFormat,
+    pub created_at: String,
+    pub next_run: String,
     #[serde(default)]
     pub last_run: Option<String>,
-    /// Next scheduled execution timestamp (ISO 8601), or null if not scheduled.
-    #[schemars(extend("x-oscal-subid" = "mut.service.cron.job.next-run@v1"))]
     #[serde(default)]
-    pub next_run: Option<String>,
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_output: Option<String>,
 }
 
-/// Global scheduling settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.service.cron.schedules.schema@v1"))]
-pub struct CronSchedules {
-    /// Timezone for schedule evaluation.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.schedules.timezone@v1"))]
-    #[serde(default)]
-    pub timezone: String,
-    /// Maximum number of jobs that may run concurrently.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.schedules.max-concurrent@v1"))]
-    #[serde(default)]
-    pub max_concurrent: u32,
-    /// Run missed jobs when the scheduler starts.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.schedules.catch-up-on-startup@v1"))]
-    #[serde(default)]
-    pub catch_up_on_startup: bool,
-    /// Maximum number of recent run records to retain.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.schedules.max-run-history@v1"))]
-    #[serde(default)]
-    pub max_run_history: u32,
-}
-
-/// Runtime execution configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.service.cron.config.schema@v1"))]
-pub struct CronConfig {
-    /// Whether the scheduler is enabled.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.config.enabled@v1"))]
-    #[serde(default)]
-    pub enabled: bool,
-    /// Timeout for a single job invocation.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.config.task-timeout-secs@v1"))]
-    #[serde(default)]
-    pub task_timeout_secs: u32,
-    /// Number of retries on failure.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.config.retry-count@v1"))]
-    #[serde(default)]
-    pub retry_count: u32,
-    /// Backoff between retries in milliseconds.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.config.backoff-ms@v1"))]
-    #[serde(default)]
-    pub backoff_ms: u32,
-}
-
-/// Runtime state of the cron scheduler.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.service.plugin.cron.schema@v1"))]
+/// Complete authoritative cron projection. Global scheduler settings are not
+/// included because they are not among the retained nine methods and the old
+/// plugin values were fabricated.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("x-oscal-subid" = "sch.service.plugin.cron.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "service"))]
-pub struct CronState {
-    /// Operational status of the cron scheduler.
-    #[schemars(extend("x-oscal-subid" = "obs.service.cron.status@v1"))]
-    #[serde(default)]
-    pub status: String,
-    /// Scheduled jobs.
+pub struct CronStateV2 {
+    #[schemars(extend("x-oscal-subid" = "obs.service.cron.scope@v2"))]
+    pub scope: CronScope,
+    /// Native `/api/events` is a wakeup transport only. State below always
+    /// comes from a complete bounded `/api/cron` readback.
+    pub event_stream: CronEventStreamIntegrity,
     #[schemars(extend("x-oscal-subid" = "mut.service.cron.manage-jobs@v1"))]
+    pub jobs: Vec<CronJobRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CronRunRecord {
+    pub id: i64,
+    pub job_id: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub status: String,
     #[serde(default)]
-    pub jobs: Vec<CronJob>,
-    /// Global scheduling settings.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.schedules@v1"))]
+    pub output: Option<String>,
     #[serde(default)]
-    pub schedules: CronSchedules,
-    /// Runtime execution configuration.
-    #[schemars(extend("x-oscal-subid" = "sch.service.cron.config@v1"))]
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListJobsInput {}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListJobsOutput {
+    pub scope: CronScope,
+    pub jobs: Vec<CronJobRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobIdInput {
+    pub job_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetJobOutput {
+    pub scope: CronScope,
+    pub job: CronJobRecord,
+}
+
+fn default_history_limit() -> u32 {
+    20
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetHistoryInput {
+    pub job_id: String,
+    #[serde(default = "default_history_limit")]
+    #[schemars(range(min = 1, max = 100))]
+    pub limit: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetHistoryOutput {
+    pub scope: CronScope,
+    pub job_id: String,
+    pub runs: Vec<CronRunRecord>,
+}
+
+/// v0.8.4's gateway create endpoint accepts cron expressions only. The native
+/// runtime also has `at`/`every` variants, but they are not admitted here.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "job_type", rename_all = "lowercase", deny_unknown_fields)]
+pub enum CreateJobInput {
+    Agent {
+        agent: String,
+        #[serde(default)]
+        name: Option<String>,
+        schedule: String,
+        #[serde(default)]
+        tz: Option<String>,
+        prompt: String,
+        #[serde(default)]
+        delivery: Option<CronDelivery>,
+        #[serde(default)]
+        session_target: Option<CronSessionTarget>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        allowed_tools: Option<Vec<String>>,
+        #[serde(default)]
+        delete_after_run: Option<bool>,
+        #[serde(default)]
+        uses_memory: Option<bool>,
+    },
+    Shell {
+        agent: String,
+        #[serde(default)]
+        name: Option<String>,
+        schedule: String,
+        #[serde(default)]
+        tz: Option<String>,
+        command: String,
+        #[serde(default)]
+        delivery: Option<CronDelivery>,
+        #[serde(default)]
+        shell_output_format: Option<CronShellOutputFormat>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateJobInput {
+    pub job_id: String,
+    /// Required only when changing a shell command; the provider ignores it
+    /// for other patches.
     #[serde(default)]
-    pub config: CronConfig,
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub schedule: Option<String>,
+    #[serde(default)]
+    pub tz: Option<String>,
+    #[serde(default)]
+    pub clear_tz: Option<bool>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub uses_memory: Option<bool>,
+    #[serde(default)]
+    pub shell_output_format: Option<CronShellOutputFormat>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobMutationOutput {
+    pub scope: CronScope,
+    pub disposition: MutationDisposition,
+    /// Provider-returned post-mutation job. v0.8.4 obtains this from its store
+    /// after create/update, so this is actual readback rather than an echo.
+    #[serde(default)]
+    pub job: Option<CronJobRecord>,
+    #[serde(default)]
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationDisposition {
+    Confirmed,
+    ProviderCompletedUnverified,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteJobOutput {
+    pub scope: CronScope,
+    pub job_id: String,
+    /// True only after the provider returned `status=ok`.
+    pub provider_completed: bool,
+    pub disposition: MutationDisposition,
+    /// `Some(true)` means a follow-up global list confirmed absence. `None`
+    /// means readback failed after provider completion; the delete is not
+    /// relabelled as failed or rolled back.
+    #[serde(default)]
+    pub absent_on_readback: Option<bool>,
+    #[serde(default)]
+    pub readback_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunDisposition {
+    Completed,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManualRunResult {
+    pub status: String,
+    pub job_id: String,
+    pub success: bool,
+    pub output: String,
+    pub duration_ms: i64,
+    pub started_at: String,
+    pub finished_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunJobOutput {
+    pub scope: CronScope,
+    pub job_id: String,
+    pub disposition: RunDisposition,
+    #[serde(default)]
+    pub result: Option<ManualRunResult>,
+    /// Sanitized uncertainty detail, including a bounded native transport
+    /// timeout or failure to publish observed state after a completed run.
+    #[serde(default)]
+    pub diagnostic: Option<String>,
 }
 
 pub struct CronPlugin;
-
 impl Default for CronPlugin {
     fn default() -> Self {
         Self
     }
 }
-
 impl CronPlugin {
     pub fn new() -> Self {
         Self
-    }
-
-    pub(crate) fn current_state() -> CronState {
-        CronState {
-            status: "active".to_string(),
-            jobs: vec![
-                CronJob {
-                    id: "heartbeat".to_string(),
-                    name: "System Heartbeat".to_string(),
-                    schedule: "*/30 * * * *".to_string(),
-                    agent_id: "system".to_string(),
-                    enabled: true,
-                    last_run: None,
-                    next_run: None,
-                },
-                CronJob {
-                    id: "memory-hygiene".to_string(),
-                    name: "Memory Hygiene".to_string(),
-                    schedule: "0 3 * * *".to_string(),
-                    agent_id: "memory".to_string(),
-                    enabled: true,
-                    last_run: None,
-                    next_run: None,
-                },
-                CronJob {
-                    id: "audit-rotate".to_string(),
-                    name: "Audit Log Rotation".to_string(),
-                    schedule: "0 0 * * 0".to_string(),
-                    agent_id: "audit".to_string(),
-                    enabled: true,
-                    last_run: None,
-                    next_run: None,
-                },
-            ],
-            schedules: CronSchedules {
-                timezone: "UTC".to_string(),
-                max_concurrent: 4,
-                catch_up_on_startup: true,
-                max_run_history: 50,
-            },
-            config: CronConfig {
-                enabled: true,
-                task_timeout_secs: 600,
-                retry_count: 2,
-                backoff_ms: 500,
-            },
-        }
     }
 }
 
@@ -173,235 +370,216 @@ impl StatePlugin for CronPlugin {
         "cron"
     }
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.1.0"
     }
     fn schema(&self) -> Option<PluginSchema> {
         let mut schema = cron_schema();
         super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
     }
-    async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions: vec![],
-            metadata: DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: String::new(),
-                desired_hash: String::new(),
-            },
-        })
+    async fn calculate_diff(&self, _: &Value, _: &Value) -> Result<StateDiff> {
+        bail!("cron state is observed from the native gateway; use a declared cron method")
     }
-    async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
-            checkpoint: None,
-        })
+    async fn apply_state(&self, _: &StateDiff) -> Result<ApplyResult> {
+        bail!("cron has no generic apply operation; use a declared cron method")
     }
-    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+    async fn verify_state(&self, _: &Value) -> Result<bool> {
+        bail!("cron has no generic desired-state verification operation")
     }
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
-            backend_checkpoint: None,
-        })
+        bail!("cron does not own native gateway checkpoints")
     }
-    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+    async fn rollback(&self, _: &Checkpoint) -> Result<()> {
+        bail!("cron does not own native gateway rollback")
     }
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
 }
 
-/// Cron schema derived from the typed [`CronState`] struct via schemars.
 pub(crate) fn cron_schema() -> PluginSchema {
-    let root = serde_json::to_value(schemars::schema_for!(CronState))
-        .expect("schemars schema serializes to JSON");
+    let root = serde_json::to_value(schemars::schema_for!(CronStateV2))
+        .expect("cron state schema serializes");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "cron",
-        "1.0.0",
-        "Cron scheduler — jobs, schedules, execution history",
+        "2.1.0",
+        "Global operator view and management of the native tched-router cron store",
         &root,
     );
-
-    // Output structs for methods that return data
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListJobsOutput {
-        pub jobs: Vec<serde_json::Value>,
+    macro_rules! method {
+        ($name:literal, $input:ty, $output:ty, $effect:expr, $idem:expr, $cap:literal, $subid:literal) => {
+            schema.methods.insert(
+                $name.into(),
+                super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
+                    $input,
+                    $output,
+                >($name, $effect, $idem, $cap, $subid),
+            );
+        };
     }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetJobOutput {
-        pub job: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetHistoryOutput {
-        pub history: Vec<serde_json::Value>,
-    }
-
-    // Add methods with typed returns
-    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
-    use op_state_store::SideEffect;
-
-    schema.methods.insert(
-        "list_jobs".to_string(),
-        method_decl_from_schemars_with_output::<(), ListJobsOutput>(
-            "list_jobs",
-            SideEffect::Read,
-            true,
-            "cron.read",
-            "obs.service.cron.job.list@v1",
-        ),
+    method!(
+        "list_jobs",
+        ListJobsInput,
+        ListJobsOutput,
+        SideEffect::Read,
+        true,
+        "cron.read",
+        "obs.service.cron.job.list@v1"
     );
-    schema.methods.insert(
-        "get_job".to_string(),
-        method_decl_from_schemars_with_output::<(), GetJobOutput>(
-            "get_job",
-            SideEffect::Read,
-            true,
-            "cron.read",
-            "obs.service.cron.job.get@v1",
-        ),
+    method!(
+        "get_job",
+        JobIdInput,
+        GetJobOutput,
+        SideEffect::Read,
+        true,
+        "cron.read",
+        "obs.service.cron.job.get@v1"
     );
-    schema.methods.insert(
-        "create_job".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "create_job",
-            SideEffect::Mutation,
-            false,
-            "cron.invoke",
-            "mut.service.cron.job.create@v1",
-        ),
+    method!(
+        "get_history",
+        GetHistoryInput,
+        GetHistoryOutput,
+        SideEffect::Read,
+        true,
+        "cron.read",
+        "obs.service.cron.history.get@v1"
     );
-    schema.methods.insert(
-        "update_job".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "update_job",
-            SideEffect::Mutation,
-            false,
-            "cron.invoke",
-            "mut.service.cron.job.update@v1",
-        ),
+    method!(
+        "create_job",
+        CreateJobInput,
+        JobMutationOutput,
+        SideEffect::Mutation,
+        false,
+        "cron.invoke",
+        "mut.service.cron.job.create@v1"
     );
-    schema.methods.insert(
-        "delete_job".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "delete_job",
-            SideEffect::Mutation,
-            true,
-            "cron.invoke",
-            "mut.service.cron.job.delete@v1",
-        ),
+    method!(
+        "update_job",
+        UpdateJobInput,
+        JobMutationOutput,
+        SideEffect::Mutation,
+        false,
+        "cron.invoke",
+        "mut.service.cron.job.update@v1"
     );
-    schema.methods.insert(
-        "enable_job".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "enable_job",
-            SideEffect::Mutation,
-            false,
-            "cron.invoke",
-            "mut.service.cron.job.enable@v1",
-        ),
+    method!(
+        "delete_job",
+        JobIdInput,
+        DeleteJobOutput,
+        SideEffect::Mutation,
+        false,
+        "cron.invoke",
+        "mut.service.cron.job.delete@v1"
     );
-    schema.methods.insert(
-        "disable_job".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "disable_job",
-            SideEffect::Mutation,
-            false,
-            "cron.invoke",
-            "mut.service.cron.job.disable@v1",
-        ),
+    method!(
+        "enable_job",
+        JobIdInput,
+        JobMutationOutput,
+        SideEffect::Mutation,
+        true,
+        "cron.invoke",
+        "mut.service.cron.job.enable@v1"
     );
-    schema.methods.insert(
-        "run_job".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "run_job",
-            SideEffect::Mutation,
-            false,
-            "cron.invoke",
-            "mut.service.cron.job.run@v1",
-        ),
+    method!(
+        "disable_job",
+        JobIdInput,
+        JobMutationOutput,
+        SideEffect::Mutation,
+        true,
+        "cron.invoke",
+        "mut.service.cron.job.disable@v1"
     );
-    schema.methods.insert(
-        "get_history".to_string(),
-        method_decl_from_schemars_with_output::<(), GetHistoryOutput>(
-            "get_history",
-            SideEffect::Read,
-            true,
-            "cron.read",
-            "obs.service.cron.history.get@v1",
-        ),
+    method!(
+        "run_job",
+        JobIdInput,
+        RunJobOutput,
+        SideEffect::Mutation,
+        false,
+        "cron.invoke",
+        "mut.service.cron.job.run@v1"
     );
-
-    schema.capabilities.insert(
-        "cron.read".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "cron.read".to_string(),
-            description: "Grants: list_jobs, get_job, get_history.".to_string(),
-        },
-    );
-    schema.capabilities.insert(
-        "cron.invoke".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "cron.invoke".to_string(),
-            description:
-                "Grants: create_job, update_job, delete_job, enable_job, disable_job, run_job."
-                    .to_string(),
-        },
-    );
-
+    schema.capabilities.insert("cron.read".into(), CapabilityDecl {
+        id: "cron.read".into(),
+        description: "Global operator observation of the native daemon cron job store and run history. Job prompts, commands, delivery targets, and outputs may be present.".into(),
+    });
+    schema.capabilities.insert("cron.invoke".into(), CapabilityDecl {
+        id: "cron.invoke".into(),
+        description: "Global operator management and manual execution of native daemon cron jobs. Creating an enabled job delegates future autonomous runs to its configured native agent risk/tool policy; later runs do not re-check the originating OP-DBUS grant.".into(),
+    });
+    // The global job store may contain prompts, commands, delivery targets and
+    // outputs. No field is exposed on the shared public projection by default.
+    schema.example = Some(simd_json::json!({
+        "scope":"global_daemon",
+        "event_stream":{"sequencing":"unsequenced","delivery":"best_effort"},
+        "jobs":[]
+    }));
     schema
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state_plugins::common::oscal::validate_subid;
-    use serde_json::Value as JVal;
-
-    fn collect_subids(value: &JVal, out: &mut Vec<String>) {
-        if let Some(obj) = value.as_object() {
-            if let Some(JVal::String(subid)) = obj.get("x-oscal-subid") {
-                out.push(subid.clone());
-            }
-            for v in obj.values() {
-                collect_subids(v, out);
-            }
-        }
-        if let Some(arr) = value.as_array() {
-            for v in arr {
-                collect_subids(v, out);
-            }
-        }
-    }
-
     #[test]
-    fn all_subids_are_valid() {
-        let root = serde_json::to_value(schemars::schema_for!(CronState))
-            .expect("schemars schema serializes to JSON");
-        let mut subids = Vec::new();
-        collect_subids(&root, &mut subids);
-        assert!(!subids.is_empty(), "expected at least one subid");
-        for subid in subids {
-            assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
-        }
+    fn retained_methods_are_exact_and_typed() {
+        let schema = cron_schema();
+        let expected = [
+            "create_job",
+            "delete_job",
+            "disable_job",
+            "enable_job",
+            "get_history",
+            "get_job",
+            "list_jobs",
+            "run_job",
+            "update_job",
+        ];
+        let mut actual = schema
+            .methods
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+        assert!(schema
+            .methods
+            .values()
+            .all(|decl| decl.args != simd_json::json!(null)));
+        assert!(schema.methods.values().all(|decl| decl
+            .returns
+            .as_ref()
+            .is_some_and(|schema| schema != &simd_json::json!(null))));
+        assert!(schema.public_state.paths.is_empty());
+    }
+    #[test]
+    fn unknown_and_cross_variant_create_fields_fail() {
+        assert!(serde_json::from_value::<CreateJobInput>(serde_json::json!({
+            "job_type":"agent", "agent":"operator", "schedule":"*/5 * * * *",
+            "prompt":"digest", "command":"echo bypass"
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<JobIdInput>(serde_json::json!({
+            "job_id":"id", "sealed_id":"caller-supplied"
+        }))
+        .is_err());
+    }
+    #[test]
+    fn global_state_example_matches_contract() {
+        let state: CronStateV2 = serde_json::from_value(serde_json::json!({
+            "scope":"global_daemon",
+            "event_stream":{"sequencing":"unsequenced","delivery":"best_effort"},
+            "jobs":[]
+        }))
+        .unwrap();
+        assert!(state.jobs.is_empty());
+        assert_eq!(state.event_stream, CronEventStreamIntegrity::default());
     }
 }
 
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("cron", |_ctx| std::sync::Arc::new(CronPlugin::new()))
 }

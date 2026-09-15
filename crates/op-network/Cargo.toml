@@ -10,6 +10,7 @@ description = "Native networking: OpenFlow (all versions, pure Rust), OVSDB JSON
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
+sha2 = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -48,10 +49,18 @@ rovs-transport = "0.2"
 bytes = "1"
 
 # D-Bus proxy for the OVSDB JSON-RPC passthrough interface
-zbus = { workspace = true }
+zbus = { workspace = true, features = ["p2p"] }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true }
+wireguard-control = "=1.7.1"
 
 # simd-json — for the transact_simd compatibility shim in ovsdb.rs
 simd-json = { workspace = true }
+
+[dev-dependencies]
+rcgen = "0.13"
+tempfile = { workspace = true }
 
 [[bin]]
 name = "op-of-controller"
@@ -60,5 +69,3 @@ path = "src/bin/op-of-controller.rs"
 [[bin]]
 name = "op-ovsbr0-setup"
 path = "src/bin/op-ovsbr0-setup.rs"
-
-

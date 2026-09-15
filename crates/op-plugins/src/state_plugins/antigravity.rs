@@ -1,17 +1,14 @@
 //! Antigravity SDK provider plugin.
 //!
-//! Publishes Antigravity product surface (OAuth/Vertex auth, project, safety,
-//! generation defaults, endpoints, usage) through PluginSchema. Gemini model
-//! catalog ownership lives on the delegated `llm_plugin` (default
+//! Publishes the proven native credential, safety policy, provider route and
+//! local response-usage surface through PluginSchema. Gemini model catalog
+//! ownership lives on the delegated `llm_plugin` (default
 //! `large_language_model`) — this plugin only holds `llm_plugin` /
 //! `provider_route` / `selected_model` references.
 
-use super::common::llm_projection::{
-    ConfigSchema, LlmProjection, LlmTool, Provider, Router, StructuredOutput, UiSurface,
-};
 use anyhow::Result;
 use async_trait::async_trait;
-use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -316,20 +313,86 @@ pub struct GenerationConfig {
 pub struct SafetySetting {
     /// Harm category.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.safety-setting.category@v1"))]
+    #[schemars(
+        regex(pattern = "^HARM_CATEGORY_(UNSPECIFIED|HARASSMENT|HATE_SPEECH|SEXUALLY_EXPLICIT|DANGEROUS_CONTENT|CIVIC_INTEGRITY)$"),
+        extend("x-oscal-subid" = "obs.software.antigravity.safety-setting.category@v1")
+    )]
     pub category: String,
     /// Default blocking threshold.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.safety-setting.threshold@v1"))]
+    #[schemars(
+        regex(pattern = "^(HARM_BLOCK_THRESHOLD_UNSPECIFIED|BLOCK_LOW_AND_ABOVE|BLOCK_MEDIUM_AND_ABOVE|BLOCK_ONLY_HIGH|BLOCK_NONE|OFF)$"),
+        extend("x-oscal-subid" = "mut.service.antigravity.safety-setting.threshold@v1")
+    )]
     pub threshold: String,
-    /// Maximum blocking threshold.
+}
+
+/// Sanitized status emitted by the native Google credential owner.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-opdbus-exact-json-schema" = true))]
+pub struct AntigravityAuthStatus {
+    /// Native credential kind (`authorized_user`, `service_account`, `api_key`, or `none`).
+    pub credential_type: String,
+    /// Non-secret source class (`application_default_credentials` or `environment`).
+    pub credential_source: String,
+    /// Whether enough credential material exists to attempt a provider request.
+    pub credential_available: bool,
+    /// Whether the credential owner can refresh this credential without a subprocess.
+    pub refreshable: bool,
+    /// OAuth scopes requested from the native credential owner.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.safety-setting.max-threshold@v1"))]
-    pub max_threshold: String,
-    /// Harm detection method.
+    pub scopes: Vec<String>,
+}
+
+/// Locally observed usage for one provider model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-opdbus-exact-json-schema" = true))]
+pub struct LocalModelUsage {
+    pub requests: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// Durable usage report derived only from successful provider responses.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-opdbus-exact-json-schema" = true))]
+pub struct LocalUsageReport {
+    pub source: String,
+    pub requests: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.safety-setting.method@v1"))]
-    pub method: String,
+    pub models: HashMap<String, LocalModelUsage>,
+    #[serde(default)]
+    pub last_recorded_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUsageReportInput {
+    /// Restrict the local response ledger to one exact model id.
+    #[serde(default)]
+    #[schemars(length(min = 1, max = 256), regex(pattern = "^[A-Za-z0-9._-]+$"))]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-opdbus-exact-json-schema" = true))]
+pub struct ConfigureSafetyInput {
+    /// Revision of the shared Antigravity runtime document; zero means absent.
+    pub expected_revision: u64,
+    /// Complete Gemini `safetySettings` replacement applied to later requests.
+    #[serde(default)]
+    #[schemars(length(max = 16))]
+    pub settings: Vec<SafetySetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-opdbus-exact-json-schema" = true))]
+pub struct ConfigureSafetyOutput {
+    pub revision: u64,
+    pub settings: Vec<SafetySetting>,
 }
 
 /// Token usage counters.
@@ -383,6 +446,8 @@ pub struct QuotaLimit {
 /// Per-model quota limits.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.model-quota.schema@v1"))]
+// Preserve numeric formats and explicit nulls at each dynamically keyed record.
+#[schemars(extend("x-opdbus-exact-json-schema" = true))]
 pub struct ModelQuota {
     /// Requests per minute limit.
     #[serde(default)]
@@ -578,11 +643,8 @@ fn default_provider_route() -> String {
     "gemini".to_string()
 }
 
-/// Top-level Antigravity state.
-///
-/// Gemini model catalog is not owned here — resolve via `llm_plugin` +
-/// `provider_route`. This plugin holds auth, project, safety, generation
-/// defaults, endpoints, usage, and a selected model id.
+/// Top-level Antigravity state containing only native observations and the
+/// revisioned provider intent actually consumed by generation requests.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.antigravity.schema@v1"))]
 #[schemars(extend("x-oscal-category" = "llm"))]
@@ -591,14 +653,10 @@ pub struct AntigravityState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "obs.software.antigravity.status@v1"))]
     pub status: String,
-    /// Authentication state.
+    /// Sanitized native credential observation.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.auth@v1"))]
-    pub auth: Auth,
-    /// Google Cloud project metadata.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.service.antigravity.project@v1"))]
-    pub project: Project,
+    pub auth: AntigravityAuthStatus,
     /// Plugin that owns the model catalog (default large_language_model).
     #[serde(default = "default_llm_plugin")]
     #[schemars(
@@ -622,26 +680,22 @@ pub struct AntigravityState {
         extend("x-oscal-subid" = "mut.software.antigravity.selected-model@v1")
     )]
     pub selected_model: String,
-    /// Generation configuration.
+    /// Provider protocol selected in the shared runtime document.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.generation-config@v1"))]
-    pub generation_config: GenerationConfig,
+    #[schemars(extend("x-oscal-subid" = "mut.software.antigravity.provider@v1"))]
+    pub provider: String,
+    /// Provider base URL selected in the shared runtime document.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "mut.software.antigravity.base-url@v1"))]
+    pub base_url: String,
     /// Safety filter settings.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.safety-settings@v1"))]
     pub safety_settings: Vec<SafetySetting>,
-    /// Usage and quota tracking.
+    /// Local response usage. This contains no provider quota or billing claim.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "obs.service.antigravity.usage@v1"))]
-    pub usage: Usage,
-    /// Service endpoint collection.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.service.antigravity.endpoints@v1"))]
-    pub endpoints: Endpoints,
-    /// Shared LLM projection fields (flattened to the top level).
-    #[serde(flatten)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.antigravity.llm-projection@v1"))]
-    pub projection: LlmProjection,
+    pub usage: LocalUsageReport,
 }
 
 pub struct AntigravityPlugin;
@@ -657,469 +711,19 @@ impl AntigravityPlugin {
         Self
     }
 
-    fn env_or(key: &str, fallback: &str) -> String {
-        std::env::var(key).unwrap_or_else(|_| fallback.to_string())
-    }
-
-    pub(crate) fn current_state() -> AntigravityState {
-        let project_id = Self::env_or("GOOGLE_CLOUD_PROJECT", "secure-bonbon-337711");
-        let location = Self::env_or("GOOGLE_CLOUD_LOCATION", "us-central1");
-        let use_vertexai = Self::env_or("GOOGLE_GENAI_USE_VERTEXAI", "true");
-
+    pub fn current_state() -> AntigravityState {
         AntigravityState {
-            status: "active".to_string(),
-            auth: Auth {
-                method: "oauth".to_string(),
-                provider: "google".to_string(),
-                token_source: "gcloud".to_string(),
-                token_file: "~/.config/gcloud/application_default_credentials.json".to_string(),
-                token_valid: true,
-                token_expiry: Some(JsonValue::Null),
-                scopes: vec![
-                    "https://www.googleapis.com/auth/cloud-platform".to_string(),
-                    "https://www.googleapis.com/auth/generative-language".to_string(),
-                ],
-                vertex_ai: VertexAuth {
-                    enabled: true,
-                    use_vertexai: use_vertexai.clone(),
-                    project: project_id.clone(),
-                    location: location.clone(),
-                    api_endpoint: format!("https://{}-aiplatform.googleapis.com", location),
-                    credentials_type: "service_account".to_string(),
-                    service_account_email: format!(
-                        "antigravity-sdk@{}.iam.gserviceaccount.com",
-                        project_id.clone()
-                    ),
-                    quota_project: project_id.clone(),
-                },
-                api_keys: ApiKeys {
-                    generative_language: ApiKey {
-                        configured: true,
-                        env_var: "GOOGLE_API_KEY".to_string(),
-                        masked_value: "********".to_string(),
-                        restriction: "allowed_referers".to_string(),
-                    },
-                    vertex_ai: ApiKey {
-                        configured: true,
-                        env_var: "GOOGLE_VERTEX_AI_API_KEY".to_string(),
-                        masked_value: "********".to_string(),
-                        restriction: "private".to_string(),
-                    },
-                },
-                oauth_bridge: OauthBridge {
-                    url: "http://127.0.0.1:3333".to_string(),
-                    status: "available".to_string(),
-                    version: "0.1.0".to_string(),
-                },
-            },
-            project: Project {
-                project_id: project_id.clone(),
-                project_number: "266510671468".to_string(),
-                name: "secure-bonbon-337711".to_string(),
-                location: location.clone(),
-                region: location.clone(),
-                api_enabled: vec![
-                    "aiplatform.googleapis.com".to_string(),
-                    "generativelanguage.googleapis.com".to_string(),
-                    "compute.googleapis.com".to_string(),
-                    "cloudresourcemanager.googleapis.com".to_string(),
-                    "iam.googleapis.com".to_string(),
-                    "monitoring.googleapis.com".to_string(),
-                    "logging.googleapis.com".to_string(),
-                ],
-                labels: {
-                    let mut m = HashMap::new();
-                    m.insert("environment".to_string(), "production".to_string());
-                    m.insert("managed_by".to_string(), "antigravity-sdk".to_string());
-                    m.insert("framework".to_string(), "operation-dbus-proto".to_string());
-                    m
-                },
-            },
+            status: "unobserved".to_string(),
+            auth: AntigravityAuthStatus::default(),
             llm_plugin: default_llm_plugin(),
             provider_route: default_provider_route(),
             selected_model: String::new(),
-            projection: LlmProjection {
-                providers: vec![
-                    Provider {
-                        id: "antigravity".to_string(),
-                        route: "antigravity".to_string(),
-                        kind: "orchestrator".to_string(),
-                        aliases: vec![
-                            "google.antigravity".to_string(),
-                            "antigravity-sdk".to_string(),
-                            "agi".to_string(),
-                        ],
-                        endpoint: format!("https://{}-aiplatform.googleapis.com/v1", location),
-                        auth: "oauth".to_string(),
-                        sdk: "google.antigravity".to_string(),
-                        oscal_source: "/opdbus/v1/plugins/oscal_subid_registry".to_string(),
-                        description: "Antigravity OAuth/SDK front-door; Gemini catalog via llm_plugin/provider_route".to_string(),
-                        ..Default::default()
-                    },
-                ],
-                // Model catalog + routes owned by llm_plugin/provider_route.
-                model_routes: vec![],
-                router: Router {
-                    provider: "large_language_model".to_string(),
-                    model: String::new(),
-                    endpoint: String::new(),
-                    scope: "delegated".to_string(),
-                    role: "catalog_ref".to_string(),
-                    emits: vec![
-                        "llm_plugin".to_string(),
-                        "provider_route".to_string(),
-                        "selected_model".to_string(),
-                    ],
-                    oscal_source: "/opdbus/v1/plugins/large_language_model".to_string(),
-                    classification_rules: serde_json::json!({
-                        "catalog": {
-                            "llm_plugin": "large_language_model",
-                            "provider_route": "gemini",
-                            "methods": ["list_models", "list_providers"]
-                        }
-                    }),
-                },
-                tools: vec![
-                    LlmTool {
-                        name: "antigravity.auth.status".to_string(),
-                        description: "Check OAuth token validity, Vertex AI config, and service account status.".to_string(),
-                        parameters: serde_json::json!({
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }),
-                        ..Default::default()
-                    },
-                    LlmTool {
-                        name: "antigravity.usage.report".to_string(),
-                        description: "Return current token usage and quota statistics.".to_string(),
-                        parameters: serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "project_id": {"type": "string"},
-                                "model": {"type": "string"}
-                            },
-                            "required": []
-                        }),
-                        ..Default::default()
-                    },
-                    LlmTool {
-                        name: "antigravity.safety.configure".to_string(),
-                        description: "Update safety filter thresholds per category.".to_string(),
-                        parameters: serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "harassment": {"type": "string"},
-                                "hate_speech": {"type": "string"},
-                                "sexually_explicit": {"type": "string"},
-                                "dangerous": {"type": "string"},
-                                "civic_integrity": {"type": "string"}
-                            },
-                            "required": []
-                        }),
-                        ..Default::default()
-                    },
-                ],
-                config_schema: ConfigSchema {
-                    source: "antigravity sdk v1".to_string(),
-                    sdk_package: "google-genai".to_string(),
-                    openapi_url: format!("https://{}-aiplatform.googleapis.com/v1/openapi.json", location),
-                    api_version: "v1".to_string(),
-                    schema_crate: "op_plugins::state_plugins::antigravity".to_string(),
-                    native_type: "AntigravityState".to_string(),
-                    env_vars: serde_json::json!({
-                        "GOOGLE_CLOUD_PROJECT": {"description": "Google Cloud project ID", "default": "secure-bonbon-337711"},
-                        "GOOGLE_CLOUD_LOCATION": {"description": "Google Cloud region/location", "default": "us-central1"},
-                        "GOOGLE_GENAI_USE_VERTEXAI": {"description": "Use Vertex AI backend (true) or Gemini API (false)", "default": "true"},
-                        "GOOGLE_API_KEY": {"description": "Gemini API key for generative language API", "required": false},
-                        "GOOGLE_VERTEX_AI_API_KEY": {"description": "Vertex AI API key", "required": false}
-                    }),
-                    ..Default::default()
-                },
-                ui_surfaces: vec![
-                    UiSurface {
-                        path: "/antigravity".to_string(),
-                        name: "Antigravity SDK".to_string(),
-                        schema: "antigravity".to_string(),
-                    },
-                    UiSurface {
-                        path: "/antigravity/safety".to_string(),
-                        name: "Safety Settings".to_string(),
-                        schema: "antigravity.safety".to_string(),
-                    },
-                    UiSurface {
-                        path: "/antigravity/usage".to_string(),
-                        name: "Usage & Quotas".to_string(),
-                        schema: "antigravity.usage".to_string(),
-                    },
-                    UiSurface {
-                        path: "/antigravity/auth".to_string(),
-                        name: "Authentication".to_string(),
-                        schema: "antigravity.auth".to_string(),
-                    },
-                ],
-                structured_output: StructuredOutput {
-                    sdk: "google.antigravity".to_string(),
-                    config_object: "LocalAgentConfig(response_schema=UiResponseSchema)".to_string(),
-                    extractor: "response.structured_output()".to_string(),
-                    response_schema: serde_json::json!({
-                        "action": "",
-                        "metadata": {},
-                        "confidence_score": 0.0
-                    }),
-                    response_mime_type: "application/json".to_string(),
-                    pydantic_source: vec![
-                        "import pydantic".to_string(),
-                        "class UiResponseSchema(pydantic.BaseModel):".to_string(),
-                        "    action: str".to_string(),
-                        "    metadata: dict[str, str]".to_string(),
-                        "    confidence_score: float".to_string(),
-                    ],
-                    ui_renderer: "JsonRenderer".to_string(),
-                    schema_validation: "strict".to_string(),
-                    refusals_as_none: true,
-                    required: true,
-                },
-            },
-            generation_config: GenerationConfig {
-                temperature: 0.7,
-                top_p: 0.95,
-                top_k: 40,
-                max_output_tokens: 65536,
-                candidate_count: 1,
-                stop_sequences: vec![],
-                response_modalities: vec!["TEXT".to_string()],
-                presence_penalty: 0.0,
-                frequency_penalty: 0.0,
-                seed: Some(JsonValue::Null),
-                thinking_config: ThinkingConfig {
-                    include_thoughts: false,
-                    thinking_budget: 4096,
-                },
-                defaults: GenerationDefaults {
-                    chat: GenerationDefaultsEntry {
-                        temperature: 0.7,
-                        top_p: 0.95,
-                        top_k: 40,
-                        max_output_tokens: 65536,
-                        thinking_config: None,
-                    },
-                    code: GenerationDefaultsEntry {
-                        temperature: 0.1,
-                        top_p: 0.95,
-                        top_k: 40,
-                        max_output_tokens: 65536,
-                        thinking_config: None,
-                    },
-                    reasoning: GenerationDefaultsEntry {
-                        temperature: 0.7,
-                        top_p: 0.95,
-                        top_k: 40,
-                        max_output_tokens: 65536,
-                        thinking_config: Some(ThinkingConfig {
-                            include_thoughts: true,
-                            thinking_budget: 16384,
-                        }),
-                    },
-                    creative: GenerationDefaultsEntry {
-                        temperature: 1.0,
-                        top_p: 0.99,
-                        top_k: 60,
-                        max_output_tokens: 32768,
-                        thinking_config: None,
-                    },
-                    precise: GenerationDefaultsEntry {
-                        temperature: 0.0,
-                        top_p: 1.0,
-                        top_k: 1,
-                        max_output_tokens: 65536,
-                        thinking_config: None,
-                    },
-                },
-            },
-            safety_settings: vec![
-                SafetySetting {
-                    category: "HARM_CATEGORY_HARASSMENT".to_string(),
-                    threshold: "BLOCK_MEDIUM_AND_ABOVE".to_string(),
-                    max_threshold: "BLOCK_ONLY_HIGH".to_string(),
-                    method: "probability".to_string(),
-                },
-                SafetySetting {
-                    category: "HARM_CATEGORY_HATE_SPEECH".to_string(),
-                    threshold: "BLOCK_MEDIUM_AND_ABOVE".to_string(),
-                    max_threshold: "BLOCK_ONLY_HIGH".to_string(),
-                    method: "probability".to_string(),
-                },
-                SafetySetting {
-                    category: "HARM_CATEGORY_SEXUALLY_EXPLICIT".to_string(),
-                    threshold: "BLOCK_MEDIUM_AND_ABOVE".to_string(),
-                    max_threshold: "BLOCK_ONLY_HIGH".to_string(),
-                    method: "probability".to_string(),
-                },
-                SafetySetting {
-                    category: "HARM_CATEGORY_DANGEROUS_CONTENT".to_string(),
-                    threshold: "BLOCK_MEDIUM_AND_ABOVE".to_string(),
-                    max_threshold: "BLOCK_ONLY_HIGH".to_string(),
-                    method: "probability".to_string(),
-                },
-                SafetySetting {
-                    category: "HARM_CATEGORY_CIVIC_INTEGRITY".to_string(),
-                    threshold: "BLOCK_NONE".to_string(),
-                    max_threshold: "BLOCK_NONE".to_string(),
-                    method: "probability".to_string(),
-                },
-                SafetySetting {
-                    category: "HARM_CATEGORY_UNSPECIFIED".to_string(),
-                    threshold: "BLOCK_NONE".to_string(),
-                    max_threshold: "BLOCK_MEDIUM_AND_ABOVE".to_string(),
-                    method: "unspecified".to_string(),
-                },
-            ],
-            usage: Usage {
-                token_tracking: TokenTracking {
-                    total_input_tokens: 0,
-                    total_output_tokens: 0,
-                    total_cached_tokens: 0,
-                    total_thinking_tokens: 0,
-                    session_input_tokens: 0,
-                    session_output_tokens: 0,
-                },
-                quotas: {
-                    let mut q = HashMap::new();
-                    q.insert(
-                        "gemini-3-pro-preview".to_string(),
-                        ModelQuota {
-                            requests_per_minute: QuotaLimit {
-                                limit: Some(360),
-                                used: 0,
-                                remaining: Some(360),
-                            },
-                            tokens_per_minute: QuotaLimit {
-                                limit: Some(4000000),
-                                used: 0,
-                                remaining: Some(4000000),
-                            },
-                            requests_per_day: QuotaLimit {
-                                limit: Some(1500),
-                                used: 0,
-                                remaining: Some(1500),
-                            },
-                        },
-                    );
-                    q.insert(
-                        "gemini-3.5-flash".to_string(),
-                        ModelQuota {
-                            requests_per_minute: QuotaLimit {
-                                limit: Some(2000),
-                                used: 0,
-                                remaining: Some(2000),
-                            },
-                            tokens_per_minute: QuotaLimit {
-                                limit: Some(4000000),
-                                used: 0,
-                                remaining: Some(4000000),
-                            },
-                            requests_per_day: QuotaLimit {
-                                limit: None,
-                                used: 0,
-                                remaining: None,
-                            },
-                        },
-                    );
-                    q.insert(
-                        "gemini-2.5-pro".to_string(),
-                        ModelQuota {
-                            requests_per_minute: QuotaLimit {
-                                limit: Some(360),
-                                used: 0,
-                                remaining: Some(360),
-                            },
-                            tokens_per_minute: QuotaLimit {
-                                limit: Some(4000000),
-                                used: 0,
-                                remaining: Some(4000000),
-                            },
-                            requests_per_day: QuotaLimit {
-                                limit: Some(1500),
-                                used: 0,
-                                remaining: Some(1500),
-                            },
-                        },
-                    );
-                    q.insert(
-                        "gemini-2.5-flash".to_string(),
-                        ModelQuota {
-                            requests_per_minute: QuotaLimit {
-                                limit: Some(2000),
-                                used: 0,
-                                remaining: Some(2000),
-                            },
-                            tokens_per_minute: QuotaLimit {
-                                limit: Some(4000000),
-                                used: 0,
-                                remaining: Some(4000000),
-                            },
-                            requests_per_day: QuotaLimit {
-                                limit: None,
-                                used: 0,
-                                remaining: None,
-                            },
-                        },
-                    );
-                    q
-                },
-                cost_tracking: CostTracking {
-                    currency: "USD".to_string(),
-                    pricing_model: "pay_as_you_go".to_string(),
-                    total_cost: 0.0,
-                    session_cost: 0.0,
-                    billing_account: format!("billingAccounts/{}", project_id.clone()),
-                },
-                monitoring: Monitoring {
-                    metrics_endpoint: format!(
-                        "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/models:monitor",
-                        location, project_id.clone(), location
-                    ),
-                    logging_enabled: true,
-                    trace_enabled: true,
-                },
-            },
-            endpoints: Endpoints {
-                vertex_ai: VertexEndpoints {
-                    base_url: format!("https://{}-aiplatform.googleapis.com/v1", location),
-                    stream_generate_content: format!(
-                        "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent",
-                        location, project_id.clone(), location, "{}"
-                    ),
-                    predict: format!(
-                        "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:predict",
-                        location, project_id.clone(), location, "{}"
-                    ),
-                    count_tokens: format!(
-                        "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:countTokens",
-                        location, project_id.clone(), location, "{}"
-                    ),
-                    batch_predict: format!(
-                        "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/batchPredictionJobs",
-                        location, project_id.clone(), location
-                    ),
-                },
-                generative_language_api: GenerativeLanguageEndpoints {
-                    base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
-                    generate_content: "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".to_string(),
-                    stream_generate_content: "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent".to_string(),
-                    count_tokens: "https://generativelanguage.googleapis.com/v1beta/models/{}:countTokens".to_string(),
-                },
-                oauth_bridge: OauthBridgeEndpoint {
-                    url: "http://127.0.0.1:3333".to_string(),
-                    health_check: "http://127.0.0.1:3333/health".to_string(),
-                    token_refresh: "http://127.0.0.1:3333/refresh".to_string(),
-                    status: "available".to_string(),
-                },
-                gemma_api: GemmaEndpoints {
-                    base_url: "https://gemma.googleapis.com/v1".to_string(),
-                    generate: "https://gemma.googleapis.com/v1/models/{}:generate".to_string(),
-                },
+            provider: "gemini".to_string(),
+            base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+            safety_settings: Vec::new(),
+            usage: LocalUsageReport {
+                source: "local_provider_response_ledger".to_string(),
+                ..Default::default()
             },
         }
     }
@@ -1132,7 +736,7 @@ impl StatePlugin for AntigravityPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.1.0"
+        "3.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -1146,49 +750,30 @@ impl StatePlugin for AntigravityPlugin {
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions: vec![],
-            metadata: DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: "schema-declared".to_string(),
-                desired_hash: "schema-declared".to_string(),
-            },
-        })
+        anyhow::bail!("antigravity reconciliation has no authoritative provider backend")
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
-            checkpoint: None,
-        })
+        anyhow::bail!("antigravity apply has no authoritative provider backend")
     }
 
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        anyhow::bail!("antigravity verification requires provider readback")
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!("antigravity has no authoritative checkpoint owner")
     }
 
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        anyhow::bail!("antigravity has no authoritative rollback owner")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
@@ -1200,8 +785,8 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "antigravity",
-        "1.1.0",
-        "Google Antigravity SDK — OAuth/Vertex auth, safety, generation defaults; Gemini catalog via large_language_model/gemini",
+        "3.0.0",
+        "Google Antigravity provider — sanitized native auth, applied safety policy, and local response usage; model catalog delegated to large_language_model",
         &root,
     );
     if let Ok(state) = simd_json::serde::to_owned_value(AntigravityPlugin::current_state()) {
@@ -1213,38 +798,14 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
     use op_state_store::SideEffect;
 
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub struct GetAuthStatusOutput {
-        pub auth: Auth,
+        pub auth: AntigravityAuthStatus,
     }
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetUsageReportInput {
-        /// Restrict quota lookup to this project. Empty = the plugin's configured project.
-        #[serde(default)]
-        pub project_id: String,
-        /// Restrict quota lookup to this model. Empty = all tracked models.
-        #[serde(default)]
-        pub model: String,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub struct GetUsageReportOutput {
-        pub usage: Usage,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ConfigureSafetyInput {
-        #[serde(default)]
-        pub harassment: Option<String>,
-        #[serde(default)]
-        pub hate_speech: Option<String>,
-        #[serde(default)]
-        pub sexually_explicit: Option<String>,
-        #[serde(default)]
-        pub dangerous: Option<String>,
-        #[serde(default)]
-        pub civic_integrity: Option<String>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ConfigureSafetyOutput {
-        pub safety_settings: Vec<SafetySetting>,
+        pub usage: LocalUsageReport,
     }
 
     // NOTE: no `chat` / `list_models` here by design — catalog and chat live on
@@ -1287,14 +848,15 @@ pub(crate) fn antigravity_schema() -> PluginSchema {
         "antigravity.read".to_string(),
         op_state_store::CapabilityDecl {
             id: "antigravity.read".to_string(),
-            description: "Grants: get_auth_status, get_usage_report, list_extensions.".to_string(),
+            description: "Grants native auth observation and local response-usage reporting."
+                .to_string(),
         },
     );
     schema.capabilities.insert(
         "antigravity.write".to_string(),
         op_state_store::CapabilityDecl {
             id: "antigravity.write".to_string(),
-            description: "Grants: configure_safety, install_extension, show_versions, sync, telemetry, uninstall_extension, update_extensions.".to_string(),
+            description: "Grants revisioned Gemini safety-policy replacement.".to_string(),
         },
     );
 
@@ -1343,14 +905,34 @@ mod tests {
     fn schema_is_schemars_seeded_and_typed() {
         let schema = antigravity_schema();
         assert_eq!(schema.name, "antigravity");
-        assert_eq!(schema.version, "1.1.0");
+        assert_eq!(schema.version, "3.0.0");
         assert!(schema.fields.contains_key("auth"));
-        assert!(schema.fields.contains_key("project"));
         assert!(schema.fields.contains_key("llm_plugin"));
         assert!(schema.fields.contains_key("provider_route"));
         assert!(schema.fields.contains_key("selected_model"));
+        assert!(schema.fields.contains_key("provider"));
+        assert!(schema.fields.contains_key("base_url"));
         assert!(!schema.fields.contains_key("models"));
         assert!(!schema.methods.contains_key("list_models"));
+    }
+
+    #[test]
+    fn state_schema_contains_only_native_or_durable_observations() {
+        let schema = antigravity_schema();
+        assert_eq!(AntigravityPlugin::new().version(), schema.version);
+        for removed in ["project", "generation_config", "endpoints", "projection"] {
+            assert!(
+                !schema.fields.contains_key(removed),
+                "stale field {removed}"
+            );
+        }
+        let example = serde_json::to_value(schema.example.as_ref().unwrap()).unwrap();
+        assert_eq!(example["usage"]["source"], "local_provider_response_ledger");
+        assert!(example["usage"].get("quotas").is_none());
+        assert!(example["usage"].get("cost_tracking").is_none());
+        assert!(!serde_json::to_string(&example)
+            .unwrap()
+            .contains("billingAccounts"));
     }
 
     #[test]
@@ -1365,6 +947,38 @@ mod tests {
         for subid in subids {
             validate_subid(&subid).expect("invalid subid: {subid}");
         }
+    }
+
+    #[tokio::test]
+    async fn generic_lifecycle_never_returns_a_false_receipt() {
+        let plugin = AntigravityPlugin::new();
+        let state = simd_json::json!({});
+        assert!(plugin.calculate_diff(&state, &state).await.is_err());
+        let diff = StateDiff {
+            plugin: plugin.name().to_owned(),
+            actions: vec![],
+            metadata: op_state::DiffMetadata {
+                timestamp: 0,
+                current_hash: String::new(),
+                desired_hash: String::new(),
+            },
+        };
+        assert!(plugin.apply_state(&diff).await.is_err());
+        assert!(plugin.verify_state(&state).await.is_err());
+        assert!(plugin.create_checkpoint().await.is_err());
+        let checkpoint = Checkpoint {
+            id: "fixture".into(),
+            plugin: plugin.name().into(),
+            timestamp: 0,
+            state_snapshot: state,
+            backend_checkpoint: None,
+        };
+        assert!(plugin.rollback(&checkpoint).await.is_err());
+        let capabilities = plugin.capabilities();
+        assert!(!capabilities.supports_verification);
+        assert!(!capabilities.supports_checkpoints);
+        assert!(!capabilities.supports_rollback);
+        assert!(!capabilities.atomic_operations);
     }
 }
 

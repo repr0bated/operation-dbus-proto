@@ -114,6 +114,8 @@ pub struct DNSConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PolicyConfig {
     #[serde(default)]
+    // Retain the digit-key pattern and original nullable values exactly.
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub levels: std::collections::HashMap<u32, Option<serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<serde_json::Value>,

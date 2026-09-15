@@ -2,11 +2,15 @@ use std::env;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[path = "src/json_schema_proto.rs"]
+mod json_schema_proto;
+use json_schema_proto::json_schema_type_to_proto;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let generated_proto = out_dir.join("plugin_methods.proto");
     let generated_routes = out_dir.join("plugin_method_routes.rs");
+    let generated_contracts = out_dir.join("compiled_method_contracts.json");
     let plugin_methods = collect_plugin_methods();
 
     std::fs::write(
@@ -16,6 +20,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         &generated_routes,
         generate_plugin_method_routes(&plugin_methods),
+    )?;
+    // Compatibility evidence for this binary, never a runtime plugin catalog.
+    // Preserve full method/state declarations from the collection producing routes.
+    std::fs::write(
+        &generated_contracts,
+        generate_compiled_method_contracts(&plugin_methods)?,
     )?;
 
     // Compile all domain protos into a single combined FileDescriptorSet so
@@ -64,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=src/grpc/tched_router.proto");
     println!("cargo:rerun-if-changed=../op-plugins/src/state_plugins");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/json_schema_proto.rs");
 
     Ok(())
 }
@@ -71,6 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, Clone)]
 struct PluginMethodSet {
     plugin_id: String,
+    plugin_version: String,
+    state_fields: std::collections::HashMap<String, op_state_store::FieldSchema>,
     service_name: String,
     server_module: String,
     server_type: String,
@@ -87,6 +100,7 @@ struct PluginMethod {
     output_name: String,
     args: simd_json::OwnedValue,
     returns: simd_json::OwnedValue,
+    declaration: op_state_store::MethodDecl,
 }
 
 fn collect_plugin_methods() -> Vec<PluginMethodSet> {
@@ -132,6 +146,7 @@ fn collect_plugin_methods() -> Vec<PluginMethodSet> {
                             .returns
                             .clone()
                             .unwrap_or_else(|| simd_json::json!({})),
+                        declaration: method_decl.clone(),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -139,6 +154,8 @@ fn collect_plugin_methods() -> Vec<PluginMethodSet> {
             let trait_name = format!("{}PluginMethods", to_pascal_ident(&plugin_id));
             sets.push(PluginMethodSet {
                 plugin_id: plugin_id.clone(),
+                plugin_version: schema.version.clone(),
+                state_fields: schema.fields.clone(),
                 service_name: trait_name.clone(),
                 server_module: format!("{}_server", to_snake_ident(&trait_name)),
                 server_type: format!("{}Server", trait_name),
@@ -150,6 +167,30 @@ fn collect_plugin_methods() -> Vec<PluginMethodSet> {
         sets.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
         sets
     })
+}
+
+fn generate_compiled_method_contracts(
+    sets: &[PluginMethodSet],
+) -> Result<Vec<u8>, serde_json::Error> {
+    let contracts = sets
+        .iter()
+        .map(|set| {
+            let methods = set
+                .methods
+                .iter()
+                .map(|method| (&method.schema_name, &method.declaration))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            (
+                &set.plugin_id,
+                serde_json::json!({
+                    "version": set.plugin_version,
+                    "fields": set.state_fields,
+                    "methods": methods
+                }),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    serde_json::to_vec(&contracts)
 }
 
 fn generate_plugin_methods_proto(sets: &[PluginMethodSet]) -> String {
@@ -283,7 +324,13 @@ fn schema_message_proto(message_name: &str, schema: &simd_json::OwnedValue) -> S
     }
 
     for field in fields {
-        let repeated = if field.repeated { "repeated " } else { "" };
+        let repeated = if field.repeated {
+            "repeated "
+        } else if json_schema_proto::needs_scalar_presence(&field.proto_type, field.repeated) {
+            "optional "
+        } else {
+            ""
+        };
         proto.push_str(&format!(
             "  {}{} {} = {};\n",
             repeated, field.proto_type, field.name, field.number
@@ -337,49 +384,6 @@ fn fallback_field(name: &str, proto_type: &str, repeated: bool) -> ProtoField {
         proto_type: proto_type.to_string(),
         repeated,
         number: stable_field_number(name),
-    }
-}
-
-fn json_schema_type_to_proto(schema: &serde_json::Value) -> (String, bool) {
-    if schema
-        .get("enum")
-        .and_then(|value| value.as_array())
-        .is_some_and(|values| !values.is_empty())
-    {
-        return ("string".to_string(), false);
-    }
-
-    match schema.get("type") {
-        Some(serde_json::Value::String(kind)) => match kind.as_str() {
-            "string" => ("string".to_string(), false),
-            "boolean" => ("bool".to_string(), false),
-            "integer" => ("int64".to_string(), false),
-            "number" => ("double".to_string(), false),
-            "array" => {
-                let item_type = schema
-                    .get("items")
-                    .map(|items| json_schema_type_to_proto(items).0)
-                    .unwrap_or_else(|| "google.protobuf.Value".to_string());
-                (item_type, true)
-            }
-            "object" => ("google.protobuf.Struct".to_string(), false),
-            _ => ("google.protobuf.Value".to_string(), false),
-        },
-        Some(serde_json::Value::Array(kinds)) => {
-            let first_non_null = kinds
-                .iter()
-                .filter_map(|value| value.as_str())
-                .find(|kind| *kind != "null")
-                .unwrap_or("object");
-            json_schema_type_to_proto(&serde_json::json!({ "type": first_non_null }))
-        }
-        _ => {
-            if schema.get("properties").is_some() {
-                ("google.protobuf.Struct".to_string(), false)
-            } else {
-                ("google.protobuf.Value".to_string(), false)
-            }
-        }
     }
 }
 

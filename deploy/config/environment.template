@@ -65,6 +65,15 @@ SESSION_TIMEOUT=86400
 # Maximum request size in bytes (default: 10MB)
 MAX_REQUEST_SIZE=10485760
 
+# Native network owner runs only on the decoy. Supply these two deployment
+# values in /etc/op-dbus/decoy-network-client.env and provision protected TLS
+# inputs in the offline server snapshot. The bridge has no host-WireGuard fallback.
+# OP_DECOY_NATIVE_ADDRESS=<private-or-WARP-routed-IP>:8732
+# OP_DECOY_NATIVE_SERVER_NAME=<decoy-certificate-DNS-name>
+OP_DECOY_NATIVE_CA_FILE=/etc/op-dbus/decoy-native/ca.pem
+OP_DECOY_NATIVE_CERT_FILE=/etc/op-dbus/decoy-native/bridge.pem
+OP_DECOY_NATIVE_KEY_FILE=/etc/op-dbus/decoy-native/bridge-key.pem
+
 # Rate limiting (requests per minute)
 RATE_LIMIT_RPM=60
 

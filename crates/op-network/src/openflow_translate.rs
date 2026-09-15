@@ -370,6 +370,12 @@ fn build_actions(
                 list.load_field(field, 0, 32, *value)
             }
             JsonFlowAction::SetField { field, value } => match field.as_str() {
+                "nw_ttl" => {
+                    let ttl: u8 = value.parse().context("invalid nw_ttl")?;
+                    anyhow::ensure!(ttl > 0, "nw_ttl must be nonzero");
+                    list.push(rovs_openflow::Action::SetTtl(ttl));
+                    list
+                }
                 "dl_dst" | "eth_dst" => list.set_eth_dst(resolve_mac(value, port_macs)?),
                 "dl_src" | "eth_src" => list.set_eth_src(resolve_mac(value, port_macs)?),
                 "dl_vlan" | "vlan_vid" => {
@@ -458,6 +464,16 @@ pub fn json_flow_to_add(
     validate_table(entry.table)?;
     let m = parse_match(&entry.match_fields, port_map)?;
     let ip_proto = m.ip_proto;
+    if entry
+        .actions
+        .iter()
+        .any(|action| matches!(action, JsonFlowAction::SetField { field, .. } if field == "nw_ttl"))
+    {
+        anyhow::ensure!(
+            matches!(m.eth_type, Some(0x0800 | 0x86dd)),
+            "nw_ttl requires an explicit IPv4 or IPv6 match"
+        );
+    }
     let actions = build_actions(&entry.actions, port_map, port_macs, ip_proto)?;
 
     let mut flow = Flow::add()

@@ -44,45 +44,80 @@ pub struct CollectionInfo {
 }
 
 /// GNOME Keyring plugin implementing freedesktop.org Secret Service
-pub struct KeyringPlugin;
+pub struct KeyringPlugin {
+    connection: Option<Connection>,
+}
 
 impl KeyringPlugin {
     pub fn new() -> Self {
-        Self
+        Self { connection: None }
     }
 
-    /// Connect to the Secret Service via the op-dbus plugin system.
-    /// The freedesktop plugin at /org/opdbus/v1/plugins/freedesktop
-    /// owns the org.freedesktop.secrets name on the op-dbus session bus.
+    #[cfg(test)]
+    fn with_connection(connection: Connection) -> Self {
+        Self {
+            connection: Some(connection),
+        }
+    }
+
+    /// Connect to the upstream Secret Service owner on the session bus.
     async fn connect_service(&self) -> Result<Proxy<'static>> {
-        let conn = Connection::session().await?;
+        let conn = match &self.connection {
+            Some(connection) => connection.clone(),
+            None => Connection::session().await?,
+        };
         let proxy = Proxy::new(
             &conn,
-            op_core::config::OPDBUS_BUS_NAME,
-            crate::canonical::plugin_path("freedesktop"),
-            crate::canonical::PLUGIN_INTERFACE,
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets",
+            "org.freedesktop.Secret.Service",
         )
         .await?;
         Ok(proxy)
     }
 
-    /// Get available collections via the op-dbus freedesktop plugin
+    /// Get available collections from the upstream Secret Service.
     async fn get_collections(&self) -> Result<Vec<CollectionInfo>> {
-        // The keyring collections are managed through the op-dbus plugin tree.
-        // When no external secret-service provider is registered, return empty.
-        Ok(Vec::new())
+        let service = self.connect_service().await?;
+        let paths: Vec<OwnedObjectPath> = service.get_property("Collections").await?;
+        let mut result = Vec::with_capacity(paths.len());
+        for path in paths {
+            result.push(self.collection_info(&path).await?);
+        }
+        Ok(result)
     }
 
-    /// Get information about a specific collection via the op-dbus freedesktop plugin
-    async fn get_collection_info(&self, _path: &ObjectPath<'_>) -> Result<CollectionInfo> {
-        Err(anyhow::anyhow!(
-            "Collection info requires org.freedesktop.secrets provider via op-dbus freedesktop plugin"
-        ))
+    /// Get typed metadata for one upstream Secret Service collection.
+    async fn get_collection_info(&self, path: &ObjectPath<'_>) -> Result<CollectionInfo> {
+        self.collection_info(path).await
     }
 
-    /// Get the default collection path via the op-dbus freedesktop plugin
+    /// Resolve the upstream Secret Service default alias.
     async fn get_default_collection(&self) -> Result<Option<String>> {
-        Ok(None)
+        let service = self.connect_service().await?;
+        let path: OwnedObjectPath = service.call("ReadAlias", &"default").await?;
+        Ok((path.as_str() != "/").then(|| path.to_string()))
+    }
+
+    async fn collection_info(&self, path: &ObjectPath<'_>) -> Result<CollectionInfo> {
+        let conn = match &self.connection {
+            Some(connection) => connection.clone(),
+            None => Connection::session().await?,
+        };
+        let proxy = Proxy::new(
+            &conn,
+            "org.freedesktop.secrets",
+            path,
+            "org.freedesktop.Secret.Collection",
+        )
+        .await?;
+        Ok(CollectionInfo {
+            path: path.to_string(),
+            label: proxy.get_property("Label").await?,
+            locked: proxy.get_property("Locked").await?,
+            created: proxy.get_property("Created").await?,
+            modified: proxy.get_property("Modified").await?,
+        })
     }
 }
 
@@ -93,14 +128,13 @@ impl Default for KeyringPlugin {
 }
 
 impl KeyringPlugin {
-    /// Check if the Secret Service is available via the op-dbus freedesktop plugin.
-    /// The freedesktop plugin at /org/opdbus/v1/plugins/freedesktop
-    /// provides org.freedesktop.secrets through the plugin system.
+    /// Check whether the session bus is available for Secret Service access.
     /// NOTE: is_available() must NOT spawn subprocesses or do blocking I/O
     /// because it runs during daemon initialization before the D-Bus name is claimed.
     fn check_service_available(&self) -> bool {
         // Check if the op-dbus session bus socket exists, which means the
-        // daemon is running and the freedesktop plugin will be available.
+        // The actual Secret Service call remains authoritative and propagates
+        // errors; this is only a cheap availability hint for registration.
         std::path::Path::new(op_core::config::SESSION_BUS_SOCKET_PATH).exists()
     }
 }
@@ -133,7 +167,7 @@ impl StatePlugin for KeyringPlugin {
     }
 
     fn unavailable_reason(&self) -> String {
-        "org.freedesktop.secrets not available via op-dbus freedesktop plugin at /org/opdbus/v1/plugins/freedesktop".to_string()
+        "org.freedesktop Secret Service is not available on the session bus".to_string()
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
@@ -218,10 +252,8 @@ pub(crate) fn keyring_schema() -> PluginSchema {
         pub default_collection: Option<String>,
     }
 
-    // Backed by real (if currently minimal) dispatchers: no external
-    // org.freedesktop.secrets provider is registered yet, so these honestly
-    // return empty/None rather than fabricating collections. `get_collection_info`
-    // is deliberately NOT exposed as a method — it unconditionally errors today.
+    // These methods query the upstream Secret Service. Unavailable providers
+    // return an error; a successful empty list means the provider has none.
     schema.methods.insert(
         "list_collections".to_string(),
         method_decl_from_schemars_with_output::<EmptyInput, ListCollectionsOutput>(
@@ -277,6 +309,76 @@ pub async fn dispatch_keyring_method(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zbus::connection;
+
+    struct SecretFixture {
+        default_available: bool,
+    }
+    #[zbus::interface(name = "org.freedesktop.Secret.Service")]
+    impl SecretFixture {
+        #[zbus(property)]
+        async fn collections(&self) -> Vec<OwnedObjectPath> {
+            vec![OwnedObjectPath::try_from("/org/freedesktop/secrets/collection/login").unwrap()]
+        }
+        async fn read_alias(&self, alias: &str) -> OwnedObjectPath {
+            if alias == "default" && self.default_available {
+                OwnedObjectPath::try_from("/org/freedesktop/secrets/collection/login").unwrap()
+            } else {
+                OwnedObjectPath::try_from("/").unwrap()
+            }
+        }
+    }
+
+    struct CollectionFixture;
+    #[zbus::interface(name = "org.freedesktop.Secret.Collection")]
+    impl CollectionFixture {
+        #[zbus(property)]
+        async fn label(&self) -> String {
+            "Login".to_string()
+        }
+        #[zbus(property)]
+        async fn locked(&self) -> bool {
+            false
+        }
+        #[zbus(property)]
+        async fn created(&self) -> u64 {
+            11
+        }
+        #[zbus(property)]
+        async fn modified(&self) -> u64 {
+            22
+        }
+    }
+
+    async fn fixture_connection(default_available: bool) -> (Connection, Connection) {
+        let (server_stream, client_stream) = tokio::net::UnixStream::pair().unwrap();
+        let guid = zbus::Guid::generate();
+        let server = connection::Builder::unix_stream(server_stream)
+            .server(guid)
+            .unwrap()
+            .p2p()
+            .serve_at(
+                "/org/freedesktop/secrets",
+                SecretFixture { default_available },
+            )
+            .unwrap();
+        let server = server
+            .serve_at(
+                "/org/freedesktop/secrets/collection/login",
+                CollectionFixture,
+            )
+            .unwrap();
+        let client = connection::Builder::unix_stream(client_stream)
+            .p2p()
+            .build();
+        let (server, client) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::try_join!(server.build(), client)
+        })
+        .await
+        .expect("p2p fixture handshake timed out")
+        .unwrap();
+        (server, client)
+    }
 
     #[tokio::test]
     async fn test_keyring_plugin_creation() {
@@ -293,6 +395,35 @@ mod tests {
         assert!(caps.supports_checkpoints);
         assert!(caps.supports_verification);
         assert!(!caps.atomic_operations);
+    }
+
+    #[tokio::test]
+    async fn secret_service_fixture_returns_collection_and_default() {
+        let (_server, client) = fixture_connection(true).await;
+        let plugin = KeyringPlugin::with_connection(client);
+        let collections = plugin.get_collections().await.unwrap();
+        assert_eq!(collections[0].label, "Login");
+        assert!(!collections[0].locked);
+        assert_eq!(
+            plugin.get_default_collection().await.unwrap().as_deref(),
+            Some("/org/freedesktop/secrets/collection/login")
+        );
+    }
+
+    #[tokio::test]
+    async fn secret_service_failure_is_propagated() {
+        let (server, client) = fixture_connection(true).await;
+        drop(server);
+        let plugin = KeyringPlugin::with_connection(client);
+        assert!(plugin.get_collections().await.is_err());
+        assert!(plugin.get_default_collection().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn secret_service_missing_default_alias_is_none() {
+        let (_server, client) = fixture_connection(false).await;
+        let plugin = KeyringPlugin::with_connection(client);
+        assert_eq!(plugin.get_default_collection().await.unwrap(), None);
     }
 }
 

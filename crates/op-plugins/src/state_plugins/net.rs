@@ -520,11 +520,9 @@ impl NetStatePlugin {
 
                 // Configure gateway if specified via rtnetlink (native netlink)
                 if let Some(ref gateway) = ipv4.gateway {
-                    // Delete existing default route (ignore errors)
-                    let _ = op_network::rtnetlink::del_default_route().await;
-
-                    // Add new default route
-                    match op_network::rtnetlink::add_default_route(&config.name, gateway).await {
+                    // Replace only the main-table default route atomically.
+                    match op_network::rtnetlink::replace_default_route(&config.name, gateway).await
+                    {
                         Ok(_) => {
                             log::info!(
                                 "Added default route via {} on {} via rtnetlink",
@@ -593,8 +591,8 @@ impl NetStatePlugin {
 
                     // Configure gateway if specified
                     if let Some(ref gateway) = ipv4.gateway {
-                        let _ = op_network::rtnetlink::del_default_route().await;
-                        match op_network::rtnetlink::add_default_route(&config.name, gateway).await
+                        match op_network::rtnetlink::replace_default_route(&config.name, gateway)
+                            .await
                         {
                             Ok(_) => {
                                 log::info!("Added default route via {} via rtnetlink", gateway);
@@ -772,7 +770,7 @@ impl StatePlugin for NetStatePlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -955,9 +953,45 @@ impl StatePlugin for NetStatePlugin {
 
 /// apply_interface method input
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ApplyInterfaceInput {
-    /// Interface configuration to apply
-    pub interface: InterfaceConfig,
+    /// The subset of interface state this method can apply natively.
+    pub interface: ApplyInterfaceConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyInterfaceConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub interface_type: ApplyInterfaceType,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv4: Option<StaticIpv4ApplyConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApplyInterfaceType {
+    Ethernet,
+    OvsBridge,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StaticIpv4ApplyConfig {
+    #[serde(default)]
+    pub addresses: Vec<StaticIpv4Address>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StaticIpv4Address {
+    pub ip: String,
+    pub prefix: u8,
 }
 
 /// delete_ovs_bridge method input
@@ -965,6 +999,403 @@ pub struct ApplyInterfaceInput {
 pub struct DeleteOvsBridgeInput {
     /// Bridge name to delete
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InterfaceApplyOutput {
+    pub name: String,
+    pub interface_type: ApplyInterfaceType,
+    pub link_state: String,
+    pub attached_ports: Vec<String>,
+    pub ipv4_addresses: Vec<AddressConfig>,
+    pub default_gateway: Option<String>,
+    pub operations_completed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BridgeDeleteOutput {
+    pub name: String,
+    pub absent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObservedInterface {
+    up: bool,
+    kind: Option<String>,
+    ipv4_addresses: Vec<(String, u8)>,
+}
+
+#[derive(Debug, Clone)]
+struct InterfacePlan {
+    name: String,
+    interface_type: ApplyInterfaceType,
+    ports: Vec<String>,
+    addresses: Vec<AddressConfig>,
+    gateway: Option<String>,
+}
+
+#[async_trait]
+trait NetOperationBackend: Send + Sync {
+    async fn inspect_interface(&self, name: &str) -> Result<Option<ObservedInterface>>;
+    async fn ovs_bridge_exists(&self, name: &str) -> Result<bool>;
+    async fn ovs_bridge_ports(&self, name: &str) -> Result<Vec<String>>;
+    async fn ovs_port_owner(&self, port: &str) -> Result<Option<String>>;
+    async fn create_ovs_bridge(&self, name: &str) -> Result<()>;
+    async fn add_ovs_port(&self, bridge: &str, port: &str) -> Result<()>;
+    async fn delete_ovs_bridge(&self, name: &str) -> Result<()>;
+    async fn link_up(&self, name: &str) -> Result<()>;
+    async fn add_ipv4_address(&self, name: &str, address: &str, prefix: u8) -> Result<()>;
+    async fn replace_default_route(&self, name: &str, gateway: &str) -> Result<()>;
+    async fn default_route_matches(&self, name: &str, gateway: &str) -> Result<bool>;
+}
+
+struct NativeNetBackend;
+
+#[async_trait]
+impl NetOperationBackend for NativeNetBackend {
+    async fn inspect_interface(&self, name: &str) -> Result<Option<ObservedInterface>> {
+        let interface = op_network::rtnetlink::list_interfaces()
+            .await?
+            .into_iter()
+            .find(|interface| interface.name == name);
+        Ok(interface.map(|interface| ObservedInterface {
+            up: interface.state == "up",
+            kind: interface.kind,
+            ipv4_addresses: interface
+                .addresses
+                .into_iter()
+                .filter(|address| address.family == "inet")
+                .map(|address| (address.address, address.prefix_len))
+                .collect(),
+        }))
+    }
+
+    async fn ovs_bridge_exists(&self, name: &str) -> Result<bool> {
+        op_network::rovs_proxy::OvsdbDbusClient::new()
+            .bridge_exists(name)
+            .await
+    }
+
+    async fn ovs_bridge_ports(&self, name: &str) -> Result<Vec<String>> {
+        op_network::rovs_proxy::OvsdbDbusClient::new()
+            .list_bridge_ports(name)
+            .await
+    }
+
+    async fn ovs_port_owner(&self, port: &str) -> Result<Option<String>> {
+        let client = op_network::rovs_proxy::OvsdbDbusClient::new();
+        for bridge in client.list_bridges().await? {
+            if client
+                .list_bridge_ports(&bridge)
+                .await?
+                .iter()
+                .any(|candidate| candidate == port)
+            {
+                return Ok(Some(bridge));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn create_ovs_bridge(&self, name: &str) -> Result<()> {
+        op_network::rovs_proxy::OvsdbDbusClient::new()
+            .create_bridge(name)
+            .await
+    }
+
+    async fn add_ovs_port(&self, bridge: &str, port: &str) -> Result<()> {
+        op_network::rovs_proxy::OvsdbDbusClient::new()
+            .add_port(bridge, port)
+            .await
+    }
+
+    async fn delete_ovs_bridge(&self, name: &str) -> Result<()> {
+        op_network::rovs_proxy::OvsdbDbusClient::new()
+            .delete_bridge(name)
+            .await
+    }
+
+    async fn link_up(&self, name: &str) -> Result<()> {
+        op_network::rtnetlink::link_up(name).await
+    }
+
+    async fn add_ipv4_address(&self, name: &str, address: &str, prefix: u8) -> Result<()> {
+        op_network::rtnetlink::add_ipv4_address(name, address, prefix).await
+    }
+
+    async fn replace_default_route(&self, name: &str, gateway: &str) -> Result<()> {
+        op_network::rtnetlink::replace_default_route(name, gateway).await
+    }
+
+    async fn default_route_matches(&self, name: &str, gateway: &str) -> Result<bool> {
+        op_network::rtnetlink::default_route_matches(name, gateway).await
+    }
+}
+
+fn validate_interface_name(name: &str) -> Result<()> {
+    anyhow::ensure!(
+        !name.is_empty() && name.len() <= 15,
+        "invalid interface name"
+    );
+    anyhow::ensure!(
+        name.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b)),
+        "interface name contains unsafe characters"
+    );
+    Ok(())
+}
+
+fn plan_interface(config: &ApplyInterfaceConfig) -> Result<InterfacePlan> {
+    validate_interface_name(&config.name)?;
+    match &config.interface_type {
+        ApplyInterfaceType::Ethernet => {
+            anyhow::ensure!(
+                config.ports.is_empty(),
+                "ethernet does not own bridge ports"
+            );
+        }
+        ApplyInterfaceType::OvsBridge => {}
+    }
+
+    let mut planned_addresses = Vec::new();
+    let mut planned_gateway = None;
+    if let Some(ipv4) = &config.ipv4 {
+        for address in &ipv4.addresses {
+            anyhow::ensure!(
+                address.ip.parse::<std::net::Ipv4Addr>().is_ok(),
+                "invalid IPv4 address"
+            );
+            anyhow::ensure!(address.prefix <= 32, "invalid IPv4 prefix");
+            planned_addresses.push(AddressConfig {
+                ip: address.ip.clone(),
+                prefix: address.prefix,
+            });
+        }
+        if let Some(requested_gateway) = &ipv4.gateway {
+            anyhow::ensure!(
+                requested_gateway.parse::<std::net::Ipv4Addr>().is_ok(),
+                "invalid IPv4 gateway"
+            );
+            planned_gateway = Some(requested_gateway.clone());
+        }
+    }
+    let mut unique_ports = std::collections::HashSet::new();
+    for port in &config.ports {
+        validate_interface_name(port)?;
+        anyhow::ensure!(
+            port != &config.name,
+            "a bridge cannot attach itself as a port"
+        );
+        anyhow::ensure!(unique_ports.insert(port), "duplicate bridge port '{port}'");
+    }
+    Ok(InterfacePlan {
+        name: config.name.clone(),
+        interface_type: config.interface_type.clone(),
+        ports: config.ports.clone(),
+        addresses: planned_addresses,
+        gateway: planned_gateway,
+    })
+}
+
+async fn apply_interface_with_backend(
+    backend: &dyn NetOperationBackend,
+    config: &ApplyInterfaceConfig,
+) -> Result<InterfaceApplyOutput> {
+    // This pure planning pass validates every requested field before the first
+    // backend query or mutation.
+    let plan = plan_interface(config)?;
+    let initial_interface = backend.inspect_interface(&plan.name).await?;
+    let mut initial_ports = Vec::new();
+    let bridge_exists = if matches!(&plan.interface_type, ApplyInterfaceType::OvsBridge) {
+        let exists = backend.ovs_bridge_exists(&plan.name).await?;
+        if exists {
+            initial_ports = backend.ovs_bridge_ports(&plan.name).await?;
+        }
+        exists
+    } else {
+        false
+    };
+    if matches!(&plan.interface_type, ApplyInterfaceType::Ethernet) {
+        let observed = initial_interface
+            .as_ref()
+            .context("ethernet interface does not exist")?;
+        anyhow::ensure!(
+            observed.kind.is_none(),
+            "requested ethernet is a virtual interface of kind {:?}",
+            observed.kind
+        );
+    }
+    if matches!(&plan.interface_type, ApplyInterfaceType::OvsBridge) {
+        for port in &plan.ports {
+            backend
+                .inspect_interface(port)
+                .await?
+                .with_context(|| format!("OVS port interface '{port}' does not exist"))?;
+            if let Some(owner) = backend.ovs_port_owner(port).await? {
+                anyhow::ensure!(
+                    owner == plan.name,
+                    "OVS port '{port}' is already owned by bridge '{owner}'"
+                );
+            }
+        }
+    }
+
+    let mut completed = Vec::new();
+    let result: Result<()> = async {
+        if matches!(&plan.interface_type, ApplyInterfaceType::OvsBridge) {
+            if !bridge_exists {
+                backend.create_ovs_bridge(&plan.name).await?;
+                completed.push("create_ovs_bridge".to_string());
+            }
+            for port in &plan.ports {
+                if !initial_ports.contains(port) {
+                    backend.add_ovs_port(&plan.name, port).await?;
+                    completed.push(format!("add_ovs_port:{port}"));
+                }
+            }
+        }
+
+        if initial_interface
+            .as_ref()
+            .is_none_or(|interface| !interface.up)
+        {
+            backend.link_up(&plan.name).await?;
+            completed.push("link_up".to_string());
+        }
+        let existing_addresses = initial_interface
+            .as_ref()
+            .map(|interface| interface.ipv4_addresses.as_slice())
+            .unwrap_or_default();
+        for address in &plan.addresses {
+            if !existing_addresses.contains(&(address.ip.clone(), address.prefix)) {
+                backend
+                    .add_ipv4_address(&plan.name, &address.ip, address.prefix)
+                    .await?;
+                completed.push(format!("add_ipv4:{}/{}", address.ip, address.prefix));
+            }
+        }
+        if let Some(gateway) = &plan.gateway {
+            if !backend.default_route_matches(&plan.name, gateway).await? {
+                backend.replace_default_route(&plan.name, gateway).await?;
+                completed.push(format!("replace_default_route:{gateway}"));
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        anyhow::bail!(
+            "partial failure applying '{}': {}; completed steps: {:?}",
+            plan.name,
+            error,
+            completed
+        );
+    }
+
+    let observed = backend
+        .inspect_interface(&plan.name)
+        .await?
+        .context("interface absent after apply")?;
+    anyhow::ensure!(observed.up, "interface is not up after apply");
+    for address in &plan.addresses {
+        anyhow::ensure!(
+            observed
+                .ipv4_addresses
+                .contains(&(address.ip.clone(), address.prefix)),
+            "IPv4 address {}/{} is absent after apply",
+            address.ip,
+            address.prefix
+        );
+    }
+    let mut attached_ports = Vec::new();
+    if matches!(&plan.interface_type, ApplyInterfaceType::OvsBridge) {
+        anyhow::ensure!(
+            backend.ovs_bridge_exists(&plan.name).await?,
+            "OVS bridge is absent after apply"
+        );
+        attached_ports = backend.ovs_bridge_ports(&plan.name).await?;
+        for port in &plan.ports {
+            anyhow::ensure!(
+                attached_ports.contains(port),
+                "OVS port {port} is absent after apply"
+            );
+        }
+        attached_ports.sort();
+    }
+    let default_route_verified = match &plan.gateway {
+        Some(gateway) => backend.default_route_matches(&plan.name, gateway).await?,
+        None => false,
+    };
+    anyhow::ensure!(
+        plan.gateway.is_none() || default_route_verified,
+        "default route is absent after apply"
+    );
+    let default_gateway = if default_route_verified {
+        plan.gateway.clone()
+    } else {
+        None
+    };
+    let mut ipv4_addresses = observed
+        .ipv4_addresses
+        .into_iter()
+        .map(|(ip, prefix)| AddressConfig { ip, prefix })
+        .collect::<Vec<_>>();
+    ipv4_addresses.sort_by(|left, right| (&left.ip, left.prefix).cmp(&(&right.ip, right.prefix)));
+    Ok(InterfaceApplyOutput {
+        name: plan.name,
+        interface_type: plan.interface_type,
+        link_state: "up".to_string(),
+        attached_ports,
+        ipv4_addresses,
+        default_gateway,
+        operations_completed: completed,
+    })
+}
+
+async fn delete_bridge_with_backend(
+    backend: &dyn NetOperationBackend,
+    name: &str,
+) -> Result<BridgeDeleteOutput> {
+    validate_interface_name(name)?;
+    anyhow::ensure!(
+        backend.ovs_bridge_exists(name).await?,
+        "OVS bridge '{name}' does not exist"
+    );
+    backend.delete_ovs_bridge(name).await?;
+    anyhow::ensure!(
+        !backend.ovs_bridge_exists(name).await?,
+        "OVS bridge still exists after deletion"
+    );
+    Ok(BridgeDeleteOutput {
+        name: name.to_string(),
+        absent: true,
+    })
+}
+
+pub async fn dispatch_net_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "apply_interface" => {
+            let input: ApplyInterfaceInput = serde_json::from_value(args.clone())
+                .context("invalid apply_interface arguments")?;
+            Ok(serde_json::to_value(
+                apply_interface_with_backend(&NativeNetBackend, &input.interface).await?,
+            )?)
+        }
+        "delete_ovs_bridge" => {
+            let input: DeleteOvsBridgeInput = serde_json::from_value(args.clone())
+                .context("invalid delete_ovs_bridge arguments")?;
+            Ok(serde_json::to_value(
+                delete_bridge_with_backend(&NativeNetBackend, &input.name).await?,
+            )?)
+        }
+        _ => anyhow::bail!(
+            "unknown net method '{}'; no canonical backend dispatch",
+            method
+        ),
+    }
 }
 
 // impl Default for NetStatePlugin {
@@ -978,7 +1409,7 @@ pub(crate) fn net_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "net",
-        "1.0.0",
+        "2.0.0",
         "Network interface management via rtnetlink",
         &root,
     );
@@ -986,7 +1417,7 @@ pub(crate) fn net_schema() -> PluginSchema {
         "apply_interface".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ApplyInterfaceInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            InterfaceApplyOutput,
         >(
             "apply_interface",
             op_state_store::SideEffect::Mutation,
@@ -999,7 +1430,7 @@ pub(crate) fn net_schema() -> PluginSchema {
         "delete_ovs_bridge".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             DeleteOvsBridgeInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            BridgeDeleteOutput,
         >(
             "delete_ovs_bridge",
             op_state_store::SideEffect::Mutation,
@@ -1023,12 +1454,158 @@ pub(crate) fn net_schema() -> PluginSchema {
         },
     );
 
+    // Publish the typed L2 topology only. Addresses, controllers, dynamic
+    // properties, and property-schema contents remain internal.
+    schema.public_state.paths = vec![
+        "/interfaces/*/name".to_string(),
+        "/interfaces/*/type".to_string(),
+        "/interfaces/*/driver".to_string(),
+        "/interfaces/*/ports".to_string(),
+    ];
+
     schema
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct MockState {
+        interface: Option<ObservedInterface>,
+        bridge_exists: bool,
+        ports: Vec<String>,
+        route: Option<String>,
+        port_owner: Option<String>,
+        operations: Vec<String>,
+        fail_on: Option<String>,
+    }
+
+    #[derive(Clone, Default)]
+    struct MockBackend(Arc<Mutex<MockState>>);
+
+    impl MockBackend {
+        fn fail_on(operation: &str) -> Self {
+            let backend = Self::default();
+            backend.0.lock().unwrap().fail_on = Some(operation.to_string());
+            backend
+        }
+
+        fn operations(&self) -> Vec<String> {
+            self.0.lock().unwrap().operations.clone()
+        }
+
+        fn record(state: &mut MockState, operation: String) -> Result<()> {
+            state.operations.push(operation.clone());
+            if state.fail_on.as_deref() == Some(operation.as_str()) {
+                anyhow::bail!("fixture failure at {operation}");
+            }
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl NetOperationBackend for MockBackend {
+        async fn inspect_interface(&self, name: &str) -> Result<Option<ObservedInterface>> {
+            if name == "eth0" {
+                return Ok(Some(ObservedInterface {
+                    up: true,
+                    kind: None,
+                    ipv4_addresses: Vec::new(),
+                }));
+            }
+            Ok(self.0.lock().unwrap().interface.clone())
+        }
+
+        async fn ovs_bridge_exists(&self, _name: &str) -> Result<bool> {
+            Ok(self.0.lock().unwrap().bridge_exists)
+        }
+
+        async fn ovs_bridge_ports(&self, _name: &str) -> Result<Vec<String>> {
+            Ok(self.0.lock().unwrap().ports.clone())
+        }
+
+        async fn ovs_port_owner(&self, _port: &str) -> Result<Option<String>> {
+            Ok(self.0.lock().unwrap().port_owner.clone())
+        }
+
+        async fn create_ovs_bridge(&self, name: &str) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            Self::record(&mut state, format!("create:{name}"))?;
+            state.bridge_exists = true;
+            state.interface = Some(ObservedInterface {
+                up: false,
+                kind: Some("OpenVSwitch".to_string()),
+                ipv4_addresses: Vec::new(),
+            });
+            Ok(())
+        }
+
+        async fn add_ovs_port(&self, bridge: &str, port: &str) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            Self::record(&mut state, format!("port:{bridge}:{port}"))?;
+            state.ports.push(port.to_string());
+            Ok(())
+        }
+
+        async fn delete_ovs_bridge(&self, name: &str) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            Self::record(&mut state, format!("delete:{name}"))?;
+            state.bridge_exists = false;
+            state.interface = None;
+            Ok(())
+        }
+
+        async fn link_up(&self, name: &str) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            Self::record(&mut state, format!("up:{name}"))?;
+            state
+                .interface
+                .as_mut()
+                .context("fixture interface absent")?
+                .up = true;
+            Ok(())
+        }
+
+        async fn add_ipv4_address(&self, name: &str, address: &str, prefix: u8) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            Self::record(&mut state, format!("address:{name}:{address}/{prefix}"))?;
+            state
+                .interface
+                .as_mut()
+                .context("fixture interface absent")?
+                .ipv4_addresses
+                .push((address.to_string(), prefix));
+            Ok(())
+        }
+
+        async fn replace_default_route(&self, name: &str, gateway: &str) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            Self::record(&mut state, format!("route:{name}:{gateway}"))?;
+            state.route = Some(gateway.to_string());
+            Ok(())
+        }
+
+        async fn default_route_matches(&self, _name: &str, gateway: &str) -> Result<bool> {
+            Ok(self.0.lock().unwrap().route.as_deref() == Some(gateway))
+        }
+    }
+
+    fn ovs_bridge_config() -> ApplyInterfaceConfig {
+        ApplyInterfaceConfig {
+            name: "switch0".to_string(),
+            interface_type: ApplyInterfaceType::OvsBridge,
+            ports: vec!["eth0".to_string()],
+            ipv4: Some(StaticIpv4ApplyConfig {
+                addresses: vec![StaticIpv4Address {
+                    ip: "192.0.2.2".to_string(),
+                    prefix: 24,
+                }],
+                gateway: Some("192.0.2.1".to_string()),
+            }),
+        }
+    }
 
     /// Every `x-oscal-subid` annotation in the derived schema must be a valid
     /// OSCAL subid according to the canonical taxonomy.
@@ -1057,6 +1634,151 @@ mod tests {
                 collect_subids(v, out);
             }
         }
+    }
+
+    #[test]
+    fn preflight_rejects_every_unsupported_field_before_backend() {
+        let backend = MockBackend::default();
+        let error = serde_json::from_value::<ApplyInterfaceInput>(serde_json::json!({
+            "interface": {
+                "name": "switch0", "type": "ovs-bridge", "ports": [],
+                "ipv4": {"addresses": [], "dns": ["1.1.1.1"]}
+            }
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+        assert!(backend.operations().is_empty());
+
+        assert!(
+            serde_json::from_value::<ApplyInterfaceInput>(serde_json::json!({
+                "interface": {"name":"port0", "type":"ovs-port"}
+            }))
+            .is_err()
+        );
+        assert!(serde_json::from_value::<ApplyInterfaceInput>(serde_json::json!({
+            "interface": {"name":"switch0", "type":"ovs-bridge", "controller":"tcp:127.0.0.1:6653"}
+        }))
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn apply_executes_complete_plan_and_returns_observed_postconditions() {
+        let backend = MockBackend::default();
+        let output = apply_interface_with_backend(&backend, &ovs_bridge_config())
+            .await
+            .unwrap();
+        assert_eq!(output.name, "switch0");
+        assert_eq!(output.link_state, "up");
+        assert_eq!(output.attached_ports, ["eth0"]);
+        assert_eq!(output.default_gateway.as_deref(), Some("192.0.2.1"));
+        assert!(output
+            .ipv4_addresses
+            .iter()
+            .any(|address| address.ip == "192.0.2.2" && address.prefix == 24));
+        assert_eq!(
+            backend.operations(),
+            [
+                "create:switch0",
+                "port:switch0:eth0",
+                "up:switch0",
+                "address:switch0:192.0.2.2/24",
+                "route:switch0:192.0.2.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn ethernet_requires_an_existing_physical_link() {
+        let backend = MockBackend::default();
+        let config = ApplyInterfaceConfig {
+            name: "eth0".to_string(),
+            interface_type: ApplyInterfaceType::Ethernet,
+            ports: Vec::new(),
+            ipv4: None,
+        };
+        let output = apply_interface_with_backend(&backend, &config)
+            .await
+            .unwrap();
+        assert_eq!(output.interface_type, ApplyInterfaceType::Ethernet);
+        assert_eq!(output.link_state, "up");
+        assert!(backend.operations().is_empty());
+
+        backend.0.lock().unwrap().interface = Some(ObservedInterface {
+            up: true,
+            kind: Some("Dummy".to_string()),
+            ipv4_addresses: Vec::new(),
+        });
+        let virtual_config = ApplyInterfaceConfig {
+            name: "virtual0".to_string(),
+            interface_type: ApplyInterfaceType::Ethernet,
+            ports: Vec::new(),
+            ipv4: None,
+        };
+        assert!(apply_interface_with_backend(&backend, &virtual_config)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("virtual interface"));
+    }
+
+    #[tokio::test]
+    async fn partial_failure_reports_completed_native_operations() {
+        let backend = MockBackend::fail_on("address:switch0:192.0.2.2/24");
+        let error = apply_interface_with_backend(&backend, &ovs_bridge_config())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("partial failure"));
+        assert!(error.to_string().contains("link_up"));
+        assert_eq!(
+            backend.operations(),
+            [
+                "create:switch0",
+                "port:switch0:eth0",
+                "up:switch0",
+                "address:switch0:192.0.2.2/24",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn port_owned_by_another_bridge_fails_before_mutation() {
+        let backend = MockBackend::default();
+        backend.0.lock().unwrap().port_owner = Some("other-bridge".to_string());
+        let error = apply_interface_with_backend(&backend, &ovs_bridge_config())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("already owned"));
+        assert!(backend.operations().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bridge_delete_uses_ovsdb_membership_without_name_heuristics() {
+        let backend = MockBackend::default();
+        {
+            let mut state = backend.0.lock().unwrap();
+            state.bridge_exists = true;
+            state.interface = Some(ObservedInterface {
+                up: true,
+                kind: Some("OpenVSwitch".to_string()),
+                ipv4_addresses: Vec::new(),
+            });
+        }
+        let output = delete_bridge_with_backend(&backend, "switch0")
+            .await
+            .unwrap();
+        assert!(output.absent);
+        assert_eq!(backend.operations(), ["delete:switch0"]);
+    }
+
+    #[test]
+    fn invalid_ipv4_is_rejected_during_pure_preflight() {
+        let mut config = ovs_bridge_config();
+        config.ipv4.as_mut().unwrap().addresses = vec![StaticIpv4Address {
+            ip: "not-an-ip".to_string(),
+            prefix: 24,
+        }];
+        let error = plan_interface(&config).unwrap_err();
+        assert!(error.to_string().contains("invalid IPv4 address"));
     }
 }
 

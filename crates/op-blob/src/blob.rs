@@ -168,11 +168,10 @@ pub fn blobify_canonical(
         .map(|d| {
             let decl = schema
                 .methods
-                .get(&d.method_name)
-                .or_else(|| schema.methods.values().find(|m| m.name == d.method_name))
+                .get(&d.schema_name)
                 .expect("descriptor method must come from PluginSchema.methods");
             MethodManifest {
-                schema_name: decl.name.clone(),
+                schema_name: d.schema_name.clone(),
                 grpc_name: descriptor::pascal_case(&decl.name),
                 grpc_path: d.grpc_path.clone(),
                 grpc_service: d.service_full.clone(),
@@ -321,6 +320,32 @@ pub struct BlobRef<'a> {
 
 impl<'a> BlobRef<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<Self, String> {
+        let blob = Self::parse_structure(bytes)?;
+        let mut hash = Sha256::new();
+        hash.update(blob.schema_json().as_bytes());
+        if hash.finalize().as_slice() != &bytes[16..48] {
+            return Err("schema hash mismatch: blob is corrupt or tampered".into());
+        }
+        Ok(blob)
+    }
+
+    /// Borrow an already sealed, manifest-pinned catalog artifact without
+    /// recomputing its digest. The expected hash MUST come from the trusted
+    /// sealer-owned catalog, never an untrusted request. This validates format,
+    /// bounds, UTF-8 and stored header identity; it does not authenticate bytes.
+    /// Use `new` for untrusted imports and producer-side integrity checks.
+    pub fn from_manifest_pinned(bytes: &'a [u8], expected_hash: &str) -> Result<Self, String> {
+        let blob = Self::parse_structure(bytes)?;
+        if expected_hash.len() != 64
+            || !expected_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || blob.schema_hash_hex() != expected_hash
+        {
+            return Err("manifest/blob stored schema hash mismatch".into());
+        }
+        Ok(blob)
+    }
+
+    fn parse_structure(bytes: &'a [u8]) -> Result<Self, String> {
         if bytes.len() < HEADER_LEN || &bytes[..8] != MAGIC {
             return Err("not an OPBLOB01 blob".into());
         }
@@ -333,14 +358,30 @@ impl<'a> BlobRef<'a> {
         if bytes.len() < table_end {
             return Err("section table overruns blob".into());
         }
-        let mut sections = Vec::with_capacity(count);
+        let mut sections: Vec<(u32, usize, usize)> = Vec::with_capacity(count);
         for i in 0..count {
             let e = HEADER_LEN + i * SECTION_ENTRY_LEN;
             let tag = u32::from_le_bytes(bytes[e..e + 4].try_into().unwrap());
-            let off = u64::from_le_bytes(bytes[e + 8..e + 16].try_into().unwrap()) as usize;
-            let len = u64::from_le_bytes(bytes[e + 16..e + 24].try_into().unwrap()) as usize;
-            if off + len > bytes.len() {
+            let off = usize::try_from(u64::from_le_bytes(bytes[e + 8..e + 16].try_into().unwrap()))
+                .map_err(|_| format!("section {tag} offset overflows address space"))?;
+            let len = usize::try_from(u64::from_le_bytes(
+                bytes[e + 16..e + 24].try_into().unwrap(),
+            ))
+            .map_err(|_| format!("section {tag} length overflows address space"))?;
+            if off < table_end || off.checked_add(len).is_none_or(|end| end > bytes.len()) {
                 return Err(format!("section {tag} overruns blob"));
+            }
+            if sections
+                .iter()
+                .any(|(previous_tag, previous_offset, previous_length)| {
+                    *previous_tag == tag
+                        || (len > 0
+                            && *previous_length > 0
+                            && off < previous_offset + previous_length
+                            && *previous_offset < off + len)
+                })
+            {
+                return Err(format!("duplicate or overlapping section {tag}"));
             }
             sections.push((tag, off, len));
         }
@@ -359,11 +400,6 @@ impl<'a> BlobRef<'a> {
         std::str::from_utf8(manifest)
             .map_err(|e| format!("manifest section is not valid UTF-8: {e}"))?;
 
-        let mut h = Sha256::new();
-        h.update(schema);
-        if h.finalize().as_slice() != &bytes[16..48] {
-            return Err("schema hash mismatch: blob is corrupt or tampered".into());
-        }
         Ok(blob)
     }
 

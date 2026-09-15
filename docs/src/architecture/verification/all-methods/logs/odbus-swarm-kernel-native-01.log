@@ -1,0 +1,18 @@
+
+running 2 tests
+test state_plugins::full_system::tests::native_hostname_owner_effect_isolated_to_uts_namespace_and_file ... ok
+
+thread 'state_plugins::rtnetlink::tests::all_declared_methods_apply_and_readback_in_isolated_network_namespace' (24137) panicked at crates/op-plugins/src/state_plugins/rtnetlink.rs:992:13:
+assertion `left == right` failed
+  left: String("Inet(192.0.2.254)")
+ right: "192.0.2.254"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test state_plugins::rtnetlink::tests::all_declared_methods_apply_and_readback_in_isolated_network_namespace ... FAILED
+
+failures:
+
+failures:
+    state_plugins::rtnetlink::tests::all_declared_methods_apply_and_readback_in_isolated_network_namespace
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 494 filtered out; finished in 0.03s
+

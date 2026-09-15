@@ -70,7 +70,7 @@ pub async fn chat_message(
         Some(model) => model,
         None => state.chat_manager.current_model().await,
     };
-    if let Err(e) = crate::tched_router_routes::ensure_model_available(&selected_model) {
+    if let Err(e) = crate::tched_router_routes::ensure_model_available(&selected_model).await {
         return (
             StatusCode::CONFLICT,
             Json(ChatResponse {
@@ -102,17 +102,32 @@ pub async fn chat_message(
             .chat_with(pt, &selected_model, messages)
             .await
     } else if req.model.is_some() {
-        let Some(route) = crate::tched_router_routes::route_for_model(&selected_model) else {
-            return (
-                StatusCode::CONFLICT,
-                Json(ChatResponse {
-                    content: String::new(),
-                    provider: "tched_router".to_string(),
-                    model: selected_model,
-                    tools_used: None,
-                    error: Some("Model is not routed by 3tched Router".to_string()),
-                }),
-            );
+        let route = match crate::tched_router_routes::route_for_model(&selected_model).await {
+            Ok(Some(route)) => route,
+            Ok(None) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ChatResponse {
+                        content: String::new(),
+                        provider: "tched_router".to_string(),
+                        model: selected_model,
+                        tools_used: None,
+                        error: Some("Model is not routed by 3tched Router".to_string()),
+                    }),
+                );
+            }
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(ChatResponse {
+                        content: String::new(),
+                        provider: "tched_router".to_string(),
+                        model: selected_model,
+                        tools_used: None,
+                        error: Some(format!("Router state unavailable: {error}")),
+                    }),
+                );
+            }
         };
         let provider_type = match route.upstream_provider.parse::<ProviderType>() {
             Ok(provider_type) if state.chat_manager.has_provider(&provider_type) => provider_type,

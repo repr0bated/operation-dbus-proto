@@ -47,6 +47,22 @@ pub fn plugin_schema_from_json(
     description: &str,
     root: &JVal,
 ) -> PluginSchema {
+    try_plugin_schema_from_json(name, version, description, root).unwrap_or_else(|error| {
+        panic!("plugin {name} state schema cannot be represented without loss: {error:?}")
+    })
+}
+
+/// Fallible producer boundary. Rejects recursive references, mixed dynamic /
+/// named objects, and unsupported map-value constraints before conversion.
+/// This never reads a catalog or establishes runtime plugin existence.
+pub fn try_plugin_schema_from_json(
+    name: &str,
+    version: &str,
+    description: &str,
+    root: &JVal,
+) -> Result<PluginSchema, op_state_store::state_schema_shape::StateSchemaShapeError> {
+    let prepared = op_state_store::state_schema_shape::prepare_state_schema(root)?;
+    let root = &prepared;
     let defs = root
         .get("$defs")
         .or_else(|| root.get("definitions"))
@@ -109,14 +125,16 @@ pub fn plugin_schema_from_json(
     // declaring the subid is enough — the accountability fields it implies
     // cannot be forgotten separately.
     super::common::oscal::ensure_category_metadata_fields(&mut schema);
-    schema
+    Ok(schema)
 }
 
 /// Follow a single `$ref` into `$defs`/`definitions`, recursively.
 fn resolve<'a>(node: &'a JVal, defs: Option<&'a Map<String, JVal>>) -> &'a JVal {
     if let (Some(r), Some(d)) = (node.get("$ref").and_then(JVal::as_str), defs) {
         if let Some(key) = r.rsplit('/').next() {
-            if let Some(target) = d.get(key) {
+            let key = op_state_store::state_schema_shape::decode_component(key)
+                .expect("producer preflight checked the local reference");
+            if let Some(target) = d.get(&key) {
                 return resolve(target, defs);
             }
         }
@@ -136,7 +154,26 @@ fn required_set(node: &JVal) -> HashSet<String> {
 }
 
 fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
-    let node = resolve(node, defs);
+    // An explicit field opt-in can accompany a local reference. Its prepared
+    // self-contained document must not be replaced by the finite target view.
+    let node = if node
+        .get("x-opdbus-exact-json-schema")
+        .and_then(JVal::as_bool)
+        == Some(true)
+    {
+        node
+    } else {
+        resolve(node, defs)
+    };
+    if node
+        .get("x-opdbus-exact-json-schema")
+        .and_then(JVal::as_bool)
+        == Some(true)
+    {
+        let document = op_state_store::exact_schema::self_contained_field_schema(node, defs)
+            .expect("producer preflight admitted the explicit exact field");
+        return FieldType::exact_json_schema(document).expect("preflight admitted exact field");
+    }
 
     // `anyOf`/`oneOf` covers two distinct schemars patterns:
     //   * `Option<T>` (and other single-real-branch unions) emit one non-null
@@ -162,6 +199,10 @@ fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
         }
     }
 
+    if let Some(value) = node.get("const").and_then(JVal::as_str) {
+        return FieldType::Enum(vec![value.to_owned()]);
+    }
+
     if let Some(en) = node.get("enum").and_then(JVal::as_array) {
         return FieldType::Enum(
             en.iter()
@@ -183,6 +224,14 @@ fn field_type(node: &JVal, defs: Option<&Map<String, JVal>>) -> FieldType {
             FieldType::Array(Box::new(item))
         }
         Some("object") => {
+            let named = node.get("properties").and_then(JVal::as_object);
+            if named.is_none_or(|properties| properties.is_empty()) {
+                if let Some(additional) = node.get("additionalProperties") {
+                    if additional != &JVal::Bool(false) {
+                        return FieldType::Map(Box::new(field_type(additional, defs)));
+                    }
+                }
+            }
             let req = required_set(node);
             let mut m = HashMap::new();
             if let Some(props) = node.get("properties").and_then(JVal::as_object) {
@@ -221,13 +270,32 @@ fn field_schema(node: &JVal, defs: Option<&Map<String, JVal>>, required: bool) -
             .to_string(),
         default: meta.get("default").map(to_simd),
         example: example_of(meta).map(to_simd),
-        constraints: constraints(meta),
+        constraints: constraints(constraint_node(meta, defs)),
         read_only: meta
             .get("readOnly")
             .and_then(JVal::as_bool)
             .unwrap_or(false),
         read_only_when: None,
     }
+}
+
+// The finite producer preflight admits only one non-null optional branch
+// when a shared FieldSchema must carry its constraints.
+fn constraint_node<'a>(node: &'a JVal, defs: Option<&'a Map<String, JVal>>) -> &'a JVal {
+    let resolved = resolve(node, defs);
+    if let Some(alternatives) = resolved
+        .get("anyOf")
+        .or_else(|| resolved.get("oneOf"))
+        .and_then(JVal::as_array)
+    {
+        let mut concrete = alternatives
+            .iter()
+            .filter(|node| type_str(node) != Some("null"));
+        if let (Some(single), None) = (concrete.next(), concrete.next()) {
+            return constraint_node(single, defs);
+        }
+    }
+    resolved
 }
 
 fn example_of(node: &JVal) -> Option<&JVal> {
@@ -402,6 +470,12 @@ fn field_diffs(d: &mut Vec<String>, prefix: &str, r: &FieldSchema, v: &FieldSche
 #[cfg(test)]
 fn field_type_diffs(d: &mut Vec<String>, prefix: &str, r: &FieldType, v: &FieldType) {
     match (r, v) {
+        (FieldType::JsonSchema(left), FieldType::JsonSchema(right)) if left != right => {
+            d.push(format!("{prefix}: exact schema changed"));
+        }
+        (FieldType::Map(r_inner), FieldType::Map(v_inner)) => {
+            field_type_diffs(d, &format!("{prefix}{{value}}"), r_inner, v_inner);
+        }
         (FieldType::Array(r_inner), FieldType::Array(v_inner)) => {
             field_type_diffs(d, &format!("{prefix}[]"), r_inner, v_inner);
         }
@@ -452,6 +526,7 @@ fn type_tag(t: &FieldType) -> String {
         FieldType::Integer => "integer".into(),
         FieldType::Float => "float".into(),
         FieldType::Boolean => "boolean".into(),
+        FieldType::JsonSchema(_) => "json_schema".into(),
         FieldType::Any => "any".into(),
         FieldType::Enum(_) => "enum".into(),
         FieldType::OneOf(branches) => {
@@ -459,6 +534,7 @@ fn type_tag(t: &FieldType) -> String {
             tags.sort();
             format!("one_of<{}>", tags.join("|"))
         }
+        FieldType::Map(i) => format!("map<string,{}>", type_tag(i)),
         FieldType::Array(i) => format!("array<{}>", type_tag(i)),
         FieldType::Object(m) => {
             let mut entries: Vec<String> = m
@@ -616,5 +692,162 @@ mod tests {
         assert!(validate_subid("bad-category.software.foo.bar").is_err());
         assert!(validate_subid("mut.bad-type.foo.bar").is_err());
         assert!(validate_subid("mut.software.foo").is_err());
+    }
+}
+
+#[cfg(test)]
+mod typed_map_adapter_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Leaf {
+        ready: bool,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Job {
+        children: BTreeMap<String, Leaf>,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Workspace {
+        jobs: BTreeMap<String, Job>,
+    }
+    #[test]
+    fn actual_schemars_maps_keep_stable_typed_children_and_match_blob_adapter() {
+        let source = serde_json::to_value(schemars::schema_for!(Workspace)).unwrap();
+        let schema = try_plugin_schema_from_json("workspace", "2.0.0", "", &source).unwrap();
+        let blob_view =
+            op_blob::adapter::try_plugin_schema_from_json("workspace", "2.0.0", "", &source)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&schema.fields).unwrap(),
+            serde_json::to_value(&blob_view.fields).unwrap()
+        );
+        let FieldType::Map(job) = &schema.fields["jobs"].field_type else {
+            panic!("map lost")
+        };
+        let FieldType::Object(job) = job.as_ref() else {
+            panic!("job type lost")
+        };
+        let FieldType::Map(leaf) = &job["children"].field_type else {
+            panic!("child map lost")
+        };
+        let FieldType::Object(leaf) = leaf.as_ref() else {
+            panic!("leaf type lost")
+        };
+        assert_eq!(leaf["ready"].field_type, FieldType::Boolean);
+        let exported = serde_json::to_value(schema.to_json_schema()).unwrap();
+        let rebuilt = try_plugin_schema_from_json("workspace", "2.0.0", "", &exported).unwrap();
+        assert_eq!(schema.fields, rebuilt.fields);
+        let mixed = serde_json::json!({"type":"object","properties":{"jobs":{"type":"object","properties":{"fixed":{"type":"string"}},"additionalProperties":{"type":"boolean"}}}});
+        assert!(try_plugin_schema_from_json("fixture", "1", "", &mixed).is_err());
+    }
+}
+
+#[cfg(test)]
+mod explicit_exact_record_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    #[derive(schemars::JsonSchema)]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    #[allow(dead_code)]
+    struct Record {
+        revision: u64,
+        label: Option<String>,
+    }
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Workspace {
+        jobs: BTreeMap<String, Record>,
+    }
+    #[test]
+    fn exact_reference_preserves_authored_definitions_beside_finite_tagged_view() {
+        let source = serde_json::json!({"type":"object","properties":{
+            "finite":{"$ref":"#/$defs/Device"},
+            "exact":{"$ref":"#/$defs/Device","x-opdbus-exact-json-schema":true}
+        },"$defs":{
+            "Device":{"oneOf":[
+                {"$ref":"#/$defs/Base","type":"object","properties":{"type":{"type":"string","const":"nic"}},"required":["type"]},
+                {"type":"object","properties":{"type":{"type":"string","const":"none"}},"required":["type"]}
+            ]},
+            "Base":{"type":"object","properties":{"parent":{"type":"string"}},"required":["parent"]}
+        }});
+        let original = source.clone();
+        let schema = try_plugin_schema_from_json("fixture", "2", "", &source).unwrap();
+        let mirror =
+            op_blob::adapter::try_plugin_schema_from_json("fixture", "2", "", &source).unwrap();
+        assert_eq!(
+            serde_json::to_value(&schema.fields).unwrap(),
+            serde_json::to_value(&mirror.fields).unwrap()
+        );
+        assert_eq!(source, original);
+        let FieldType::OneOf(variants) = &schema.fields["finite"].field_type else {
+            panic!("finite tagged view lost")
+        };
+        let FieldType::Object(nic) = &variants[0] else {
+            panic!("finite object lost")
+        };
+        assert_eq!(nic["type"].field_type, FieldType::Enum(vec!["nic".into()]));
+        let FieldType::JsonSchema(document) = &schema.fields["exact"].field_type else {
+            panic!("exact reference marker lost")
+        };
+        let retained = serde_json::to_value(document.as_ref()).unwrap();
+        assert_eq!(retained["$ref"], "#/$defs/Device");
+        assert_eq!(retained["$defs"], original["$defs"]);
+        let exported = serde_json::to_value(schema.to_json_schema()).unwrap();
+        let validator = jsonschema::validator_for(&exported).unwrap();
+        assert!(validator.is_valid(&serde_json::json!({"exact":{"type":"nic","parent":"ovsbr0"}})));
+        assert!(!validator.is_valid(&serde_json::json!({"exact":{"type":"nic"}})));
+
+        // Exact-only constraints must not be rejected by normalizing unrelated
+        // finite definitions. No finite field refers to this closed base.
+        let mut exact_only = source.clone();
+        exact_only["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("finite");
+        exact_only["$defs"]["Base"]["additionalProperties"] = serde_json::json!(false);
+        let exact_schema = try_plugin_schema_from_json("fixture", "2", "", &exact_only).unwrap();
+        let FieldType::JsonSchema(retained) = &exact_schema.fields["exact"].field_type else {
+            panic!("exact-only contract lost")
+        };
+        assert_eq!(
+            serde_json::to_value(retained.as_ref()).unwrap()["$defs"],
+            exact_only["$defs"]
+        );
+    }
+    #[test]
+    fn opted_in_map_record_preserves_real_schemars_format_and_nullable_children() {
+        let source = serde_json::to_value(schemars::schema_for!(Workspace)).unwrap();
+        let schema = try_plugin_schema_from_json("workspace", "2", "", &source).unwrap();
+        let mirror =
+            op_blob::adapter::try_plugin_schema_from_json("workspace", "2", "", &source).unwrap();
+        assert_eq!(
+            serde_json::to_value(&schema.fields).unwrap(),
+            serde_json::to_value(&mirror.fields).unwrap()
+        );
+        let FieldType::Map(record) = &schema.fields["jobs"].field_type else {
+            panic!("map keys lost")
+        };
+        let FieldType::JsonSchema(record) = record.as_ref() else {
+            panic!("exact child constraints lost")
+        };
+        let retained = serde_json::to_value(record.as_ref()).unwrap();
+        assert_eq!(retained["properties"]["revision"]["format"], "uint64");
+        assert!(retained["properties"]["label"]["type"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("null")));
+        let valid = simd_json::json!({"jobs":{"stable":{"revision":u64::MAX,"label":null}}});
+        assert!(schema.validate(&valid).valid);
+        schema.validate_exact_schema_fields(&valid).unwrap();
+        assert!(schema
+            .validate_exact_schema_fields(
+                &simd_json::json!({"jobs":{"stable":{"revision":-1,"label":null}}})
+            )
+            .is_err());
+        assert!(schema.public_state.is_empty());
     }
 }

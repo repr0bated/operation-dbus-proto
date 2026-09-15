@@ -1,6 +1,4 @@
-//! GB.Wireguard plugin — schemars-seeded, D-Bus-backed WireGuard interface state.
-//!
-//! This plugin owns the WireGuard interface state and peer management.
+//! Canonical schema for decoy-owned Linux kernel WireGuard administration.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -9,201 +7,164 @@ use op_state_store::{CapabilityDecl, PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
 
-use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, AckOutput};
-
-// =============================================================================
-// PLUGIN ENTRY: identity and typed schema seed
-// =============================================================================
+use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
 
 const PLUGIN_NAME: &str = "wireguard";
-const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_VERSION: &str = "2.0.0";
 const PLUGIN_CATEGORY: &str = "network";
-const PLUGIN_DESCRIPTION: &str = "WireGuard interface state";
+const PLUGIN_DESCRIPTION: &str = "Decoy-owned Linux kernel WireGuard interface state";
 const PLUGIN_DISPLAY_NAME: &str = "GB.Wireguard";
 
-/// WireGuard interface state.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.network.plugin.wireguard.schema@v1"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.network.plugin.wireguard.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "network"))]
 pub struct WireGuardState {
-    /// Active WireGuard interfaces.
+    /// Complete sanitized kernel readback for allowlisted interfaces.
     #[serde(default)]
-    #[schemars(
-        description = "Active WireGuard interfaces",
-        extend("x-oscal-subid" = "exp.network.wireguard.interfaces.render@v1")
-    )]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub interfaces: Vec<WireGuardInterface>,
 }
 
-/// A single WireGuard interface.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.network.wireguard.interface.observe@v1"))]
+/// Sanitized kernel interface readback. Secret keys are structurally absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct WireGuardInterface {
-    /// Interface name.
-    #[schemars(
-        description = "Interface name",
-        example = &"wg0",
-        extend("x-oscal-subid" = "exp.network.wireguard.interface.name.render@v1")
-    )]
     pub name: String,
-
-    /// Private key (only present when set).
+    pub public_key: Option<String>,
+    pub listen_port: Option<u16>,
+    pub fwmark: Option<u32>,
     #[serde(default)]
-    #[schemars(
-        description = "Private key",
-        extend("x-oscal-subid" = "obs.network.wireguard.interface.private-key.observe@v1")
-    )]
-    pub private_key: Option<String>,
-
-    /// Listen port.
-    #[schemars(
-        description = "Listen port",
-        extend("x-oscal-subid" = "exp.network.wireguard.interface.port.render@v1")
-    )]
-    pub listen_port: u16,
-
-    /// Configured peers.
-    #[serde(default)]
-    #[schemars(
-        description = "Configured peers",
-        extend("x-oscal-subid" = "exp.network.wireguard.peers.render@v1")
-    )]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub peers: Vec<WireGuardPeer>,
 }
 
-/// A WireGuard peer.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.network.wireguard.peer.observe@v1"))]
+/// Sanitized kernel peer readback. The preshared key is never represented.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct WireGuardPeer {
-    /// Peer's public key.
-    #[schemars(
-        description = "Peer's public key",
-        extend("x-oscal-subid" = "exp.network.wireguard.peer.public-key.render@v1")
-    )]
     pub public_key: String,
-
-    /// Allowed IP addresses.
-    #[schemars(
-        description = "Allowed IP addresses",
-        extend("x-oscal-subid" = "exp.network.wireguard.peer.allowed-ips.render@v1")
-    )]
-    pub allowed_ips: Vec<String>,
-
-    /// Endpoint address.
     #[serde(default)]
-    #[schemars(
-        description = "Endpoint address",
-        extend("x-oscal-subid" = "obs.network.wireguard.peer.endpoint.render@v1")
-    )]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub allowed_ips: Vec<String>,
     pub endpoint: Option<String>,
+    pub persistent_keepalive: Option<u16>,
+    pub latest_handshake_unix: Option<i64>,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
 }
 
-// =============================================================================
-// METHOD INPUT/OUTPUT TYPES
-// =============================================================================
-
-/// Input for SetDevice method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "mut.network.wireguard.device.set.input@v1"))]
-pub struct SetDeviceInput {
-    /// Interface name.
-    pub interface: String,
-    /// Private key (optional).
+#[serde(deny_unknown_fields)]
+pub struct WireGuardPeerConfig {
+    pub public_key: String,
     #[serde(default)]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub allowed_ips: Vec<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub persistent_keepalive: Option<u16>,
+    #[serde(default)]
+    #[schemars(extend("x-secret" = true))]
+    pub preshared_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WireGuardDeviceConfig {
+    #[serde(default)]
+    #[schemars(extend("x-secret" = true))]
     pub private_key: Option<String>,
-    /// Listen port (optional).
     #[serde(default)]
     pub listen_port: Option<u16>,
-    /// Firewall mark (optional).
+    #[serde(default)]
+    pub fwmark: Option<u32>,
+    #[serde(default)]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub peers: Vec<WireGuardPeerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetDeviceInput {
+    pub interface: String,
+    #[serde(default)]
+    #[schemars(extend("x-secret" = true))]
+    pub private_key: Option<String>,
+    #[serde(default)]
+    pub listen_port: Option<u16>,
     #[serde(default)]
     pub fwmark: Option<u32>,
 }
 
-/// Input for GetDevice method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.network.wireguard.device.get.input@v1"))]
+#[serde(deny_unknown_fields)]
 pub struct GetDeviceInput {
-    /// Interface name.
     pub interface: String,
 }
 
-/// Output for GetDevice method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.network.wireguard.device.get.output@v1"))]
 pub struct GetDeviceOutput {
-    /// Interface details.
     pub interface: Option<WireGuardInterface>,
 }
 
-/// Input for AddPeer method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "mut.network.wireguard.peer.add.input@v1"))]
+pub struct SetDeviceOutput {
+    pub interface: WireGuardInterface,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AddPeerInput {
-    /// Interface name.
     pub interface: String,
-    /// Peer's public key.
-    pub public_key: String,
-    /// Endpoint address (optional).
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    /// Allowed IP addresses.
-    pub allowed_ips: Vec<String>,
-    /// Persistent keepalive interval (optional).
-    #[serde(default)]
-    pub persistent_keepalive: Option<u16>,
-    /// Preshared key (optional).
-    #[serde(default)]
-    pub preshared_key: Option<String>,
+    #[serde(flatten)]
+    pub peer: WireGuardPeerConfig,
 }
 
-/// Input for RemovePeer method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "mut.network.wireguard.peer.remove.input@v1"))]
+#[serde(deny_unknown_fields)]
 pub struct RemovePeerInput {
-    /// Interface name.
     pub interface: String,
-    /// Peer's public key.
     pub public_key: String,
 }
 
-/// Input for ListPeers method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.network.wireguard.peers.list.input@v1"))]
+#[serde(deny_unknown_fields)]
 pub struct ListPeersInput {
-    /// Interface name.
     pub interface: String,
 }
 
-/// Output for ListPeers method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.network.wireguard.peers.list.output@v1"))]
 pub struct ListPeersOutput {
-    /// List of peers.
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub peers: Vec<WireGuardPeer>,
 }
 
-/// Input for SetConfig method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "mut.network.wireguard.config.set.input@v1"))]
-pub struct SetConfigInput {
-    /// Interface name.
-    pub interface: String,
-    /// Full configuration as JSON.
-    pub config: serde_json::Value,
+pub struct PeerMutationOutput {
+    pub interface: WireGuardInterface,
+    pub peer: Option<WireGuardPeer>,
+    pub changed: bool,
 }
 
-// =============================================================================
-// PLUGIN BODY: D-Bus-backed behavior only
-// =============================================================================
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetConfigInput {
+    pub interface: String,
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub config: WireGuardDeviceConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SetConfigOutput {
+    pub interface: WireGuardInterface,
+}
 
 pub struct WireGuardPlugin;
-
 impl Default for WireGuardPlugin {
     fn default() -> Self {
         Self
     }
 }
-
 impl WireGuardPlugin {
     pub fn new() -> Self {
         Self
@@ -215,172 +176,135 @@ impl StatePlugin for WireGuardPlugin {
     fn name(&self) -> &str {
         PLUGIN_NAME
     }
-
     fn version(&self) -> &str {
         PLUGIN_VERSION
     }
-
     fn schema(&self) -> Option<PluginSchema> {
         Some(wireguard_schema())
     }
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
-            plugin: PLUGIN_NAME.to_string(),
+            plugin: PLUGIN_NAME.into(),
             actions: vec![],
             metadata: DiffMetadata {
                 timestamp: chrono::Utc::now().timestamp(),
-                current_hash: "unknown".to_string(),
-                desired_hash: "unknown".to_string(),
+                current_hash: "unknown".into(),
+                desired_hash: "unknown".into(),
             },
         })
     }
-
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
-            checkpoint: None,
-        })
+        anyhow::bail!("WireGuard effects are accepted only by the authenticated decoy D-Bus owner")
     }
-
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        anyhow::bail!("WireGuard verification requires decoy kernel readback")
     }
-
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: PLUGIN_NAME.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::json!(null),
-            backend_checkpoint: None,
-        })
+        anyhow::bail!("WireGuard checkpointing is not supported")
     }
-
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        anyhow::bail!("WireGuard rollback is not supported")
     }
-
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
-            supports_rollback: true,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_rollback: false,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
 }
 
-// =============================================================================
-// PLUGIN EXIT: publish the single PluginSchema contract
-// =============================================================================
-
 pub fn wireguard_schema() -> PluginSchema {
-    let root = serde_json::to_value(schemars::schema_for!(WireGuardState))
-        .expect("schemars schema serializes to JSON");
+    let root =
+        serde_json::to_value(schemars::schema_for!(WireGuardState)).expect("schema serializes");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         PLUGIN_NAME,
         PLUGIN_VERSION,
         PLUGIN_DESCRIPTION,
         &root,
     );
-    schema.category = PLUGIN_CATEGORY.to_string();
-    schema.display_name = Some(PLUGIN_DISPLAY_NAME.to_string());
-
-    // SetDevice method
-    schema.methods.insert(
-        "set_device".to_string(),
-        method_decl_from_schemars_with_output::<SetDeviceInput, AckOutput>(
-            "set_device",
-            SideEffect::Mutation,
-            false,
-            "wireguard.write",
-            "mut.network.wireguard.device.set@v1",
-        ),
+    schema.category = PLUGIN_CATEGORY.into();
+    schema.display_name = Some(PLUGIN_DISPLAY_NAME.into());
+    macro_rules! method {
+        ($id:literal, $input:ty, $output:ty, $effect:expr, $idem:expr, $cap:literal, $subid:literal) => {
+            schema.methods.insert(
+                $id.into(),
+                method_decl_from_schemars_with_output::<$input, $output>(
+                    $id, $effect, $idem, $cap, $subid,
+                ),
+            );
+        };
+    }
+    method!(
+        "set_device",
+        SetDeviceInput,
+        SetDeviceOutput,
+        SideEffect::Mutation,
+        false,
+        "wireguard.write",
+        "mut.network.wireguard.device.set@v2"
     );
-
-    // GetDevice method
-    schema.methods.insert(
-        "get_device".to_string(),
-        method_decl_from_schemars_with_output::<GetDeviceInput, GetDeviceOutput>(
-            "get_device",
-            SideEffect::Read,
-            true,
-            "wireguard.read",
-            "obs.network.wireguard.device.get@v1",
-        ),
+    method!(
+        "get_device",
+        GetDeviceInput,
+        GetDeviceOutput,
+        SideEffect::Read,
+        true,
+        "wireguard.read",
+        "obs.network.wireguard.device.get@v2"
     );
-
-    // AddPeer method
-    schema.methods.insert(
-        "add_peer".to_string(),
-        method_decl_from_schemars_with_output::<AddPeerInput, AckOutput>(
-            "add_peer",
-            SideEffect::Mutation,
-            false,
-            "wireguard.write",
-            "mut.network.wireguard.peer.add@v1",
-        ),
+    method!(
+        "add_peer",
+        AddPeerInput,
+        PeerMutationOutput,
+        SideEffect::Mutation,
+        false,
+        "wireguard.write",
+        "mut.network.wireguard.peer.add@v2"
     );
-
-    // RemovePeer method
-    schema.methods.insert(
-        "remove_peer".to_string(),
-        method_decl_from_schemars_with_output::<RemovePeerInput, AckOutput>(
-            "remove_peer",
-            SideEffect::Mutation,
-            false,
-            "wireguard.write",
-            "mut.network.wireguard.peer.remove@v1",
-        ),
+    method!(
+        "remove_peer",
+        RemovePeerInput,
+        PeerMutationOutput,
+        SideEffect::Mutation,
+        false,
+        "wireguard.write",
+        "mut.network.wireguard.peer.remove@v2"
     );
-
-    // ListPeers method
-    schema.methods.insert(
-        "list_peers".to_string(),
-        method_decl_from_schemars_with_output::<ListPeersInput, ListPeersOutput>(
-            "list_peers",
-            SideEffect::Read,
-            true,
-            "wireguard.read",
-            "obs.network.wireguard.peers.list@v1",
-        ),
+    method!(
+        "list_peers",
+        ListPeersInput,
+        ListPeersOutput,
+        SideEffect::Read,
+        true,
+        "wireguard.read",
+        "obs.network.wireguard.peers.list@v2"
     );
-
-    // SetConfig method
-    schema.methods.insert(
-        "set_config".to_string(),
-        method_decl_from_schemars_with_output::<SetConfigInput, AckOutput>(
-            "set_config",
-            SideEffect::Mutation,
-            false,
-            "wireguard.write",
-            "mut.network.wireguard.config.set@v1",
-        ),
+    method!(
+        "set_config",
+        SetConfigInput,
+        SetConfigOutput,
+        SideEffect::Mutation,
+        false,
+        "wireguard.write",
+        "mut.network.wireguard.config.set@v2"
     );
-
     schema.capabilities.insert(
-        "wireguard.write".to_string(),
+        "wireguard.write".into(),
         CapabilityDecl {
-            id: "wireguard.write".to_string(),
-            description: "Grants: set_device, add_peer, remove_peer, set_config.".to_string(),
+            id: "wireguard.write".into(),
+            description: "Grants: set_device, add_peer, remove_peer, set_config.".into(),
         },
     );
     schema.capabilities.insert(
-        "wireguard.read".to_string(),
+        "wireguard.read".into(),
         CapabilityDecl {
-            id: "wireguard.read".to_string(),
-            description: "Grants: get_device, list_peers.".to_string(),
+            id: "wireguard.read".into(),
+            description: "Grants: get_device, list_peers.".into(),
         },
     );
-
     schema
 }
 
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
-inventory::submit! {
-    crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(WireGuardPlugin::new()))
-}
+inventory::submit! { crate::default_registry::PluginReg::new(PLUGIN_NAME, |_ctx| std::sync::Arc::new(WireGuardPlugin::new())) }

@@ -4,7 +4,7 @@
 //! JSON rendering, D-Bus projection, and tool generation all consume the same
 //! schema authority instead of ad-hoc `/proc` tools.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use op_state::{
     ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateAction, StateDiff, StatePlugin,
@@ -12,13 +12,12 @@ use op_state::{
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use std::path::Path;
-use tokio::fs;
+use sysinfo::{CpuRefreshKind, Networks, Pid, ProcessRefreshKind, System};
 
 /// Runtime procfs state, derived from `/proc` files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(
-    extend("x-oscal-subid" = "sch.software.plugin.procfs.schema@v1"),
+    extend("x-oscal-subid" = "sch.software.plugin.procfs.schema@v2"),
     extend("x-immutable-paths" = [
         "/memory",
         "/loadavg",
@@ -39,9 +38,9 @@ pub struct ProcfsState {
     #[schemars(
         description = "Parsed /proc/meminfo values.",
         extend("readOnly" = true),
-        extend("x-oscal-subid" = "obs.service.procfs.memory.query@v1")
+        extend("x-oscal-subid" = "obs.service.procfs.memory.query@v2")
     )]
-    pub memory: std::collections::BTreeMap<String, u64>,
+    pub memory: MemInfo,
     /// Parsed /proc/loadavg values.
     #[serde(default)]
     #[schemars(
@@ -68,14 +67,14 @@ pub struct ProcfsState {
     )]
     pub cpuinfo: Value,
     /// Parsed /proc/stat values.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "Parsed /proc/stat values.",
         with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.stat.query@v1")
     )]
-    pub stat: Value,
+    pub stat: Option<Value>,
     /// Parsed /proc/net/dev counters.
     #[serde(default)]
     #[schemars(
@@ -85,40 +84,89 @@ pub struct ProcfsState {
     )]
     pub net_dev: NetDev,
     /// Parsed /proc/mounts entries.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "Parsed /proc/mounts entries.",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.mounts.query@v1")
     )]
-    pub mounts: Vec<MountEntry>,
+    pub mounts: Option<Vec<MountEntry>>,
     /// Kernel version from /proc/version.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "Kernel version from /proc/version.",
         with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.kernel.query@v1")
     )]
-    pub kernel: Value,
+    pub kernel: Option<Value>,
     /// Parsed /proc/vmstat values.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "Parsed /proc/vmstat values.",
         with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.vmstat.query@v1")
     )]
-    pub vmstat: Value,
+    pub vmstat: Option<Value>,
     /// Parsed /proc/diskstats rows.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "Parsed /proc/diskstats rows.",
         with = "serde_json::Value",
         extend("readOnly" = true),
         extend("x-oscal-subid" = "obs.service.procfs.diskstats.query@v1")
     )]
-    pub diskstats: Value,
+    pub diskstats: Option<Value>,
+}
+
+/// Memory counters reported by the same native snapshot as method output.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MemInfo {
+    pub total_kb: u64,
+    pub available_kb: u64,
+    pub used_kb: u64,
+}
+
+/// Load averages reported by the native system information provider.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LoadAvg {
+    pub load1: f64,
+    pub load5: f64,
+    pub load15: f64,
+}
+
+/// Host uptime reported by the native system information provider.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Uptime {
+    pub uptime_secs: u64,
+}
+
+/// Cumulative counters supported by `sysinfo` for one network interface.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NetDevInterface {
+    pub interface: String,
+    pub rx_bytes: u64,
+    pub rx_packets: u64,
+    pub rx_errors: u64,
+    pub tx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_errors: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NetDev {
+    pub interfaces: Vec<NetDevInterface>,
+}
+
+/// One mounted filesystem. This remains part of the projected state contract;
+/// the retained method surface does not synthesize it from unsupported data.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MountEntry {
+    pub device: String,
+    pub mountpoint: String,
+    pub fstype: String,
+    pub options: String,
 }
 
 pub struct ProcfsPlugin;
@@ -142,15 +190,15 @@ impl StatePlugin for ProcfsPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn is_available(&self) -> bool {
-        Path::new("/proc").exists()
+        true
     }
 
     fn unavailable_reason(&self) -> String {
-        "/proc is not mounted".to_string()
+        "sysinfo native host snapshot unavailable".to_string()
     }
 
     fn schema(&self) -> Option<PluginSchema> {
@@ -208,13 +256,308 @@ impl StatePlugin for ProcfsPlugin {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProcessSnapshot {
+    pub pid: i32,
+    pub name: String,
+    pub memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListProcessesOutput {
+    pub observed_at: String,
+    pub processes: Vec<ProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetProcessInfoOutput {
+    pub observed_at: String,
+    pub process: Option<ProcessSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetMeminfoOutput {
+    pub observed_at: String,
+    pub total_kb: u64,
+    pub available_kb: u64,
+    pub used_kb: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CpuSnapshot {
+    pub name: String,
+    pub brand: Option<String>,
+    pub frequency_mhz: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetCpuinfoOutput {
+    pub observed_at: String,
+    pub cpus: Vec<CpuSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetLoadavgOutput {
+    pub observed_at: String,
+    pub load1: f64,
+    pub load5: f64,
+    pub load15: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetUptimeOutput {
+    pub observed_at: String,
+    pub uptime_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetNetDevOutput {
+    pub observed_at: String,
+    pub interfaces: Vec<NetDevInterface>,
+}
+
+/// Method output paired with the complete state observed by the same native
+/// snapshot. The caller commits `state` before returning `output`.
+#[derive(Debug, Clone)]
+pub struct ProcfsObservedDispatch {
+    pub output: serde_json::Value,
+    pub state: ProcfsState,
+}
+
+#[derive(Debug, Clone)]
+struct ProcfsSnapshot {
+    observed_at: String,
+    processes: Vec<ProcessSnapshot>,
+    total_memory_bytes: u64,
+    available_memory_bytes: u64,
+    cpus: Vec<CpuSnapshot>,
+    loadavg: LoadAvg,
+    uptime_secs: u64,
+    interfaces: Vec<NetDevInterface>,
+}
+
+fn native_snapshot() -> Result<ProcfsSnapshot> {
+    let mut system = System::new();
+    system.refresh_memory();
+    system.refresh_cpu_specifics(CpuRefreshKind::new().with_frequency());
+    system.refresh_processes_specifics(ProcessRefreshKind::new().with_memory());
+    let networks = Networks::new_with_refreshed_list();
+    snapshot_from_native(
+        chrono::Utc::now().to_rfc3339(),
+        &system,
+        &networks,
+        System::load_average(),
+        System::uptime(),
+    )
+}
+
+fn snapshot_from_native(
+    observed_at: String,
+    system: &System,
+    networks: &Networks,
+    loadavg: sysinfo::LoadAvg,
+    uptime_secs: u64,
+) -> Result<ProcfsSnapshot> {
+    let mut processes = system
+        .processes()
+        .iter()
+        .map(|(pid, process)| process_snapshot(*pid, process))
+        .collect::<Result<Vec<_>>>()?;
+    processes.sort_unstable_by_key(|process| process.pid);
+
+    let cpus = system
+        .cpus()
+        .iter()
+        .map(|cpu| CpuSnapshot {
+            name: cpu.name().to_string(),
+            brand: nonempty(cpu.brand()),
+            frequency_mhz: (cpu.frequency() > 0).then_some(cpu.frequency()),
+        })
+        .collect();
+
+    let mut interfaces = networks
+        .iter()
+        .map(|(name, network)| NetDevInterface {
+            interface: name.clone(),
+            rx_bytes: network.total_received(),
+            rx_packets: network.total_packets_received(),
+            rx_errors: network.total_errors_on_received(),
+            tx_bytes: network.total_transmitted(),
+            tx_packets: network.total_packets_transmitted(),
+            tx_errors: network.total_errors_on_transmitted(),
+        })
+        .collect::<Vec<_>>();
+    interfaces.sort_unstable_by(|left, right| left.interface.cmp(&right.interface));
+
+    Ok(ProcfsSnapshot {
+        observed_at,
+        processes,
+        total_memory_bytes: system.total_memory(),
+        available_memory_bytes: system.available_memory(),
+        cpus,
+        loadavg: LoadAvg {
+            load1: loadavg.one,
+            load5: loadavg.five,
+            load15: loadavg.fifteen,
+        },
+        uptime_secs,
+        interfaces,
+    })
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn process_snapshot(pid: Pid, process: &sysinfo::Process) -> Result<ProcessSnapshot> {
+    Ok(ProcessSnapshot {
+        pid: i32::try_from(pid.as_u32()).map_err(|_| anyhow::anyhow!("pid exceeds i32 range"))?,
+        name: process.name().to_string(),
+        memory_bytes: process.memory(),
+        virtual_memory_bytes: process.virtual_memory(),
+        status: process.status().to_string(),
+    })
+}
+
+fn bytes_to_kib(bytes: u64) -> u64 {
+    bytes / 1024
+}
+
+pub fn dispatch_procfs_method(method: &str, args: &serde_json::Value) -> Result<serde_json::Value> {
+    Ok(dispatch_procfs_method_observed(method, args)?.output)
+}
+
+pub fn dispatch_procfs_method_observed(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<ProcfsObservedDispatch> {
+    dispatch_procfs_snapshot_observed(method, args, native_snapshot()?)
+}
+
+fn dispatch_procfs_snapshot(
+    method: &str,
+    args: &serde_json::Value,
+    snapshot: ProcfsSnapshot,
+) -> Result<serde_json::Value> {
+    Ok(dispatch_procfs_snapshot_observed(method, args, snapshot)?.output)
+}
+
+fn dispatch_procfs_snapshot_observed(
+    method: &str,
+    args: &serde_json::Value,
+    snapshot: ProcfsSnapshot,
+) -> Result<ProcfsObservedDispatch> {
+    validate_procfs_snapshot(&snapshot)?;
+    let state = procfs_state_from_snapshot(&snapshot)?;
+    let ProcfsSnapshot {
+        observed_at,
+        processes,
+        total_memory_bytes,
+        available_memory_bytes,
+        cpus,
+        loadavg,
+        uptime_secs,
+        interfaces,
+    } = snapshot;
+
+    let output = match method {
+        "list_processes" => Ok::<_, anyhow::Error>(serde_json::to_value(ListProcessesOutput {
+            observed_at,
+            processes,
+        })?),
+        "get_process_info" => {
+            let input: ProcessInfoInput = serde_json::from_value(args.clone())?;
+            if input.pid < 0 {
+                bail!("pid must be non-negative");
+            }
+            Ok(serde_json::to_value(GetProcessInfoOutput {
+                observed_at,
+                process: processes
+                    .into_iter()
+                    .find(|process| process.pid == input.pid),
+            })?)
+        }
+        "get_meminfo" => Ok(serde_json::to_value(GetMeminfoOutput {
+            observed_at,
+            total_kb: bytes_to_kib(total_memory_bytes),
+            available_kb: bytes_to_kib(available_memory_bytes),
+            used_kb: bytes_to_kib(total_memory_bytes.saturating_sub(available_memory_bytes)),
+        })?),
+        "get_cpuinfo" => Ok(serde_json::to_value(GetCpuinfoOutput {
+            observed_at,
+            cpus,
+        })?),
+        "get_loadavg" => Ok(serde_json::to_value(GetLoadavgOutput {
+            observed_at,
+            load1: loadavg.load1,
+            load5: loadavg.load5,
+            load15: loadavg.load15,
+        })?),
+        "get_uptime" => Ok(serde_json::to_value(GetUptimeOutput {
+            observed_at,
+            uptime_secs,
+        })?),
+        "get_net_dev" => Ok(serde_json::to_value(GetNetDevOutput {
+            observed_at,
+            interfaces,
+        })?),
+        _ => bail!("unsupported procfs method: {method}"),
+    }?;
+    Ok(ProcfsObservedDispatch { output, state })
+}
+
+fn validate_procfs_snapshot(snapshot: &ProcfsSnapshot) -> Result<()> {
+    if snapshot.total_memory_bytes == 0 {
+        bail!("native procfs snapshot reported zero total memory");
+    }
+    if snapshot.available_memory_bytes > snapshot.total_memory_bytes {
+        bail!("native procfs snapshot reported available memory greater than total memory");
+    }
+    if snapshot.cpus.is_empty() {
+        bail!("native procfs snapshot reported no CPUs");
+    }
+    Ok(())
+}
+
+fn procfs_state_from_snapshot(snapshot: &ProcfsSnapshot) -> Result<ProcfsState> {
+    let total_kb = bytes_to_kib(snapshot.total_memory_bytes);
+    let available_kb = bytes_to_kib(snapshot.available_memory_bytes);
+    Ok(ProcfsState {
+        memory: MemInfo {
+            total_kb,
+            available_kb,
+            used_kb: bytes_to_kib(
+                snapshot
+                    .total_memory_bytes
+                    .saturating_sub(snapshot.available_memory_bytes),
+            ),
+        },
+        loadavg: snapshot.loadavg.clone(),
+        uptime: Uptime {
+            uptime_secs: snapshot.uptime_secs,
+        },
+        cpuinfo: simd_json::serde::to_owned_value(&snapshot.cpus)?,
+        stat: None,
+        net_dev: NetDev {
+            interfaces: snapshot.interfaces.clone(),
+        },
+        mounts: None,
+        kernel: None,
+        vmstat: None,
+        diskstats: None,
+    })
+}
+
 /// Procfs schema derived from the typed [`ProcfsState`] struct via schemars.
 pub(crate) fn procfs_schema() -> PluginSchema {
     let root = serde_json::to_value(schemars::schema_for!(ProcfsState))
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "procfs",
-        "1.0.0",
+        "2.0.0",
         "Read-only procfs host state projected through PluginSchema.",
         &root,
     );
@@ -223,9 +566,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "list_processes".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            ListProcessesOutput,
         >(
-            "ListProcesses",
+            "list_processes",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -236,9 +579,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_process_info".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ProcessInfoInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetProcessInfoOutput,
         >(
-            "GetProcessInfo",
+            "get_process_info",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -249,9 +592,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_meminfo".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetMeminfoOutput,
         >(
-            "GetMeminfo",
+            "get_meminfo",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -262,9 +605,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_cpuinfo".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetCpuinfoOutput,
         >(
-            "GetCpuinfo",
+            "get_cpuinfo",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -275,9 +618,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_loadavg".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetLoadavgOutput,
         >(
-            "GetLoadavg",
+            "get_loadavg",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -288,9 +631,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_uptime".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetUptimeOutput,
         >(
-            "GetUptime",
+            "get_uptime",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -301,9 +644,9 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         "get_net_dev".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            GetNetDevOutput,
         >(
-            "GetNetDev",
+            "get_net_dev",
             op_state_store::SideEffect::Read,
             true,
             "procfs.read",
@@ -321,6 +664,16 @@ pub(crate) fn procfs_schema() -> PluginSchema {
         },
     );
 
+    // Shared readers receive only bounded, typed host telemetry. Opaque
+    // procfs documents, mount paths, process arguments, and open-ended maps
+    // remain internal.
+    schema.public_state.paths = vec![
+        "/memory".to_string(),
+        "/loadavg".to_string(),
+        "/uptime".to_string(),
+        "/net_dev".to_string(),
+    ];
+
     schema
 }
 
@@ -329,366 +682,46 @@ pub struct ProcessInfoInput {
     pub pid: i32,
 }
 
-async fn gather_procfs_state() -> ProcfsState {
-    let (memory, loadavg, uptime, cpuinfo, stat, net_dev, mounts, kernel, vmstat, diskstats) = tokio::join!(
-        gather_memory(),
-        gather_loadavg(),
-        gather_uptime(),
-        gather_cpuinfo(),
-        gather_stat(),
-        gather_net_dev(),
-        gather_mounts(),
-        gather_kernel(),
-        gather_vmstat(),
-        gather_diskstats(),
-    );
-
-    ProcfsState {
-        memory,
-        loadavg,
-        uptime,
-        cpuinfo,
-        stat,
-        net_dev,
-        mounts,
-        kernel,
-        vmstat,
-        diskstats,
-    }
-}
-
-async fn read_proc(path: &str) -> String {
-    fs::read_to_string(Path::new("/proc").join(path))
-        .await
-        .unwrap_or_default()
-}
-
-/// Parsed `/proc/loadavg`. Sample: `7.02 4.40 3.68 16/2222 8032`.
-///
-/// Typed rather than a free-form map so the value is usable without a consumer
-/// re-parsing it: `num_or_str` would type `2` as an integer and `2.82` as a
-/// float for the same field depending on the instantaneous load.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct LoadAvg {
-    /// 1-minute load average.
-    pub load1: f64,
-    /// 5-minute load average.
-    pub load5: f64,
-    /// 15-minute load average.
-    pub load15: f64,
-    /// Runnable kernel entities — numerator of the `16/2222` field.
-    pub procs_running: u64,
-    /// Total kernel entities — denominator of the `16/2222` field.
-    pub procs_total: u64,
-}
-
-/// Parsed `/proc/uptime`. Sample: `210649.82 3136532.75`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Uptime {
-    /// Seconds since boot, centisecond resolution.
-    pub uptime_secs: f64,
-    /// Summed idle seconds across all cores. Exceeds `uptime_secs` on SMP —
-    /// this is correct, not a parsing error.
-    pub idle_secs: f64,
-}
-
-/// One interface row from `/proc/net/dev`. All counters are cumulative since boot.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct NetDevInterface {
-    /// Interface name, e.g. `eth0`, `ovsbr0`.
-    pub interface: String,
-    pub rx_bytes: u64,
-    pub rx_packets: u64,
-    pub rx_errs: u64,
-    pub rx_drop: u64,
-    pub rx_fifo: u64,
-    pub rx_frame: u64,
-    pub rx_compressed: u64,
-    pub rx_multicast: u64,
-    pub tx_bytes: u64,
-    pub tx_packets: u64,
-    pub tx_errs: u64,
-    pub tx_drop: u64,
-    pub tx_fifo: u64,
-    pub tx_colls: u64,
-    pub tx_carrier: u64,
-    pub tx_compressed: u64,
-}
-
-/// Parsed `/proc/net/dev`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct NetDev {
-    pub interfaces: Vec<NetDevInterface>,
-}
-
-/// One row from `/proc/mounts`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct MountEntry {
-    /// Backing device or pseudo-source, e.g. `/dev/sda4`, `proc`.
-    pub device: String,
-    /// Where it is mounted, e.g. `/home`.
-    pub mountpoint: String,
-    /// Filesystem type, e.g. `btrfs`, `tmpfs`.
-    pub fstype: String,
-    /// Comma-separated mount options exactly as the kernel reports them.
-    pub options: String,
-}
-
-/// Strip a trailing unit and parse the leading integer: `"32855784 kB"` → `32855784`.
-fn kb_value(raw: &str) -> Option<u64> {
-    raw.split_whitespace().next()?.parse::<u64>().ok()
-}
-
-/// Normalise a `/proc/meminfo` key to a snake_case field name, encoding the unit
-/// in the name so no consumer has to parse `" kB"` out of a value:
-/// `MemTotal` → `mem_total_kb`, `Active(anon)` → `active_anon_kb`.
-fn meminfo_key(key: &str, has_kb_unit: bool) -> String {
-    let mut out = String::with_capacity(key.len() + 4);
-    let mut prev_lower = false;
-    for ch in key.chars() {
-        match ch {
-            '(' | '-' | ' ' => {
-                out.push('_');
-                prev_lower = false;
-            }
-            ')' => prev_lower = false,
-            c if c.is_ascii_uppercase() => {
-                if prev_lower {
-                    out.push('_');
-                }
-                out.push(c.to_ascii_lowercase());
-                prev_lower = false;
-            }
-            c => {
-                out.push(c);
-                prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
-            }
-        }
-    }
-    while out.contains("__") {
-        out = out.replace("__", "_");
-    }
-    let out = out.trim_matches('_').to_string();
-    if has_kb_unit {
-        format!("{out}_kb")
-    } else {
-        out
-    }
-}
-
-fn num_or_str(s: &str) -> Value {
-    let t = s.trim();
-    if let Ok(n) = t.parse::<i64>() {
-        return Value::from(n);
-    }
-    if let Ok(f) = t.parse::<f64>() {
-        return Value::from(f);
-    }
-    Value::from(t.to_string())
-}
-
-fn kv_file(content: &str) -> Value {
-    let mut map = simd_json::owned::Object::new();
-    for line in content.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            map.insert(
-                key.trim().replace(' ', "_").to_lowercase(),
-                num_or_str(value),
-            );
-        }
-    }
-    Value::Object(Box::new(map))
-}
-
-/// Parsed `/proc/meminfo`, keyed by normalised field name with integer values.
-///
-/// A map rather than a fixed struct because the key set is kernel-config
-/// dependent (hugepages, ZSWAP, CMA and others appear conditionally) — but every
-/// value is a `u64`, so this is fully typed regardless of which keys a given
-/// kernel emits.
-async fn gather_memory() -> std::collections::BTreeMap<String, u64> {
-    let raw = read_proc("meminfo").await;
-    let mut map = std::collections::BTreeMap::new();
-    for line in raw.lines() {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        let has_kb = value.ends_with("kB");
-        if let Some(n) = kb_value(value) {
-            map.insert(meminfo_key(key.trim(), has_kb), n);
-        }
-    }
-    map
-}
-
-async fn gather_loadavg() -> LoadAvg {
-    let raw = read_proc("loadavg").await;
-    let parts: Vec<&str> = raw.split_whitespace().collect();
-    let (procs_running, procs_total) = parts
-        .get(3)
-        .and_then(|v| v.split_once('/'))
-        .map(|(r, t)| {
-            (
-                r.parse::<u64>().unwrap_or_default(),
-                t.parse::<u64>().unwrap_or_default(),
-            )
-        })
-        .unwrap_or_default();
-    LoadAvg {
-        load1: parts
-            .first()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default(),
-        load5: parts
-            .get(1)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default(),
-        load15: parts
-            .get(2)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default(),
-        procs_running,
-        procs_total,
-    }
-}
-
-async fn gather_uptime() -> Uptime {
-    let raw = read_proc("uptime").await;
-    let parts: Vec<&str> = raw.split_whitespace().collect();
-    Uptime {
-        uptime_secs: parts
-            .first()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default(),
-        idle_secs: parts
-            .get(1)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default(),
-    }
-}
-
-async fn gather_cpuinfo() -> Value {
-    let raw = read_proc("cpuinfo").await;
-    let mut cpus: Vec<Value> = Vec::new();
-    let mut cur = simd_json::owned::Object::new();
-    for line in raw.lines() {
-        if line.trim().is_empty() {
-            if !cur.is_empty() {
-                cpus.push(Value::Object(Box::new(std::mem::take(&mut cur))));
-            }
-        } else if let Some((key, value)) = line.split_once(':') {
-            cur.insert(
-                key.trim().replace(' ', "_").to_lowercase(),
-                num_or_str(value),
-            );
-        }
-    }
-    if !cur.is_empty() {
-        cpus.push(Value::Object(Box::new(cur)));
-    }
-
-    let mut map = simd_json::owned::Object::new();
-    map.insert("count".into(), Value::from(cpus.len() as i64));
-    map.insert("cpus".into(), Value::Array(cpus));
-    Value::Object(Box::new(map))
-}
-
-async fn gather_stat() -> Value {
-    let raw = read_proc("stat").await;
-    let mut map = simd_json::owned::Object::new();
-    for line in raw.lines() {
-        if let Some((key, value)) = line.split_once(' ') {
-            map.insert(key.into(), num_or_str(value));
-        }
-    }
-    Value::Object(Box::new(map))
-}
-
-async fn gather_net_dev() -> NetDev {
-    let raw = read_proc("net/dev").await;
-    let mut interfaces = Vec::new();
-    for line in raw.lines().skip(2) {
-        let Some((iface, stats)) = line.split_once(':') else {
-            continue;
-        };
-        let n: Vec<u64> = stats
-            .split_whitespace()
-            .map(|v| v.parse::<u64>().unwrap_or_default())
-            .collect();
-        let at = |i: usize| n.get(i).copied().unwrap_or_default();
-        interfaces.push(NetDevInterface {
-            interface: iface.trim().to_string(),
-            rx_bytes: at(0),
-            rx_packets: at(1),
-            rx_errs: at(2),
-            rx_drop: at(3),
-            rx_fifo: at(4),
-            rx_frame: at(5),
-            rx_compressed: at(6),
-            rx_multicast: at(7),
-            tx_bytes: at(8),
-            tx_packets: at(9),
-            tx_errs: at(10),
-            tx_drop: at(11),
-            tx_fifo: at(12),
-            tx_colls: at(13),
-            tx_carrier: at(14),
-            tx_compressed: at(15),
-        });
-    }
-    NetDev { interfaces }
-}
-
-async fn gather_mounts() -> Vec<MountEntry> {
-    let raw = read_proc("mounts").await;
-    raw.lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            (parts.len() >= 4).then(|| MountEntry {
-                device: parts[0].to_string(),
-                mountpoint: parts[1].to_string(),
-                fstype: parts[2].to_string(),
-                options: parts[3].to_string(),
-            })
-        })
-        .collect()
-}
-
-async fn gather_kernel() -> Value {
-    let mut map = simd_json::owned::Object::new();
-    map.insert(
-        "version".into(),
-        Value::from(read_proc("version").await.trim().to_string()),
-    );
-    Value::Object(Box::new(map))
-}
-
-async fn gather_vmstat() -> Value {
-    let raw = read_proc("vmstat").await;
-    let mut map = simd_json::owned::Object::new();
-    for line in raw.lines() {
-        if let Some((key, value)) = line.split_once(' ') {
-            map.insert(key.into(), num_or_str(value));
-        }
-    }
-    Value::Object(Box::new(map))
-}
-
-async fn gather_diskstats() -> Value {
-    let raw = read_proc("diskstats").await;
-    let rows = raw
-        .lines()
-        .map(|line| Value::from(line.to_string()))
-        .collect::<Vec<_>>();
-    Value::Array(rows)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
     use serde_json::Value as JVal;
+
+    fn fixture() -> ProcfsSnapshot {
+        ProcfsSnapshot {
+            observed_at: "2026-09-13T00:00:00Z".to_string(),
+            processes: vec![ProcessSnapshot {
+                pid: 42,
+                name: "fixture-process".to_string(),
+                memory_bytes: 4096,
+                virtual_memory_bytes: 8192,
+                status: "Run".to_string(),
+            }],
+            total_memory_bytes: 8193,
+            available_memory_bytes: 2048,
+            cpus: vec![CpuSnapshot {
+                name: "cpu0".to_string(),
+                brand: Some("fixture-cpu".to_string()),
+                frequency_mhz: Some(3200),
+            }],
+            loadavg: LoadAvg {
+                load1: 1.25,
+                load5: 0.75,
+                load15: 0.5,
+            },
+            uptime_secs: 1234,
+            interfaces: vec![NetDevInterface {
+                interface: "eth0".to_string(),
+                rx_bytes: 10,
+                rx_packets: 2,
+                rx_errors: 1,
+                tx_bytes: 20,
+                tx_packets: 4,
+                tx_errors: 3,
+            }],
+        }
+    }
 
     fn collect_subids(value: &JVal, out: &mut Vec<String>) {
         if let Some(obj) = value.as_object() {
@@ -716,6 +749,162 @@ mod tests {
         for subid in subids {
             assert!(validate_subid(&subid).is_ok(), "invalid subid: {subid}");
         }
+    }
+
+    #[test]
+    fn all_seven_methods_dispatch_from_one_typed_fixture() {
+        let empty = serde_json::json!({});
+
+        let processes = dispatch_procfs_snapshot("list_processes", &empty, fixture()).unwrap();
+        assert_eq!(processes["processes"][0]["pid"], 42);
+        assert!(processes["processes"][0].get("command").is_none());
+
+        let process = dispatch_procfs_snapshot(
+            "get_process_info",
+            &serde_json::json!({"pid": 42}),
+            fixture(),
+        )
+        .unwrap();
+        assert_eq!(process["process"]["name"], "fixture-process");
+
+        let memory = dispatch_procfs_snapshot("get_meminfo", &empty, fixture()).unwrap();
+        assert_eq!(memory["total_kb"], 8);
+        assert_eq!(memory["available_kb"], 2);
+        assert_eq!(memory["used_kb"], 6);
+
+        let cpu = dispatch_procfs_snapshot("get_cpuinfo", &empty, fixture()).unwrap();
+        assert_eq!(cpu["cpus"][0]["frequency_mhz"], 3200);
+
+        let load = dispatch_procfs_snapshot("get_loadavg", &empty, fixture()).unwrap();
+        assert_eq!(load["load1"], 1.25);
+
+        let uptime = dispatch_procfs_snapshot("get_uptime", &empty, fixture()).unwrap();
+        assert_eq!(uptime["uptime_secs"], 1234);
+
+        let network = dispatch_procfs_snapshot("get_net_dev", &empty, fixture()).unwrap();
+        assert_eq!(network["interfaces"][0]["rx_errors"], 1);
+        assert!(network["interfaces"][0].get("rx_drop").is_none());
+    }
+
+    #[test]
+    fn observed_dispatch_keeps_method_output_separate_from_plugin_state() {
+        let receipt =
+            dispatch_procfs_snapshot_observed("get_meminfo", &serde_json::json!({}), fixture())
+                .unwrap();
+        assert_eq!(receipt.output["total_kb"], 8);
+        assert_eq!(receipt.state.memory.total_kb, 8);
+        assert_eq!(receipt.state.memory.available_kb, 2);
+        assert_eq!(receipt.state.memory.used_kb, 6);
+        assert_eq!(receipt.state.net_dev.interfaces[0].interface, "eth0");
+
+        let serialized = serde_json::to_value(&receipt.state).unwrap();
+        for unobserved in ["stat", "mounts", "kernel", "vmstat", "diskstats"] {
+            assert!(
+                serialized.get(unobserved).is_none(),
+                "{unobserved} must not be fabricated by the sysinfo snapshot"
+            );
+        }
+        assert!(serialized.get("observed_at").is_none());
+        assert!(serialized.get("processes").is_none());
+    }
+
+    #[test]
+    fn actual_observed_state_projects_only_declared_public_telemetry() {
+        let state = procfs_state_from_snapshot(&fixture()).unwrap();
+        let state = simd_json::serde::to_owned_value(&state).unwrap();
+        let projected = procfs_schema()
+            .project_public_state(&state)
+            .unwrap()
+            .expect("procfs has an explicit public policy");
+        let projected = serde_json::to_value(projected).unwrap();
+
+        assert_eq!(projected["memory"]["total_kb"], 8);
+        assert_eq!(projected["loadavg"]["load1"], 1.25);
+        assert_eq!(projected["uptime"]["uptime_secs"], 1234);
+        assert_eq!(projected["net_dev"]["interfaces"][0]["interface"], "eth0");
+        assert!(projected.get("cpuinfo").is_none());
+        assert!(projected.get("stat").is_none());
+        assert!(projected.get("mounts").is_none());
+    }
+
+    #[test]
+    fn process_lookup_rejects_invalid_pid_and_represents_missing_process() {
+        assert!(dispatch_procfs_snapshot(
+            "get_process_info",
+            &serde_json::json!({"pid": -1}),
+            fixture(),
+        )
+        .is_err());
+        assert!(
+            dispatch_procfs_snapshot("get_process_info", &serde_json::json!({}), fixture(),)
+                .is_err()
+        );
+
+        let missing = dispatch_procfs_snapshot(
+            "get_process_info",
+            &serde_json::json!({"pid": 404}),
+            fixture(),
+        )
+        .unwrap();
+        assert!(missing["process"].is_null());
+    }
+
+    #[test]
+    fn invalid_native_snapshots_are_rejected_before_publication() {
+        let mut zero_total = fixture();
+        zero_total.total_memory_bytes = 0;
+        assert!(dispatch_procfs_snapshot_observed(
+            "get_meminfo",
+            &serde_json::json!({}),
+            zero_total,
+        )
+        .is_err());
+
+        let mut impossible_available = fixture();
+        impossible_available.available_memory_bytes = impossible_available.total_memory_bytes + 1;
+        assert!(dispatch_procfs_snapshot_observed(
+            "get_meminfo",
+            &serde_json::json!({}),
+            impossible_available,
+        )
+        .is_err());
+
+        let mut no_cpus = fixture();
+        no_cpus.cpus.clear();
+        assert!(
+            dispatch_procfs_snapshot_observed("get_cpuinfo", &serde_json::json!({}), no_cpus,)
+                .is_err()
+        );
+
+        let mut zero_available_and_frequency = fixture();
+        zero_available_and_frequency.available_memory_bytes = 0;
+        zero_available_and_frequency.cpus[0].frequency_mhz = None;
+        assert!(dispatch_procfs_snapshot_observed(
+            "get_cpuinfo",
+            &serde_json::json!({}),
+            zero_available_and_frequency,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn schema_method_keys_match_declared_names() {
+        let schema = procfs_schema();
+        assert_eq!(schema.methods.len(), 7);
+        for (key, method) in &schema.methods {
+            assert_eq!(key, &method.name);
+        }
+    }
+
+    #[test]
+    fn native_bytes_are_converted_to_kibibytes_at_the_output_boundary() {
+        assert_eq!(bytes_to_kib(2049), 2);
+    }
+
+    #[test]
+    fn plugin_and_schema_versions_match_v2_memory_contract() {
+        assert_eq!(ProcfsPlugin::new().version(), "2.0.0");
+        assert_eq!(procfs_schema().version, "2.0.0");
     }
 }
 
@@ -757,8 +946,6 @@ mod typed_field_tests {
             ("load1", FieldType::Float),
             ("load5", FieldType::Float),
             ("load15", FieldType::Float),
-            ("procs_running", FieldType::Integer),
-            ("procs_total", FieldType::Integer),
         ] {
             let got = &fields
                 .get(name)
@@ -769,27 +956,13 @@ mod typed_field_tests {
     }
 
     #[test]
-    fn uptime_is_two_floats() {
+    fn uptime_exposes_the_supported_integer_seconds() {
         let schema = procfs_schema();
         let FieldType::Object(fields) = &schema.fields["uptime"].field_type else {
             panic!("uptime should be an object");
         };
-        assert_eq!(fields["uptime_secs"].field_type, FieldType::Float);
-        assert_eq!(fields["idle_secs"].field_type, FieldType::Float);
-    }
-
-    #[test]
-    fn meminfo_keys_normalise_and_carry_their_unit() {
-        assert_eq!(super::meminfo_key("MemTotal", true), "mem_total_kb");
-        assert_eq!(super::meminfo_key("Active(anon)", true), "active_anon_kb");
-        assert_eq!(
-            super::meminfo_key("HugePages_Total", false),
-            "huge_pages_total"
-        );
-        assert_eq!(super::meminfo_key("SwapCached", true), "swap_cached_kb");
-        // the unit is stripped from the value, not left for a consumer to parse
-        assert_eq!(super::kb_value("32855784 kB"), Some(32855784));
-        assert_eq!(super::kb_value("0"), Some(0));
+        assert_eq!(fields["uptime_secs"].field_type, FieldType::Integer);
+        assert_eq!(fields.len(), 1);
     }
 }
 
@@ -833,10 +1006,10 @@ mod collection_field_tests {
         for c in [
             "rx_bytes",
             "rx_packets",
-            "rx_errs",
+            "rx_errors",
             "tx_bytes",
             "tx_packets",
-            "tx_drop",
+            "tx_errors",
         ] {
             assert_eq!(cols[c].field_type, FieldType::Integer, "{c}");
         }

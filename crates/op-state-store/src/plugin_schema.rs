@@ -1,15 +1,10 @@
-//! Plugin schema catalog and compatibility helpers.
+//! Plugin schema catalog and derived-document helpers.
 //!
 //! Architectural rule:
 //! - plugin code is the source of schema truth
 //! - that schema is also the footprint and JSON render contract
-//! - this module stores indexed copies of that schema for validation/export
-//!
-//! Compatibility note:
-//! a large amount of built-in schema data still lives in this file. Those
-//! built-ins are intentionally exposed through explicit compatibility helpers
-//! so runtime code can continue to resolve legacy schemas without turning this
-//! catalog back into a second schema authority.
+//! - this module stores indexed copies of plugin-provided schemas for
+//!   validation/export; it does not define or discover plugin schemas
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use simd_json::prelude::*;
@@ -17,6 +12,8 @@ use simd_json::{json, OwnedValue as Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::public_state::PublicStatePolicy;
 
 /// Default JSON Schema dialect (can be overridden per-schema)
 pub const DEFAULT_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -41,6 +38,12 @@ pub enum FieldType {
     Boolean,
     Array(Box<FieldType>),
     Object(HashMap<String, FieldSchema>),
+    /// Dynamic string keys with one declared value type. Object retains its
+    /// existing named-field representation; map keys are never public implicitly.
+    Map(Box<FieldType>),
+    /// Explicit, self-contained exact JSON Schema retained from the plugin.
+    /// Not a generic fallback; shared public projection denies this boundary.
+    JsonSchema(Box<Value>),
     Enum(Vec<String>),
     /// Discriminated union (tagged enum): the value must match exactly one of
     /// the inner branch types. Serializes as `{"one_of": [<FieldType>, ...]}`
@@ -247,6 +250,15 @@ pub struct PluginCapabilities {
     pub atomic_operations: bool,
 }
 
+/// A property write is an explicit alias for one declared mutation method.
+/// The target method's capability and input contract remain authoritative.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FieldWriteDecl {
+    pub method: String,
+    pub argument: String,
+}
+
 /// Plugin schema definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSchema {
@@ -265,6 +277,16 @@ pub struct PluginSchema {
     pub display_name: Option<String>,
     /// Fields in the plugin state
     pub fields: HashMap<String, FieldSchema>,
+    /// Explicit allowlist for the shared public state projection. Absence or
+    /// an empty policy withholds all state; methods and field declarations do
+    /// not infer exposure.
+    #[serde(default, skip_serializing_if = "PublicStatePolicy::is_empty")]
+    pub public_state: PublicStatePolicy,
+    /// Explicit property-to-method write bindings. Absence means that a field
+    /// cannot be written through a generic property surface. This map grants
+    /// no authority; callers must satisfy the mapped method's capability.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub field_writes: HashMap<String, FieldWriteDecl>,
     /// Dependencies on other plugins
     #[serde(default)]
     pub dependencies: Vec<String>,
@@ -496,6 +518,14 @@ impl PluginSchema {
     /// - `propertyDependencies` for conditional immutability
     /// - Schema-level immutability via tags
     pub fn to_json_schema(&self) -> Value {
+        if self.fields.values().any(|field| {
+            crate::exact_schema::contains_exact(&field.field_type).expect("bounded field type")
+        }) {
+            assert_eq!(
+                self.dialect, DEFAULT_SCHEMA_DIALECT,
+                "exact fields require the declared 2020-12 export dialect"
+            );
+        }
         let is_fully_immutable = self.tags.contains(&"immutable".to_string());
         let mut properties = simd_json::value::owned::Object::new();
         let mut required = Vec::new();
@@ -574,6 +604,7 @@ impl PluginSchema {
             }
         }
 
+        crate::exact_schema::scope_field_exports(&mut schema, &self.fields, "");
         schema
     }
 
@@ -614,12 +645,23 @@ impl PluginSchema {
                 obj.insert("x-oscal-subid".to_string(), json!(subid));
             }
         }
+        crate::exact_schema::scope_type_export(&mut schema, &field.field_type, "");
         Some(schema)
     }
 
     /// Convert to JSON Schema draft-07 format (deprecated, for backward compatibility)
     #[deprecated(since = "2.0.0", note = "Use to_json_schema() for JSON Schema 2026")]
     pub fn to_json_schema_draft07(&self) -> Value {
+        assert!(
+            !self
+                .fields
+                .values()
+                .any(
+                    |field| crate::exact_schema::contains_exact(&field.field_type)
+                        .expect("bounded field type")
+                ),
+            "exact 2020-12 fields cannot use legacy draft07 export"
+        );
         let mut properties = simd_json::value::owned::Object::new();
         let mut required = Vec::new();
 
@@ -633,14 +675,16 @@ impl PluginSchema {
             }
         }
 
-        json!({
+        let mut schema = json!({
             "$schema": "http://json-schema.org/draft-07/schema#",
             "title": self.name,
             "description": self.description,
             "type": "object",
             "properties": properties,
             "required": required
-        })
+        });
+        crate::exact_schema::scope_field_exports(&mut schema, &self.fields, "");
+        schema
     }
 
     /// Convert to the legacy contract-style schema while using this registry
@@ -907,6 +951,8 @@ pub struct PluginSchemaBuilder {
     description: String,
     display_name: Option<String>,
     fields: HashMap<String, FieldSchema>,
+    public_state: PublicStatePolicy,
+    field_writes: HashMap<String, FieldWriteDecl>,
     dependencies: Vec<String>,
     example: Option<Value>,
     immutable_paths: Vec<String>,
@@ -929,6 +975,8 @@ impl PluginSchemaBuilder {
             description: String::new(),
             display_name: None,
             fields: HashMap::new(),
+            public_state: PublicStatePolicy::default(),
+            field_writes: HashMap::new(),
             dependencies: Vec::new(),
             example: None,
             immutable_paths: Vec::new(),
@@ -945,6 +993,18 @@ impl PluginSchemaBuilder {
 
     pub fn version(mut self, version: &str) -> Self {
         self.version = version.to_string();
+        self
+    }
+
+    /// Bind a property to its plugin-owned mutation method and input argument.
+    pub fn field_write(mut self, property: &str, method: &str, argument: &str) -> Self {
+        self.field_writes.insert(
+            property.to_string(),
+            FieldWriteDecl {
+                method: method.to_string(),
+                argument: argument.to_string(),
+            },
+        );
         self
     }
 
@@ -975,6 +1035,23 @@ impl PluginSchemaBuilder {
 
     pub fn field(mut self, name: &str, schema: FieldSchema) -> Self {
         self.fields.insert(name.to_string(), schema);
+        self
+    }
+
+    /// Publish one schema-declared JSON pointer through the shared public
+    /// state projection. The projector validates the complete policy and
+    /// fails closed on opaque types, invalid paths, or state type drift.
+    pub fn public_state_path(mut self, path: &str) -> Self {
+        self.public_state.paths.push(path.to_string());
+        self
+    }
+
+    /// Publish multiple schema-declared JSON pointers through the shared
+    /// public state projection.
+    pub fn public_state_paths(mut self, paths: &[&str]) -> Self {
+        self.public_state
+            .paths
+            .extend(paths.iter().map(|path| (*path).to_string()));
         self
     }
 
@@ -1168,6 +1245,8 @@ impl PluginSchemaBuilder {
             description: self.description,
             display_name: self.display_name,
             fields: self.fields,
+            public_state: self.public_state,
+            field_writes: self.field_writes,
             dependencies: self.dependencies,
             example: self.example,
             immutable_paths: self.immutable_paths,
@@ -1233,20 +1312,6 @@ impl SchemaRegistry {
         registry
     }
 
-    /// Create a catalog pre-populated with built-in compatibility schemas.
-    pub fn with_builtin_schemas() -> Self {
-        let mut registry = Self::empty();
-        registry.register_builtin_schemas();
-        registry
-    }
-
-    /// Create a compatibility catalog with built-ins and a custom spec base path.
-    pub fn with_builtin_schemas_and_spec_path(spec_path: impl AsRef<Path>) -> Self {
-        let mut registry = Self::with_spec_path(spec_path);
-        registry.register_builtin_schemas();
-        registry
-    }
-
     /// Set the base path for the json-schema-spec repository
     pub fn set_spec_path(&mut self, path: impl AsRef<Path>) {
         self.spec_base_path = Some(path.as_ref().to_path_buf());
@@ -1278,49 +1343,6 @@ impl SchemaRegistry {
     /// Get a loaded meta-schema
     pub fn get_meta_schema(&self, dialect: &str) -> Option<&Value> {
         self.meta_schemas.get(dialect)
-    }
-
-    /// Load a plugin schema from a JSON file
-    pub fn load_from_file(&mut self, path: impl AsRef<Path>) -> Result<String, SchemaLoadError> {
-        let path = path.as_ref();
-        let mut content = fs::read_to_string(path)
-            .map_err(|e| SchemaLoadError::IoError(path.to_path_buf(), e.to_string()))?;
-
-        let schema: PluginSchema = unsafe { simd_json::from_str(&mut content) }
-            .map_err(|e| SchemaLoadError::ParseError(path.to_path_buf(), e.to_string()))?;
-
-        let name = schema.name.clone();
-        self.register(schema);
-        Ok(name)
-    }
-
-    /// Load all schema files from a directory
-    pub fn load_from_directory(
-        &mut self,
-        dir: impl AsRef<Path>,
-    ) -> Result<Vec<String>, SchemaLoadError> {
-        let dir = dir.as_ref();
-        let mut loaded = Vec::new();
-
-        let entries = fs::read_dir(dir)
-            .map_err(|e| SchemaLoadError::IoError(dir.to_path_buf(), e.to_string()))?;
-
-        for entry in entries {
-            let entry =
-                entry.map_err(|e| SchemaLoadError::IoError(dir.to_path_buf(), e.to_string()))?;
-            let path = entry.path();
-
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                match self.load_from_file(&path) {
-                    Ok(name) => loaded.push(name),
-                    Err(e) => {
-                        tracing::warn!("Failed to load schema from {:?}: {}", path, e);
-                    }
-                }
-            }
-        }
-
-        Ok(loaded)
     }
 
     /// Export all schemas as JSON Schema documents
@@ -1404,16 +1426,6 @@ impl SchemaRegistry {
         self.get(plugin_name).map(|schema| schema.validate(state))
     }
 
-    /// Register all built-in plugin schemas.
-    ///
-    /// This path is compatibility-only and should not be treated as the
-    /// authoritative runtime source for live plugin documents.
-    fn register_builtin_schemas(&mut self) {
-        for schema in builtin_plugin_schemas() {
-            self.register(schema);
-        }
-    }
-
     fn canonical_name(name: &str) -> &str {
         match name {
             "incus_wireguard_ingress" => "incus-wireguard-ingress",
@@ -1425,101 +1437,6 @@ impl SchemaRegistry {
             other => other,
         }
     }
-}
-
-/// Compatibility helper for built-in plugin schemas.
-///
-/// Runtime code should still obtain schema through the plugin instance. This
-/// helper exists so legacy built-in plugins can satisfy `StatePlugin::schema()`
-/// without forcing registration code to infer schema from live state again.
-pub fn builtin_plugin_schema(name: &str) -> Option<PluginSchema> {
-    builtin_plugin_schema_from_canonical_name(SchemaRegistry::canonical_name(name))
-}
-
-/// Return the full compatibility set of built-in schemas.
-///
-/// Calling this is an explicit compatibility action. Runtime code should
-/// prefer plugin registration or persisted canonical plugin documents instead.
-pub fn builtin_plugin_schemas() -> Vec<PluginSchema> {
-    [
-        "lxc",
-        "incus",
-        "incus-wireguard-ingress",
-        "incus-xray-reality-client",
-        "incus-xray-reality-server",
-        "net",
-        "rtnetlink",
-        "openflow",
-        "s6",
-        "netmaker",
-        "adc",
-        "agent_config",
-        "config",
-        "dnsresolver",
-        "endpoint",
-        "full_system",
-        "gcloud_adc",
-        "hardware",
-        "keyring",
-        "login1",
-        "mcp",
-        "openflow_obfuscation",
-        "ovsdb_bridge",
-        "packagekit",
-        "pcidecl",
-        "privacy",
-        "proxmox",
-        "proxy_server",
-        "service",
-        "sess_decl",
-        "software",
-        "users",
-        "web_ui",
-        "wireguard",
-    ]
-    .into_iter()
-    .filter_map(builtin_plugin_schema_from_canonical_name)
-    .collect()
-}
-
-fn builtin_plugin_schema_from_canonical_name(name: &str) -> Option<PluginSchema> {
-    Some(match name {
-        "adc" => create_adc_schema(),
-        "agent_config" => create_agent_config_schema(),
-        "config" => create_config_schema(),
-        "dnsresolver" => create_dnsresolver_schema(),
-        "endpoint" => create_endpoint_schema(),
-        "full_system" => create_full_system_schema(),
-        "gcloud_adc" => create_gcloud_adc_schema(),
-        "hardware" => create_hardware_schema(),
-        "keyring" => create_keyring_schema(),
-        "login1" => create_login1_schema(),
-        "mcp" => create_mcp_schema(),
-        "openflow_obfuscation" => create_openflow_obfuscation_schema(),
-        "ovsdb_bridge" => create_ovsdb_bridge_schema(),
-        "packagekit" => create_packagekit_schema(),
-        "pcidecl" => create_pcidecl_schema(),
-        "privacy" => create_privacy_schema(),
-        "proxmox" => create_proxmox_schema(),
-        "proxy_server" => create_proxy_server_schema(),
-        "service" => create_service_schema(),
-        "sess_decl" => create_sess_decl_schema(),
-        "software" => create_software_schema(),
-        "users" => create_users_schema(),
-        "web_ui" => create_web_ui_schema(),
-        "wireguard" => create_wireguard_schema(),
-        "lxc" => create_lxc_schema(),
-        "incus" => create_incus_schema(),
-        "incus-wireguard-ingress" => create_incus_wireguard_ingress_schema(),
-        "incus-xray-reality-client" => create_incus_xray_reality_client_schema(),
-        "incus-xray-reality-server" => create_incus_xray_reality_server_schema(),
-        "net" => create_net_schema(),
-        "rtnetlink" => create_rtnetlink_schema(),
-        "openflow" => create_openflow_schema(),
-        "s6" => create_s6_schema(),
-        "netmaker" => create_netmaker_schema(),
-        _ => return None,
-    })
 }
 
 impl Default for SchemaRegistry {
@@ -1555,21 +1472,8 @@ impl std::fmt::Display for SchemaLoadError {
 impl std::error::Error for SchemaLoadError {}
 
 // ============================================================================
-// Built-in Schema Definitions
+// Schema helpers
 // ============================================================================
-
-fn any_field(required: bool, description: &str, default: Option<Value>) -> FieldSchema {
-    FieldSchema {
-        field_type: FieldType::Any,
-        required,
-        description: description.to_string(),
-        default,
-        example: None,
-        constraints: Vec::new(),
-        read_only: false,
-        read_only_when: None,
-    }
-}
 
 fn is_secret_field_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -1592,2942 +1496,6 @@ fn is_pii_field_name(name: &str) -> bool {
     ["email", "account", "google_id", "google_email", "user_id"]
         .iter()
         .any(|needle| lower.contains(needle))
-}
-
-fn simple_schema(
-    name: &str,
-    description: &str,
-    dependencies: &[&str],
-    fields: Vec<(&str, FieldSchema)>,
-) -> PluginSchema {
-    let mut builder = PluginSchema::builder(name)
-        .version("1.0.0")
-        .description(description);
-    for dep in dependencies {
-        builder = builder.dependency(dep);
-    }
-    for (field_name, schema) in fields {
-        builder = builder.field(field_name, schema);
-    }
-    builder.build()
-}
-
-fn create_adc_schema() -> PluginSchema {
-    simple_schema(
-        "adc",
-        "Application default credentials state",
-        &[],
-        vec![(
-            "configured",
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: true,
-                description: "Whether ADC is configured".to_string(),
-                default: Some(json!(false)),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )],
-    )
-}
-
-fn create_agent_config_schema() -> PluginSchema {
-    simple_schema(
-        "agent_config",
-        "Agent configuration and tool assignments",
-        &[],
-        vec![(
-            "agents",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Any)),
-                required: true,
-                description: "List of agent configurations".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )],
-    )
-}
-
-fn create_config_schema() -> PluginSchema {
-    simple_schema(
-        "config",
-        "Global key/value config store",
-        &[],
-        vec![(
-            "configs",
-            any_field(true, "Configuration map", Some(json!({}))),
-        )],
-    )
-}
-
-fn create_dnsresolver_schema() -> PluginSchema {
-    simple_schema(
-        "dnsresolver",
-        "DNS resolver declaration state",
-        &["net"],
-        vec![
-            (
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: false,
-                    description: "Schema version".to_string(),
-                    default: Some(json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "items",
-                FieldSchema {
-                    field_type: FieldType::Array(Box::new(FieldType::Any)),
-                    required: true,
-                    description: "Resolver items".to_string(),
-                    default: Some(json!([])),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-        ],
-    )
-}
-
-fn create_endpoint_schema() -> PluginSchema {
-    simple_schema(
-        "endpoint",
-        "Endpoint configuration",
-        &["net"],
-        vec![(
-            "endpoints",
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Declared endpoints".to_string(),
-                default: Some(json!([])),
-                example: None,
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        )],
-    )
-}
-
-fn create_full_system_schema() -> PluginSchema {
-    simple_schema(
-        "full_system",
-        "Full system recovery snapshot",
-        &["net", "service", "software", "users", "lxc", "s6"],
-        vec![
-            (
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: true,
-                    description: "Snapshot schema version".to_string(),
-                    default: Some(json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "captured_at",
-                FieldSchema {
-                    field_type: FieldType::String,
-                    required: false,
-                    description: "Capture timestamp".to_string(),
-                    default: None,
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            ("hostname", any_field(true, "Host name", Some(json!("")))),
-            (
-                "system",
-                any_field(false, "System details", Some(json!({}))),
-            ),
-            (
-                "network",
-                any_field(false, "Network snapshot", Some(json!({}))),
-            ),
-            (
-                "services",
-                any_field(false, "Service snapshot", Some(json!([]))),
-            ),
-            (
-                "packages",
-                any_field(false, "Package snapshot", Some(json!([]))),
-            ),
-            ("users", any_field(false, "User snapshot", Some(json!([])))),
-            (
-                "storage",
-                any_field(false, "Storage snapshot", Some(json!({}))),
-            ),
-            (
-                "containers",
-                any_field(false, "Container snapshot", Some(json!({}))),
-            ),
-            (
-                "plugins",
-                any_field(false, "Plugin snapshots", Some(json!({}))),
-            ),
-        ],
-    )
-}
-
-fn create_gcloud_adc_schema() -> PluginSchema {
-    simple_schema(
-        "gcloud_adc",
-        "Google Cloud ADC state",
-        &[],
-        vec![
-            ("account", any_field(false, "Authenticated account", None)),
-            ("project_id", any_field(false, "Project id", None)),
-            (
-                "authenticated",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Authentication status".to_string(),
-                    default: Some(json!(false)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-        ],
-    )
-}
-
-fn create_hardware_schema() -> PluginSchema {
-    simple_schema(
-        "hardware",
-        "Hardware inventory snapshot",
-        &[],
-        vec![
-            ("cpu", any_field(true, "CPU info", Some(json!({})))),
-            ("memory", any_field(true, "Memory info", Some(json!({})))),
-            ("disks", any_field(true, "Disk list", Some(json!([])))),
-        ],
-    )
-}
-
-fn create_keyring_schema() -> PluginSchema {
-    simple_schema(
-        "keyring",
-        "Secret service collections state",
-        &[],
-        vec![
-            (
-                "collections",
-                any_field(true, "Secret collections", Some(json!([]))),
-            ),
-            (
-                "default_collection",
-                any_field(false, "Default collection path", None),
-            ),
-        ],
-    )
-}
-
-fn create_login1_schema() -> PluginSchema {
-    simple_schema(
-        "login1",
-        "Runtime login sessions",
-        &["users"],
-        vec![(
-            "sessions",
-            any_field(true, "Active sessions", Some(json!([]))),
-        )],
-    )
-}
-
-fn create_mcp_schema() -> PluginSchema {
-    simple_schema(
-        "mcp",
-        "MCP server and tool-group configuration",
-        &["agent_config"],
-        vec![
-            (
-                "servers",
-                any_field(false, "MCP server map", Some(json!({}))),
-            ),
-            (
-                "tool_groups",
-                any_field(false, "Tool group config", Some(json!({}))),
-            ),
-            (
-                "compact_mode",
-                any_field(false, "Compact mode config", Some(json!({}))),
-            ),
-        ],
-    )
-}
-
-fn create_openflow_obfuscation_schema() -> PluginSchema {
-    simple_schema(
-        "openflow_obfuscation",
-        "OpenFlow traffic obfuscation configuration",
-        &["openflow", "net"],
-        vec![(
-            "config",
-            any_field(true, "Obfuscation config", Some(json!({}))),
-        )],
-    )
-}
-
-fn create_ovsdb_bridge_schema() -> PluginSchema {
-    simple_schema(
-        "ovsdb_bridge",
-        "OVS bridge declarations",
-        &["net"],
-        vec![(
-            "bridges",
-            any_field(true, "Bridge declarations", Some(json!([]))),
-        )],
-    )
-}
-
-fn create_packagekit_schema() -> PluginSchema {
-    simple_schema(
-        "packagekit",
-        "PackageKit package declarations",
-        &["software"],
-        vec![
-            (
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: false,
-                    description: "Schema version".to_string(),
-                    default: Some(json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "packages",
-                any_field(true, "Package declaration map", Some(json!({}))),
-            ),
-        ],
-    )
-}
-
-fn create_pcidecl_schema() -> PluginSchema {
-    simple_schema(
-        "pcidecl",
-        "PCI device declaration state",
-        &["hardware"],
-        vec![
-            (
-                "version",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: false,
-                    description: "Schema version".to_string(),
-                    default: Some(json!(1)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 1.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "items",
-                any_field(true, "PCI declarations", Some(json!([]))),
-            ),
-        ],
-    )
-}
-
-fn create_privacy_schema() -> PluginSchema {
-    simple_schema(
-        "privacy",
-        "Privacy coordination configuration",
-        &["wireguard", "proxmox"],
-        vec![("config", any_field(true, "Privacy config", Some(json!({}))))],
-    )
-}
-
-fn create_proxmox_schema() -> PluginSchema {
-    simple_schema(
-        "proxmox",
-        "Proxmox container declarations",
-        &["net"],
-        vec![(
-            "containers",
-            any_field(true, "Container declarations", Some(json!([]))),
-        )],
-    )
-}
-
-fn create_proxy_server_schema() -> PluginSchema {
-    simple_schema(
-        "proxy_server",
-        "Proxy server runtime config",
-        &["net"],
-        vec![
-            (
-                "enabled",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable proxy".to_string(),
-                    default: Some(json!(false)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "port",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: true,
-                    description: "Proxy port".to_string(),
-                    default: Some(json!(8080)),
-                    example: None,
-                    constraints: vec![
-                        Constraint::Min { value: 1.0 },
-                        Constraint::Max { value: 65535.0 },
-                    ],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-        ],
-    )
-}
-
-fn create_service_schema() -> PluginSchema {
-    simple_schema(
-        "service",
-        "Service definition declarations",
-        &["net"],
-        vec![("services", any_field(true, "Service map", Some(json!({}))))],
-    )
-}
-
-fn create_sess_decl_schema() -> PluginSchema {
-    simple_schema(
-        "sess_decl",
-        "Session declaration state",
-        &["users"],
-        vec![(
-            "sessions",
-            any_field(true, "Session declarations", Some(json!([]))),
-        )],
-    )
-}
-
-fn create_software_schema() -> PluginSchema {
-    simple_schema(
-        "software",
-        "Software package inventory",
-        &[],
-        vec![("packages", any_field(true, "Package list", Some(json!([]))))],
-    )
-}
-
-fn create_users_schema() -> PluginSchema {
-    simple_schema(
-        "users",
-        "User account declarations",
-        &[],
-        vec![("users", any_field(true, "Users list", Some(json!([]))))],
-    )
-}
-
-fn create_web_ui_schema() -> PluginSchema {
-    simple_schema(
-        "web_ui",
-        "Web UI tunables",
-        &["mcp"],
-        vec![
-            (
-                "enabled",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable UI".to_string(),
-                    default: Some(json!(true)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "cors_origins",
-                any_field(false, "Allowed CORS origins", Some(json!([]))),
-            ),
-            (
-                "compression",
-                FieldSchema {
-                    field_type: FieldType::Boolean,
-                    required: true,
-                    description: "Enable compression".to_string(),
-                    default: Some(json!(true)),
-                    example: None,
-                    constraints: Vec::new(),
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "cache_ttl",
-                FieldSchema {
-                    field_type: FieldType::Integer,
-                    required: true,
-                    description: "Cache TTL seconds".to_string(),
-                    default: Some(json!(86400)),
-                    example: None,
-                    constraints: vec![Constraint::Min { value: 0.0 }],
-                    read_only: false,
-                    read_only_when: None,
-                },
-            ),
-            (
-                "theme",
-                any_field(true, "Theme name", Some(json!("default"))),
-            ),
-            (
-                "feature_flags",
-                any_field(false, "Feature flag map", Some(json!({}))),
-            ),
-        ],
-    )
-}
-
-fn create_wireguard_schema() -> PluginSchema {
-    simple_schema(
-        "wireguard",
-        "WireGuard interface state",
-        &["net"],
-        vec![(
-            "interfaces",
-            any_field(true, "WireGuard interfaces", Some(json!([]))),
-        )],
-    )
-}
-
-fn create_lxc_schema() -> PluginSchema {
-    let container_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Container VMID".to_string(),
-                default: None,
-                example: Some(json!("100")),
-                constraints: vec![Constraint::Pattern {
-                    regex: r"^\d+$".to_string(),
-                }],
-                read_only: true, // ID is immutable once created
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "veth".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Veth interface name".to_string(),
-                default: None,
-                example: Some(json!("vi100")),
-                constraints: Vec::new(),
-                read_only: false,
-                // veth becomes readOnly when container is running
-                read_only_when: Some(ReadOnlyCondition {
-                    property: "running".to_string(),
-                    value: "true".to_string(),
-                }),
-            },
-        );
-        fields.insert(
-            "bridge".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "OVS bridge name".to_string(),
-                default: Some(json!("ovs-br0")),
-                example: Some(json!("ovs-br0")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "running".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether container is running".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "properties".to_string(),
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Container properties (hostname, memory, cores, etc.)".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "hostname": "my-container",
-                    "memory": 512,
-                    "cores": 2,
-                    "template": "local:vztmpl/debian-13.tar.zst"
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("lxc")
-        .version("2.0.0")
-        .description("LXC container management via native Proxmox API")
-        .array_field(
-            "containers",
-            FieldType::Object(container_fields),
-            true,
-            "List of containers",
-        )
-        .example(json!({
-            "containers": [
-                {
-                    "id": "100",
-                    "veth": "vi100",
-                    "bridge": "ovs-br0",
-                    "running": true,
-                    "properties": {
-                        "hostname": "wireguard-gateway",
-                        "memory": 512,
-                        "cores": 1,
-                        "network_type": "bridge"
-                    }
-                }
-            ]
-        }))
-        .build()
-}
-
-fn create_incus_schema() -> PluginSchema {
-    let instance_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Instance name".to_string(),
-                default: None,
-                example: Some(json!("privacy-user-123")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "status".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "Running".to_string(),
-                    "Stopped".to_string(),
-                    "Frozen".to_string(),
-                ]),
-                required: true,
-                description: "Instance status".to_string(),
-                default: Some(json!("Stopped")),
-                example: Some(json!("Running")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "type".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "container".to_string(),
-                    "virtual-machine".to_string(),
-                ]),
-                required: true,
-                description: "Instance type".to_string(),
-                default: Some(json!("container")),
-                example: Some(json!("container")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "image".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Source image reference".to_string(),
-                default: None,
-                example: Some(json!("images:debian/13")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "storage_pool".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Preferred Incus storage pool for initial creation".to_string(),
-                default: None,
-                example: Some(json!("registration")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "profiles".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "Applied Incus profiles".to_string(),
-                default: Some(json!(["default"])),
-                example: Some(json!(["default"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "config".to_string(),
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Instance configuration map".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({"limits.cpu": "2"})),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "devices".to_string(),
-            FieldSchema {
-                field_type: FieldType::Any,
-                required: false,
-                description: "Instance device definitions".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "eth0": {
-                        "type": "nic",
-                        "nictype": "bridged",
-                        "parent": "ovsbr0"
-                    }
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("incus")
-        .version("1.0.0")
-        .description("Incus instance management")
-        .array_field(
-            "instances",
-            FieldType::Object(instance_fields),
-            true,
-            "List of Incus instances",
-        )
-        .example(json!({
-            "instances": [
-                {
-                    "name": "privacy-user-123",
-                    "status": "Running",
-                    "type": "container",
-                    "image": "images:debian/13",
-                    "storage_pool": "registration",
-                    "profiles": ["default"],
-                    "config": {
-                        "limits.cpu": "2"
-                    },
-                    "devices": {
-                        "eth0": {
-                            "type": "nic",
-                            "nictype": "bridged",
-                            "parent": "ovsbr0"
-                        }
-                    }
-                }
-            ]
-        }))
-        .build()
-}
-
-fn create_incus_wireguard_ingress_schema() -> PluginSchema {
-    let container_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "image".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Incus image alias for the WireGuard ingress container".to_string(),
-                default: Some(json!("images:alpine/edge")),
-                example: Some(json!("images:alpine/edge")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "profiles".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Incus profiles applied to the container".to_string(),
-                default: Some(json!(["default"])),
-                example: Some(json!(["default", "privacy-system"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "devices".to_string(),
-            any_field(
-                false,
-                "Incus device overrides such as NICs and disks",
-                Some(json!({})),
-            ),
-        );
-        fields
-    };
-
-    let peer_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "public_key".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Peer public key".to_string(),
-                default: None,
-                example: Some(json!("base64publickey")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "allowed_ips".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Allowed IP ranges for the peer".to_string(),
-                default: Some(json!(["0.0.0.0/0"])),
-                example: Some(json!(["10.0.0.2/32"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "endpoint".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional peer endpoint host:port".to_string(),
-                default: None,
-                example: Some(json!("vpn.example.com:51820")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "persistent_keepalive".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: false,
-                description: "Persistent keepalive interval in seconds".to_string(),
-                default: None,
-                example: Some(json!(25)),
-                constraints: vec![
-                    Constraint::Min { value: 0.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let wireguard_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "interface".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "WireGuard interface name inside the container".to_string(),
-                default: Some(json!("wg0")),
-                example: Some(json!("wg0")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "listen_port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: true,
-                description: "WireGuard listen port".to_string(),
-                default: Some(json!(51820)),
-                example: Some(json!(51820)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "private_key_env".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Environment variable name holding the private key".to_string(),
-                default: Some(json!("WIREGUARD_PRIVATE_KEY")),
-                example: Some(json!("WIREGUARD_PRIVATE_KEY")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "address".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "CIDR address assigned to the WireGuard interface".to_string(),
-                default: None,
-                example: Some(json!("10.0.0.1/24")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "dns".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "DNS resolvers pushed to clients".to_string(),
-                default: Some(json!([])),
-                example: Some(json!(["1.1.1.1", "1.0.0.1"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "peers".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(peer_fields))),
-                required: true,
-                description: "WireGuard peers served by the ingress gateway".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "public_key": "base64publickey",
-                    "allowed_ips": ["10.0.0.2/32"]
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let capability_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "requires_root".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the container requires root privileges".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "supports_rollback".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the deployment supports rollback".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("incus-wireguard-ingress")
-        .version("1.0.0")
-        .description("Incus system container declaration for the WireGuard ingress gateway")
-        .field(
-            "name",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Schema object name".to_string(),
-                default: Some(json!("incus-wireguard-ingress")),
-                example: Some(json!("incus-wireguard-ingress")),
-                constraints: vec![
-                    Constraint::Pattern {
-                        regex: "^[a-z0-9_-]+$".to_string(),
-                    },
-                    Constraint::Max { value: 64.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "version",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Schema version".to_string(),
-                default: Some(json!("1.0.0")),
-                example: Some(json!("1.0.0")),
-                constraints: vec![Constraint::Pattern {
-                    regex: "^\\d+\\.\\d+\\.\\d+$".to_string(),
-                }],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "plugin_type",
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["network".to_string()]),
-                required: true,
-                description: "Container schema category".to_string(),
-                default: Some(json!("network")),
-                example: Some(json!("network")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .object_field(
-            "container",
-            container_fields,
-            true,
-            "Incus container image, profiles, and device overrides",
-        )
-        .object_field(
-            "wireguard",
-            wireguard_fields,
-            true,
-            "WireGuard ingress service configuration",
-        )
-        .object_field(
-            "capabilities",
-            capability_fields,
-            false,
-            "Operational capabilities for the container implementation",
-        )
-        .field(
-            "service",
-            any_field(false, "Optional service declaration", Some(json!({}))),
-        )
-        .example(json!({
-            "name": "incus-wireguard-ingress",
-            "version": "1.0.0",
-            "plugin_type": "network",
-            "container": {
-                "image": "images:alpine/edge",
-                "profiles": ["default", "privacy-system"],
-                "devices": {}
-            },
-            "wireguard": {
-                "interface": "wg0",
-                "listen_port": 51820,
-                "private_key_env": "WIREGUARD_PRIVATE_KEY",
-                "address": "10.0.0.1/24",
-                "dns": ["1.1.1.1", "1.0.0.1"],
-                "peers": [{
-                    "public_key": "base64publickey",
-                    "allowed_ips": ["10.0.0.2/32"]
-                }]
-            },
-            "capabilities": {
-                "requires_root": true,
-                "supports_rollback": false
-            },
-            "service": {}
-        }))
-        .build()
-}
-
-fn create_incus_xray_reality_client_schema() -> PluginSchema {
-    let container_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "image".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Incus image alias for the Xray client container".to_string(),
-                default: Some(json!("images:debian/13")),
-                example: Some(json!("images:debian/13")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "profiles".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Incus profiles applied to the container".to_string(),
-                default: Some(json!(["default"])),
-                example: Some(json!(["default", "privacy-system"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "devices".to_string(),
-            any_field(
-                false,
-                "Incus device overrides such as NICs and disks",
-                Some(json!({})),
-            ),
-        );
-        fields
-    };
-
-    let inbound_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "tag".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional Xray inbound tag".to_string(),
-                default: None,
-                example: Some(json!("socks-in")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "protocol".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "socks".to_string(),
-                    "http".to_string(),
-                    "dokodemo-door".to_string(),
-                ]),
-                required: true,
-                description: "Inbound protocol".to_string(),
-                default: Some(json!("socks")),
-                example: Some(json!("socks")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: true,
-                description: "Listener port".to_string(),
-                default: Some(json!(1080)),
-                example: Some(json!(1080)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "listen".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Listener bind address".to_string(),
-                default: Some(json!("127.0.0.1")),
-                example: Some(json!("127.0.0.1")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "sniffing".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Enable protocol sniffing".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let vnext_user_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "User UUID".to_string(),
-                default: None,
-                example: Some(json!("00000000-0000-0000-0000-000000000000")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "flow".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["xtls-rprx-vision".to_string()]),
-                required: true,
-                description: "REALITY flow".to_string(),
-                default: Some(json!("xtls-rprx-vision")),
-                example: Some(json!("xtls-rprx-vision")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "encryption".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["none".to_string()]),
-                required: false,
-                description: "Encryption mode".to_string(),
-                default: Some(json!("none")),
-                example: Some(json!("none")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let vnext_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "address".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Remote Xray server hostname or IP".to_string(),
-                default: None,
-                example: Some(json!("vps.example.com")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: true,
-                description: "Remote Xray server port".to_string(),
-                default: Some(json!(443)),
-                example: Some(json!(443)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "users".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(vnext_user_fields))),
-                required: true,
-                description: "Authorized VLESS users".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "id": "00000000-0000-0000-0000-000000000000",
-                    "flow": "xtls-rprx-vision",
-                    "encryption": "none"
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let outbound_settings_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "vnext".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(vnext_fields))),
-                required: true,
-                description: "Remote VLESS upstream definitions".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "address": "vps.example.com",
-                    "port": 443,
-                    "users": [{
-                        "id": "00000000-0000-0000-0000-000000000000",
-                        "flow": "xtls-rprx-vision",
-                        "encryption": "none"
-                    }]
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let reality_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "server_name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "TLS server name to mimic".to_string(),
-                default: None,
-                example: Some(json!("www.microsoft.com")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "public_key".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Server public key".to_string(),
-                default: None,
-                example: Some(json!("base64publickey")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "short_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "REALITY short ID".to_string(),
-                default: None,
-                example: Some(json!("1234abcd")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "fingerprint".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Client fingerprint".to_string(),
-                default: Some(json!("chrome")),
-                example: Some(json!("chrome")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let stream_settings_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "network".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["tcp".to_string()]),
-                required: true,
-                description: "Transport network".to_string(),
-                default: Some(json!("tcp")),
-                example: Some(json!("tcp")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "security".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["reality".to_string()]),
-                required: true,
-                description: "Transport security".to_string(),
-                default: Some(json!("reality")),
-                example: Some(json!("reality")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "reality_settings".to_string(),
-            FieldSchema {
-                field_type: FieldType::Object(reality_fields),
-                required: true,
-                description: "REALITY transport settings".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "server_name": "www.microsoft.com",
-                    "public_key": "base64publickey",
-                    "short_id": "1234abcd",
-                    "fingerprint": "chrome"
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let outbound_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "tag".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional Xray outbound tag".to_string(),
-                default: None,
-                example: Some(json!("reality-out")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "protocol".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["vless".to_string()]),
-                required: true,
-                description: "Outbound protocol".to_string(),
-                default: Some(json!("vless")),
-                example: Some(json!("vless")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "settings".to_string(),
-            FieldSchema {
-                field_type: FieldType::Object(outbound_settings_fields),
-                required: true,
-                description: "Outbound server settings".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "vnext": [{
-                        "address": "vps.example.com",
-                        "port": 443,
-                        "users": [{
-                            "id": "00000000-0000-0000-0000-000000000000",
-                            "flow": "xtls-rprx-vision",
-                            "encryption": "none"
-                        }]
-                    }]
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "stream_settings".to_string(),
-            FieldSchema {
-                field_type: FieldType::Object(stream_settings_fields),
-                required: true,
-                description: "REALITY transport settings".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "network": "tcp",
-                    "security": "reality",
-                    "reality_settings": {
-                        "server_name": "www.microsoft.com",
-                        "public_key": "base64publickey",
-                        "short_id": "1234abcd",
-                        "fingerprint": "chrome"
-                    }
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let xray_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "log_level".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "debug".to_string(),
-                    "info".to_string(),
-                    "warning".to_string(),
-                    "error".to_string(),
-                    "none".to_string(),
-                ]),
-                required: false,
-                description: "Xray log level".to_string(),
-                default: Some(json!("warning")),
-                example: Some(json!("warning")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "inbounds".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(inbound_fields))),
-                required: true,
-                description: "Local proxy listeners".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "tag": "socks-in",
-                    "protocol": "socks",
-                    "port": 1080,
-                    "listen": "127.0.0.1",
-                    "sniffing": true
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "outbounds".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(outbound_fields))),
-                required: true,
-                description: "REALITY egress definitions".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "tag": "reality-out",
-                    "protocol": "vless",
-                    "settings": {
-                        "vnext": [{
-                            "address": "vps.example.com",
-                            "port": 443,
-                            "users": [{
-                                "id": "00000000-0000-0000-0000-000000000000",
-                                "flow": "xtls-rprx-vision",
-                                "encryption": "none"
-                            }]
-                        }]
-                    },
-                    "stream_settings": {
-                        "network": "tcp",
-                        "security": "reality",
-                        "reality_settings": {
-                            "server_name": "www.microsoft.com",
-                            "public_key": "base64publickey",
-                            "short_id": "1234abcd",
-                            "fingerprint": "chrome"
-                        }
-                    }
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let capability_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "requires_root".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the container requires root privileges".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "supports_rollback".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the deployment supports rollback".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("incus-xray-reality-client")
-        .version("1.0.0")
-        .description("Incus system container declaration for the Xray REALITY outbound client")
-        .field(
-            "name",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Schema object name".to_string(),
-                default: Some(json!("incus-xray-reality-client")),
-                example: Some(json!("incus-xray-reality-client")),
-                constraints: vec![
-                    Constraint::Pattern {
-                        regex: "^[a-z0-9_-]+$".to_string(),
-                    },
-                    Constraint::Max { value: 64.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "version",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Schema version".to_string(),
-                default: Some(json!("1.0.0")),
-                example: Some(json!("1.0.0")),
-                constraints: vec![Constraint::Pattern {
-                    regex: "^\\d+\\.\\d+\\.\\d+$".to_string(),
-                }],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "plugin_type",
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["network".to_string()]),
-                required: true,
-                description: "Container schema category".to_string(),
-                default: Some(json!("network")),
-                example: Some(json!("network")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .object_field(
-            "container",
-            container_fields,
-            true,
-            "Incus container image, profiles, and device overrides",
-        )
-        .object_field(
-            "xray",
-            xray_fields,
-            true,
-            "Xray REALITY client configuration",
-        )
-        .object_field(
-            "capabilities",
-            capability_fields,
-            false,
-            "Operational capabilities for the container implementation",
-        )
-        .field(
-            "service",
-            any_field(false, "Optional service declaration", Some(json!({}))),
-        )
-        .example(json!({
-            "name": "incus-xray-reality-client",
-            "version": "1.0.0",
-            "plugin_type": "network",
-            "container": {
-                "image": "images:debian/13",
-                "profiles": ["default", "privacy-system"],
-                "devices": {}
-            },
-            "xray": {
-                "log_level": "warning",
-                "inbounds": [{
-                    "tag": "socks-in",
-                    "protocol": "socks",
-                    "port": 1080,
-                    "listen": "127.0.0.1",
-                    "sniffing": true
-                }],
-                "outbounds": [{
-                    "tag": "reality-out",
-                    "protocol": "vless",
-                    "settings": {
-                        "vnext": [{
-                            "address": "vps.example.com",
-                            "port": 443,
-                            "users": [{
-                                "id": "00000000-0000-0000-0000-000000000000",
-                                "flow": "xtls-rprx-vision",
-                                "encryption": "none"
-                            }]
-                        }]
-                    },
-                    "stream_settings": {
-                        "network": "tcp",
-                        "security": "reality",
-                        "reality_settings": {
-                            "server_name": "www.microsoft.com",
-                            "public_key": "base64publickey",
-                            "short_id": "1234abcd",
-                            "fingerprint": "chrome"
-                        }
-                    }
-                }]
-            },
-            "capabilities": {
-                "requires_root": false,
-                "supports_rollback": false
-            },
-            "service": {}
-        }))
-        .build()
-}
-
-fn create_incus_xray_reality_server_schema() -> PluginSchema {
-    let container_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "image".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Incus image alias for the Xray server container".to_string(),
-                default: Some(json!("images:debian/13")),
-                example: Some(json!("images:debian/13")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "profiles".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Incus profiles applied to the container".to_string(),
-                default: Some(json!(["default"])),
-                example: Some(json!(["default", "privacy-system"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "devices".to_string(),
-            any_field(
-                false,
-                "Incus device overrides such as NICs and disks",
-                Some(json!({})),
-            ),
-        );
-        fields
-    };
-
-    let client_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Authorized user UUID".to_string(),
-                default: None,
-                example: Some(json!("00000000-0000-0000-0000-000000000000")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "flow".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["xtls-rprx-vision".to_string()]),
-                required: true,
-                description: "REALITY flow".to_string(),
-                default: Some(json!("xtls-rprx-vision")),
-                example: Some(json!("xtls-rprx-vision")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "email".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional client label".to_string(),
-                default: None,
-                example: Some(json!("user@example.com")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let inbound_settings_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "clients".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(client_fields))),
-                required: true,
-                description: "Authorized inbound clients".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "id": "00000000-0000-0000-0000-000000000000",
-                    "flow": "xtls-rprx-vision",
-                    "email": "user@example.com"
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "decryption".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["none".to_string()]),
-                required: false,
-                description: "VLESS decryption mode".to_string(),
-                default: Some(json!("none")),
-                example: Some(json!("none")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let reality_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "show".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Enable REALITY debug output".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "dest".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Fallback destination for non-REALITY traffic".to_string(),
-                default: None,
-                example: Some(json!("www.microsoft.com:443")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "server_names".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Allowed SNI values".to_string(),
-                default: Some(json!([])),
-                example: Some(json!(["www.microsoft.com"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "private_key_env".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Environment variable name holding the private key".to_string(),
-                default: None,
-                example: Some(json!("XRAY_PRIVATE_KEY")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "private_key".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Inline x25519 private key".to_string(),
-                default: None,
-                example: Some(json!("base64privatekey")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "short_ids".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: true,
-                description: "Allowed REALITY short IDs".to_string(),
-                default: Some(json!([])),
-                example: Some(json!(["1234abcd"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let stream_settings_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "network".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["tcp".to_string()]),
-                required: true,
-                description: "Transport network".to_string(),
-                default: Some(json!("tcp")),
-                example: Some(json!("tcp")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "security".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["reality".to_string()]),
-                required: true,
-                description: "Transport security".to_string(),
-                default: Some(json!("reality")),
-                example: Some(json!("reality")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "reality_settings".to_string(),
-            FieldSchema {
-                field_type: FieldType::Object(reality_fields),
-                required: true,
-                description: "REALITY listener settings".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "show": false,
-                    "dest": "www.microsoft.com:443",
-                    "server_names": ["www.microsoft.com"],
-                    "private_key_env": "XRAY_PRIVATE_KEY",
-                    "short_ids": ["1234abcd"]
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let inbound_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "tag".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional Xray inbound tag".to_string(),
-                default: None,
-                example: Some(json!("reality-in")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "protocol".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["vless".to_string()]),
-                required: true,
-                description: "Inbound protocol".to_string(),
-                default: Some(json!("vless")),
-                example: Some(json!("vless")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "port".to_string(),
-            FieldSchema {
-                field_type: FieldType::Integer,
-                required: true,
-                description: "Listener port".to_string(),
-                default: Some(json!(443)),
-                example: Some(json!(443)),
-                constraints: vec![
-                    Constraint::Min { value: 1.0 },
-                    Constraint::Max { value: 65535.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "listen".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Listener bind address".to_string(),
-                default: Some(json!("0.0.0.0")),
-                example: Some(json!("0.0.0.0")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "settings".to_string(),
-            FieldSchema {
-                field_type: FieldType::Object(inbound_settings_fields),
-                required: true,
-                description: "Inbound client settings".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "clients": [{
-                        "id": "00000000-0000-0000-0000-000000000000",
-                        "flow": "xtls-rprx-vision",
-                        "email": "user@example.com"
-                    }],
-                    "decryption": "none"
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "stream_settings".to_string(),
-            FieldSchema {
-                field_type: FieldType::Object(stream_settings_fields),
-                required: true,
-                description: "REALITY transport settings".to_string(),
-                default: Some(json!({})),
-                example: Some(json!({
-                    "network": "tcp",
-                    "security": "reality",
-                    "reality_settings": {
-                        "show": false,
-                        "dest": "www.microsoft.com:443",
-                        "server_names": ["www.microsoft.com"],
-                        "private_key_env": "XRAY_PRIVATE_KEY",
-                        "short_ids": ["1234abcd"]
-                    }
-                })),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let outbound_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "tag".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional Xray outbound tag".to_string(),
-                default: None,
-                example: Some(json!("direct")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "protocol".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["freedom".to_string(), "blackhole".to_string()]),
-                required: true,
-                description: "Outbound protocol".to_string(),
-                default: Some(json!("freedom")),
-                example: Some(json!("freedom")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let xray_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "log_level".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "debug".to_string(),
-                    "info".to_string(),
-                    "warning".to_string(),
-                    "error".to_string(),
-                    "none".to_string(),
-                ]),
-                required: false,
-                description: "Xray log level".to_string(),
-                default: Some(json!("warning")),
-                example: Some(json!("warning")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "inbounds".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(inbound_fields))),
-                required: true,
-                description: "REALITY server listeners".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([{
-                    "tag": "reality-in",
-                    "protocol": "vless",
-                    "port": 443,
-                    "listen": "0.0.0.0",
-                    "settings": {
-                        "clients": [{
-                            "id": "00000000-0000-0000-0000-000000000000",
-                            "flow": "xtls-rprx-vision",
-                            "email": "user@example.com"
-                        }],
-                        "decryption": "none"
-                    },
-                    "stream_settings": {
-                        "network": "tcp",
-                        "security": "reality",
-                        "reality_settings": {
-                            "show": false,
-                            "dest": "www.microsoft.com:443",
-                            "server_names": ["www.microsoft.com"],
-                            "private_key_env": "XRAY_PRIVATE_KEY",
-                            "short_ids": ["1234abcd"]
-                        }
-                    }
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "outbounds".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object(outbound_fields))),
-                required: true,
-                description: "Server-side outbounds, typically direct or blackhole".to_string(),
-                default: Some(json!([{"protocol": "freedom"}])),
-                example: Some(json!([{
-                    "tag": "direct",
-                    "protocol": "freedom"
-                }])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    let capability_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "requires_root".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the container requires root privileges".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "supports_rollback".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether the deployment supports rollback".to_string(),
-                default: Some(json!(false)),
-                example: Some(json!(false)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("incus-xray-reality-server")
-        .version("1.0.0")
-        .description("Incus system container declaration for the Xray REALITY inbound server")
-        .field(
-            "name",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Schema object name".to_string(),
-                default: Some(json!("incus-xray-reality-server")),
-                example: Some(json!("incus-xray-reality-server")),
-                constraints: vec![
-                    Constraint::Pattern {
-                        regex: "^[a-z0-9_-]+$".to_string(),
-                    },
-                    Constraint::Max { value: 64.0 },
-                ],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "version",
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Schema version".to_string(),
-                default: Some(json!("1.0.0")),
-                example: Some(json!("1.0.0")),
-                constraints: vec![Constraint::Pattern {
-                    regex: "^\\d+\\.\\d+\\.\\d+$".to_string(),
-                }],
-                read_only: false,
-                read_only_when: None,
-            },
-        )
-        .field(
-            "plugin_type",
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["network".to_string()]),
-                required: true,
-                description: "Container schema category".to_string(),
-                default: Some(json!("network")),
-                example: Some(json!("network")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        )
-        .object_field(
-            "container",
-            container_fields,
-            true,
-            "Incus container image, profiles, and device overrides",
-        )
-        .object_field(
-            "xray",
-            xray_fields,
-            true,
-            "Xray REALITY server configuration",
-        )
-        .object_field(
-            "capabilities",
-            capability_fields,
-            false,
-            "Operational capabilities for the container implementation",
-        )
-        .field(
-            "service",
-            any_field(false, "Optional service declaration", Some(json!({}))),
-        )
-        .example(json!({
-            "name": "incus-xray-reality-server",
-            "version": "1.0.0",
-            "plugin_type": "network",
-            "container": {
-                "image": "images:debian/13",
-                "profiles": ["default", "privacy-system"],
-                "devices": {}
-            },
-            "xray": {
-                "log_level": "warning",
-                "inbounds": [{
-                    "tag": "reality-in",
-                    "protocol": "vless",
-                    "port": 443,
-                    "listen": "0.0.0.0",
-                    "settings": {
-                        "clients": [{
-                            "id": "00000000-0000-0000-0000-000000000000",
-                            "flow": "xtls-rprx-vision",
-                            "email": "user@example.com"
-                        }],
-                        "decryption": "none"
-                    },
-                    "stream_settings": {
-                        "network": "tcp",
-                        "security": "reality",
-                        "reality_settings": {
-                            "show": false,
-                            "dest": "www.microsoft.com:443",
-                            "server_names": ["www.microsoft.com"],
-                            "private_key_env": "XRAY_PRIVATE_KEY",
-                            "short_ids": ["1234abcd"]
-                        }
-                    }
-                }],
-                "outbounds": [{
-                    "tag": "direct",
-                    "protocol": "freedom"
-                }]
-            },
-            "capabilities": {
-                "requires_root": false,
-                "supports_rollback": false
-            },
-            "service": {}
-        }))
-        .build()
-}
-
-fn create_net_schema() -> PluginSchema {
-    let interface_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Interface name".to_string(),
-                default: None,
-                example: Some(json!("eth0")),
-                constraints: Vec::new(),
-                read_only: true, // Interface name is identity
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "type".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "ethernet".to_string(),
-                    "bridge".to_string(),
-                    "veth".to_string(),
-                    "vlan".to_string(),
-                    "bond".to_string(),
-                ]),
-                required: true,
-                description: "Interface type".to_string(),
-                default: Some(json!("ethernet")),
-                example: Some(json!("ethernet")),
-                constraints: Vec::new(),
-                read_only: true, // Type cannot change after creation
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "state".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["up".to_string(), "down".to_string()]),
-                required: false,
-                description: "Interface state".to_string(),
-                default: Some(json!("up")),
-                example: Some(json!("up")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "addresses".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "IP addresses".to_string(),
-                default: Some(json!([])),
-                example: Some(json!(["192.168.1.100/24"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("net")
-        .version("1.0.0")
-        .description("Network interface management via rtnetlink")
-        .array_field(
-            "interfaces",
-            FieldType::Object(interface_fields),
-            true,
-            "List of network interfaces",
-        )
-        .example(json!({
-            "interfaces": [
-                {
-                    "name": "eth0",
-                    "type": "ethernet",
-                    "state": "up",
-                    "addresses": ["192.168.1.100/24"]
-                }
-            ]
-        }))
-        .build()
-}
-
-fn create_rtnetlink_schema() -> PluginSchema {
-    let interface_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Interface name".to_string(),
-                default: None,
-                example: Some(json!("eth0")),
-                constraints: Vec::new(),
-                read_only: true,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "state".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec!["up".to_string(), "down".to_string()]),
-                required: false,
-                description: "Administrative interface state".to_string(),
-                default: Some(json!("up")),
-                example: Some(json!("up")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "addresses".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "Interface IP addresses in CIDR form".to_string(),
-                default: Some(json!([])),
-                example: Some(json!(["10.0.0.2/24"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "mac_address".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Optional MAC address override".to_string(),
-                default: None,
-                example: Some(json!("02:00:00:00:00:01")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "default_gateway".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Default gateway for this interface".to_string(),
-                default: None,
-                example: Some(json!("10.0.0.1")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("rtnetlink")
-        .version("1.0.0")
-        .description("Native kernel rtnetlink interface management")
-        .array_field(
-            "interfaces",
-            FieldType::Object(interface_fields),
-            true,
-            "Desired rtnetlink-managed interfaces",
-        )
-        .example(json!({
-            "interfaces": [
-                {
-                    "name": "ovsbr0",
-                    "state": "up",
-                    "addresses": ["10.10.0.1/24"],
-                    "default_gateway": "10.10.0.254"
-                }
-            ]
-        }))
-        .build()
-}
-
-fn create_openflow_schema() -> PluginSchema {
-    let bridge_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Bridge name".to_string(),
-                default: None,
-                example: Some(json!("ovs-br0")),
-                constraints: Vec::new(),
-                read_only: true, // Bridge name is identity
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "datapath_id".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: false,
-                description: "Datapath ID".to_string(),
-                default: None,
-                example: Some(json!("0000000000000001")),
-                constraints: Vec::new(),
-                read_only: true, // Datapath ID is immutable
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "protocols".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::String)),
-                required: false,
-                description: "Supported OpenFlow protocols".to_string(),
-                default: Some(json!(["OpenFlow13"])),
-                example: Some(json!(["OpenFlow10", "OpenFlow13"])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "flows".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object({
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "table".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: true,
-                            description: "OpenFlow table number".to_string(),
-                            default: Some(json!(0)),
-                            example: Some(json!(0)),
-                            constraints: vec![
-                                Constraint::Min { value: 0.0 },
-                                Constraint::Max { value: 254.0 },
-                            ],
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "priority".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: true,
-                            description: "Flow priority".to_string(),
-                            default: Some(json!(100)),
-                            example: Some(json!(22000)),
-                            constraints: vec![
-                                Constraint::Min { value: 0.0 },
-                                Constraint::Max { value: 65535.0 },
-                            ],
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "match_fields".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Any,
-                            required: true,
-                            description: "OpenFlow match fields".to_string(),
-                            default: None,
-                            example: Some(
-                                json!({"in_port": "ovsbr0-sock", "nw_src": "10.100.0.2"}),
-                            ),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "actions".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Array(Box::new(FieldType::Any)),
-                            required: true,
-                            description: "OpenFlow actions".to_string(),
-                            default: None,
-                            example: Some(json!([{"type": "output", "port": "gbr_wg"}])),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "cookie".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Flow cookie for idempotent route ownership".to_string(),
-                            default: None,
-                            example: Some(json!(5787125521171081216u64)),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "idle_timeout".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Idle timeout in seconds".to_string(),
-                            default: Some(json!(0)),
-                            example: Some(json!(0)),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "hard_timeout".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Hard timeout in seconds".to_string(),
-                            default: Some(json!(0)),
-                            example: Some(json!(0)),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields
-                }))),
-                required: false,
-                description: "Flows managed for this bridge".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "socket_ports".to_string(),
-            FieldSchema {
-                field_type: FieldType::Array(Box::new(FieldType::Object({
-                    let mut fields = HashMap::new();
-                    fields.insert(
-                        "name".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::String,
-                            required: true,
-                            description: "OVS socket port name".to_string(),
-                            default: None,
-                            example: Some(json!("ovsbr0-sock")),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "container_name".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::String,
-                            required: false,
-                            description: "Optional legacy container name bound to this port"
-                                .to_string(),
-                            default: None,
-                            example: Some(json!("privacy-user-abc")),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "port_type".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::String,
-                            required: true,
-                            description: "Socket port role".to_string(),
-                            default: Some(json!("SharedIngress")),
-                            example: Some(json!("SharedIngress")),
-                            constraints: Vec::new(),
-                            read_only: false,
-                            read_only_when: None,
-                        },
-                    );
-                    fields.insert(
-                        "ofport".to_string(),
-                        FieldSchema {
-                            field_type: FieldType::Integer,
-                            required: false,
-                            description: "Resolved OpenFlow port number".to_string(),
-                            default: None,
-                            example: Some(json!(7)),
-                            constraints: Vec::new(),
-                            read_only: true,
-                            read_only_when: None,
-                        },
-                    );
-                    fields
-                }))),
-                required: false,
-                description: "Managed OVS socket ports for the bridge".to_string(),
-                default: Some(json!([])),
-                example: Some(json!([])),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("openflow")
-        .version("1.0.0")
-        .description("OpenFlow flow table management")
-        .dependency("net")
-        .array_field(
-            "bridges",
-            FieldType::Object(bridge_fields),
-            true,
-            "OVS bridges",
-        )
-        .string_field("controller_endpoint", false, "OpenFlow controller endpoint")
-        .boolean_field(
-            "auto_discover_containers",
-            false,
-            "Auto-create flows from discovered legacy container sockets",
-        )
-        .boolean_field("enable_security_flows", false, "Inject hardening flows before route flows")
-        .integer_field("obfuscation_level", false, "Traffic obfuscation level for generated flows")
-        .example(json!({
-            "bridges": [
-                {
-                    "name": "ovsbr0",
-                    "protocols": ["OpenFlow13"],
-                    "socket_ports": [
-                        {
-                            "name": "ovsbr0-sock",
-                            "port_type": "SharedIngress"
-                        }
-                    ],
-                    "flows": [
-                        {
-                            "table": 0,
-                            "priority": 22000,
-                            "match_fields": {"in_port": "ovsbr0-sock", "ip": "", "nw_src": "10.100.0.2"},
-                            "actions": [{"type": "output", "port": "gbr_wg"}],
-                            "cookie": 5787125521171081216u64,
-                            "idle_timeout": 0,
-                            "hard_timeout": 0
-                        }
-                    ]
-                }
-            ],
-            "auto_discover_containers": false,
-            "enable_security_flows": false,
-            "obfuscation_level": 0
-        }))
-        .build()
-}
-
-fn create_s6_schema() -> PluginSchema {
-    let unit_fields = {
-        let mut fields = HashMap::new();
-        fields.insert(
-            "name".to_string(),
-            FieldSchema {
-                field_type: FieldType::String,
-                required: true,
-                description: "Unit name".to_string(),
-                default: None,
-                example: Some(json!("nginx")),
-                constraints: Vec::new(),
-                read_only: true, // Unit name is identity
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "state".to_string(),
-            FieldSchema {
-                field_type: FieldType::Enum(vec![
-                    "active".to_string(),
-                    "inactive".to_string(),
-                    "failed".to_string(),
-                ]),
-                required: false,
-                description: "Desired unit state".to_string(),
-                default: Some(json!("active")),
-                example: Some(json!("active")),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields.insert(
-            "enabled".to_string(),
-            FieldSchema {
-                field_type: FieldType::Boolean,
-                required: false,
-                description: "Whether unit is enabled at boot".to_string(),
-                default: Some(json!(true)),
-                example: Some(json!(true)),
-                constraints: Vec::new(),
-                read_only: false,
-                read_only_when: None,
-            },
-        );
-        fields
-    };
-
-    PluginSchema::builder("s6")
-        .version("1.0.0")
-        .description("S6 service management")
-        .array_field("units", FieldType::Object(unit_fields), true, "S6 services")
-        .example(json!({
-            "units": [
-                {
-                    "name": "nginx",
-                    "state": "active",
-                    "enabled": true
-                }
-            ]
-        }))
-        .build()
-}
-
-fn create_netmaker_schema() -> PluginSchema {
-    PluginSchema::builder("netmaker")
-        .version("1.0.0")
-        .description("Netmaker mesh network management")
-        .dependency("net")
-        .string_field("network_name", true, "Netmaker network name")
-        .string_field("interface", false, "WireGuard interface name (e.g., nm0)")
-        .string_field("server_url", false, "Netmaker server URL")
-        .string_field(
-            "enrollment_token",
-            false,
-            "Enrollment token for joining network",
-        )
-        .boolean_field("auto_enroll", false, "Auto-enroll containers in mesh")
-        .example(json!({
-            "network_name": "container-mesh",
-            "interface": "nm0",
-            "auto_enroll": true
-        }))
-        .build()
 }
 
 // ============================================================================
@@ -4583,7 +1551,7 @@ fn validate_field(name: &str, value: &Value, schema: &FieldSchema) -> Result<(),
     Ok(())
 }
 
-fn validate_value_against_type(
+pub(crate) fn validate_value_against_type(
     name: &str,
     value: &Value,
     field_type: &FieldType,
@@ -4625,6 +1593,15 @@ fn validate_value_against_type(
                 }
             }
         }
+        FieldType::Map(item_type) => {
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("Field '{}' must be an object map", name))?;
+            for item in object.values() {
+                // Do not include dynamic (possibly private) keys in errors.
+                validate_value_against_type(&format!("{}[map value]", name), item, item_type)?;
+            }
+        }
         FieldType::Object(fields) => {
             if !value.is_object() {
                 return Err(format!("Field '{}' must be an object", name));
@@ -4653,6 +1630,9 @@ fn validate_value_against_type(
                     name
                 ));
             }
+        }
+        FieldType::JsonSchema(schema) => {
+            crate::exact_schema::validate_value(schema, value).map_err(|error| error.to_string())?
         }
         FieldType::Any => {}
     }
@@ -4695,18 +1675,22 @@ fn default_for_type(field_type: &FieldType) -> Value {
         FieldType::Float => json!(0.0),
         FieldType::Boolean => json!(false),
         FieldType::Array(_) => json!([]),
-        FieldType::Object(_) => json!({}),
+        FieldType::Object(_) | FieldType::Map(_) => json!({}),
         FieldType::Enum(values) => values.first().map(|s| json!(s)).unwrap_or(json!("")),
         FieldType::OneOf(branches) => branches
             .first()
             .map(default_for_type)
             .unwrap_or(json!(null)),
-        FieldType::Any => json!(null),
+        FieldType::JsonSchema(_) | FieldType::Any => json!(null),
     }
 }
 
 fn field_type_to_json_schema(field_type: &FieldType) -> Value {
     match field_type {
+        FieldType::JsonSchema(schema) => schema.as_ref().clone(),
+        FieldType::Map(item_type) => {
+            json!({"type":"object", "additionalProperties": typed_map_value_to_json_schema(item_type)})
+        }
         FieldType::String => json!({"type": "string"}),
         FieldType::Integer => json!({"type": "integer"}),
         FieldType::Float => json!({"type": "number"}),
@@ -4739,9 +1723,67 @@ fn field_type_to_json_schema(field_type: &FieldType) -> Value {
     }
 }
 
+/// Export a map value without dropping constraints on its named descendants.
+/// The map's own value type has no metadata slot; producer preflight rejects
+/// constraints there that Map(Box<FieldType>) cannot represent.
+fn typed_map_value_to_json_schema(field_type: &FieldType) -> Value {
+    match field_type {
+        FieldType::Map(item) => {
+            json!({"type":"object", "additionalProperties": typed_map_value_to_json_schema(item)})
+        }
+        FieldType::Array(item) => {
+            json!({"type":"array", "items": typed_map_value_to_json_schema(item)})
+        }
+        FieldType::Object(fields) => {
+            let mut properties = simd_json::value::owned::Object::new();
+            let mut required = Vec::new();
+            for (name, field) in fields {
+                let mut schema = typed_map_value_to_json_schema(&field.field_type);
+                let object = schema.as_object_mut().expect("type schema is object");
+                if !field.description.is_empty() {
+                    object.insert("description".into(), json!(field.description));
+                }
+                if field.read_only {
+                    object.insert("readOnly".into(), json!(true));
+                }
+                for constraint in &field.constraints {
+                    match constraint {
+                        Constraint::Min { value } => {
+                            object.insert("minimum".into(), json!(value));
+                        }
+                        Constraint::Max { value } => {
+                            object.insert("maximum".into(), json!(value));
+                        }
+                        Constraint::Pattern { regex } => {
+                            object.insert("pattern".into(), json!(regex));
+                        }
+                        Constraint::OneOf { values } => {
+                            object.insert("enum".into(), json!(values));
+                        }
+                        _ => {}
+                    }
+                }
+                properties.insert(name.clone(), schema);
+                if field.required {
+                    required.push(name.clone());
+                }
+            }
+            json!({"type":"object", "properties": properties, "required": required})
+        }
+        FieldType::OneOf(branches) => {
+            json!({"oneOf": branches.iter().map(typed_map_value_to_json_schema).collect::<Vec<_>>()})
+        }
+        _ => field_type_to_json_schema_2026(field_type),
+    }
+}
+
 /// Convert field type to JSON Schema 2026 format with full metadata
 fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
     match field_type {
+        FieldType::JsonSchema(schema) => schema.as_ref().clone(),
+        FieldType::Map(item_type) => {
+            json!({"type":"object", "additionalProperties": typed_map_value_to_json_schema(item_type)})
+        }
         FieldType::String => json!({"type": "string"}),
         FieldType::Integer => json!({"type": "integer"}),
         FieldType::Float => json!({"type": "number"}),
@@ -4798,6 +1840,30 @@ fn field_type_to_json_schema_2026(field_type: &FieldType) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn property_write_bindings_are_optional_and_round_trip_in_plugin_schema() {
+        let legacy = PluginSchema::builder("fixture").build();
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized.get("field_writes").is_none());
+        let decoded: PluginSchema = serde_json::from_value(serialized.clone()).unwrap();
+        assert!(decoded.field_writes.is_empty());
+        assert_eq!(serde_json::to_value(decoded).unwrap(), serialized);
+
+        let bound = PluginSchema::builder("fixture")
+            .string_field("selected", false, "Selection")
+            .field_write("selected", "Select", "selection")
+            .build();
+        let decoded: PluginSchema =
+            serde_json::from_value(serde_json::to_value(bound).unwrap()).unwrap();
+        assert_eq!(
+            decoded.field_writes["selected"],
+            FieldWriteDecl {
+                method: "Select".into(),
+                argument: "selection".into()
+            }
+        );
+    }
 
     // ====================================================================
     // Capability declaration closure (migration: 3-place lookup)
@@ -5133,83 +2199,86 @@ mod tests {
     // ====================================================================
 
     #[test]
-    fn test_schema_catalog() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
-        assert!(catalog.get("lxc").is_some());
-        assert!(catalog.get("incus").is_some());
-        assert!(catalog.get("incus-wireguard-ingress").is_some());
-        assert!(catalog.get("incus-xray-reality-client").is_some());
-        assert!(catalog.get("incus-xray-reality-server").is_some());
-        assert!(catalog.get("net").is_some());
-        assert!(catalog.get("openflow").is_some());
-        assert!(catalog.get("systemd").is_some());
-        assert!(catalog.get("netmaker").is_some());
+    fn test_schema_catalog_registration() {
+        let mut catalog = SchemaCatalog::empty();
+        let schema = PluginSchema::builder("fixture")
+            .version("1.0.0")
+            .description("fixture schema")
+            .string_field("id", true, "Identifier")
+            .build();
+        catalog.register(schema);
+        assert!(catalog.get("fixture").is_some());
+        assert_eq!(catalog.list(), vec!["fixture"]);
     }
 
     #[test]
-    fn test_schema_catalog_aliases() {
-        let catalog = SchemaCatalog::with_builtin_schemas();
-        assert!(catalog.get("incus_wireguard_ingress").is_some());
-        assert!(catalog.get("incus_xray_reality_client").is_some());
-        assert!(catalog.get("incus_xray_reality_server").is_some());
+    fn test_schema_catalog_aliases_are_canonicalized() {
+        let mut catalog = SchemaCatalog::empty();
+        catalog.register(
+            PluginSchema::builder("net")
+                .version("1.0.0")
+                .description("fixture")
+                .build(),
+        );
+        // The catalog remains keyed by the canonical plugin document name.
+        assert!(std::ptr::eq(
+            catalog.get("net").unwrap(),
+            catalog.get("network").unwrap()
+        ));
+        assert_eq!(catalog.list(), vec!["net"]);
     }
 
     #[test]
-    fn test_schema_registry_compatibility_alias() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        assert!(registry.get("net").is_some());
+    fn test_schema_registry_compatibility_type_is_empty_by_default() {
+        let registry = SchemaRegistry::new();
+        assert!(registry.list().is_empty());
     }
 
     #[test]
-    fn test_lxc_validation() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        let schema = registry.get("lxc").unwrap();
-
-        // Valid state
-        let valid_state = json!({
-            "containers": [
-                {
-                    "id": "100",
-                    "veth": "vi100",
-                    "bridge": "ovs-br0",
-                    "running": true
-                }
-            ]
-        });
-        let result = schema.validate(&valid_state);
-        assert!(result.valid, "Errors: {:?}", result.errors);
-
-        // Missing required field
-        let invalid_state = json!({});
-        let result = schema.validate(&invalid_state);
-        assert!(!result.valid);
+    fn test_fixture_validation() {
+        let mut registry = SchemaRegistry::new();
+        registry.register(
+            PluginSchema::builder("fixture")
+                .version("1.0.0")
+                .description("fixture")
+                .string_field("id", true, "Identifier")
+                .build(),
+        );
+        let schema = registry.get("fixture").unwrap();
+        assert!(schema.validate(&json!({"id": "ok"})).valid);
+        assert!(!schema.validate(&json!({})).valid);
     }
 
     #[test]
-    fn test_template_generation() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        let schema = registry.get("lxc").unwrap();
+    fn test_template_generation_from_registered_schema() {
+        let schema = PluginSchema::builder("fixture")
+            .version("1.0.0")
+            .description("fixture")
+            .string_field("id", true, "Identifier")
+            .build();
         let template = schema.generate_template();
-        assert!(template.get("containers").is_some());
+        assert!(template.get("id").is_some());
     }
 
     #[test]
-    fn test_json_schema_export() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        let schema = registry.get("lxc").unwrap();
+    fn test_json_schema_export_from_registered_schema() {
+        let schema = PluginSchema::builder("fixture")
+            .version("1.0.0")
+            .description("fixture")
+            .string_field("id", true, "Identifier")
+            .build();
         let json_schema = schema.to_json_schema();
-        assert_eq!(json_schema["title"], "lxc");
+        assert_eq!(json_schema["title"], "fixture");
         assert!(json_schema["properties"].is_object());
     }
 
     #[test]
-    fn test_json_schema_2026_dialect() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        let schema = registry.get("lxc").unwrap();
-        let json_schema = schema.to_json_schema();
-
-        // Check that 2026 dialect is used
-        assert_eq!(json_schema["$schema"], DEFAULT_SCHEMA_DIALECT);
+    fn test_json_schema_2026_dialect_from_registered_schema() {
+        let schema = PluginSchema::builder("fixture")
+            .version("1.0.0")
+            .description("fixture")
+            .build();
+        assert_eq!(schema.to_json_schema()["$schema"], DEFAULT_SCHEMA_DIALECT);
     }
 
     #[test]
@@ -5257,80 +2326,6 @@ mod tests {
         assert!(deps["status"]["locked"]["properties"]["id"]["readOnly"]
             .as_bool()
             .unwrap_or(false));
-    }
-
-    #[test]
-    fn test_nested_required_fields_for_wireguard_ingress() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        let schema = registry.get("incus-wireguard-ingress").unwrap();
-
-        let invalid_state = json!({
-            "name": "incus-wireguard-ingress",
-            "version": "1.0.0",
-            "plugin_type": "network",
-            "container": {
-                "profiles": ["default"]
-            },
-            "wireguard": {
-                "private_key_env": "WIREGUARD_PRIVATE_KEY",
-                "peers": []
-            }
-        });
-
-        let result = schema.validate(&invalid_state);
-        assert!(!result.valid);
-        assert!(result
-            .errors
-            .iter()
-            .any(|error| error.contains("container.image")));
-    }
-
-    #[test]
-    fn test_nested_required_fields_for_xray_client() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-        let schema = registry.get("incus-xray-reality-client").unwrap();
-
-        let invalid_state = json!({
-            "name": "incus-xray-reality-client",
-            "version": "1.0.0",
-            "plugin_type": "network",
-            "container": {
-                "image": "images:debian/13",
-                "profiles": ["default"]
-            },
-            "xray": {
-                "outbounds": []
-            }
-        });
-
-        let result = schema.validate(&invalid_state);
-        assert!(!result.valid);
-        assert!(result
-            .errors
-            .iter()
-            .any(|error| error.contains("xray.inbounds")));
-    }
-
-    #[test]
-    fn test_contract_schema_sections_for_incus_components() {
-        let registry = SchemaRegistry::with_builtin_schemas();
-
-        for schema_name in [
-            "incus-wireguard-ingress",
-            "incus-xray-reality-client",
-            "incus-xray-reality-server",
-        ] {
-            let schema = registry.get(schema_name).unwrap();
-            let contract = schema.to_contract_json_schema();
-            let required = contract["required"].as_array().unwrap();
-
-            assert!(required.iter().any(|value| value == "stub"));
-            assert!(required.iter().any(|value| value == "immutable"));
-            assert!(required.iter().any(|value| value == "tunable"));
-            assert!(contract["properties"]["stub"].is_object());
-            assert!(contract["properties"]["immutable"].is_object());
-            assert!(contract["properties"]["tunable"].is_object());
-        }
     }
 
     #[test]
@@ -5388,5 +2383,90 @@ mod tests {
 
         let json_schema = schema.to_json_schema();
         assert_eq!(json_schema["$schema"], dialects::DRAFT_07);
+    }
+}
+
+#[cfg(test)]
+mod typed_map_tests {
+    use super::*;
+    fn schema() -> PluginSchema {
+        let leaf = PluginSchema::builder("leaf")
+            .boolean_field("ready", true, "")
+            .build();
+        let value = PluginSchema::builder("value")
+            .field(
+                "children",
+                FieldSchema {
+                    field_type: FieldType::Map(Box::new(FieldType::Object(leaf.fields))),
+                    required: true,
+                    description: String::new(),
+                    default: None,
+                    example: None,
+                    constraints: vec![],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .build();
+        PluginSchema::builder("map_fixture")
+            .field(
+                "jobs",
+                FieldSchema {
+                    field_type: FieldType::Map(Box::new(FieldType::Object(value.fields))),
+                    required: true,
+                    description: String::new(),
+                    default: None,
+                    example: None,
+                    constraints: vec![],
+                    read_only: false,
+                    read_only_when: None,
+                },
+            )
+            .build()
+    }
+    #[test]
+    fn map_roundtrip_preserves_children_grandchildren_and_object_wire_shape() {
+        let schema = schema();
+        let encoded = serde_json::to_value(&schema).unwrap();
+        assert!(
+            encoded["fields"]["jobs"]["field_type"]["map"]["object"]["children"]["field_type"]
+                ["map"]["object"]["ready"]
+                .is_object()
+        );
+        let decoded: PluginSchema = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.fields, schema.fields);
+        assert!(
+            decoded
+                .validate(
+                    &json!({"jobs":{"stable_job":{"children":{"stable_child":{"ready":false}}}}})
+                )
+                .valid
+        );
+        assert!(
+            !decoded
+                .validate(
+                    &json!({"jobs":{"stable_job":{"children":{"stable_child":{"ready":"wrong"}}}}})
+                )
+                .valid
+        );
+        assert!(
+            !decoded
+                .validate(&json!({"jobs":{"stable_job":{"children":{"stable_child":{}}}}}))
+                .valid
+        );
+        let errors = decoded
+            .validate(&json!({"jobs":{"PRIVATE_KEY":{"children":false}}}))
+            .errors;
+        assert!(!format!("{errors:?}").contains("PRIVATE_KEY"));
+        let exported = serde_json::to_value(decoded.to_json_schema()).unwrap();
+        assert_eq!(
+            exported["properties"]["jobs"]["additionalProperties"]["properties"]["children"]
+                ["additionalProperties"]["properties"]["ready"]["type"],
+            "boolean"
+        );
+        assert_eq!(
+            serde_json::to_value(FieldType::Object(HashMap::new())).unwrap(),
+            serde_json::json!({"object":{}})
+        );
     }
 }

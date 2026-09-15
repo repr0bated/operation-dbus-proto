@@ -54,12 +54,18 @@ const DEFAULT_EMQX_EXHOOK_CLIENT_CERT: &str = "/etc/op-dbus/tls/emqx-exhook-clie
 /// the catalog IS the plugin); a file path is still accepted for tests and
 /// plugin-owned schema files.
 const DEFAULT_SCHEMA_PATH: &str = op_blob::catalog::DEFAULT_SHM_DIR;
+const DEFAULT_UI_WORKSPACE_SHM_DIR: &str = "/dev/shm/opdbus/ui-workspaces";
+const DEFAULT_GENERATION_SHM_DIR: &str = "/dev/shm/opdbus/generation-jobs";
 
 /// Runtime configuration for the tched_router Axum host.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub plugin_id: String,
     pub schema_path: PathBuf,
+    /// Held owner-only root for principal/session-private UI workspace projections.
+    pub ui_workspace_shm_dir: PathBuf,
+    /// Private generation documents are separate from public router observations.
+    pub generation_shm_dir: PathBuf,
     /// Host-local gRPC UDS (`TCHED_ROUTER_UNIX_SOCKET`, default `/run/opdbus/grpc.sock`).
     pub unix_socket: PathBuf,
     /// Shared container UDS (`GHOSTBRIDGE_SOCKET_PATH`, default
@@ -107,6 +113,8 @@ impl Default for ServerConfig {
         Self {
             plugin_id: DEFAULT_SCHEMA_PLUGIN_ID.to_string(),
             schema_path: PathBuf::from(DEFAULT_SCHEMA_PATH),
+            ui_workspace_shm_dir: PathBuf::from(DEFAULT_UI_WORKSPACE_SHM_DIR),
+            generation_shm_dir: PathBuf::from(DEFAULT_GENERATION_SHM_DIR),
             unix_socket: PathBuf::from(DEFAULT_UNIX_SOCKET),
             shared_socket: PathBuf::from(DEFAULT_SHARED_SOCKET),
             bind_addr: DEFAULT_BIND_ADDR.to_string(),
@@ -124,6 +132,14 @@ impl ServerConfig {
             schema_path: PathBuf::from(
                 std::env::var("TCHED_ROUTER_SCHEMA_PATH")
                     .unwrap_or_else(|_| DEFAULT_SCHEMA_PATH.to_string()),
+            ),
+            ui_workspace_shm_dir: PathBuf::from(
+                std::env::var("OP_UI_WORKSPACE_SHM_DIR")
+                    .unwrap_or_else(|_| DEFAULT_UI_WORKSPACE_SHM_DIR.to_string()),
+            ),
+            generation_shm_dir: PathBuf::from(
+                std::env::var("OP_GENERATION_SHM_DIR")
+                    .unwrap_or_else(|_| DEFAULT_GENERATION_SHM_DIR.to_string()),
             ),
             unix_socket: PathBuf::from(
                 std::env::var("TCHED_ROUTER_UNIX_SOCKET")
@@ -525,16 +541,39 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
     // SIGHUP reload watcher.
     let _sighup_handle = loader.clone().watch_sighup();
 
-    // PluginService (PluginService.CallMethod) backed by the authoritative
-    // MutationEngine. This is how createunixsocket is invoked: a CallMethod with
-    // plugin_id="unix_socket" routes through MutationEngine.mutate →
-    // UnixSocketPlugin::create_unix_socket. The sled identity is resolved as
-    // the actor_id inside mutate when the caller omits it.
+    // PluginService enters the canonical MutationEngine after request identity
+    // and exact capability validation; omitted actors inherit no identity.
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
         op_state_store::ChainConfig::default(),
     )));
     let ovsdb = Arc::new(op_network::rovs_proxy::OvsdbDbusClient::new());
     let mutation_engine = Arc::new(MutationEngine::new(event_chain, ovsdb));
+    mutation_engine.configure_shared_socket_path(&config.shared_socket)?;
+    // Prepare only the held owner directory. Per-owner namespaces and durable
+    // workspace rows remain absent until an admitted explicit recovery/mutation.
+    let ui_workspace_root =
+        op_core::projection_shm::PrivateProjectionDirectory::prepare(&config.ui_workspace_shm_dir)?;
+    mutation_engine.configure_chatbot_episode_projection(
+        ui_workspace_root.prepare_child("chatbot-episodes")?,
+        crate::sealed_schema_reader::blob_catalog_dir_from_env(),
+    )?;
+    mutation_engine.configure_ui_workspace(
+        ui_workspace_root,
+        op_plugins::state_plugins::runtime_documents::runtime_documents().await?,
+        crate::sealed_schema_reader::blob_catalog_dir_from_env(),
+    )?;
+    let generation_root =
+        op_core::projection_shm::PrivateProjectionDirectory::prepare(&config.generation_shm_dir)?;
+    generation_root.ensure_distinct_from(&config.ui_workspace_shm_dir)?;
+    mutation_engine.configure_generation_jobs(
+        generation_root,
+        op_plugins::state_plugins::runtime_documents::runtime_documents().await?,
+        crate::sealed_schema_reader::blob_catalog_dir_from_env(),
+        Arc::new(crate::tched_router_runtime::TchedRouterRuntimeClient::from_env()),
+    )?;
+    // No prompt replay or automatic activation: each verified owner must invoke
+    // recover_generation_jobs. A compatible stateless native ACK is required
+    // later for every start; preparing these directories proves no live support.
     // One validator is shared by every projection/listener so an assertion
     // consumed through MCP cannot be replayed through gRPC (or vice versa).
     let assertion_validator = Arc::new(AssertionValidator::from_env(DecoyTrustStore::load()));
@@ -544,10 +583,9 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
     if replayed > 0 {
         tracing::info!(replayed, "audit trail restored from durable storage");
     }
+    mutation_engine.initialize_identity_sled_store().await?;
+    crate::identity_sled_dispatch::recover_identity_startup(mutation_engine.as_ref()).await?;
     mutation_engine.seed_missing_plugin_projections().await?;
-    // Cozo is the identity-sled authority. Replay and leftover SHM can
-    // resurrect host-only session rows; overlay the provisioned containers.
-    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
     // D-Bus bindings do not survive a bridge restart. Invalidate every
     // instance-backed sled that was durably active, then stop its container,
     // before MCP/gRPC/D-Bus routes can be built or listeners exposed. Host
@@ -574,10 +612,8 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
     mutation_engine
         .bootstrap_configured_local_human_identity()
         .await?;
-    // Genesis mint persists SID1 without instance/btrfs. Re-overlay Cozo so
-    // provisioned container metadata survives that write.
-    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
     let mutation_engine_for_dbus = mutation_engine.clone();
+    mutation_engine.clone().start().await?;
     let operation_server = OperationGrpcServer::new(mutation_engine.clone());
     // The sealed SHM blob catalog IS the plugin set: hydrate reflection from
     // it so a bridge restart advertises every sealed plugin immediately.
@@ -596,6 +632,7 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
     // with real methods/properties matching each plugin's schema, dispatching
     // calls through the same MutationEngine as the gRPC path.
     let assertion_validator_for_dbus = assertion_validator.clone();
+    let mut catalog_reload_rx = loader.reload_tx().subscribe();
     tokio::spawn(async move {
         let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS")
             .unwrap_or_else(|_| op_core::config::SESSION_BUS_ADDRESS.to_string());
@@ -662,9 +699,18 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
             }
         }
 
-        // Keep connection alive (it's moved into the spawned task)
-        // The connection drops when the server shuts down.
-        std::future::pending::<()>().await;
+        // The existing explicit reload signal also refreshes the canonical
+        // D-Bus objects and wakes SHM subscribers, including schema removals.
+        while let Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) =
+            catalog_reload_rx.recv().await
+        {
+            if let Err(error) = router.reload().await {
+                tracing::warn!(%error, "D-Bus catalog reload failed");
+            }
+            if let Err(error) = engine_for_signal.clone().start().await {
+                tracing::warn!(%error, "Native observation restart failed after explicit reload");
+            }
+        }
     });
     // Attach the semantic shuttle for parity with run_grpc_server so
     // SearchSemanticTrace behaves identically on both endpoints (best-effort:
@@ -676,25 +722,28 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
             operation_server
         }
     };
-    match serde_json::from_value::<op_state_store::PluginSchema>(loader.get().await) {
-        Ok(schema) => {
-            let blob = crate::tched_router_object_blob::from_schema(schema.clone());
+    match crate::sealed_schema_reader::read_manifest_pinned_schema_document(
+        &crate::sealed_schema_reader::blob_catalog_dir_from_env(),
+        &config.plugin_id,
+    ) {
+        Ok(pinned) => {
+            let blob = pinned.blob;
             tracing::info!(
                 plugin_id = %blob.manifest.plugin_id,
                 schema_hash = %blob.manifest.schema_hash,
                 methods = blob.manifest.methods.len(),
                 dbus_path = %blob.manifest.dbus.object_path,
                 grpc_service = ?blob.manifest.grpc.services,
-                "tched_router D-Bus/gRPC object blob frozen"
+                "loaded manifest-pinned tched_router object metadata"
             );
             if let Err(error) = operation_server
-                .register_plugin_methods(config.plugin_id.clone(), &schema)
+                .register_plugin_methods(config.plugin_id.clone(), &pinned.schema)
                 .await
             {
                 tracing::warn!(
                     plugin_id = %config.plugin_id,
                     %error,
-                    "failed to freeze tched_router method descriptors for gRPC reflection"
+                    "failed to register pinned tched_router method descriptors for gRPC reflection"
                 );
             }
         }
@@ -702,7 +751,7 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
             tracing::warn!(
                 plugin_id = %config.plugin_id,
                 %error,
-                "tched_router schema could not be parsed for gRPC reflection"
+                "pinned tched_router blob unavailable for gRPC reflection"
             );
         }
     }
@@ -780,22 +829,33 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
         None
     };
 
-    // Host-local Unix socket (operators / host clients).
+    // Controllers retain an exclusive ownership lease. An existing path is
+    // never removed without matching prior ownership and proven staleness.
     let unix_socket = config.unix_socket.clone();
-    let unix_incoming = bind_unix_listener(&unix_socket).await?;
+    let unix_controller =
+        crate::shared_socket::SharedListenerController::open(unix_socket.clone())?;
+    unix_controller.start(128)?;
+    let unix_incoming = unix_controller.take_incoming()?;
     info!(path = %unix_socket.display(), "tched_router native gRPC listening on Unix socket");
 
     // Shared container socket — same gRPC surface, path bind-mounted into CTs.
     // Skip a second bind when env points both knobs at the same path.
     let shared_socket = config.shared_socket.clone();
     let shared_incoming = if shared_socket != unix_socket {
-        let incoming = bind_unix_listener(&shared_socket).await?;
+        let controller =
+            crate::shared_socket::SharedListenerController::open(shared_socket.clone())?;
+        controller.start(128)?;
+        let incoming = controller.take_incoming()?;
+        mutation_engine.set_shared_listener(controller)?;
+        mutation_engine.publish_shared_listener_startup().await?;
         info!(
             path = %shared_socket.display(),
             "shared container.sock listening (ghostbridge UDS fabric)"
         );
         Some(incoming)
     } else {
+        mutation_engine.set_shared_listener(unix_controller.clone())?;
+        mutation_engine.publish_shared_listener_startup().await?;
         info!(
             path = %shared_socket.display(),
             "shared container socket coincides with host UDS; single listener"
@@ -915,35 +975,6 @@ pub async fn run_tched_router_server(config: ServerConfig) -> anyhow::Result<()>
         result = tcp_fut => result,
         result = emqx_exhook_fut => result,
     }
-}
-
-/// Bind a Unix domain socket for tonic, creating parents and replacing stale files.
-async fn bind_unix_listener(
-    path: &std::path::Path,
-) -> anyhow::Result<tokio_stream::wrappers::UnixListenerStream> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-        // Containers mount this directory; world-executable so CT UIDs can traverse.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755));
-        }
-    }
-    if let Err(e) = tokio::fs::remove_file(path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(e.into());
-        }
-    }
-    let listener = tokio::net::UnixListener::bind(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // World-readable+writable+executable: NIC-less containers (mapped UIDs) must connect.
-        // Auth is enforced by the Ghostbridge session identity, not socket ACLs.
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777));
-    }
-    Ok(tokio_stream::wrappers::UnixListenerStream::new(listener))
 }
 
 #[cfg(test)]

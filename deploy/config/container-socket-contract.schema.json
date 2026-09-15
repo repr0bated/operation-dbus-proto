@@ -27,6 +27,25 @@
       "pattern": "^(artifact|container|mount|process|service|socket|workload):.+$"
     },
     "artifact": {
+      "oneOf": [
+        { "$ref": "#/$defs/cargo_git_artifact" },
+        { "$ref": "#/$defs/workspace_bundle_artifact" }
+      ]
+    },
+    "workspace_bundle_artifact": {
+      "type": "object",
+      "required": ["installer", "package", "target", "runtime", "archive", "binary"],
+      "properties": {
+        "installer": { "const": "workspace_bundle" },
+        "package": { "const": "op-plugins" },
+        "target": { "const": "x86_64-unknown-linux-gnu" },
+        "runtime": { "const": "private-glibc-loader-bundle" },
+        "archive": { "const": "mail-3tched-x86_64-linux-gnu-bundle.tar" },
+        "binary": { "const": "/usr/local/bin/op-mail-admin" }
+      },
+      "additionalProperties": false
+    },
+    "cargo_git_artifact": {
       "type": "object",
       "required": ["installer", "git", "rev", "target", "binary"],
       "properties": {

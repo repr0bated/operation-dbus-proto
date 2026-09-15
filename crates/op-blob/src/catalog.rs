@@ -353,19 +353,44 @@ pub fn read_plugin_state_store_schema(
     dir: &Path,
     plugin_id: &str,
 ) -> Option<op_state_store::PluginSchema> {
-    let prefix = format!("{plugin_id}.");
-    for e in std::fs::read_dir(dir).ok()? {
-        let p = e.ok()?.path();
-        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if name.starts_with(&prefix) && name.ends_with(".blob") {
-            let bytes = std::fs::read(&p).ok()?;
-            let blob = BlobRef::new(&bytes).ok()?;
-            return blob.state_store_schema().ok();
-        }
+    if plugin_id.is_empty()
+        || !plugin_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return None;
     }
-    None
+    let manifest_path = dir.join(MANIFEST_FILENAME);
+    let committed = std::fs::read(&manifest_path).ok()?;
+    let catalog: serde_json::Value = serde_json::from_slice(&committed).ok()?;
+    let expected_hash = catalog
+        .get("plugins")?
+        .as_object()?
+        .get(plugin_id)?
+        .as_str()?;
+    if expected_hash.len() != 64 || !expected_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let path = dir.join(format!("{plugin_id}.{}.blob", &expected_hash[..16]));
+    let bytes = std::fs::read(path).ok()?;
+    // The authoritative sealer-owned manifest supplies the expected identity.
+    // This consumer performs no digest computation, scan, reseal, or write.
+    let blob = BlobRef::from_manifest_pinned(&bytes, expected_hash).ok()?;
+    let manifest = blob.manifest().ok()?;
+    if manifest.plugin_id != plugin_id
+        || manifest.schema_hash != expected_hash
+        || manifest.blob_type != "active_reflection"
+    {
+        return None;
+    }
+    let schema = blob.state_store_schema().ok()?;
+    if schema.name != plugin_id
+        || schema.version != manifest.schema_version
+        || std::fs::read(manifest_path).ok()? != committed
+    {
+        return None;
+    }
+    Some(schema)
 }
 
 /// [`read_plugin_state_store_schema`] against the default SHM catalog.

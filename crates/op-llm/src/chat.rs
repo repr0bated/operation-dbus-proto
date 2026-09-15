@@ -3,7 +3,7 @@
 //! ## Authentication Priority
 //!
 //! 1. **Factory** (explicit FACTORY_BASE_URL)
-//! 2. **GCloud ADC** (direct OAuth via gcloud)
+//! 2. **Antigravity** (native Google ADC refresh or configured bridge)
 //! 3. **Gemini** (API key fallback)
 //! 4. **Anthropic** (API key)
 //!
@@ -32,9 +32,9 @@ use std::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::anthropic::AnthropicClient;
+use crate::antigravity::AntigravityProvider;
 use crate::assistant::AssistantProvider;
 use crate::factory::FactoryProvider;
-use crate::gcloud_adc::GCloudADCProvider;
 use crate::gemini::GeminiClient;
 use crate::gemini_cli::create_gemini_cli_provider;
 use crate::openclaw::OpenClawProvider;
@@ -123,14 +123,21 @@ impl ChatManager {
         }
 
         // =====================================================
-        // GCloud ADC - Directly from gcloud CLI / application-default credentials
-        // Kept under ProviderType::Antigravity for backward compatibility of provider ids.
+        // Antigravity - native ADC/API-key/OpenAI-compatible owner. Provider
+        // requests consume the revisioned RuntimeDocument and record returned
+        // token usage; no `gcloud` subprocess participates in this route.
         // =====================================================
-        let gcloud = GCloudADCProvider::new();
-        info!("✅ GCloud ADC provider initialized");
-        providers.insert(ProviderType::Antigravity, Box::new(gcloud));
-        if default_provider.is_none() {
-            default_provider = Some(ProviderType::Antigravity);
+        match AntigravityProvider::from_env() {
+            Ok(antigravity) => {
+                info!("✅ Antigravity native provider initialized");
+                providers.insert(ProviderType::Antigravity, Box::new(antigravity));
+                if default_provider.is_none() {
+                    default_provider = Some(ProviderType::Antigravity);
+                }
+            }
+            Err(error) => {
+                debug!("Antigravity provider unavailable: {error}");
+            }
         }
 
         // =====================================================
@@ -262,7 +269,7 @@ impl ChatManager {
             warn!("⚠️  No LLM providers available!");
             warn!("   Configure authentication:");
             warn!("   1. Set FACTORY_BASE_URL for Factory");
-            warn!("   2. Authenticate: gcloud auth login");
+            warn!("   2. Configure Google ADC or ANTIGRAVITY_BRIDGE_URL");
             warn!("   3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw");
             warn!("   4. Or set GEMINI_API_KEY environment variable");
         } else {
@@ -380,7 +387,7 @@ impl ChatManager {
             "No LLM providers configured.\n\n\
             To authenticate:\n\
             1. Set FACTORY_BASE_URL for Factory\n\
-            2. Run: gcloud auth login\n\
+            2. Configure Google ADC or ANTIGRAVITY_BRIDGE_URL\n\
             3. Or set OPENCLAW_BASE_URL and LLM_PROVIDER=openclaw\n\n\
             Or set GEMINI_API_KEY environment variable."
         ))
@@ -601,8 +608,8 @@ impl ChatManager {
                     ],
                 ),
                 ProviderType::Antigravity => (
-                    "OAuth (gcloud ADC, legacy provider id)",
-                    vec!["Gemini models", "Application-default credentials"],
+                    "Native Google ADC or OpenAI-compatible bridge",
+                    vec!["Configured provider model", "Durable local response usage"],
                 ),
                 ProviderType::Gemini => (
                     "API key (GEMINI_API_KEY)",

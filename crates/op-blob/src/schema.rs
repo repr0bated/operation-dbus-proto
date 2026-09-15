@@ -24,6 +24,12 @@ pub enum FieldType {
     OneOf(Vec<FieldType>),
     Array(Box<FieldType>),
     Object(HashMap<String, FieldSchema>),
+    /// Dynamic string keys with one declared value type. Object retains its
+    /// existing named-field representation; map keys are never public implicitly.
+    Map(Box<FieldType>),
+    /// Explicit, self-contained exact JSON Schema retained from the plugin.
+    /// Not a generic fallback; shared public projection denies this boundary.
+    JsonSchema(Box<Value>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,10 +145,8 @@ impl PluginSchema {
                 required.push(Value::String(name.clone()));
             }
             let mut node = field_to_json_schema(f);
-            if let Some(subid) = self.subids.get(name) {
-                node.as_object_mut()
-                    .unwrap()
-                    .insert("x-oscal-subid".into(), Value::String(subid.clone()));
+            if let (Some(subid), Some(object)) = (self.subids.get(name), node.as_object_mut()) {
+                object.insert("x-oscal-subid".into(), Value::String(subid.clone()));
             }
             props.insert(name.clone(), node);
         }
@@ -176,7 +180,15 @@ impl PluginSchema {
             "x-plugin-version".into(),
             Value::String(self.version.clone()),
         );
-        Value::Object(root)
+        let mut output = Value::Object(root);
+        for (name, field) in &self.fields {
+            scope_exact_export(
+                &mut output,
+                &field.field_type,
+                &format!("/properties/{}", escape_pointer(name)),
+            );
+        }
+        output
     }
 }
 
@@ -219,6 +231,9 @@ impl PluginSchemaBuilder {
 }
 
 fn field_to_json_schema(f: &FieldSchema) -> Value {
+    if let FieldType::JsonSchema(schema) = &f.field_type {
+        return schema.as_ref().clone();
+    }
     let mut node = type_to_json_schema(&f.field_type);
     let obj = node.as_object_mut().unwrap();
     if !f.description.is_empty() {
@@ -256,10 +271,14 @@ fn type_to_json_schema(t: &FieldType) -> Value {
         FieldType::Integer => serde_json::json!({"type": "integer"}),
         FieldType::Float => serde_json::json!({"type": "number"}),
         FieldType::Boolean => serde_json::json!({"type": "boolean"}),
+        FieldType::JsonSchema(schema) => schema.as_ref().clone(),
         FieldType::Any => serde_json::json!({}),
         FieldType::Enum(vs) => serde_json::json!({"type": "string", "enum": vs}),
         FieldType::OneOf(branches) => {
             serde_json::json!({"oneOf": branches.iter().map(type_to_json_schema).collect::<Vec<_>>()})
+        }
+        FieldType::Map(inner) => {
+            serde_json::json!({"type":"object", "additionalProperties": type_to_json_schema(inner)})
         }
         FieldType::Array(inner) => {
             serde_json::json!({"type": "array", "items": type_to_json_schema(inner)})
@@ -293,4 +312,36 @@ pub fn hex(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+fn escape_pointer(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
+}
+fn scope_exact_export(output: &mut Value, kind: &FieldType, pointer: &str) {
+    match kind {
+        FieldType::JsonSchema(schema) => {
+            if let Some(value) = output.pointer_mut(pointer) {
+                *value = op_state_store::exact_schema::embed_exact_schema(schema, pointer);
+            }
+        }
+        FieldType::Object(fields) => {
+            for (name, field) in fields {
+                scope_exact_export(
+                    output,
+                    &field.field_type,
+                    &format!("{pointer}/properties/{}", escape_pointer(name)),
+                )
+            }
+        }
+        FieldType::Map(item) => {
+            scope_exact_export(output, item, &format!("{pointer}/additionalProperties"))
+        }
+        FieldType::Array(item) => scope_exact_export(output, item, &format!("{pointer}/items")),
+        FieldType::OneOf(items) => {
+            for (index, item) in items.iter().enumerate() {
+                scope_exact_export(output, item, &format!("{pointer}/oneOf/{index}"))
+            }
+        }
+        _ => {}
+    }
 }

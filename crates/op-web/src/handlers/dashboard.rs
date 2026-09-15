@@ -1,8 +1,8 @@
-//! Dashboard Metrics Handlers — reads schema-validated state from SHM state tree.
+//! Dashboard metrics backed only by committed, sealed SHM projections.
 
-use axum::{extract::Extension, response::Json};
+use axum::{extract::Extension, http::StatusCode, response::Json};
 use serde::{Deserialize, Serialize};
-use simd_json::prelude::ValueAsScalar;
+use simd_json::prelude::*;
 use std::sync::Arc;
 
 use crate::state::AppState;
@@ -10,161 +10,114 @@ use crate::state_tree;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DashboardMetrics {
-    pub active_connections: usize,
+    pub active_connections: Option<usize>,
     pub total_users: usize,
-    pub mail_queue: usize,
-    pub mcp_services: usize,
-    pub cpu: f32,
-    pub memory: f32,
-    pub network: f32,
-    /// Source of the data: "projection" if from D-Bus tree, "fallback" if raw /proc
+    pub mail_queue: Option<usize>,
+    pub mcp_services: Option<usize>,
+    /// CPU utilization is absent until a canonical producer publishes that
+    /// measurement. Load average is not relabeled as CPU percentage.
+    pub cpu: Option<f32>,
+    pub memory: Option<f32>,
+    pub network: Option<f32>,
     pub source: String,
-    /// Schema version of the projection data
     pub schema_version: String,
 }
 
-/// GET /api/dashboard/metrics — Read from D-Bus projection tree (schema-validated).
-/// Falls back to raw /proc only if projections are not yet available.
+type DashboardError = (StatusCode, String);
+
+/// GET /api/dashboard/metrics — return only measurements present in the
+/// committed canonical `procfs` projection. Missing or invalid backing state is
+/// service-unavailable rather than a fabricated zero or a direct host probe.
 pub async fn dashboard_metrics_handler(
     Extension(state): Extension<Arc<AppState>>,
-) -> Json<DashboardMetrics> {
-    // Get user count
+) -> Result<Json<DashboardMetrics>, DashboardError> {
+    let tree = state_tree::read_committed_tree()
+        .await
+        .map_err(state_unavailable)?;
+    let procfs = tree.plugins.get("procfs").ok_or_else(|| {
+        state_unavailable(anyhow::anyhow!("canonical procfs plugin is not sealed"))
+    })?;
+    let projection = procfs.state.as_ref().ok_or_else(|| {
+        state_unavailable(anyhow::anyhow!(
+            "canonical procfs state has not been published"
+        ))
+    })?;
+
+    // The retained get_meminfo output publishes these byte-derived KiB values.
+    // Reject missing or inconsistent data instead of converting defaults.
+    let memory = memory_percent(projection).ok_or_else(|| {
+        state_unavailable(anyhow::anyhow!(
+            "procfs memory measurement is unavailable or inconsistent"
+        ))
+    })?;
+
     let total_users = state.user_store.list_users().await.len();
-
-    // Get VPN connections
-    let active_connections = get_vpn_peer_count();
-
-    // Read system stats from the SHM state tree.
-    // These are live procfs projections written by the mutation engine.
-    let mem_proj = state_tree::read_plugin("system.memory");
-    let load_proj = state_tree::read_plugin("system.load");
-
-    let (cpu, memory, source, schema_version) = if mem_proj.is_some() || load_proj.is_some() {
-        let mut cpu = 0.0f32;
-        let mut memory = 0.0f32;
-
-        // memory projection from /proc/meminfo: keys are lowercase, values are strings like "24019080 kB"
-        if let Some(simd_json::OwnedValue::Object(ref obj)) = mem_proj {
-            let total_kb = obj
-                .get("memtotal")
-                .and_then(|v| {
-                    v.as_str().map(|s| {
-                        s.split_whitespace()
-                            .next()
-                            .unwrap_or("0")
-                            .parse::<u64>()
-                            .unwrap_or(0)
-                    })
-                })
-                .unwrap_or(0);
-            let free_kb = obj
-                .get("memfree")
-                .and_then(|v| {
-                    v.as_str().map(|s| {
-                        s.split_whitespace()
-                            .next()
-                            .unwrap_or("0")
-                            .parse::<u64>()
-                            .unwrap_or(0)
-                    })
-                })
-                .unwrap_or(0);
-            if total_kb > 0 {
-                memory = ((total_kb - free_kb) as f32 / total_kb as f32) * 100.0;
-            }
-        }
-
-        // CPU load from /proc/loadavg projection: keys are "load1", "load5", "load15"
-        // Values may be floats or strings depending on parser.
-        if let Some(simd_json::OwnedValue::Object(ref obj)) = load_proj {
-            let load_1min = obj
-                .get("load1")
-                .and_then(|v| {
-                    as_f64(v).or_else(|| v.as_str().map(|s| s.parse::<f64>().unwrap_or(0.0)))
-                })
-                .unwrap_or(0.0) as f32;
-            // Approximate CPU % from load (assuming 8 cores)
-            cpu = (load_1min * 100.0 / 8.0).min(100.0);
-        }
-
-        (cpu, memory, "projection".to_string(), "live".to_string())
-    } else {
-        // Fallback: read raw /proc directly
-        let (cpu, memory) = get_system_stats();
-        (cpu, memory, "fallback".to_string(), "none".to_string())
-    };
-
-    Json(DashboardMetrics {
-        active_connections,
+    Ok(Json(DashboardMetrics {
+        active_connections: None,
         total_users,
-        mail_queue: 0,
-        mcp_services: 0,
-        cpu,
-        memory,
-        network: 0.0,
-        source,
-        schema_version,
-    })
+        mail_queue: None,
+        mcp_services: None,
+        cpu: None,
+        memory: Some(memory),
+        network: None,
+        source: "committed_procfs_projection".to_string(),
+        schema_version: procfs.schema.version.clone(),
+    }))
 }
 
-/// GET /api/dashboard/projections — Return all plugin state from SHM state tree.
+/// GET /api/dashboard/projections — return the complete committed public tree.
 pub async fn dashboard_projections_handler(
     Extension(_state): Extension<Arc<AppState>>,
-) -> Json<std::collections::HashMap<String, simd_json::OwnedValue>> {
-    let projections = state_tree::read_all();
-    Json(projections)
+) -> Result<Json<std::collections::HashMap<String, simd_json::OwnedValue>>, DashboardError> {
+    state_tree::read_all()
+        .await
+        .map(Json)
+        .map_err(state_unavailable)
 }
 
-fn get_vpn_peer_count() -> usize {
-    let peers_dir = "/sys/class/net/wg0/wireguard/peers";
-    std::fs::read_dir(peers_dir)
-        .ok()
-        .map(|entries| entries.filter_map(|e| e.ok()).count())
-        .unwrap_or(0)
+fn state_unavailable(error: anyhow::Error) -> DashboardError {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        format!("committed dashboard state unavailable: {error}"),
+    )
 }
 
-fn get_system_stats() -> (f32, f32) {
-    // Get CPU usage from /proc/loadavg
-    let cpu = std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|s| {
-            s.split_whitespace()
-                .next()
-                .and_then(|n| n.parse::<f32>().ok())
-        })
-        .map(|load| (load * 100.0).min(100.0))
-        .unwrap_or(0.0);
-
-    // Get memory usage from /proc/meminfo
-    let memory = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| {
-            let mut total = 0u64;
-            let mut available = 0u64;
-            for line in s.lines() {
-                if line.starts_with("MemTotal:") {
-                    total = line.split_whitespace().nth(1)?.parse().ok()?;
-                } else if line.starts_with("MemAvailable:") {
-                    available = line.split_whitespace().nth(1)?.parse().ok()?;
-                }
-            }
-            if total > 0 {
-                Some(((total - available) as f32 / total as f32) * 100.0)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(0.0);
-
-    (cpu, memory)
+fn memory_percent(projection: &simd_json::OwnedValue) -> Option<f32> {
+    let memory = projection.get("memory")?;
+    let total_kb = memory
+        .get("total_kb")
+        .and_then(|value| value.as_u64())
+        .filter(|total| *total > 0)?;
+    let available_kb = memory
+        .get("available_kb")
+        .and_then(|value| value.as_u64())
+        .filter(|available| *available <= total_kb)?;
+    Some(((total_kb - available_kb) as f64 * 100.0 / total_kb as f64) as f32)
 }
 
-/// Extract f64 from simd_json OwnedValue.
-fn as_f64(v: &simd_json::OwnedValue) -> Option<f64> {
-    match v {
-        simd_json::OwnedValue::Static(simd_json::StaticNode::F64(n)) => Some(*n),
-        simd_json::OwnedValue::Static(simd_json::StaticNode::U64(n)) => Some(*n as f64),
-        simd_json::OwnedValue::Static(simd_json::StaticNode::I64(n)) => Some(*n as f64),
-        _ => None,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simd_json::json;
+
+    #[test]
+    fn derives_only_supported_memory_measurement() {
+        assert_eq!(
+            memory_percent(&json!({"memory":{"total_kb": 1000, "available_kb": 250}})),
+            Some(75.0)
+        );
+        assert_eq!(
+            memory_percent(&json!({"memory":{"total_kb": 0, "available_kb": 0}})),
+            None
+        );
+        assert_eq!(
+            memory_percent(&json!({"memory":{"total_kb": 100, "available_kb": 101}})),
+            None
+        );
+        assert_eq!(memory_percent(&json!({"load1": 0.5})), None);
+        assert_eq!(
+            memory_percent(&json!({"total_kb": 1000, "available_kb": 250})),
+            None
+        );
     }
 }

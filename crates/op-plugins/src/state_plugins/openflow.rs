@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::{json, OwnedValue as Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use zbus::proxy;
 
 /// Proxy for the OpenFlow controller's dynamic flow-mod interface.
@@ -48,6 +48,13 @@ pub struct OpenFlowConfig {
     /// Bridges managed by this controller
     pub bridges: Vec<BridgeFlowConfig>,
 
+    /// Exact flow members confirmed by the native compare/exchange owner,
+    /// keyed first by bridge and then by canonical flow identity. This is an
+    /// observation tree; it never replaces the authored bridge configuration.
+    #[serde(default)]
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub observed_flows: BTreeMap<String, BTreeMap<String, FlowObservation>>,
+
     /// Controller endpoint (tcp:IP:PORT)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_endpoint: Option<String>,
@@ -66,6 +73,14 @@ pub struct OpenFlowConfig {
     /// Level 3: Advanced obfuscation (traffic morphing, protocol mimicry, decoy traffic)
     #[serde(default = "default_obfuscation_level")]
     pub obfuscation_level: u8,
+}
+
+/// One native observation, including confirmed absence after deletion.
+/// Retaining the selector distinguishes an observed removal from unknown state.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FlowObservation {
+    pub flow: FlowEntry,
+    pub installed: bool,
 }
 
 fn default_security_enabled() -> bool {
@@ -92,6 +107,7 @@ pub struct BridgeFlowConfig {
 
 /// OpenFlow flow entry
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FlowEntry {
     /// Flow table number (0-254)
     pub table: u8,
@@ -100,9 +116,11 @@ pub struct FlowEntry {
     pub priority: u16,
 
     /// Match criteria (OpenFlow match fields)
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub match_fields: HashMap<String, String>,
 
     /// Actions to perform
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
     pub actions: Vec<FlowAction>,
 
     /// Cookie for flow identification
@@ -121,6 +139,7 @@ pub struct FlowEntry {
 /// OpenFlow actions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum FlowAction {
     /// Output to port
     Output { port: String },
@@ -1107,7 +1126,7 @@ impl StatePlugin for OpenFlowPlugin {
     }
 
     fn version(&self) -> &str {
-        "0.1.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -1492,7 +1511,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "openflow",
-        "1.0.0",
+        "2.0.0",
         "OpenFlow flow table management",
         &root,
     );
@@ -1530,39 +1549,39 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         "add_flow".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             AddFlowInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            FlowMutationOutput,
         >(
             "AddFlow",
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.flow.add@v1",
+            "mut.network.openflow.flow.add@v2",
         ),
     );
     schema.methods.insert(
         "delete_flow".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             DeleteFlowInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            FlowMutationOutput,
         >(
             "DeleteFlow",
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.flow.delete@v1",
+            "mut.network.openflow.flow.delete@v2",
         ),
     );
     schema.methods.insert(
         "modify_flow".to_string(),
         super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
             ModifyFlowInput,
-            super::plugin_scaffold_helpers::AckOutput,
+            FlowMutationOutput,
         >(
             "ModifyFlow",
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.flow.modify@v1",
+            "mut.network.openflow.flow.modify@v2",
         ),
     );
 
@@ -1576,7 +1595,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.datapath.ensure_fallback_normal@v1",
+            "mut.network.openflow.datapath.ensure-fallback-normal@v1",
         ),
     );
     schema.methods.insert(
@@ -1589,7 +1608,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.datapath.set_fail_mode@v1",
+            "mut.network.openflow.datapath.set-fail-mode@v1",
         ),
     );
     schema.methods.insert(
@@ -1602,7 +1621,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.datapath.del_controller@v1",
+            "mut.network.openflow.datapath.del-controller@v1",
         ),
     );
     schema.methods.insert(
@@ -1615,7 +1634,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.datapath.set_controller@v1",
+            "mut.network.openflow.datapath.set-controller@v1",
         ),
     );
     schema.methods.insert(
@@ -1628,7 +1647,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             op_state_store::SideEffect::Read,
             false,
             "openflow.read",
-            "mut.network.openflow.datapath.get_health@v1",
+            "obs.network.openflow.datapath.get-health@v1",
         ),
     );
     schema.methods.insert(
@@ -1641,7 +1660,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
             op_state_store::SideEffect::Mutation,
             false,
             "openflow.write",
-            "mut.network.openflow.datapath.attach_controller_safe@v1",
+            "mut.network.openflow.datapath.attach-controller-safe@v1",
         ),
     );
 
@@ -1657,7 +1676,7 @@ pub(crate) fn openflow_schema() -> PluginSchema {
         op_state_store::CapabilityDecl {
             id: "openflow.write".to_string(),
             description:
-                "Grants: ensure_fallback_normal, set_fail_mode, del_controller, set_controller, attach_controller_safe."
+                "Grants: add_flow, delete_flow, modify_flow, ensure_fallback_normal, set_fail_mode, del_controller, set_controller, attach_controller_safe."
                     .to_string(),
         },
     );
@@ -1726,50 +1745,55 @@ pub struct AttachControllerSafeInput {
     pub endpoint: String,
 }
 
-/// Input struct for AddFlow method
-/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddFlowInput {
-    /// Bridge name
     pub bridge: String,
-    /// Flow table ID
-    pub table: u8,
-    /// Flow priority
-    pub priority: u16,
-    /// Match fields (in_port, ip, nw_src, nw_dst, etc.)
-    pub match_fields: HashMap<String, String>,
-    /// Actions to apply
-    pub actions: Vec<FlowAction>,
-    /// Cookie value for flow
-    pub cookie: Option<u64>,
-    /// Idle timeout in seconds (0 = never expires)
-    pub idle_timeout: Option<u32>,
-    /// Hard timeout in seconds (0 = never expires)
-    pub hard_timeout: Option<u32>,
+    /// Exact desired member. Add succeeds only when its live identity is absent.
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub flow: FlowEntry,
 }
 
-/// Input struct for DeleteFlow method
-/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeleteFlowInput {
-    /// Bridge name
     pub bridge: String,
-    /// Match fields to identify flow (empty = delete all)
-    pub match_fields: HashMap<String, String>,
+    /// Full expected live member. Wildcard deletion is not representable.
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub expected: FlowEntry,
 }
 
-/// Input struct for ModifyFlow method
-/// D-Bus method spec: https://www.opennetworking.org/wp-content/uploads/2014/10/of_spec_1_0.pdf
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ModifyFlowInput {
-    /// Bridge name
     pub bridge: String,
-    /// Match fields to identify flow
-    pub match_fields: HashMap<String, String>,
-    /// New actions to apply
-    pub actions: Vec<FlowAction>,
-    /// Update priority
-    pub priority: Option<u16>,
+    /// Full exact revision that must be live before replacement.
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub expected: FlowEntry,
+    /// Replacement with the same table, priority and match identity.
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub replacement: FlowEntry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowMutationKind {
+    Added,
+    Deleted,
+    Modified,
+}
+
+/// Barrier-confirmed live observation for one flow-table member.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FlowMutationOutput {
+    pub bridge: String,
+    pub operation: FlowMutationKind,
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub before: Option<FlowEntry>,
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub after: Option<FlowEntry>,
+    pub verified: bool,
+    pub observed_at_unix: i64,
 }
 
 /// Dispatch an `openflow` schema method. Called from `op-grpc-bridge`'s
@@ -1787,20 +1811,20 @@ pub async fn dispatch_openflow_method(
             Ok(serde_json::json!({ "success": true }))
         }
         "set_fail_mode" => {
-            let input: SetFailModeInput = serde_json::from_value(args.clone())
-                .context("invalid SetFailMode arguments")?;
+            let input: SetFailModeInput =
+                serde_json::from_value(args.clone()).context("invalid SetFailMode arguments")?;
             op_network::set_fail_mode(&input.bridge, &input.mode).await?;
             Ok(serde_json::json!({ "success": true }))
         }
         "del_controller" => {
-            let input: DelControllerInput = serde_json::from_value(args.clone())
-                .context("invalid DelController arguments")?;
+            let input: DelControllerInput =
+                serde_json::from_value(args.clone()).context("invalid DelController arguments")?;
             op_network::del_controller(&input.bridge).await?;
             Ok(serde_json::json!({ "success": true }))
         }
         "set_controller" => {
-            let input: SetControllerInput = serde_json::from_value(args.clone())
-                .context("invalid SetController arguments")?;
+            let input: SetControllerInput =
+                serde_json::from_value(args.clone()).context("invalid SetController arguments")?;
             op_network::set_controller(&input.bridge, &input.endpoint).await?;
             Ok(serde_json::json!({ "success": true }))
         }
@@ -1835,8 +1859,7 @@ pub async fn dispatch_openflow_method(
             })?)
         }
         "add_flow" | "delete_flow" | "modify_flow" => Err(anyhow!(
-            "openflow.{} is declared for schema/Call validation; use StatePlugin apply or SendFlow on org.opdbus.v1.plugins.openflow",
-            method
+            "openflow.{method} must use the canonical compare/exchange bridge adapter"
         )),
         other => Err(anyhow!("unknown openflow method: {}", other)),
     }

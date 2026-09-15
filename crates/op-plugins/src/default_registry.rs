@@ -3,12 +3,6 @@
 //! This module deliberately does not maintain a second plugin list. If a state
 //! plugin exists in `state_plugins`, the registry discovers it and registers it.
 //!
-//! ## Schema Validation
-//!
-//! Plugins are validated against JSON schema files at runtime.
-//! If a schema file is missing in strict mode, the plugin will be rejected.
-//! Schema files are loaded from `schemas/plugin/{name}.json`.
-//!
 //! ## Canonical Path Enforcement
 //!
 //! All plugins must use canonical D-Bus paths:
@@ -21,8 +15,6 @@ use anyhow::{anyhow, Result};
 use op_state_store::StateStore;
 use simd_json::prelude::*;
 use std::sync::Arc;
-
-use crate::schema_loader::SchemaLoader;
 
 use crate::AutoPlugin;
 
@@ -39,7 +31,10 @@ use crate::AutoPlugin;
 /// - `compact_mcp`: retired as a PluginV1 / MCP *plugin*. Compact *mode* for
 ///   the singleton control-plane chatbot is in-process in op-web, not a
 ///   reflected plugin and not a second MCP listener.
-pub const RETIRED_PLUGIN_IDS: &[&str] = &["compact_mcp", "netmaker"];
+/// - `factory`: the former account/platform plugin is retired; Factory CLI/SSH
+///   provider vocabulary remains in `op-llm`, while model routing stays in
+///   `tched_router`.
+pub const RETIRED_PLUGIN_IDS: &[&str] = &["compact_mcp", "factory", "netmaker"];
 
 pub fn is_retired_plugin(plugin_id: &str) -> bool {
     RETIRED_PLUGIN_IDS.contains(&plugin_id)
@@ -121,7 +116,6 @@ impl Default for PluginRegistryConfig {
 pub struct DefaultPluginRegistry {
     config: PluginRegistryConfig,
     state_store: Arc<dyn StateStore>,
-    schema_loader: SchemaLoader,
 }
 
 impl DefaultPluginRegistry {
@@ -130,40 +124,7 @@ impl DefaultPluginRegistry {
         Self {
             config: PluginRegistryConfig::default(),
             state_store,
-            schema_loader: SchemaLoader::new("schemas/plugin"),
         }
-    }
-
-    /// Create with custom schema directory
-    pub fn with_schema_dir(
-        state_store: Arc<dyn StateStore>,
-        schema_dir: impl Into<std::path::PathBuf>,
-    ) -> Self {
-        Self {
-            config: PluginRegistryConfig::default(),
-            state_store,
-            schema_loader: SchemaLoader::new(schema_dir),
-        }
-    }
-
-    /// Validate a plugin has a valid schema file
-    ///
-    /// Returns Ok(()) if schema exists and is valid
-    /// Returns Err if schema is missing or invalid (in strict mode)
-    pub async fn validate_plugin_schema(&self, plugin_name: &str) -> Result<()> {
-        match self.schema_loader.load_schema(plugin_name).await? {
-            Some(_) => Ok(()),
-            None => Err(anyhow!(
-                "Plugin '{}' has no valid schema file. Expected: schemas/plugin/{}.json",
-                plugin_name,
-                plugin_name
-            )),
-        }
-    }
-
-    /// Check if a schema file exists for a plugin
-    pub async fn schema_exists(&self, plugin_name: &str) -> bool {
-        self.schema_loader.schema_exists(plugin_name).await
     }
 
     /// Create with custom configuration
@@ -171,20 +132,6 @@ impl DefaultPluginRegistry {
         Self {
             config,
             state_store,
-            schema_loader: SchemaLoader::new("schemas/plugin"),
-        }
-    }
-
-    /// Create with custom configuration and schema directory
-    pub fn with_config_and_schema_dir(
-        state_store: Arc<dyn StateStore>,
-        config: PluginRegistryConfig,
-        schema_dir: impl Into<std::path::PathBuf>,
-    ) -> Self {
-        Self {
-            config,
-            state_store,
-            schema_loader: SchemaLoader::new(schema_dir),
         }
     }
 
@@ -335,19 +282,6 @@ impl DefaultPluginRegistry {
         plugins
     }
 
-    /// Get list of plugins with valid schema files
-    pub async fn available_schemas(&self) -> Result<Vec<String>> {
-        self.schema_loader.list_available_schemas().await
-    }
-
-    /// Load schema for a plugin
-    pub async fn load_plugin_schema(
-        &self,
-        plugin_name: &str,
-    ) -> Result<Option<op_state::PluginSchema>> {
-        self.schema_loader.load_schema(plugin_name).await
-    }
-
     /// Check if a plugin is enabled for auto-load
     pub fn is_auto_load(&self, plugin_name: &str) -> bool {
         self.config.auto_load.contains(&plugin_name.to_string())
@@ -366,6 +300,7 @@ mod tests {
 
         let plugins = registry.load_default_plugins().await.unwrap();
         assert!(!plugins.is_empty());
+        assert!(!plugins.iter().any(|plugin| plugin.name() == "factory"));
         assert!(plugins.iter().any(|plugin| plugin.name() == "mail_server"));
         assert!(plugins.iter().any(|plugin| plugin.name() == "tched_router"));
     }
@@ -596,7 +531,8 @@ mod tests {
         let registry = DefaultPluginRegistry::new(store);
         let plugins = registry.load_all_plugins().await.unwrap();
 
-        let mut all_subids: Vec<(String, String, String)> = Vec::new(); // plugin, key, subid
+        let mut all_subids: Vec<(String, String, String)> = Vec::new(); // schema plugin, key, subid
+        let mut declaration_subids: Vec<(String, String, String)> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
 
         for plugin in &plugins {
@@ -607,10 +543,27 @@ mod tests {
             for (key, subid) in &schema.subids {
                 all_subids.push((name.clone(), key.clone(), subid.clone()));
             }
+            for (key, method) in &schema.methods {
+                declaration_subids.push((
+                    name.clone(),
+                    format!("method:{key}"),
+                    method.subid.clone(),
+                ));
+            }
+            for signal in &schema.signals {
+                declaration_subids.push((
+                    name.clone(),
+                    format!("signal:{}", signal.name),
+                    signal.subid.clone(),
+                ));
+            }
         }
 
-        // 1. Every subid must match the canonical OSCAL subid regex.
-        for (plugin_name, key, subid) in &all_subids {
+        // 1. Every schema annotation, method and signal subid must match the
+        // canonical OSCAL grammar. Method/signal bindings may legitimately
+        // repeat an annotation owned by the same plugin, so this adds no new
+        // cross-surface uniqueness claim.
+        for (plugin_name, key, subid) in all_subids.iter().chain(&declaration_subids) {
             if let Err(e) = validate_subid(subid) {
                 errors.push(format!(
                     "plugin '{plugin_name}' key '{key}' has invalid subid '{subid}': {e}"

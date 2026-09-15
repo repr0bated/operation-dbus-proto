@@ -123,32 +123,7 @@ impl ProtoGenerator {
         writeln!(output, "import \"google/protobuf/struct.proto\";").unwrap();
         writeln!(output).unwrap();
 
-        let message_name = to_pascal_case(&schema.name);
-        writeln!(output, "message {} {{", message_name).unwrap();
-
-        let mut fields: Vec<(&str, &op_state_store::FieldSchema)> = schema
-            .fields
-            .iter()
-            .map(|(field_name, field_schema)| (field_name.as_str(), field_schema))
-            .collect();
-        fields.sort_unstable_by(|left, right| left.0.cmp(right.0));
-
-        for (field_num, (field_name, field_schema)) in (1..).zip(fields) {
-            let proto_type = self.field_type_to_proto(&field_schema.field_type);
-            let optional_marker = if field_schema.required {
-                ""
-            } else {
-                "optional "
-            };
-            writeln!(
-                output,
-                "  {}{} {} = {};",
-                optional_marker, proto_type, field_name, field_num
-            )
-            .unwrap();
-        }
-
-        writeln!(output, "}}").unwrap();
+        self.generate_message(&mut output, schema);
         output
     }
 
@@ -195,6 +170,7 @@ impl ProtoGenerator {
         let message_name = to_pascal_case(&schema.name);
         writeln!(output, "message {} {{", message_name).unwrap();
 
+        let mut descendants = String::new();
         let mut fields: Vec<(&str, &op_state_store::FieldSchema)> = schema
             .fields
             .iter()
@@ -203,12 +179,23 @@ impl ProtoGenerator {
         fields.sort_unstable_by(|left, right| left.0.cmp(right.0));
 
         for (field_num, (field_name, field_schema)) in (1..).zip(fields) {
-            let proto_type = self.field_type_to_proto(&field_schema.field_type);
-            let optional_marker = if field_schema.required {
-                ""
-            } else {
-                "optional "
+            let proto_type = match &field_schema.field_type {
+                FieldType::Map(value) => format!(
+                    "map<string, {}>",
+                    map_value_proto(
+                        value,
+                        &format!("{message_name}MapValue{field_num}"),
+                        &mut descendants
+                    )
+                ),
+                other => self.field_type_to_proto(other),
             };
+            let optional_marker =
+                if field_schema.required || matches!(&field_schema.field_type, FieldType::Map(_)) {
+                    ""
+                } else {
+                    "optional "
+                };
             writeln!(
                 output,
                 "  {}{} {} = {};",
@@ -219,6 +206,7 @@ impl ProtoGenerator {
 
         writeln!(output, "}}").unwrap();
         writeln!(output).unwrap();
+        output.push_str(&descendants);
     }
 
     fn generate_crud_messages(&self, output: &mut String, schema: &PluginSchema) {
@@ -273,11 +261,66 @@ impl ProtoGenerator {
             FieldType::Integer => "int64".to_string(),
             FieldType::Float => "double".to_string(),
             FieldType::Boolean => "bool".to_string(),
+            FieldType::Array(inner) if matches!(inner.as_ref(), FieldType::Map(_)) => {
+                "repeated google.protobuf.Struct".into()
+            }
             FieldType::Array(inner) => format!("repeated {}", self.field_type_to_proto(inner)),
             FieldType::Object(_) => "google.protobuf.Struct".to_string(),
+            FieldType::Map(_) => "google.protobuf.Struct".into(),
             FieldType::Enum(_) => "string".to_string(),
             FieldType::OneOf(_) => "google.protobuf.Value".to_string(),
-            FieldType::Any => "google.protobuf.Value".to_string(),
+            FieldType::JsonSchema(_) | FieldType::Any => "google.protobuf.Value".to_string(),
+        }
+    }
+}
+
+/// New typed map fields use typed record values. Existing Object fields keep
+/// their Struct wire representation and all existing field numbers stay put.
+/// A protobuf map cannot directly contain a map/repeated value; WKT Struct /
+/// ListValue retains those JSON boundaries (arbitrary numbers remain doubles).
+fn map_value_proto(kind: &FieldType, name: &str, definitions: &mut String) -> String {
+    match kind {
+        FieldType::String | FieldType::Enum(_) => "string".into(),
+        FieldType::Integer => "int64".into(),
+        FieldType::Float => "double".into(),
+        FieldType::Boolean => "bool".into(),
+        FieldType::Array(_) => "google.protobuf.ListValue".into(),
+        FieldType::Map(_) => "google.protobuf.Struct".into(),
+        FieldType::Any | FieldType::OneOf(_) | FieldType::JsonSchema(_) => {
+            "google.protobuf.Value".into()
+        }
+        FieldType::Object(fields) => {
+            let mut nested = String::new();
+            let mut message = format!("message {name} {{\n");
+            let mut fields: Vec<_> = fields.iter().collect();
+            fields.sort_unstable_by_key(|(key, _)| *key);
+            for (index, (key, field)) in fields.into_iter().enumerate() {
+                let number = index + 1;
+                let child_name = format!("{name}Field{number}");
+                let (ty, is_map) = match &field.field_type {
+                    FieldType::Map(value) => (
+                        format!(
+                            "map<string, {}>",
+                            map_value_proto(value, &child_name, &mut nested)
+                        ),
+                        true,
+                    ),
+                    other => (map_value_proto(other, &child_name, &mut nested), false),
+                };
+                let presence = if is_map
+                    || ty.starts_with("google.protobuf.")
+                    || matches!(&field.field_type, FieldType::Object(_))
+                {
+                    ""
+                } else {
+                    "optional "
+                };
+                writeln!(message, "  {presence}{ty} {key} = {number};").unwrap();
+            }
+            writeln!(message, "}}\n").unwrap();
+            definitions.push_str(&message);
+            definitions.push_str(&nested);
+            name.to_owned()
         }
     }
 }
@@ -319,5 +362,48 @@ mod tests {
         assert_eq!(to_pascal_case("lxc"), "Lxc");
         assert_eq!(to_pascal_case("network_interface"), "NetworkInterface");
         assert_eq!(to_pascal_case("ovs-bridge"), "OvsBridge");
+    }
+}
+
+#[cfg(test)]
+mod typed_map_proto_tests {
+    use super::*;
+    use std::collections::HashMap;
+    fn field(field_type: FieldType) -> op_state_store::FieldSchema {
+        op_state_store::FieldSchema {
+            field_type,
+            required: false,
+            description: String::new(),
+            default: None,
+            example: None,
+            constraints: vec![],
+            read_only: false,
+            read_only_when: None,
+        }
+    }
+    #[test]
+    fn legacy_export_preserves_object_layout_and_adds_typed_map_records() {
+        let schema = PluginSchema::builder("fixture")
+            .field("existing", field(FieldType::Object(HashMap::new())))
+            .field(
+                "jobs",
+                field(FieldType::Map(Box::new(FieldType::Object(HashMap::from(
+                    [
+                        ("ready".into(), field(FieldType::Boolean)),
+                        (
+                            "children".into(),
+                            field(FieldType::Map(Box::new(FieldType::String))),
+                        ),
+                    ],
+                ))))),
+            )
+            .build();
+        let proto = ProtoGenerator::new(ProtoGenConfig::default()).generate_for_schema(&schema);
+        assert!(proto.contains("optional google.protobuf.Struct existing = 1;"));
+        assert!(proto.contains("map<string, FixtureMapValue2> jobs = 2;"));
+        assert!(!proto.contains("optional map<"));
+        assert!(proto.contains("message FixtureMapValue2 {"));
+        assert!(proto.contains("map<string, string> children = 1;"));
+        assert!(proto.contains("optional bool ready = 2;"));
     }
 }

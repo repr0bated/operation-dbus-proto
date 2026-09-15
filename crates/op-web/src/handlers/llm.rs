@@ -45,11 +45,18 @@ pub struct LlmProvidersResponse {
 /// GET /api/llm/status - Get LLM status
 pub async fn llm_status_handler(
     Extension(state): Extension<Arc<AppState>>,
-) -> Json<LlmStatusResponse> {
+) -> Result<Json<LlmStatusResponse>, (StatusCode, String)> {
     let mut provider = state.chat_manager.current_provider().await.to_string();
     let mut model = state.chat_manager.current_model().await;
     if let Some((selected_provider, selected_model)) =
         crate::tched_router_routes::selected_provider_model()
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("committed tched_router state unavailable: {error}"),
+                )
+            })?
     {
         if !selected_provider.is_empty() {
             provider = selected_provider;
@@ -71,7 +78,7 @@ pub async fn llm_status_handler(
             status: Some("available".to_string()),
         })
         .collect();
-    Json(LlmStatusResponse {
+    Ok(Json(LlmStatusResponse {
         active_provider: provider.clone(),
         active_model: model.clone(),
         provider,
@@ -79,7 +86,7 @@ pub async fn llm_status_handler(
         model_non_sandboxed,
         available,
         providers,
-    })
+    }))
 }
 
 #[derive(Debug, Deserialize)]

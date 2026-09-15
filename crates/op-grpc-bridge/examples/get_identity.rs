@@ -1,6 +1,6 @@
 //! Look up a real identity sled by WireGuard pubkey via the canonical
-//! identity_sled plugin (PluginService.CallMethod), same path used by
-//! write_identity/provision_identity — never a side-channel.
+//! identity_sled plugin (PluginService.CallMethod), the same canonical path
+//! used by identity updates after container provisioning.
 use op_grpc_bridge::grpc_client::{GrpcClientPool, RemoteOperationClient};
 use std::sync::Arc;
 

@@ -702,8 +702,54 @@ mod tests {
         match device {
             FieldType::OneOf(branches) => {
                 assert_eq!(branches.len(), 12, "one branch per device type");
+                let mut tags = std::collections::BTreeSet::new();
+                for branch in branches {
+                    let FieldType::Object(fields) = branch else {
+                        panic!("typed object branch");
+                    };
+                    let tag = &fields["type"];
+                    assert!(tag.required, "native discriminant is required");
+                    let FieldType::Enum(values) = &tag.field_type else {
+                        panic!("string const must remain a single enum");
+                    };
+                    assert_eq!(values.len(), 1);
+                    assert!(tags.insert(values[0].clone()));
+                }
+                assert!(tags.contains("proxy") && tags.contains("none"));
             }
             other => panic!("expected OneOf union, got {other:?}"),
         }
+        for valid in [
+            serde_json::json!({"name":"eth0","device":{"type":"nic","nictype":"bridged","parent":"ovsbr0"}}),
+            serde_json::json!({"name":"gone","device":{"type":"none"}}),
+        ] {
+            assert!(
+                schema
+                    .validate(&simd_json::serde::to_owned_value(valid).unwrap())
+                    .valid
+            );
+        }
+        for invalid in [
+            serde_json::json!({"name":"eth0","device":{"parent":"ovsbr0"}}),
+            serde_json::json!({"name":"eth0","device":{"type":"invented-device"}}),
+        ] {
+            assert!(
+                !schema
+                    .validate(&simd_json::serde::to_owned_value(invalid).unwrap())
+                    .valid
+            );
+        }
+        let other =
+            op_blob::adapter::try_plugin_schema_from_json("named_device", "1.0.0", "test", &root)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&other.fields["device"].field_type).unwrap(),
+            serde_json::to_value(device).unwrap()
+        );
+        let original = serde_json::to_value(schemars::schema_for!(NamedDevice)).unwrap();
+        assert_eq!(
+            root, original,
+            "producer normalization cannot mutate authored schema"
+        );
     }
 }

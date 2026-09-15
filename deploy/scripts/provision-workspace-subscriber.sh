@@ -14,8 +14,7 @@
 #   - Memory namespaces on the single cognitive/cozo leaf (host fabric)
 #
 # Identity: prefer EXISTING keys (--pubkey / --identity-dir). Generate only
-# when none supplied. PSK optional for Argon2 session derivation (when set,
-# session_id uses derive_session_id_from_psk; else blake3 derive_session_id).
+# when none supplied. Session IDs derive from the WireGuard public key.
 #
 # Email stored ONLY when GhostBridge privacy is off (same rule as before).
 #
@@ -28,7 +27,7 @@
 # Usage:
 #   sudo ./provision-workspace-subscriber.sh <role|username> \
 #     [--pubkey B64] [--identity-dir PATH] [--private-key-file PATH] \
-#     [--psk KEY] [--email ADDR] [--mesh-ip CIDR] \
+#     [--email ADDR] [--mesh-ip CIDR] \
 #     [--image FINGERPRINT|alias] [--fstorage-gib N] \
 #     [--ghostbridge] [--semantic] [--no-start] [--recreate]
 #
@@ -67,7 +66,6 @@ shift
 PUBKEY=""
 IDENTITY_DIR=""
 PRIVATE_KEY_FILE=""
-PSK=""
 EMAIL=""
 MESH_IP=""
 IMAGE="$DEFAULT_IMAGE"
@@ -82,7 +80,6 @@ while [ $# -gt 0 ]; do
         --pubkey)            shift; PUBKEY="${1:?}" ;;
         --identity-dir)      shift; IDENTITY_DIR="${1:?}" ;;
         --private-key-file)  shift; PRIVATE_KEY_FILE="${1:?}" ;;
-        --psk)               shift; PSK="${1:?}" ;;
         --email)             shift; EMAIL="${1:?}" ;;
         --mesh-ip)           shift; MESH_IP="${1:?}" ;;
         --image)             shift; IMAGE="${1:?}" ;;
@@ -667,10 +664,6 @@ remember "container:${CONTAINER_ID}:identity" "session_id" "\"$SESSION_ID\""
 remember "container:${CONTAINER_ID}:identity" "shared_socket" "\"$SHARED_CONTAINER_SOCK\""
 if [ -n "$MESH_IP" ]; then
     remember "container:${CONTAINER_ID}:identity" "mesh_ip" "\"$MESH_IP\""
-fi
-if [ -n "$PSK" ]; then
-    # Store proof only ideally; raw PSK storage is legacy — keep opt-in
-    remember "container:${CONTAINER_ID}:identity" "psk_present" "true"
 fi
 if [ -n "$EMAIL" ] && [ "$GHOSTBRIDGE" = "false" ]; then
     remember "container:${CONTAINER_ID}:identity" "email" "\"$EMAIL\""

@@ -78,37 +78,30 @@ sudo sv restart op-grpc-bridge
 sudo sv status op-grpc-bridge
 ```
 
-For schema or dispatch-code changes, rebuild and publish the matching binary
-through the canonical btrfs golden/live workflow. Suppress automatic restarts
-so catalog and binary activation happen together in the final step:
+For schema or dispatch-code changes, rebuild the matching binary and sealed
+catalog, then prepare them in the golden subvolume:
 
 ```bash
 CXXFLAGS="-include cstdint" cargo build --workspace --release
-CXXFLAGS="-include cstdint" NO_RESTART=1 ./deploy/reseal-plugins.sh
+sudo env COGNITIVE_MCP_QDRANT_URL=http://10.200.0.2:6334 \
+  target/release/opblob seal-shm
+sudo target/release/opblob persist
 sudo deploy/runit/build-golden.sh --dry-run
-sudo deploy/runit/build-golden.sh --no-restart
-sudo sv status op-grpc-bridge
-sudo sv restart op-grpc-bridge
-sudo sv status op-grpc-bridge
+sudo deploy/runit/build-golden.sh
 ```
 
-`--no-restart` leaves every affected service running its previous process.
-Record the dry run's restart and held-back service lists, then schedule
-deliberate restarts for services other than the bridge. The final bridge restart
-above loads both the installed binary and the resealed catalog.
+`build-golden.sh` stops after staging and validating `/opt/op-dbus/golden`; it
+copies the exact persisted blobs and commit manifest into
+`golden/var/lib/opdbus/plugin-blobs`. Set `OP_PERSISTED_CATALOG_SOURCE` to stage
+an isolated release catalog instead of the default persisted path. The builder
+does not reseal, install live files, restart a service, or perform deployment. Review
+`golden/MANIFEST`, create a read-only snapshot, and transfer that snapshot with
+`btrfs send/receive`. Receiving, activation, and target service actions remain
+separate operator steps so binary and catalog enter service together.
 
-The default `reseal-plugins.sh` mode directly replaces two live binaries and
-restarts the bridge. It does not update the golden release subvolume, so it is
-not a release deployment path.
-
-`--force` skips both repository checks:
-
-```bash
-CXXFLAGS="-include cstdint" NO_RESTART=1 ./deploy/reseal-plugins.sh --force
-```
-
-Use it only when intentionally testing a non-main or dirty checkout; it removes
-the protection against publishing stale or uncommitted schemas.
+`reseal-plugins.sh` is retained as historical/local recovery tooling. Its live
+copy and restart path is not a release deployment path and must not be used to
+publish a release.
 
 ## Verification and troubleshooting
 

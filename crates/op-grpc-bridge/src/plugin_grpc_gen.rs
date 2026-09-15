@@ -42,6 +42,8 @@ pub struct PerMethodGrpcServices {
     lifecycle_tx: broadcast::Sender<MethodServiceLifecycleEvent>,
     /// Frozen per-method descriptor set created alongside D-Bus object registration.
     descriptor_bytes: std::sync::RwLock<Vec<u8>>,
+    /// Original sealed descriptor sections, keyed by their pinned plugin.
+    sealed_descriptor_bytes: std::sync::RwLock<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 
 /// A frozen gRPC service for a single method.
@@ -87,6 +89,7 @@ impl PerMethodGrpcServices {
             services: Arc::new(RwLock::new(HashMap::new())),
             lifecycle_tx,
             descriptor_bytes: std::sync::RwLock::new(Vec::new()),
+            sealed_descriptor_bytes: std::sync::RwLock::new(std::collections::BTreeMap::new()),
         })
     }
 
@@ -100,6 +103,38 @@ impl PerMethodGrpcServices {
     /// This is called at D-Bus object creation time. Each method gets its own
     /// service - the services are frozen and will never change.
     pub async fn create_frozen_services(
+        &self,
+        plugin_id: String,
+        schema: &PluginSchema,
+    ) -> Result<Vec<MethodServiceRegistry>, anyhow::Error> {
+        let registries = self
+            .create_service_metadata(plugin_id.clone(), schema)
+            .await?;
+        self.freeze_descriptor_set(plugin_id.as_str(), schema);
+        Ok(registries)
+    }
+
+    /// Consumer registration preserves the sealer's descriptor bytes. It does
+    /// not generate a new service package, artifact identity, or schema hash.
+    pub async fn register_sealed_services(
+        &self,
+        plugin_id: String,
+        schema: &PluginSchema,
+        descriptors: &[u8],
+    ) -> Result<Vec<MethodServiceRegistry>, anyhow::Error> {
+        FileDescriptorSet::decode(descriptors)?;
+        self.remove_services_for_plugin(&plugin_id).await;
+        let registries = self
+            .create_service_metadata(plugin_id.clone(), schema)
+            .await?;
+        self.sealed_descriptor_bytes
+            .write()
+            .map_err(|_| anyhow::anyhow!("sealed descriptor cache lock poisoned"))?
+            .insert(plugin_id, descriptors.to_vec());
+        Ok(registries)
+    }
+
+    async fn create_service_metadata(
         &self,
         plugin_id: String,
         schema: &PluginSchema,
@@ -139,8 +174,6 @@ impl PerMethodGrpcServices {
                 });
         }
 
-        self.freeze_descriptor_set(plugin_id.as_str(), schema);
-
         Ok(registries)
     }
 
@@ -173,10 +206,20 @@ impl PerMethodGrpcServices {
     /// This is a static snapshot. It is produced when plugin methods are registered
     /// alongside D-Bus object creation and is not mutated by the reflection service.
     pub fn frozen_descriptor_set_bytes(&self) -> Vec<u8> {
-        self.descriptor_bytes
+        let mut bytes = self
+            .descriptor_bytes
             .read()
             .map(|bytes| bytes.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Ok(sealed) = self.sealed_descriptor_bytes.read() {
+            // FileDescriptorSet contains repeated FileDescriptorProto fields;
+            // concatenation preserves their original wire bytes without a
+            // deserialize/reserialize or descriptor synthesis step.
+            for descriptor in sealed.values() {
+                bytes.extend_from_slice(descriptor);
+            }
+        }
+        bytes
     }
 
     /// Get a method service registry by method path.
@@ -212,6 +255,9 @@ impl PerMethodGrpcServices {
 
     /// Remove all method services for a plugin when its D-Bus object is removed.
     pub async fn remove_services_for_plugin(&self, plugin_id: &str) -> usize {
+        if let Ok(mut descriptors) = self.sealed_descriptor_bytes.write() {
+            descriptors.remove(plugin_id);
+        }
         let mut services = self.services.write().await;
         let to_remove: Vec<String> = services
             .iter()
@@ -242,6 +288,7 @@ impl Default for PerMethodGrpcServices {
             services: Arc::new(RwLock::new(HashMap::new())),
             lifecycle_tx,
             descriptor_bytes: std::sync::RwLock::new(Vec::new()),
+            sealed_descriptor_bytes: std::sync::RwLock::new(std::collections::BTreeMap::new()),
         }
     }
 }
@@ -402,7 +449,14 @@ fn schema_message_proto(message_name: &str, schema: &simd_json::OwnedValue) -> S
 
     for (idx, field) in fields.into_iter().enumerate() {
         let number = idx + 1;
-        let repeated = if field.repeated { "repeated " } else { "" };
+        let repeated = if field.repeated {
+            "repeated "
+        } else if crate::json_schema_proto::needs_scalar_presence(&field.proto_type, field.repeated)
+        {
+            "optional "
+        } else {
+            ""
+        };
         proto.push_str(&format!(
             "  {}{} {} = {};\n",
             repeated, field.proto_type, field.name, number
@@ -414,12 +468,26 @@ fn schema_message_proto(message_name: &str, schema: &simd_json::OwnedValue) -> S
 }
 
 fn schema_descriptor(message_name: &str, schema: &simd_json::OwnedValue) -> DescriptorProto {
+    let mut oneof_decl = Vec::new();
     let field = schema_fields(schema)
         .into_iter()
         .enumerate()
         .map(|(idx, field)| {
             let number = idx as i32 + 1;
             let (field_type, type_name) = field_descriptor_type(&field.proto_type);
+            let oneof_index = if crate::json_schema_proto::needs_scalar_presence(
+                &field.proto_type,
+                field.repeated,
+            ) {
+                let index = oneof_decl.len() as i32;
+                oneof_decl.push(prost_types::OneofDescriptorProto {
+                    name: Some(format!("_{}", field.name)),
+                    ..Default::default()
+                });
+                Some(index)
+            } else {
+                None
+            };
             FieldDescriptorProto {
                 name: Some(field.name.clone()),
                 number: Some(number),
@@ -431,6 +499,8 @@ fn schema_descriptor(message_name: &str, schema: &simd_json::OwnedValue) -> Desc
                 r#type: Some(field_type as i32),
                 type_name,
                 json_name: Some(field.name),
+                proto3_optional: oneof_index.map(|_| true),
+                oneof_index,
                 ..Default::default()
             }
         })
@@ -439,6 +509,7 @@ fn schema_descriptor(message_name: &str, schema: &simd_json::OwnedValue) -> Desc
     DescriptorProto {
         name: Some(to_message_name(message_name)),
         field,
+        oneof_decl,
         ..Default::default()
     }
 }
@@ -483,53 +554,19 @@ fn fallback_field(name: &str, proto_type: &str, repeated: bool) -> ProtoField {
     }
 }
 
-fn json_schema_type_to_proto(schema: &serde_json::Value) -> (String, bool) {
-    if let Some(enum_values) = schema.get("enum").and_then(|v| v.as_array()) {
-        if !enum_values.is_empty() {
-            return ("string".to_string(), false);
-        }
-    }
-
-    match schema.get("type") {
-        Some(serde_json::Value::String(kind)) => match kind.as_str() {
-            "string" => ("string".to_string(), false),
-            "boolean" => ("bool".to_string(), false),
-            "integer" => ("int64".to_string(), false),
-            "number" => ("double".to_string(), false),
-            "array" => {
-                let item_type = schema
-                    .get("items")
-                    .map(|items| json_schema_type_to_proto(items).0)
-                    .unwrap_or_else(|| "google.protobuf.Value".to_string());
-                (item_type, true)
-            }
-            "object" => ("google.protobuf.Struct".to_string(), false),
-            _ => ("google.protobuf.Value".to_string(), false),
-        },
-        Some(serde_json::Value::Array(kinds)) => {
-            let first_non_null = kinds
-                .iter()
-                .filter_map(|v| v.as_str())
-                .find(|kind| *kind != "null")
-                .unwrap_or("object");
-            json_schema_type_to_proto(&serde_json::json!({ "type": first_non_null }))
-        }
-        _ => {
-            if schema.get("properties").is_some() {
-                ("google.protobuf.Struct".to_string(), false)
-            } else {
-                ("google.protobuf.Value".to_string(), false)
-            }
-        }
-    }
-}
+use crate::json_schema_proto::json_schema_type_to_proto;
 
 fn field_descriptor_type(proto_type: &str) -> (field_descriptor_proto::Type, Option<String>) {
     match proto_type {
         "string" => (field_descriptor_proto::Type::String, None),
         "bool" => (field_descriptor_proto::Type::Bool, None),
         "int64" => (field_descriptor_proto::Type::Int64, None),
+        "uint64" => (field_descriptor_proto::Type::Uint64, None),
         "double" => (field_descriptor_proto::Type::Double, None),
+        "google.protobuf.ListValue" => (
+            field_descriptor_proto::Type::Message,
+            Some(".google.protobuf.ListValue".to_string()),
+        ),
         "google.protobuf.Struct" => (
             field_descriptor_proto::Type::Message,
             Some(".google.protobuf.Struct".to_string()),

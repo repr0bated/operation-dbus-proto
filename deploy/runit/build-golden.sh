@@ -1,50 +1,41 @@
 #!/bin/sh
-# build-golden.sh — publish a release two ways, from one build.
+# build-golden.sh — prepare the golden btrfs subvolume from one release build.
 #
-#   1. GOLDEN  — populate the `golden` btrfs subvolume: the deployable content.
-#                Taking the read-only snapshot and running `btrfs send` belongs
-#                to the deployment process, not here. This script only makes
-#                `golden` correct and current.
-#   2. LIVE    — install the same binaries into this host's runtime
-#                (/usr/local/bin, /etc/runit/sv) and restart only the runit
-#                services whose binary or release-owned definition changed.
-#
-# Both read the same `target/release`, so the golden subvolume and the running
-# host are provably the same build — the MANIFEST records per-binary sha256 so
-# that can be checked after the fact.
+# Populate the `golden` btrfs subvolume with the complete deployable content.
+# Taking a read-only snapshot, transferring it with `btrfs send/receive`, and
+# activating the received filesystem belong to the deployment process. This
+# preparation script performs none of those deployment steps and never writes
+# into the running host's installation or restarts a service.
 #
 # Layout created under $OPDBUS_ROOT (default /opt/op-dbus):
 #
 #   golden/                      the deployable subvolume
 #     bin/                       release binaries
 #     sbin/                      control scripts + systemd compat layer
+#     usr/bin/zeroclaw           pinned tched_router native dependency
+#     usr/share/op-dbus/         native and UI provenance manifests
+#     usr/local/share/op-dbus/dashboard/vercel-json-render/  pinned UI assets
 #     sv/<service>/run           runit service definitions
 #     etc/                       environment defaults, pacman hooks
+#     var/lib/opdbus/plugin-blobs/  persisted sealed plugin catalog
 #     MANIFEST                   commit, build time, sha256 per binary
 #
 # Usage:
-#   build-golden.sh                 # both paths (default)
-#   build-golden.sh --golden-only   # skip touching the running host
-#   build-golden.sh --live-only     # skip the subvolume
-#   build-golden.sh --no-restart    # install live but leave services running old code
+#   build-golden.sh                 # prepare and validate golden (default)
+#   build-golden.sh --golden-only   # compatibility alias for the default
 #   build-golden.sh --dry-run
 #
-# Requires root for the subvolume and the live install. Never builds: run
+# Retired options `--live-only` and `--no-restart` fail explicitly. Requires
+# root to populate the btrfs subvolume. Never builds: run
 # `CXXFLAGS="-include cstdint" cargo build --workspace --release` first (the
 # vendored RocksDB in cozorocks needs that flag on modern GCC).
+# `OP_PERSISTED_CATALOG_SOURCE` may name an isolated prepared catalog; it
+# defaults to `/var/lib/opdbus/plugin-blobs` and is never modified here.
 set -eu
 
 OPDBUS_ROOT=${OPDBUS_ROOT:-/opt/op-dbus}
 GOLDEN_DIR="$OPDBUS_ROOT/golden"
 
-INSTALL_BIN=${INSTALL_BIN:-/usr/local/bin}
-INSTALL_SBIN=${INSTALL_SBIN:-/usr/local/sbin}
-RUNIT_SV_DIR=${RUNIT_SV_DIR:-/etc/runit/sv}
-RUNIT_RUNSVDIR=${RUNIT_RUNSVDIR:-/etc/runit/runsvdir/default}
-
-DO_GOLDEN=1
-DO_LIVE=1
-DO_RESTART=1
 DRY_RUN=0
 
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
@@ -55,39 +46,45 @@ else
     PROJECT_ROOT=${OP_DBUS_ROOT:-$(pwd)}
 fi
 RELEASE_DIR="$PROJECT_ROOT/target/release"
+MAIL_ARTIFACT_NAME=mail-3tched-x86_64-linux-gnu-bundle.tar
+MAIL_ARTIFACT_PATH="$PROJECT_ROOT/target/container-artifacts/$MAIL_ARTIFACT_NAME"
 GRANTS_SOURCE="$SCRIPT_DIR/../security/capability-grants.json"
 MCP_AUDIENCE_POLICY_SOURCE="$SCRIPT_DIR/../config/mcp-audience-policy.json"
 MCP_TOOLSETS_SOURCE="$SCRIPT_DIR/../config/mcp-toolsets.json"
 HOST_RUNTIME_PACKAGES_SOURCE="$SCRIPT_DIR/../config/host-runtime-packages.txt"
+PERSISTED_CATALOG_DIR=${OP_PERSISTED_CATALOG_SOURCE:-/var/lib/opdbus/plugin-blobs}
 RETIRED_SERVICES_FILE="$SCRIPT_DIR/retired-services"
 RETIRED_BINARIES_FILE="$SCRIPT_DIR/retired-binaries"
-MANAGED_SERVICES_FILE="$SCRIPT_DIR/managed-services"
-ENABLED_SERVICES_FILE="$SCRIPT_DIR/enabled-services"
 EMQX_VERSION_FILE="$SCRIPT_DIR/../config/emqx.version"
 EMQX_CONFIG_DIR="$SCRIPT_DIR/../emqx"
 EMQX_ARTIFACT_CACHE_DIR=${EMQX_ARTIFACT_CACHE_DIR:-/var/cache/op-dbus/source-artifacts}
 MCP_PROVIDER_ARTIFACT_CACHE_DIR=${MCP_PROVIDER_ARTIFACT_CACHE_DIR:-/var/cache/op-dbus/source-artifacts}
 NOTEBOOKLM_MCP_VERSION_FILE="$SCRIPT_DIR/../config/notebooklm-mcp.version"
 MONGODB_MCP_VERSION_FILE="$SCRIPT_DIR/../config/mongodb-mcp-server.version"
-NLM_CLI_BIN=/usr/local/bin/nlm
 NLM_CLI_ROOT=/opt/opdbus
+TCHED_ROUTER_SOURCE_PIN="$PROJECT_ROOT/vendor/tched-router/source.pin"
+TCHED_ROUTER_VENDORED_SOURCE="$PROJECT_ROOT/vendor/tched-router/source.tar.gz"
+TCHED_ROUTER_ARTIFACT_DIR="$PROJECT_ROOT/target/native-artifacts/tched-router"
+TCHED_ROUTER_NATIVE_BIN="$TCHED_ROUTER_ARTIFACT_DIR/zeroclaw"
+TCHED_ROUTER_NATIVE_MANIFEST="$TCHED_ROUTER_ARTIFACT_DIR/manifest.json"
+TCHED_ROUTER_LAG_PATCH="$PROJECT_ROOT/vendor/tched-router/patches/0001-close-native-event-stream-on-lag.patch"
+TCHED_ROUTER_GENERATION_PATCH="$PROJECT_ROOT/vendor/tched-router/patches/0002-stateless-provider-generation.patch"
+TCHED_ROUTER_PATCH_INVENTORY="$PROJECT_ROOT/vendor/tched-router/patch-inventory"
+TCHED_ROUTER_BASE_MANIFEST="$PROJECT_ROOT/vendor/tched-router/base-sha256sums"
+TCHED_ROUTER_BOOTSTRAP_CONFIG="$SCRIPT_DIR/../config/zeroclaw-runtime.toml"
+TCHED_ROUTER_BOOTSTRAP_SKILLS="$SCRIPT_DIR/../config/zeroclaw-skills/default"
+UI_SOURCE_DIR="$PROJECT_ROOT/vendor/vercel-json-render-ui"
+UI_SOURCE_PIN="$UI_SOURCE_DIR/source.pin"
+UI_SOURCE_ARCHIVE="$UI_SOURCE_DIR/source.tar.gz"
+UI_SOURCE_MANIFEST="$UI_SOURCE_DIR/source-sha256sums"
+UI_ARTIFACT_DIR="$PROJECT_ROOT/target/ui-artifacts/vercel-json-render-ui"
+UI_ASSET_ARCHIVE="$UI_ARTIFACT_DIR/assets.tar.gz"
+UI_ASSET_MANIFEST="$UI_ARTIFACT_DIR/manifest.json"
 
 is_retired_service() {
     svc=$1
     [ -f "$RETIRED_SERVICES_FILE" ] &&
         grep -Ev '^[[:space:]]*(#|$)' "$RETIRED_SERVICES_FILE" | grep -qx "$svc"
-}
-
-is_managed_service() {
-    svc=$1
-    [ -f "$MANAGED_SERVICES_FILE" ] &&
-        grep -Ev '^[[:space:]]*(#|$)' "$MANAGED_SERVICES_FILE" | grep -qx "$svc"
-}
-
-is_enabled_service() {
-    svc=$1
-    [ -f "$ENABLED_SERVICES_FILE" ] &&
-        grep -Ev '^[[:space:]]*(#|$)' "$ENABLED_SERVICES_FILE" | grep -qx "$svc"
 }
 
 is_retired_binary() {
@@ -98,7 +95,6 @@ is_retired_binary() {
 
 log()  { printf '\033[0;34m[golden]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[0;32m[ ok  ]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[warn ]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[0;31m[fail ]\033[0m %s\n' "$*" >&2; exit 1; }
 
 run() {
@@ -204,11 +200,29 @@ case "${MONGODB_MCP_SHA256:-}" in *[!0-9a-f]*|'') die "invalid MONGODB_MCP_SHA25
 MONGODB_MCP_ARTIFACT_PATH="$MCP_PROVIDER_ARTIFACT_CACHE_DIR/$MONGODB_MCP_ARTIFACT"
 MONGODB_MCP_INSTALL_NAME="mongodb-mcp-server-$MONGODB_MCP_VERSION-$MONGODB_MCP_SHA256"
 
+[ -r "$TCHED_ROUTER_SOURCE_PIN" ] ||
+    die "missing tched_router native source pin: $TCHED_ROUTER_SOURCE_PIN"
+# shellcheck disable=SC1090 -- release-owned, fixed-key declaration validated below.
+. "$TCHED_ROUTER_SOURCE_PIN"
+case "${UPSTREAM_TAG:-}" in v[0-9]*.[0-9]*.[0-9]*) ;; *) die "invalid tched_router UPSTREAM_TAG" ;; esac
+case "${UPSTREAM_COMMIT:-}" in *[!0-9a-f]*|'') die "invalid tched_router UPSTREAM_COMMIT" ;; esac
+[ "${#UPSTREAM_COMMIT}" -eq 40 ] || die "tched_router UPSTREAM_COMMIT must contain 40 lowercase hex characters"
+case "${SOURCE_ARCHIVE_SHA256:-}" in *[!0-9a-f]*|'') die "invalid tched_router SOURCE_ARCHIVE_SHA256" ;; esac
+[ "${#SOURCE_ARCHIVE_SHA256}" -eq 64 ] ||
+    die "tched_router SOURCE_ARCHIVE_SHA256 must contain 64 lowercase hex characters"
+case "${VENDORED_SOURCE_GZIP_SHA256:-}" in *[!0-9a-f]*|'') die "invalid tched_router VENDORED_SOURCE_GZIP_SHA256" ;; esac
+[ "${#VENDORED_SOURCE_GZIP_SHA256}" -eq 64 ] ||
+    die "tched_router VENDORED_SOURCE_GZIP_SHA256 must contain 64 lowercase hex characters"
+[ -f "$TCHED_ROUTER_VENDORED_SOURCE" ] ||
+    die "missing vendored tched_router source archive: $TCHED_ROUTER_VENDORED_SOURCE"
+[ "$(sha256sum "$TCHED_ROUTER_VENDORED_SOURCE" | cut -d' ' -f1)" = "$VENDORED_SOURCE_GZIP_SHA256" ] ||
+    die "vendored tched_router source archive does not match source.pin"
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --golden-only) DO_LIVE=0 ;;
-        --live-only)   DO_GOLDEN=0 ;;
-        --no-restart)  DO_RESTART=0 ;;
+        --golden-only) ;;
+        --live-only)   die "--live-only is retired; deploy only with btrfs send/receive of a prepared snapshot" ;;
+        --no-restart)  die "--no-restart is retired because this script never installs or restarts live services" ;;
         --dry-run)     DRY_RUN=1 ;;
         -h|--help)     sed -n '2,35p' "$SCRIPT_PATH"; exit 0 ;;
         *)             die "unknown option: $1" ;;
@@ -222,9 +236,170 @@ done
 
 BINARIES=$(find "$RELEASE_DIR" -maxdepth 1 -type f -executable ! -name '*.d' ! -name '*.so' | sort |
     while IFS= read -r bin; do
+        # Container and decoy owners have separate offline release artifacts.
+        case "$(basename "$bin")" in op-mail-admin|op-decoy-network) continue ;; esac
         is_retired_binary "$(basename "$bin")" || printf '%s\n' "$bin"
     done)
 [ -n "$BINARIES" ] || die "$RELEASE_DIR contains no executables"
+[ -x "$RELEASE_DIR/opblob" ] || die "release is missing opblob"
+[ -x "$RELEASE_DIR/op-mail-admin" ] || die "build op-mail-admin before preparing the release"
+[ -f "$MAIL_ARTIFACT_PATH" ] || die "missing mail bundle; run deploy/mail-3tched/build-container-artifact.sh after the release build"
+tar -tf "$MAIL_ARTIFACT_PATH" | awk '
+    /^\// || /(^|\/)\.\.($|\/)/ { bad = 1 }
+    END { exit bad ? 1 : 0 }
+' || die "mail bundle contains an unsafe path"
+tar -tvf "$MAIL_ARTIFACT_PATH" | awk 'substr($1,1,1) !~ /[-d]/ { bad=1 } END { exit bad ? 1 : 0 }' ||
+    die "mail bundle must contain only regular files and directories"
+for required in MANIFEST apply-rootfs.sh rootfs/usr/local/bin/op-mail-admin rootfs/usr/local/lib/op-mail-admin/op-mail-admin.bin rootfs/usr/local/lib/op-mail-admin/ld-linux-x86-64.so.2 rootfs/etc/init.d/op-mail-admin rootfs/etc/postfix/opdbus-main.cf rootfs/etc/postfix/opdbus-domains rootfs/etc/dovecot/opdbus.conf; do
+    tar -tf "$MAIL_ARTIFACT_PATH" | grep -qx "$required" || die "mail bundle is missing $required"
+done
+for declaration in 'rust-target: x86_64-unknown-linux-gnu' 'elf-runtime: private-glibc-loader-bundle'; do
+    tar -xOf "$MAIL_ARTIFACT_PATH" MANIFEST | grep -Fqx "$declaration" ||
+        die "mail bundle does not declare $declaration"
+done
+[ "$(tar -xOf "$MAIL_ARTIFACT_PATH" rootfs/usr/local/lib/op-mail-admin/op-mail-admin.bin | sha256sum | cut -d' ' -f1)" = "$(sha256sum "$RELEASE_DIR/op-mail-admin" | cut -d' ' -f1)" ] ||
+    die "mail bundle does not contain the current release binary"
+MAIL_ARTIFACT_SHA256=$(sha256sum "$MAIL_ARTIFACT_PATH" | cut -d' ' -f1)
+[ -x "$TCHED_ROUTER_NATIVE_BIN" ] ||
+    die "missing tched_router native binary; run vendor/tched-router/build-native.sh --cache-dir /var/cache/op-dbus-build/tched-router --output-dir target/native-artifacts/tched-router"
+[ -f "$TCHED_ROUTER_NATIVE_MANIFEST" ] ||
+    die "missing tched_router native provenance manifest: $TCHED_ROUTER_NATIVE_MANIFEST"
+TCHED_ROUTER_NATIVE_SHA256=$(sha256sum "$TCHED_ROUTER_NATIVE_BIN" | cut -d' ' -f1)
+TCHED_ROUTER_MANIFEST_SHA256=$(sha256sum "$TCHED_ROUTER_NATIVE_MANIFEST" | cut -d' ' -f1)
+TCHED_ROUTER_NATIVE_BYTES=$(wc -c < "$TCHED_ROUTER_NATIVE_BIN" | tr -d ' ')
+TCHED_ROUTER_LAG_PATCH_SHA256=$(sha256sum "$TCHED_ROUTER_LAG_PATCH" | cut -d' ' -f1)
+TCHED_ROUTER_GENERATION_PATCH_SHA256=$(sha256sum "$TCHED_ROUTER_GENERATION_PATCH" | cut -d' ' -f1)
+TCHED_ROUTER_PATCH_INVENTORY_SHA256=$(sha256sum "$TCHED_ROUTER_PATCH_INVENTORY" | cut -d' ' -f1)
+TCHED_ROUTER_BASE_MANIFEST_SHA256=$(sha256sum "$TCHED_ROUTER_BASE_MANIFEST" | cut -d' ' -f1)
+jq -e \
+    --arg url "$UPSTREAM_URL" \
+    --arg tag "$UPSTREAM_TAG" \
+    --arg commit "$UPSTREAM_COMMIT" \
+    --arg source_sha "$SOURCE_ARCHIVE_SHA256" \
+    --arg vendored_source_gzip_sha "$VENDORED_SOURCE_GZIP_SHA256" \
+    --arg binary_sha "$TCHED_ROUTER_NATIVE_SHA256" \
+    --argjson binary_bytes "$TCHED_ROUTER_NATIVE_BYTES" \
+    --arg lag_patch_sha "$TCHED_ROUTER_LAG_PATCH_SHA256" \
+    --arg generation_patch_sha "$TCHED_ROUTER_GENERATION_PATCH_SHA256" \
+    --arg inventory_sha "$TCHED_ROUTER_PATCH_INVENTORY_SHA256" \
+    --arg base_manifest_sha "$TCHED_ROUTER_BASE_MANIFEST_SHA256" \
+    '.format == "opdbus.tched-router-native.v1" and
+     .upstream.url == $url and
+     .upstream.tag == $tag and
+     .upstream.commit == $commit and
+     .upstream.source_archive_sha256 == $source_sha and
+     .upstream.vendored_source_gzip_sha256 == $vendored_source_gzip_sha and
+     .artifact.name == "zeroclaw" and
+     .artifact.sha256 == $binary_sha and
+     .artifact.bytes == $binary_bytes and
+     (.artifact.rust_target | type == "string" and length > 0) and
+     .patches.lagged_sse_sha256 == $lag_patch_sha and
+     .patches.stateless_generation_sha256 == $generation_patch_sha and
+     .patches.inventory_sha256 == $inventory_sha and
+     .patches.base_manifest_sha256 == $base_manifest_sha and
+     (.patches.patched_cargo_lock_sha256 | type == "string" and test("^[0-9a-f]{64}$"))' \
+    "$TCHED_ROUTER_NATIVE_MANIFEST" >/dev/null ||
+    die "tched_router native provenance does not match its pinned source and binary"
+[ "$("$TCHED_ROUTER_NATIVE_BIN" --version)" = "zeroclaw ${UPSTREAM_TAG#v}" ] ||
+    die "tched_router native candidate reports an unexpected version"
+strings "$TCHED_ROUTER_NATIVE_BIN" | grep -Fq 'tched_router.generation.v1' ||
+    die "tched_router native candidate lacks the patched generation protocol"
+[ -f "$TCHED_ROUTER_BOOTSTRAP_CONFIG" ] ||
+    die "missing tched_router bootstrap configuration: $TCHED_ROUTER_BOOTSTRAP_CONFIG"
+[ -d "$TCHED_ROUTER_BOOTSTRAP_SKILLS" ] ||
+    die "missing tched_router bootstrap skill bundle: $TCHED_ROUTER_BOOTSTRAP_SKILLS"
+[ -z "$(find "$TCHED_ROUTER_BOOTSTRAP_SKILLS" -type l -print -quit)" ] ||
+    die "tched_router bootstrap skill bundle must not contain symlinks"
+TCHED_ROUTER_BOOTSTRAP_SKILL_COUNT=$(find "$TCHED_ROUTER_BOOTSTRAP_SKILLS" -type f | wc -l)
+[ "$TCHED_ROUTER_BOOTSTRAP_SKILL_COUNT" -gt 0 ] ||
+    die "tched_router bootstrap skill bundle is empty"
+TCHED_ROUTER_BOOTSTRAP_CONFIG_SHA256=$(sha256sum "$TCHED_ROUTER_BOOTSTRAP_CONFIG" | cut -d' ' -f1)
+TCHED_ROUTER_BOOTSTRAP_SKILLS_SHA256=$(
+    find "$TCHED_ROUTER_BOOTSTRAP_SKILLS" -type f -print | sort |
+        while IFS= read -r skill; do
+            relative=${skill#"$TCHED_ROUTER_BOOTSTRAP_SKILLS"/}
+            printf '%s  %s\n' "$(sha256sum "$skill" | cut -d' ' -f1)" "$relative"
+        done | sha256sum | cut -d' ' -f1
+)
+[ -f "$UI_SOURCE_PIN" ] && [ -f "$UI_SOURCE_ARCHIVE" ] && [ -f "$UI_SOURCE_MANIFEST" ] ||
+    die "missing pinned UI source inputs under $UI_SOURCE_DIR"
+[ -f "$UI_ASSET_ARCHIVE" ] && [ -f "$UI_ASSET_MANIFEST" ] ||
+    die "missing UI build artifact; run vendor/vercel-json-render-ui/build-assets.sh"
+ui_pin() {
+    sed -n "s/^$1=//p" "$UI_SOURCE_PIN"
+}
+UI_SOURCE_HEAD=$(ui_pin source_head)
+UI_SOURCE_WORKTREE=$(ui_pin source_worktree)
+UI_SOURCE_ARCHIVE_SHA256=$(sha256sum "$UI_SOURCE_ARCHIVE" | cut -d' ' -f1)
+UI_SOURCE_CONTENT_SHA256=$(sha256sum "$UI_SOURCE_MANIFEST" | cut -d' ' -f1)
+[ "$UI_SOURCE_ARCHIVE_SHA256" = "$(ui_pin source_archive_sha256)" ] ||
+    die "pinned UI source archive hash mismatch"
+[ "$UI_SOURCE_CONTENT_SHA256" = "$(ui_pin content_manifest_sha256)" ] ||
+    die "pinned UI source content-manifest hash mismatch"
+UI_PACKAGE_LOCK_SHA256=$(tar -xOzf "$UI_SOURCE_ARCHIVE" vercel-json-render-ui/package-lock.json | sha256sum | cut -d' ' -f1)
+UI_ASSET_SHA256=$(sha256sum "$UI_ASSET_ARCHIVE" | cut -d' ' -f1)
+UI_ASSET_BYTES=$(wc -c < "$UI_ASSET_ARCHIVE" | tr -d ' ')
+UI_ASSET_MANIFEST_SHA256=$(sha256sum "$UI_ASSET_MANIFEST" | cut -d' ' -f1)
+jq -e \
+    --arg source_head "$UI_SOURCE_HEAD" \
+    --arg source_worktree "$UI_SOURCE_WORKTREE" \
+    --arg source_archive_sha256 "$UI_SOURCE_ARCHIVE_SHA256" \
+    --arg content_manifest_sha256 "$UI_SOURCE_CONTENT_SHA256" \
+    --arg package_lock_sha256 "$UI_PACKAGE_LOCK_SHA256" \
+    --arg asset_sha256 "$UI_ASSET_SHA256" \
+    --argjson asset_bytes "$UI_ASSET_BYTES" \
+    '.format == "opdbus.vercel-json-render-ui-assets.v1" and
+     .source.head == $source_head and
+     .source.worktree == $source_worktree and
+     .source.archive_sha256 == $source_archive_sha256 and
+     .source.content_manifest_sha256 == $content_manifest_sha256 and
+     .source.package_lock_sha256 == $package_lock_sha256 and
+     .build.base == "/vercel-json-render/" and
+     (.build.node_version | type == "string" and length > 0) and
+     (.build.npm_version | type == "string" and length > 0) and
+     .artifact.name == "assets.tar.gz" and
+     .artifact.sha256 == $asset_sha256 and
+     .artifact.bytes == $asset_bytes' \
+    "$UI_ASSET_MANIFEST" >/dev/null ||
+    die "UI asset provenance does not match pinned source and artifact"
+tar -tzf "$UI_ASSET_ARCHIVE" | awk '
+    /^\// || /(^|\/)\.\.($|\/)/ { bad=1 }
+    END { exit bad ? 1 : 0 }
+' || die "UI asset archive contains an unsafe path"
+tar -tvzf "$UI_ASSET_ARCHIVE" | awk 'substr($1,1,1) !~ /[-d]/ {bad=1} END {exit bad ? 1 : 0}' ||
+    die "UI asset archive must contain only files and directories"
+tar -tzf "$UI_ASSET_ARCHIVE" | grep -qx './index.html' ||
+    die "UI asset archive is missing index.html"
+[ -f "$PERSISTED_CATALOG_DIR/.manifest.json" ] ||
+    die "missing persisted sealed catalog; run the freshly built opblob seal-shm and persist preparation steps first"
+jq -e '
+    (.generation | type == "number" and floor == . and . >= 1) and
+    (.catalog_hash | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.plugins | type == "object" and length > 0) and
+    all(.plugins | to_entries[];
+        (.key | test("^[a-z0-9_-]+$")) and
+        (.value | type == "string" and test("^[0-9a-f]{64}$")))
+' "$PERSISTED_CATALOG_DIR/.manifest.json" >/dev/null ||
+    die "persisted sealed catalog manifest is invalid"
+CATALOG_GENERATION=$(jq -r '.generation' "$PERSISTED_CATALOG_DIR/.manifest.json")
+CATALOG_HASH=$(jq -r '.catalog_hash' "$PERSISTED_CATALOG_DIR/.manifest.json")
+CATALOG_MANIFEST_SHA256=$(sha256sum "$PERSISTED_CATALOG_DIR/.manifest.json" | cut -d' ' -f1)
+CATALOG_PLUGIN_COUNT=$(jq -r '.plugins | length' "$PERSISTED_CATALOG_DIR/.manifest.json")
+ACTUAL_CATALOG_BLOB_COUNT=$(find "$PERSISTED_CATALOG_DIR" -maxdepth 1 -type f -name '*.blob' | wc -l)
+[ "$ACTUAL_CATALOG_BLOB_COUNT" -eq "$CATALOG_PLUGIN_COUNT" ] ||
+    die "persisted sealed catalog blob count does not match its manifest"
+jq -r '.plugins | to_entries[] | [.key, .value] | @tsv' \
+    "$PERSISTED_CATALOG_DIR/.manifest.json" |
+    while IFS="$(printf '\t')" read -r plugin_id schema_hash; do
+        blob="$PERSISTED_CATALOG_DIR/$plugin_id.$(printf '%s' "$schema_hash" | cut -c1-16).blob"
+        [ -f "$blob" ] || die "persisted sealed catalog is missing $blob"
+        inspected=$("$RELEASE_DIR/opblob" inspect "$blob") ||
+            die "persisted sealed catalog contains an invalid blob: $blob"
+        [ "$(printf '%s\n' "$inspected" | awk '$1 == "plugin" { print $2; exit }')" = "$plugin_id" ] ||
+            die "persisted sealed catalog blob plugin id does not match its manifest: $blob"
+        [ "$(printf '%s\n' "$inspected" | awk '$1 == "schema" && $2 == "sha256" { print $3; exit }')" = "$schema_hash" ] ||
+            die "persisted sealed catalog blob schema hash does not match its manifest: $blob"
+    done
 [ -f "$EMQX_ARTIFACT_PATH" ] || die "missing pinned EMQX artifact: $EMQX_ARTIFACT_PATH"
 [ "$(sha256sum "$EMQX_ARTIFACT_PATH" | cut -d' ' -f1)" = "$EMQX_SHA256" ] ||
     die "EMQX artifact digest does not match deploy/config/emqx.version"
@@ -294,7 +469,7 @@ BIN_COUNT=$(printf '%s\n' "$BINARIES" | wc -l)
 log "$BIN_COUNT release binaries in $RELEASE_DIR"
 
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" != 0 ]; then
-    die "must run as root (subvolume creation and install to $INSTALL_BIN)"
+    die "must run as root to prepare the golden btrfs subvolume"
 fi
 
 COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -328,6 +503,9 @@ build_golden() {
 
     # Binaries. A reused golden subvolume must not retain listener executables
     # that were retired when their implementation moved behind the bridge.
+    for name in op-mail-admin op-decoy-network; do
+        [ ! -e "$GOLDEN_DIR/bin/$name" ] || run rm -- "$GOLDEN_DIR/bin/$name"
+    done
     if [ -f "$RETIRED_BINARIES_FILE" ]; then
         grep -Ev '^[[:space:]]*(#|$)' "$RETIRED_BINARIES_FILE" | while IFS= read -r name; do
             [ -n "$name" ] || continue
@@ -338,6 +516,40 @@ build_golden() {
         run install -Dm755 "$bin" "$GOLDEN_DIR/bin/$(basename "$bin")"
     done
     ok "staged $BIN_COUNT binaries into golden/bin"
+    # The upstream-named binary is the native implementation behind the
+    # tched_router plugin. Its runit definition verifies this separately
+    # staged provenance manifest before exec.
+    run install -Dm755 "$TCHED_ROUTER_NATIVE_BIN" \
+        "$GOLDEN_DIR/usr/bin/zeroclaw"
+    run install -Dm644 "$TCHED_ROUTER_NATIVE_MANIFEST" \
+        "$GOLDEN_DIR/usr/share/op-dbus/native-manifests/tched-router.json"
+    ok "staged pinned tched_router native binary and provenance manifest"
+    ui_destination="$GOLDEN_DIR/usr/local/share/op-dbus/dashboard/vercel-json-render"
+    [ ! -e "$ui_destination" ] || run rm -r -- "$ui_destination"
+    run install -d -m 0755 "$ui_destination"
+    run tar -xzf "$UI_ASSET_ARCHIVE" -C "$ui_destination"
+    run install -Dm644 "$UI_ASSET_MANIFEST" \
+        "$GOLDEN_DIR/usr/share/op-dbus/ui-manifests/vercel-json-render-ui.json"
+    ok "staged pinned vercel-json-render UI assets and provenance manifest"
+    # Offline rootfs preparation consumes this archive before snapshot/send.
+    # Never install the GNU daemon directly into the running Alpine container.
+    run install -Dm644 "$MAIL_ARTIFACT_PATH" "$GOLDEN_DIR/opt/op-dbus/container-artifacts/$MAIL_ARTIFACT_NAME"
+
+    # The sealed blob is the plugin. Stage exactly the persisted committed
+    # catalog, with the manifest copied last, so first boot does not regenerate
+    # schemas from a different runtime environment.
+    golden_catalog="$GOLDEN_DIR/var/lib/opdbus/plugin-blobs"
+    [ ! -e "$golden_catalog" ] || run rm -r -- "$golden_catalog"
+    run install -d -m 0755 "$golden_catalog"
+    jq -r '.plugins | to_entries[] | [.key, .value] | @tsv' \
+        "$PERSISTED_CATALOG_DIR/.manifest.json" |
+        while IFS="$(printf '\t')" read -r plugin_id schema_hash; do
+            blob="$PERSISTED_CATALOG_DIR/$plugin_id.$(printf '%s' "$schema_hash" | cut -c1-16).blob"
+            run install -Dm644 "$blob" "$golden_catalog/$(basename "$blob")"
+        done
+    run install -Dm644 "$PERSISTED_CATALOG_DIR/.manifest.json" \
+        "$golden_catalog/.manifest.json"
+    ok "staged committed sealed catalog ($CATALOG_PLUGIN_COUNT plugins, generation $CATALOG_GENERATION)"
 
     # Control scripts + the systemd compatibility layer.
     for script in systemd-unit-to-runit op-convert-systemd-units systemctl-shim \
@@ -511,9 +723,15 @@ build_golden() {
         "$GOLDEN_DIR/etc/opdbus/mcp-toolsets.json"
     run install -Dm644 "$HOST_RUNTIME_PACKAGES_SOURCE" \
         "$GOLDEN_DIR/etc/opdbus/host-runtime-packages.txt"
+    run install -Dm644 "$TCHED_ROUTER_BOOTSTRAP_CONFIG" \
+        "$GOLDEN_DIR/etc/op-dbus/zeroclaw-runtime.toml"
+    golden_tched_router_skills="$GOLDEN_DIR/etc/op-dbus/zeroclaw-skills/default"
+    [ ! -e "$golden_tched_router_skills" ] || run rm -r -- "$golden_tched_router_skills"
+    run install -d -m 0755 "$golden_tched_router_skills"
+    run cp -a "$TCHED_ROUTER_BOOTSTRAP_SKILLS/." "$golden_tched_router_skills/"
 
-    # Network configuration shipped by this release. These paths mirror the
-    # live locations below so golden and the running host remain one artifact.
+    # Network configuration shipped by this release. The paths are relative
+    # to the golden release tree and are activated only after snapshot receipt.
     for mapping in \
         "nftables.conf:nftables.conf" \
         "iptables.rules:iptables/iptables.rules" \
@@ -530,8 +748,8 @@ build_golden() {
             run install -Dm644 "$SCRIPT_DIR/../config/$src" "$GOLDEN_DIR/etc/$rel"
     done
 
-    # MANIFEST: what this snapshot is, and the hashes to prove the running host
-    # matches it.
+    # MANIFEST: staged release identity and hashes for verification after the
+    # read-only snapshot is received. This script does not inspect a live host.
     if [ "$DRY_RUN" != 1 ]; then
         {
             printf 'golden-build: %s\n' "$STAMP"
@@ -539,6 +757,21 @@ build_golden() {
             printf 'source: %s\n' "$PROJECT_ROOT"
             printf 'init: runit (sv)\n'
             printf 'binaries: %s\n' "$BIN_COUNT"
+            printf 'mail-artifact: %s\n' "$MAIL_ARTIFACT_NAME"
+            printf 'mail-sha256: %s\n' "$MAIL_ARTIFACT_SHA256"
+            printf 'tched-router-native-sha256: %s\n' "$TCHED_ROUTER_NATIVE_SHA256"
+            printf 'tched-router-manifest-sha256: %s\n' "$TCHED_ROUTER_MANIFEST_SHA256"
+            printf 'tched-router-bootstrap-config-sha256: %s\n' "$TCHED_ROUTER_BOOTSTRAP_CONFIG_SHA256"
+            printf 'tched-router-bootstrap-skills-sha256: %s\n' "$TCHED_ROUTER_BOOTSTRAP_SKILLS_SHA256"
+            printf 'ui-source-head: %s\n' "$UI_SOURCE_HEAD"
+            printf 'ui-source-worktree: %s\n' "$UI_SOURCE_WORKTREE"
+            printf 'ui-source-archive-sha256: %s\n' "$UI_SOURCE_ARCHIVE_SHA256"
+            printf 'ui-source-content-sha256: %s\n' "$UI_SOURCE_CONTENT_SHA256"
+            printf 'ui-assets-sha256: %s\n' "$UI_ASSET_SHA256"
+            printf 'ui-assets-manifest-sha256: %s\n' "$UI_ASSET_MANIFEST_SHA256"
+            printf 'plugin-catalog-generation: %s\n' "$CATALOG_GENERATION"
+            printf 'plugin-catalog-hash: %s\n' "$CATALOG_HASH"
+            printf 'plugin-catalog-manifest-sha256: %s\n' "$CATALOG_MANIFEST_SHA256"
             printf 'emqx-artifact: %s\n' "$EMQX_ARTIFACT"
             printf 'emqx-sha256: %s\n' "$EMQX_SHA256"
             printf 'nlm-cli-artifact: %s\n' "$NOTEBOOKLM_MCP_ARTIFACT"
@@ -555,742 +788,10 @@ build_golden() {
     log "golden is ready; the read-only snapshot and btrfs send happen at deploy time"
 }
 
-# ═══ Path 2: live runtime ═══════════════════════════════════════════════════
-# Services that are never auto-restarted: they carry the host's network and
-# session bus, and bouncing them from a deploy script can cut remote access or
-# reparent the control plane. They are reported so an operator can restart them
-# deliberately, on the console, in a chosen order.
-NEVER_AUTO_RESTART="ovs-vswitchd ovsbr0-addr ovsbr0-svc-addr ovsbr0-uplink \
-uplink-dhcp op-session-bus opdbus-rundirs dbus"
-
-# Which enabled services actually exec a given binary?
-#
-# Matches the installed path with a trailing word boundary, not the bare name:
-# a substring match would tie `opdbus` to `opdbus-rundirs` and drag unrelated
-# services into the restart set.
-services_using() {
-    binary=$1
-    # `.` is the only ERE metacharacter in these paths.
-    escaped=$(printf '%s' "$INSTALL_BIN/$binary" | sed 's/\./\\./g')
-    for link in "$RUNIT_RUNSVDIR"/*; do
-        [ -e "$link" ] || continue
-        svc=$(basename "$link")
-        run_script="$RUNIT_SV_DIR/$svc/run"
-        [ -f "$run_script" ] || continue
-        if grep -qE "${escaped}([^A-Za-z0-9_.-]|\$)" "$run_script" 2>/dev/null; then
-            printf '%s\n' "$svc"
-        fi
-    done
-}
-
-listener_present() {
-    address=$1
-    ss -H -lnt 2>/dev/null | awk -v wanted="$address" '
-        $4 == wanted { found = 1 }
-        END { exit(found ? 0 : 1) }
-    '
-}
-
-legacy_8090_relay_running() {
-    pgrep -f '/usr/local/libexec/3tched/socket-relay .*tcp-listen .* 8090' >/dev/null 2>&1
-}
-
-wait_legacy_8090_relays_down() {
-    attempts=0
-    while legacy_8090_relay_running; do
-        attempts=$((attempts + 1))
-        [ "$attempts" -lt 30 ] || die "legacy :8090 relay still running after retirement"
-        sleep 1
-    done
-}
-
-bridge_ready() {
-    sv status op-grpc-bridge 2>/dev/null | grep -q '^run:' || return 1
-    pgrep -x op-grpc-bridge >/dev/null 2>&1 || return 1
-    [ -S /run/opdbus/grpc.sock ] || return 1
-    listener_present 127.0.0.1:8090 || return 1
-    listener_present 10.0.0.3:8090 || return 1
-    listener_present 127.0.0.1:9000 || return 1
-    ! legacy_8090_relay_running
-}
-
-wait_bridge_ready() {
-    attempts=0
-    until bridge_ready; do
-        attempts=$((attempts + 1))
-        [ "$attempts" -lt 45 ] || return 1
-        sleep 1
-    done
-}
-
-runit_manager_ready() {
-    sv status op-runit-systemctl 2>/dev/null | grep -q '^run:' || return 1
-    busctl --system introspect \
-        org.opdbus.v1.Runit.Systemctl \
-        /org/opdbus/v1/plugins/runit/systemctl \
-        org.opdbus.v1.Runit.Systemctl >/dev/null 2>&1
-}
-
-emqx_ready() {
-    sv status emqx 2>/dev/null | grep -q '^run:' || return 1
-    listener_present 127.0.0.1:1883 || return 1
-    listener_present 127.0.0.1:18083 || return 1
-    ! listener_present 0.0.0.0:1883
-}
-
-mongodb_mcp_ready() {
-    sv status mongodb-mcp-server 2>/dev/null | grep -q '^run:' || return 1
-    curl -fsS --max-time 2 http://127.0.0.1:3103/health >/dev/null 2>&1 || return 1
-    listener_present 127.0.0.1:3102 || return 1
-    listener_present 127.0.0.1:3103 || return 1
-    ! listener_present 0.0.0.0:3102 || return 1
-    ! listener_present 0.0.0.0:3103
-}
-
-wait_service_ready() {
-    ready_fn=$1
-    attempts=0
-    until "$ready_fn"; do
-        attempts=$((attempts + 1))
-        [ "$attempts" -lt 60 ] || return 1
-        sleep 1
-    done
-}
-
-wait_runit_supervision() {
-    svc=$1
-    attempts=0
-    until sv status "$svc" >/dev/null 2>&1; do
-        attempts=$((attempts + 1))
-        [ "$attempts" -lt 30 ] || return 1
-        sleep 1
-    done
-}
-
-ensure_enabled_service_ready() {
-    svc=$1
-    ready_fn=$2
-    [ -e "$RUNIT_RUNSVDIR/$svc" ] || [ -L "$RUNIT_RUNSVDIR/$svc" ] || return 0
-    "$ready_fn" && return 0
-    warn "$svc is enabled but not ready; restarting it to complete the release"
-    wait_runit_supervision "$svc" ||
-        die "$svc is enabled but runsv did not establish supervision"
-    if [ "$svc" = op-grpc-bridge ]; then
-        wait_legacy_8090_relays_down
-    fi
-    sv restart "$svc" || die "sv restart $svc failed"
-    if [ "$svc" = op-grpc-bridge ]; then
-        wait_bridge_ready || die "op-grpc-bridge failed direct-bind readiness"
-    else
-        wait_service_ready "$ready_fn" || die "$svc failed readiness"
-    fi
-}
-
-install_live() {
-    log "installing into the live runtime"
-
-    changed_binaries=""
-    changed_services=""
-    config_backup="/var/tmp/op-config-pre-golden-$STAMP"
-    bridge_cutover_needed=0
-    for legacy_bridge_relay in fwd-8090 fwd-nm-mesh-8090; do
-        if [ -L "$RUNIT_RUNSVDIR/$legacy_bridge_relay" ] ||
-           [ -d "$RUNIT_SV_DIR/$legacy_bridge_relay" ]; then
-            bridge_cutover_needed=1
-        fi
-    done
-    # A redirected loop stays in the current shell, preserving both the
-    # accumulated change list and one exact executable path per input line.
-    # This avoids a predictable root-owned /tmp scratch file, including during
-    # --dry-run, without regressing whitespace-safe path handling.
-    while IFS= read -r bin; do
-        [ -n "$bin" ] || continue
-        name=$(basename "$bin")
-        target="$INSTALL_BIN/$name"
-        if [ -f "$target" ] && cmp -s "$bin" "$target"; then
-            continue
-        fi
-        run install -Dm755 "$bin" "$target"
-        if [ -z "$changed_binaries" ]; then
-            changed_binaries=$name
-        else
-            changed_binaries="$changed_binaries
-$name"
-        fi
-    done <<EOF
-$BINARIES
-EOF
-
-    if [ -z "$changed_binaries" ]; then
-        ok "all $BIN_COUNT binaries already current in $INSTALL_BIN"
-    else
-        ok "updated $(printf '%s\n' "$changed_binaries" | wc -l) binaries in $INSTALL_BIN"
-    fi
-
-    # Control scripts. The systemctl shim goes in $INSTALL_BIN because sudo's
-    # secure_path searches it before /usr/bin, so it wins for installers.
-    for script in systemd-unit-to-runit op-convert-systemd-units; do
-        [ -f "$SCRIPT_DIR/$script" ] &&
-            run install -Dm755 "$SCRIPT_DIR/$script" "$INSTALL_SBIN/$script"
-    done
-    [ -f "$SCRIPT_DIR/systemctl-shim" ] &&
-        run install -Dm755 "$SCRIPT_DIR/systemctl-shim" "$INSTALL_BIN/systemctl"
-    [ -f "$SCRIPT_DIR/../agent-runit-guard.sh" ] &&
-        run install -Dm755 "$SCRIPT_DIR/../agent-runit-guard.sh" \
-            "$INSTALL_SBIN/agent-runit-guard"
-    for helper_name in xray-config-mount-up emqx-prepare mcp-provider-probe; do
-        helper_source="$SCRIPT_DIR/libexec-3tched/$helper_name"
-        [ -f "$helper_source" ] || continue
-        helper_target="/usr/local/libexec/3tched/$helper_name"
-        helper_changed=0
-        if [ ! -f "$helper_target" ] || ! cmp -s "$helper_source" "$helper_target"; then
-            helper_changed=1
-            if [ -f "$helper_target" ]; then
-                run mkdir -p "/var/tmp/op-control-pre-golden-$STAMP"
-                run install -Dm755 "$helper_target" \
-                    "/var/tmp/op-control-pre-golden-$STAMP/$helper_name"
-            fi
-        fi
-        run install -Dm755 "$helper_source" "$helper_target"
-        if [ "$helper_changed" = 1 ]; then
-            case "$helper_name" in
-                xray-config-mount-up) helper_services="xray-config-mount" ;;
-                emqx-prepare) helper_services="emqx" ;;
-                mcp-provider-probe)
-                    helper_services="mongodb-mcp-server"
-                    ;;
-                *) helper_services="" ;;
-            esac
-            for helper_service in $helper_services; do
-                case " $changed_services " in
-                    *" $helper_service "*) ;;
-                    *) changed_services="$changed_services $helper_service" ;;
-                esac
-            done
-        fi
-    done
-    ok "installed control scripts + systemd compat layer"
-
-    # Install the same digest-pinned portable EMQX tree used by the golden
-    # image. The immutable root name includes the full artifact digest, so a
-    # new artifact never replaces the tree referenced by the stable link.
-    live_emqx="/opt/$EMQX_INSTALL_NAME"
-    live_emqx_marker="$live_emqx/.opdbus-artifact-sha256"
-    emqx_changed=0
-    live_emqx_current=0
-    if [ -f "$live_emqx_marker" ] &&
-       [ "$(sed -n '1p' "$live_emqx_marker")" = "$EMQX_SHA256" ]; then
-        live_emqx_current=1
-    fi
-    if [ "$live_emqx_current" != 1 ]; then
-        emqx_changed=1
-        [ ! -e "$live_emqx" ] ||
-            die "content-addressed EMQX root exists with an invalid digest marker: $live_emqx"
-        if [ "$DRY_RUN" = 1 ]; then
-            printf '  would stage: %s -> %s\n' "$EMQX_ARTIFACT_PATH" "$live_emqx"
-        else
-            emqx_stage=$(mktemp -d /opt/.emqx-stage.XXXXXX)
-            tar -xzf "$EMQX_ARTIFACT_PATH" -C "$emqx_stage"
-            [ -x "$emqx_stage/bin/emqx" ] || die "staged EMQX tree has no executable bin/emqx"
-            printf '%s\n' "$EMQX_SHA256" > "$emqx_stage/.opdbus-artifact-sha256"
-            chmod 0755 "$emqx_stage"
-            mv -- "$emqx_stage" "$live_emqx"
-        fi
-    fi
-    run chmod 0755 "$live_emqx"
-
-    run install -d -m 0750 -o root -g root /etc/emqx
-    if [ -d "$live_emqx/etc" ] && [ ! -L "$live_emqx/etc" ]; then
-        run cp -an "$live_emqx/etc/." /etc/emqx/
-        run mv -- "$live_emqx/etc" "$live_emqx/etc.dist"
-        run ln -s /etc/emqx "$live_emqx/etc"
-    fi
-    if [ -e /opt/emqx ] && [ ! -L /opt/emqx ]; then
-        run mkdir -p "/opt/.opdbus-rollback/$STAMP"
-        run mv -- /opt/emqx "/opt/.opdbus-rollback/$STAMP/emqx-current"
-        emqx_changed=1
-    fi
-    if [ ! -L /opt/emqx ] || [ "$(readlink /opt/emqx 2>/dev/null || true)" != "$EMQX_INSTALL_NAME" ]; then
-        if [ "$DRY_RUN" = 1 ]; then
-            printf '  would atomically link: /opt/emqx -> %s\n' "$EMQX_INSTALL_NAME"
-        else
-            emqx_link_tmp="/opt/.emqx-link.$$"
-            rm -f -- "$emqx_link_tmp"
-            ln -s "$EMQX_INSTALL_NAME" "$emqx_link_tmp"
-            mv -Tf -- "$emqx_link_tmp" /opt/emqx
-        fi
-        emqx_changed=1
-    fi
-
-    for config_name in emqx.conf base.hocon acl.conf; do
-        source_file="$EMQX_CONFIG_DIR/$config_name"
-        dest="/etc/emqx/$config_name"
-        [ -f "$source_file" ] || die "missing EMQX configuration: $source_file"
-        if [ ! -f "$dest" ] || ! cmp -s "$source_file" "$dest"; then
-            emqx_changed=1
-            if [ -f "$dest" ]; then
-                run mkdir -p "$config_backup/etc/emqx"
-                run install -Dm644 "$dest" "$config_backup$dest"
-            fi
-        fi
-        run install -Dm644 "$source_file" "$dest"
-    done
-    run /usr/local/libexec/3tched/emqx-prepare --check-config
-    if [ "$emqx_changed" = 1 ]; then
-        case " $changed_services " in
-            *" emqx "*) ;;
-            *) changed_services="$changed_services emqx" ;;
-        esac
-    fi
-
-    # Stage the pinned local MCP providers atomically. The versioned tree is
-    # never overwritten in place; the stable link changes only after the
-    # complete archive and expected entry point have been verified.
-    install_live_mcp_provider() {
-        provider_service=$1
-        provider_install_name=$2
-        provider_artifact_path=$3
-        provider_sha256=$4
-        provider_entry=$5
-        provider_overlay_source=${6:-}
-        provider_overlay_target=${7:-}
-        provider_patch_source=${8:-}
-        provider_patch_target=${9:-}
-        provider_base=/opt/op-mcp-providers
-        provider_root="$provider_base/$provider_install_name"
-        provider_link="$provider_base/$provider_service"
-        provider_marker="$provider_root/.opdbus-artifact-sha256"
-        provider_changed=0
-        if [ -f "$provider_marker" ] &&
-           [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" = "$provider_sha256" ] &&
-           [ -n "$provider_overlay_source" ] &&
-           ! cmp -s "$provider_overlay_source" "$provider_root/$provider_overlay_target"; then
-            die "$provider_service content-addressed overlay does not match its digest marker"
-        fi
-        if [ -f "$provider_marker" ] &&
-           [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" = "$provider_sha256" ] &&
-           [ -n "$provider_patch_source" ] &&
-           ! patch --batch --silent --dry-run --reverse \
-                -d "$provider_root" -p1 < "$provider_patch_source" >/dev/null; then
-            die "$provider_service content-addressed auth patch does not match its digest marker"
-        fi
-        if [ ! -f "$provider_marker" ] ||
-           [ "$(sed -n '1p' "$provider_marker" 2>/dev/null || true)" != "$provider_sha256" ]; then
-            provider_changed=1
-            [ ! -e "$provider_root" ] ||
-                die "content-addressed provider root has an invalid digest marker: $provider_root"
-            if [ "$DRY_RUN" = 1 ]; then
-                printf '  would stage: %s -> %s\n' "$provider_artifact_path" "$provider_root"
-            else
-                provider_stage=$(mktemp -d "$provider_base/.${provider_service}-stage.XXXXXX")
-                tar -xzf "$provider_artifact_path" -C "$provider_stage"
-                [ -f "$provider_stage/$provider_entry" ] ||
-                    die "$provider_service staged tree is missing $provider_entry"
-                if [ -n "$provider_overlay_source" ]; then
-                    install -Dm644 "$provider_overlay_source" \
-                        "$provider_stage/$provider_overlay_target"
-                    cmp -s "$provider_overlay_source" \
-                        "$provider_stage/$provider_overlay_target" ||
-                        die "$provider_service staged overlay verification failed"
-                fi
-                if [ -n "$provider_patch_source" ]; then
-                    apply_provider_patch "$provider_stage" "$provider_patch_source"
-                    patch --batch --silent --dry-run --reverse \
-                        -d "$provider_stage" -p1 < "$provider_patch_source" >/dev/null ||
-                        die "$provider_service staged auth patch verification failed"
-                    /usr/bin/node --check "$provider_stage/$provider_patch_target" >/dev/null ||
-                        die "$provider_service patched auth manager is not valid JavaScript"
-                fi
-                printf '%s\n' "$provider_sha256" > "$provider_stage/.opdbus-artifact-sha256"
-                chmod 0755 "$provider_stage"
-                mv -- "$provider_stage" "$provider_root"
-            fi
-        fi
-        run chmod 0755 "$provider_root"
-        if [ ! -L "$provider_link" ] ||
-           [ "$(readlink "$provider_link" 2>/dev/null || true)" != "$provider_install_name" ]; then
-            provider_changed=1
-            if [ -e "$provider_link" ] && [ ! -L "$provider_link" ]; then
-                run mkdir -p "$provider_base/.opdbus-rollback/$STAMP"
-                run mv -- "$provider_link" \
-                    "$provider_base/.opdbus-rollback/$STAMP/${provider_service}-previous"
-            fi
-            if [ "$DRY_RUN" = 1 ]; then
-                printf '  would atomically link: %s -> %s\n' \
-                    "$provider_link" "$provider_install_name"
-            else
-                provider_link_tmp="$provider_base/.${provider_service}-link.$$"
-                rm -f -- "$provider_link_tmp"
-                ln -s "$provider_install_name" "$provider_link_tmp"
-                mv -Tf -- "$provider_link_tmp" "$provider_link"
-            fi
-        fi
-        if [ "$provider_changed" = 1 ]; then
-            case " $changed_services " in
-                *" $provider_service "*) ;;
-                *) changed_services="$changed_services $provider_service" ;;
-            esac
-        fi
-    }
-    run install -d -m 0755 -o root -g root /opt/op-mcp-providers
-    install_nlm_cli "" "$NLM_CLI_BIN"
-    [ -e /usr/bin/nlm ] && [ "$(readlink -f "$NLM_CLI_BIN")" = /usr/bin/nlm ] &&
-        die "nlm wrapper resolved to /usr/bin/nlm; jacob-bd must stay at $NLM_CLI_BIN"
-    install_live_mcp_provider \
-        mongodb-mcp-server "$MONGODB_MCP_INSTALL_NAME" \
-        "$MONGODB_MCP_ARTIFACT_PATH" "$MONGODB_MCP_SHA256" \
-        node_modules/mongodb-mcp-server/dist/esm/index.js
-    run install -d -m 0755 \
-        /var/log/runit/mongodb-mcp-server
-    run install -d -m 0750 -o root -g secrets /etc/opdbus/secrets
-    # SID1 is durable inside the identity Cozo relations. Keep that database
-    # root-only; blob-aware clients read only the private tmpfs projection.
-    run install -d -m 0700 -o root -g root /var/lib/op-dbus/identity-cozo
-    run find /var/lib/op-dbus/identity-cozo -xdev -type d -exec chmod 0700 {} +
-    run find /var/lib/op-dbus/identity-cozo -xdev -type f -exec chmod 0600 {} +
-
-    if [ -f "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" ]; then
-        run install -d -m 0755 /etc/pacman.d/hooks
-        run install -Dm644 "$SCRIPT_DIR/99-systemd-unit-to-runit.hook" \
-            /etc/pacman.d/hooks/99-systemd-unit-to-runit.hook
-    fi
-
-    # Retire exact service definitions recoverably. Removing the enabled
-    # symlink is runit's source-of-truth operation; /run/runit/service is never
-    # edited directly. Old definitions remain under /var/tmp for rollback.
-    retired_backup="/var/tmp/op-runit-retired-$STAMP"
-    if [ -f "$RETIRED_SERVICES_FILE" ]; then
-        grep -Ev '^[[:space:]]*(#|$)' "$RETIRED_SERVICES_FILE" | while IFS= read -r svc; do
-            [ -n "$svc" ] || continue
-            [ ! -L "$RUNIT_RUNSVDIR/$svc" ] || run rm -- "$RUNIT_RUNSVDIR/$svc"
-            if [ -d "$RUNIT_SV_DIR/$svc" ]; then
-                run mkdir -p "$retired_backup"
-                run mv -- "$RUNIT_SV_DIR/$svc" "$retired_backup/$svc"
-            fi
-        done
-    fi
-
-    # The crate libraries remain part of the bridge, but their old standalone
-    # listener executables are not deployable surfaces. Preserve any installed
-    # copies alongside the service rollback backup, then remove them live.
-    if [ -f "$RETIRED_BINARIES_FILE" ]; then
-        grep -Ev '^[[:space:]]*(#|$)' "$RETIRED_BINARIES_FILE" | while IFS= read -r name; do
-            [ -n "$name" ] || continue
-            if [ -f "$INSTALL_BIN/$name" ]; then
-                run mkdir -p "$retired_backup/bin"
-                run mv -- "$INSTALL_BIN/$name" "$retired_backup/bin/$name"
-            fi
-        done
-    fi
-
-    # Install the release-owned network config and preserve replaced host
-    # copies under one timestamped rollback directory.
-    legacy_sshd_dropin="/etc/ssh/sshd_config.d/10-netmaker-only.conf"
-    if [ -f "$legacy_sshd_dropin" ]; then
-        run mkdir -p "$config_backup/etc/ssh/sshd_config.d"
-        run mv -- "$legacy_sshd_dropin" \
-            "$config_backup/etc/ssh/sshd_config.d/10-netmaker-only.conf"
-    fi
-    for mapping in \
-        "nftables.conf:/etc/nftables.conf" \
-        "iptables.rules:/etc/iptables/iptables.rules" \
-        "network.conf:/etc/op-dbus/network.conf" \
-        "openflow-static-flows.json:/etc/op-dbus/openflow-static-flows.json" \
-        "sshd/sshd_config:/etc/ssh/sshd_config" \
-        "sshd/10-loopback-only.conf:/etc/ssh/sshd_config.d/10-loopback-only.conf" \
-        "sshd/15-ghostbridge-vip.conf:/etc/ssh/sshd_config.d/15-ghostbridge-vip.conf" \
-        "sshd/90-password-public.conf:/etc/ssh/sshd_config.d/90-singleuser-password.conf"
-    do
-        src=${mapping%%:*}
-        dest=${mapping#*:}
-        source_file="$SCRIPT_DIR/../config/$src"
-        [ -f "$source_file" ] || continue
-        if [ -f "$dest" ] && ! cmp -s "$source_file" "$dest"; then
-            run mkdir -p "$config_backup$(dirname "$dest")"
-            run install -Dm644 "$dest" "$config_backup$dest"
-        fi
-        run install -Dm644 "$source_file" "$dest"
-    done
-
-    # Capability authority is release-owned, principal-only, and materialized
-    # into tmpfs by opdbus-grants. Preserve the previous durable document for
-    # rollback and restart the materializer when it changes.
-    grants_dest="/etc/opdbus/capability-grants.json"
-    if [ -f "$GRANTS_SOURCE" ]; then
-        grants_changed=0
-        if [ ! -f "$grants_dest" ] || ! cmp -s "$GRANTS_SOURCE" "$grants_dest"; then
-            grants_changed=1
-            if [ -f "$grants_dest" ]; then
-                run mkdir -p "$config_backup$(dirname "$grants_dest")"
-                run install -Dm600 "$grants_dest" "$config_backup$grants_dest"
-            fi
-        fi
-        run install -Dm600 "$GRANTS_SOURCE" "$grants_dest"
-        if [ "$grants_changed" = 1 ]; then
-            case " $changed_services " in
-                *" opdbus-grants "*) ;;
-                *) changed_services="$changed_services opdbus-grants" ;;
-            esac
-        fi
-    fi
-
-    # Projection policy is durable, root-only release content. It contains no
-    # credentials or identity assertions, but is protected against live edits
-    # because it defines what each authenticated MCP audience can discover.
-    for mapping in \
-        "$MCP_AUDIENCE_POLICY_SOURCE:/etc/opdbus/mcp-audience-policy.json" \
-        "$MCP_TOOLSETS_SOURCE:/etc/opdbus/mcp-toolsets.json"
-    do
-        source_file=${mapping%%:*}
-        dest=${mapping#*:}
-        policy_changed=0
-        if [ ! -f "$dest" ] || ! cmp -s "$source_file" "$dest"; then
-            policy_changed=1
-            if [ -f "$dest" ]; then
-                run mkdir -p "$config_backup$(dirname "$dest")"
-                run install -Dm600 "$dest" "$config_backup$dest"
-            fi
-        fi
-        run install -Dm600 "$source_file" "$dest"
-        if [ "$policy_changed" = 1 ]; then
-            case " $changed_services " in
-                *" op-grpc-bridge "*) ;;
-                *) changed_services="$changed_services op-grpc-bridge" ;;
-            esac
-        fi
-    done
-
-    # Keep the host requirements beside the release policies. This is an
-    # auditable package contract, not a service secret.
-    host_packages_dest=/etc/opdbus/host-runtime-packages.txt
-    if [ -f "$host_packages_dest" ] &&
-       ! cmp -s "$HOST_RUNTIME_PACKAGES_SOURCE" "$host_packages_dest"; then
-        run mkdir -p "$config_backup$(dirname "$host_packages_dest")"
-        run install -Dm644 "$host_packages_dest" "$config_backup$host_packages_dest"
-    fi
-    run install -Dm644 "$HOST_RUNTIME_PACKAGES_SOURCE" "$host_packages_dest"
-
-    # Service definitions normally preserve a hand-tuned host copy. Services
-    # listed in managed-services are deliberately release-owned and replaced
-    # with a recoverable backup when they differ.
-    service_backup="/var/tmp/op-runit-pre-golden-$STAMP"
-    for svc_dir in "$SCRIPT_DIR"/*/; do
-        [ -f "${svc_dir}run" ] || continue
-        svc=$(basename "$svc_dir")
-        is_retired_service "$svc" && continue
-        dest="$RUNIT_SV_DIR/$svc/run"
-        definition_changed=0
-        if [ -f "$dest" ] && ! cmp -s "${svc_dir}run" "$dest"; then
-            if is_managed_service "$svc"; then
-                run mkdir -p "$service_backup/$svc"
-                run install -Dm755 "$dest" "$service_backup/$svc/run"
-                definition_changed=1
-            else
-                warn "$dest differs from the repo copy — leaving the host version alone"
-                continue
-            fi
-        elif [ ! -f "$dest" ]; then
-            definition_changed=1
-        fi
-        run install -Dm755 "${svc_dir}run" "$dest"
-        [ -f "${svc_dir}log/run" ] &&
-            run install -Dm755 "${svc_dir}log/run" "$RUNIT_SV_DIR/$svc/log/run"
-        [ -f "${svc_dir}check" ] &&
-            run install -Dm755 "${svc_dir}check" "$RUNIT_SV_DIR/$svc/check"
-        [ -f "${svc_dir}finish" ] &&
-            run install -Dm755 "${svc_dir}finish" "$RUNIT_SV_DIR/$svc/finish"
-        if [ "$definition_changed" = 1 ] && is_managed_service "$svc"; then
-            changed_services="$changed_services $svc"
-        fi
-    done
-
-    # Enable only explicitly declared new services. Existing enablement is
-    # otherwise untouched.
-    if [ -f "$ENABLED_SERVICES_FILE" ]; then
-        while IFS= read -r svc || [ -n "$svc" ]; do
-            case "$svc" in ''|\#*) continue ;; esac
-            if [ "$DRY_RUN" = 1 ]; then
-                [ -f "$SCRIPT_DIR/$svc/run" ] || die "enabled service has no definition: $svc"
-            else
-                [ -d "$RUNIT_SV_DIR/$svc" ] || die "enabled service has no definition: $svc"
-            fi
-            enabled_target="$RUNIT_RUNSVDIR/$svc"
-            enable_changed=0
-            if [ -e "$enabled_target" ] && [ ! -L "$enabled_target" ]; then
-                die "enabled runit service path is not a symlink: $enabled_target"
-            fi
-            if [ ! -L "$enabled_target" ] ||
-               [ "$(readlink "$enabled_target" 2>/dev/null || true)" != "$RUNIT_SV_DIR/$svc" ]; then
-                enable_changed=1
-                [ ! -L "$enabled_target" ] || run rm -- "$enabled_target"
-                run ln -s "$RUNIT_SV_DIR/$svc" "$RUNIT_RUNSVDIR/$svc"
-            fi
-            if [ "$enable_changed" = 1 ]; then
-                case " $changed_services " in
-                    *" $svc "*) ;;
-                    *) changed_services="$changed_services $svc" ;;
-                esac
-            fi
-        done < "$ENABLED_SERVICES_FILE"
-    fi
-
-    if [ "$bridge_cutover_needed" = 1 ] && [ -e "$RUNIT_RUNSVDIR/op-grpc-bridge" ]; then
-        case " $changed_services " in
-            *" op-grpc-bridge "*) ;;
-            *) changed_services="$changed_services op-grpc-bridge" ;;
-        esac
-    fi
-
-    if [ "$DO_RESTART" != 1 ]; then
-        warn "--no-restart: services still running the previous binaries"
-        return 0
-    fi
-    if [ -z "$changed_binaries" ] && [ -z "$changed_services" ]; then
-        log "nothing changed; no restarts needed"
-        if [ "$DRY_RUN" != 1 ]; then
-            ensure_enabled_service_ready op-runit-systemctl runit_manager_ready
-            ensure_enabled_service_ready mongodb-mcp-server mongodb_mcp_ready
-            ensure_enabled_service_ready op-grpc-bridge bridge_ready
-            ensure_enabled_service_ready emqx emqx_ready
-        fi
-        return 0
-    fi
-
-    # Restart enabled services whose release-owned run definition or binary
-    # changed. Network/session-bus carriers remain held back below.
-    restart_list=""
-    held_back=""
-    for svc in $changed_services; do
-        if [ "$DRY_RUN" = 1 ]; then
-            [ -e "$RUNIT_RUNSVDIR/$svc" ] || is_enabled_service "$svc" || continue
-        else
-            [ -e "$RUNIT_RUNSVDIR/$svc" ] || [ -L "$RUNIT_RUNSVDIR/$svc" ] || continue
-        fi
-        case " $NEVER_AUTO_RESTART " in
-            *" $svc "*)
-                held_back="$held_back $svc"
-                continue
-                ;;
-        esac
-        case " $restart_list " in
-            *" $svc "*) ;;
-            *) restart_list="$restart_list $svc" ;;
-        esac
-    done
-    for name in $changed_binaries; do
-        for svc in $(services_using "$name"); do
-            # Network and session-bus carriers are reported, never bounced here.
-            case " $NEVER_AUTO_RESTART " in
-                *" $svc "*)
-                    case " $held_back " in
-                        *" $svc "*) ;;
-                        *) held_back="$held_back $svc" ;;
-                    esac
-                    continue
-                    ;;
-            esac
-            case " $restart_list " in
-                *" $svc "*) ;;
-                *) restart_list="$restart_list $svc" ;;
-            esac
-        done
-    done
-
-    if [ -n "$held_back" ]; then
-        warn "NOT restarted (network/session-bus critical):$held_back"
-        warn "  restart these deliberately from the console, e.g.: sudo sv restart <svc>"
-    fi
-
-    # A prior interrupted publish may have installed content before restarting
-    # its consumer. Queue any unhealthy release dependency so an idempotent
-    # rerun completes the cutover instead of merely reporting stale state.
-    for readiness in \
-        op-runit-systemctl:runit_manager_ready \
-        mongodb-mcp-server:mongodb_mcp_ready \
-        op-grpc-bridge:bridge_ready \
-        emqx:emqx_ready
-    do
-        svc=${readiness%%:*}
-        ready_fn=${readiness#*:}
-        [ -e "$RUNIT_RUNSVDIR/$svc" ] || [ -L "$RUNIT_RUNSVDIR/$svc" ] || continue
-        "$ready_fn" && continue
-        case " $restart_list " in
-            *" $svc "*) ;;
-            *) restart_list="$restart_list $svc" ;;
-        esac
-    done
-
-    if [ -z "$restart_list" ]; then
-        log "no enabled service references the changed binaries"
-        return 0
-    fi
-
-    # Dependency order is explicit: local WARM providers become healthy before
-    # the bridge projects them, and EMQX registers after the bridge's ExHook
-    # listener is ready.
-    ordered_restart_list=""
-    for svc in op-runit-systemctl mongodb-mcp-server op-grpc-bridge emqx $restart_list; do
-        case " $restart_list " in *" $svc "*) ;; *) continue ;; esac
-        case " $ordered_restart_list " in
-            *" $svc "*) ;;
-            *) ordered_restart_list="$ordered_restart_list $svc" ;;
-        esac
-    done
-    restart_list=$ordered_restart_list
-
-    log "restarting:$restart_list"
-    for svc in $restart_list; do
-        if [ "$DRY_RUN" != 1 ]; then
-            wait_runit_supervision "$svc" ||
-                die "$svc was enabled but runsv did not establish supervision"
-        fi
-        if [ "$svc" = op-grpc-bridge ]; then
-            if [ "$DRY_RUN" = 1 ]; then
-                run sv restart "$svc"
-                continue
-            fi
-            wait_legacy_8090_relays_down
-            sv restart "$svc" || die "sv restart $svc failed"
-            wait_bridge_ready || die "op-grpc-bridge failed direct-bind readiness"
-            ok "op-grpc-bridge ready on :8090 plus loopback-mTLS ExHook :9000"
-        elif [ "$svc" = op-runit-systemctl ]; then
-            run sv restart "$svc" || die "sv restart $svc failed"
-            if [ "$DRY_RUN" != 1 ]; then
-                wait_service_ready runit_manager_ready || die "op-runit-systemctl failed D-Bus readiness"
-                ok "op-runit-systemctl ready on the system bus"
-            fi
-        elif [ "$svc" = emqx ]; then
-            run sv restart "$svc" || die "sv restart $svc failed"
-            if [ "$DRY_RUN" != 1 ]; then
-                wait_service_ready emqx_ready || die "standalone EMQX failed loopback readiness"
-                ok "standalone EMQX ready on loopback MQTT and management listeners"
-            fi
-        elif [ "$svc" = mongodb-mcp-server ]; then
-            run sv restart "$svc" || die "sv restart $svc failed"
-            if [ "$DRY_RUN" != 1 ]; then
-                wait_service_ready mongodb_mcp_ready ||
-                    die "MongoDB MCP provider failed loopback readiness"
-                ok "MongoDB MCP provider ready read-only on loopback :3102"
-            fi
-        else
-            run sv restart "$svc" || warn "sv restart $svc failed"
-        fi
-    done
-
-    # Report real state rather than assuming the restart worked.
-    if [ "$DRY_RUN" != 1 ]; then
-        sleep 3
-        for svc in $restart_list; do
-            printf '  %s\n' "$(sv status "$svc" 2>&1 | head -1)"
-        done
-    fi
-}
-
 # ═══ Run ════════════════════════════════════════════════════════════════════
-[ "$DO_GOLDEN" = 1 ] && build_golden
-[ "$DO_LIVE" = 1 ] && install_live
+build_golden
 
 log "commit $COMMIT, build $STAMP"
-[ "$DO_GOLDEN" = 1 ] && log "deployable subvolume: $GOLDEN_DIR"
-[ "$DO_LIVE" = 1 ] && log "live runtime: $INSTALL_BIN"
-ok "done"
+log "prepared subvolume: $GOLDEN_DIR"
+log "next deployment boundary: create a read-only snapshot, then transfer it with btrfs send/receive"
+ok "golden preparation complete"

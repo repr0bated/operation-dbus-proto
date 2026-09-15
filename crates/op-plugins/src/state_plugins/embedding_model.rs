@@ -1,23 +1,7 @@
-//! Generic, provider-agnostic embedding-model plugin.
+//! Provider-agnostic embedding contracts and native request adapters.
 //!
-//! The single EMBEDDING surface — provider, model id, endpoint, and the shared
-//! output dimensionality. The model is a FIELD, not the plugin's identity: swap
-//! `voyage-4` → `voyage-4-lite` (or an Ollama/local embedder) by changing
-//! `model_id`. This is the ONLY plugin that knows how to reach an embedding
-//! provider; consumers (ctl_plane_chatbot, knowledge, memory, notebooklm)
-//! delegate here and embed no model of their own. It is the embedding sibling of
-//! [`super::large_language_model`].
-//!
-//! Embeddings are a different KIND from generation: the method surface is
-//! `embed` (text → vector), and vectors in one shared space compare directly —
-//! the voyage-4 trio writes one 1024-dim Qdrant collection with no re-index on
-//! model switch.
-//!
-//! The plugin reports the *live* observed state. Providers differ: Ollama serves
-//! embeddings and enumerates models (`GET {endpoint}/api/tags`), so the active
-//! model can be resolved by lookup; Voyage is a cloud API (`POST /v1/embeddings`)
-//! with no model-list endpoint, so it is reachable iff an API key is present and
-//! the active model is config-driven. Either way, no active model is hardcoded.
+//! One nonsecret runtime configuration is persisted in RuntimeDocuments and
+//! read for every canonical request. Credentials stay in the environment.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -25,7 +9,12 @@ use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateD
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
-use std::time::Duration;
+
+#[path = "embedding_model_methods.rs"]
+pub mod methods;
+pub use methods::{
+    dispatch_embedding_model_method, embedding_model_state, restored_embedding_state,
+};
 
 /// Default public Voyage AI endpoint. The only copy of this constant — consumers
 /// (e.g. `op-cognitive-mcp`) resolve their call-time endpoint through
@@ -40,6 +29,9 @@ const VOYAGE_MONGODB_URL: &str = "https://ai.mongodb.com/v1/embeddings";
 #[schemars(extend("x-oscal-subid" = "sch.software.plugin.embedding-model.schema@v1"))]
 #[schemars(extend("x-oscal-category" = "llm"))]
 pub struct EmbeddingModelState {
+    /// Durable configuration revision; zero means environment bootstrap.
+    #[serde(default)]
+    pub config_revision: u64,
     /// Embedding provider / runtime — the only provider-aware field
     /// ("voyage", "ollama", …).
     #[serde(default)]
@@ -59,7 +51,8 @@ pub struct EmbeddingModelState {
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "mut.service.embedding-model.dimensions@v1"))]
     pub dimensions: u32,
-    /// Reachability of the provider: "online" or "offline" (observed).
+    /// Configuration snapshots are "unprobed". Credential presence is not
+    /// evidence that the remote embedding provider is reachable.
     #[serde(default)]
     #[schemars(extend("x-oscal-subid" = "obs.software.embedding-model.status@v1"))]
     pub status: String,
@@ -84,13 +77,9 @@ pub struct EmbeddingModelState {
 /// ([`VoyageModel::SHARED_EMBEDDING_DIMS`]). Switching models is a quality/cost
 /// tradeoff only — it never requires re-vectorizing existing data.
 ///
-/// `voyage-4-nano` is **deliberately excluded from this collection**, but for a
-/// different reason than the domain models: per Voyage, "all 4 series models are
-/// compatible with each other," so nano *is* in the same embedding space — it is
-/// just dimensionally **capped at ≤512** (128/256/512). Our collection is pinned
-/// at 1024, which nano cannot produce, so it can't join here. (It could join a
-/// 256/512 collection.) Adding it to the 1024 trio would force everything down to
-/// 512. Out for the 1024 setup — not out of the space.
+/// This legacy catalog remains the compatibility set for the existing shared
+/// collection. The generic dispatcher accepts other configured models without
+/// claiming that their vectors share this collection's embedding space.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VoyageModel {
@@ -137,57 +126,50 @@ impl VoyageModel {
     }
 }
 
-/// Call-time parameters for a Voyage embed request, resolved from the
-/// `embedding_model` projection (or its env-var fallback) plus a freshly-read
-/// API key. This is the shared config surface `op-cognitive-mcp` calls into —
-/// it never executes HTTP itself; that stays in the consuming crate.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.embedding-model.embed-params.schema@v1"))]
+/// Secret call parameters for the legacy Voyage-specific shared collection.
+/// Deliberately not serializable, schema-derived, or Debug-printable.
 pub struct VoyageEmbedParams {
-    /// Resolved Voyage endpoint URL (public or MongoDB, based on al- key prefix).
-    #[schemars(extend("x-oscal-subid" = "obs.software.embedding-model.embed-params.endpoint@v1"))]
     pub endpoint: String,
-    /// Active model identifier (e.g. "voyage-4").
-    #[schemars(extend("x-oscal-subid" = "obs.software.embedding-model.embed-params.model-id@v1"))]
     pub model_id: String,
-    /// Voyage API key, sourced from env vars in priority order. Never persisted
-    /// to the projection.
-    #[schemars(extend("x-oscal-subid" = "obs.software.embedding-model.embed-params.api-key@v1"))]
     pub api_key: String,
 }
 
-/// Resolve the call-time Voyage embed parameters: read the `embedding_model`
-/// projection if present (endpoint + model_id come from there), otherwise fall
-/// back to `EmbeddingModelPlugin::config_state()`'s env-var reads. The API key
-/// is always read fresh from env — it is never stored in the projection.
-/// Returns `None` when no Voyage API key exists in the environment.
-///
-/// OSCAL subid: obs.service.embedding-model.embed-params.resolve@v1
+/// Incompatible providers, dimensions, model spaces, and credential origins
+/// are rejected instead of sending Voyage requests to a different protocol.
 pub fn voyage_embed_params() -> Option<VoyageEmbedParams> {
-    let api_key = EmbeddingModelPlugin::voyage_api_key()?;
-
-    let state = op_core::projection_shm::read_projection_bytes("embedding_model")
-        .and_then(|bytes| serde_json::from_slice::<EmbeddingModelState>(&bytes).ok())
-        .unwrap_or_else(EmbeddingModelPlugin::config_state);
-
-    // model_id is deliberately unresolved ("no hardcoded model") in config_state
-    // when nothing configures it; a Voyage call still needs a concrete model, so
-    // fall back to the documented POC-target default of the shared-space trio.
-    let model_id = if state.model_id.is_empty() {
-        VoyageModel::default().model_id().to_string()
-    } else {
-        state.model_id
+    let key = EmbeddingModelPlugin::voyage_api_key()?;
+    let state = match op_core::projection_shm::read_projection_bytes("embedding_model") {
+        Some(bytes) => serde_json::from_slice::<EmbeddingModelState>(&bytes).ok()?,
+        None => methods::EmbeddingConfig::from_environment().ok()?.state(0),
     };
-
+    let model_id = legacy_voyage_model(&state)?;
+    methods::validate_voyage_credential_endpoint(&state.endpoint, &key).ok()?;
     Some(VoyageEmbedParams {
         endpoint: state.endpoint,
         model_id,
-        api_key,
+        api_key: key,
     })
 }
 
-pub struct EmbeddingModelPlugin;
+fn legacy_voyage_model(state: &EmbeddingModelState) -> Option<String> {
+    if state.provider != "voyage" || state.dimensions != VoyageModel::SHARED_EMBEDDING_DIMS {
+        return None;
+    }
+    let model_id = if state.model_id.is_empty() {
+        VoyageModel::default().model_id().to_string()
+    } else {
+        state.model_id.clone()
+    };
+    if !VoyageModel::SHARED_SPACE
+        .iter()
+        .any(|model| model.model_id() == model_id)
+    {
+        return None;
+    }
+    Some(model_id)
+}
 
+pub struct EmbeddingModelPlugin;
 impl Default for EmbeddingModelPlugin {
     fn default() -> Self {
         Self
@@ -198,27 +180,6 @@ impl EmbeddingModelPlugin {
     pub fn new() -> Self {
         Self
     }
-
-    fn env_or(key: &str, fallback: &str) -> String {
-        std::env::var(key).unwrap_or_else(|_| fallback.to_string())
-    }
-
-    fn env_u32(key: &str, fallback: u32) -> u32 {
-        std::env::var(key)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(fallback)
-    }
-
-    /// Whether a Voyage API key is present in the environment — the cloud
-    /// provider's notion of reachability (it has no list/health endpoint).
-    fn voyage_key_present() -> bool {
-        Self::voyage_api_key().is_some()
-    }
-
-    /// Read the Voyage API key from the environment, in priority order. The key
-    /// is never stored in the projection (secrets do not live in shm) — it is
-    /// always read fresh from env at call time.
     fn voyage_api_key() -> Option<String> {
         [
             "COGNITIVE_MCP_VOYAGE_API_KEY",
@@ -226,120 +187,19 @@ impl EmbeddingModelPlugin {
             "VOYAGE_API_KEY_RUST",
         ]
         .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
     }
-
-    /// Determine the correct Voyage endpoint for a given API key: MongoDB-hosted
-    /// keys (`al-*`) route to the MongoDB endpoint, all others to the public one.
-    /// The only copy of this detection logic.
     fn voyage_url_for_key(key: &str) -> String {
         if key.trim().starts_with("al-") {
-            VOYAGE_MONGODB_URL.to_string()
+            VOYAGE_MONGODB_URL
         } else {
-            VOYAGE_PUBLIC_URL.to_string()
+            VOYAGE_PUBLIC_URL
         }
-    }
-
-    /// Configuration portion of the state, sourced from the environment.
-    /// `status`/`available_models`/`model_digest` are observed and filled in by
-    /// the live query. No active model is hardcoded: an explicit override wins,
-    /// then the provider-specific env, else empty (resolved in `live_state`).
-    fn config_state() -> EmbeddingModelState {
-        let provider = Self::env_or("EMBEDDING_PROVIDER", "voyage");
-        // Explicit override wins; otherwise for voyage, resolve public-vs-MongoDB
-        // by the api key's `al-` prefix; otherwise the public URL is a harmless
-        // default for non-voyage providers (they set their own endpoint).
-        let endpoint = std::env::var("EMBEDDING_ENDPOINT").unwrap_or_else(|_| {
-            if provider == "voyage" {
-                Self::voyage_api_key()
-                    .map(|key| Self::voyage_url_for_key(&key))
-                    .unwrap_or_else(|| VOYAGE_PUBLIC_URL.to_string())
-            } else {
-                VOYAGE_PUBLIC_URL.to_string()
-            }
-        });
-        EmbeddingModelState {
-            provider,
-            model_id: std::env::var("EMBEDDING_MODEL_ID")
-                .or_else(|_| std::env::var("COGNITIVE_MCP_VOYAGE_MODEL"))
-                .or_else(|_| std::env::var("VOYAGE_MODEL"))
-                .unwrap_or_default(),
-            endpoint,
-            dimensions: Self::env_u32("EMBEDDING_DIMENSIONS", VoyageModel::SHARED_EMBEDDING_DIMS),
-            status: "offline".to_string(),
-            available_models: Vec::new(),
-            model_digest: String::new(),
-        }
-    }
-
-    /// Query an Ollama-compatible provider (`/api/tags`) for its embedding models
-    /// and their content digests. Returns `None` if unreachable or unparseable.
-    async fn fetch_ollama_models(endpoint: &str) -> Option<Vec<(String, String)>> {
-        let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .ok()?;
-        let body = client.get(&url).send().await.ok()?.text().await.ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
-        let models = parsed.get("models").and_then(serde_json::Value::as_array)?;
-        Some(
-            models
-                .iter()
-                .filter_map(|m| {
-                    let name = m.get("name").and_then(serde_json::Value::as_str)?;
-                    let digest = m
-                        .get("digest")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default();
-                    Some((name.to_string(), digest.to_string()))
-                })
-                .collect(),
-        )
-    }
-
-    /// Compose the live observed state. Config comes from the environment; the
-    /// active model / reachability is a lookup to the provider — never a
-    /// hardcoded active model. Ollama enumerates and resolves a model + digest;
-    /// Voyage (and other cloud providers) are reachable iff an API key is present
-    /// and keep the config-driven model with no enumerable catalog.
-    async fn live_state() -> EmbeddingModelState {
-        let mut state = Self::config_state();
-        match state.provider.as_str() {
-            "ollama" => {
-                if let Some(models) = Self::fetch_ollama_models(&state.endpoint).await {
-                    state.status = "online".to_string();
-                    if state.model_id.is_empty() {
-                        state.model_id = models
-                            .first()
-                            .map(|(name, _)| name.clone())
-                            .unwrap_or_default();
-                    }
-                    if let Some((_, digest)) =
-                        models.iter().find(|(name, _)| name == &state.model_id)
-                    {
-                        state.model_digest = digest.clone();
-                    }
-                    state.available_models = models.into_iter().map(|(name, _)| name).collect();
-                }
-            }
-            // Voyage and other cloud providers: no list endpoint. Reachable iff
-            // an API key is present; the model is config-driven and the catalog
-            // is not enumerable, so available_models stays observed-empty.
-            _ => {
-                if Self::voyage_key_present() {
-                    state.status = "online".to_string();
-                    // Known Voyage catalog (the cloud API has no list endpoint):
-                    // the shared-space trio. This is the enumerable catalog, not
-                    // an active-model default.
-                    state.available_models = VoyageModel::SHARED_SPACE
-                        .iter()
-                        .map(|m| m.model_id().to_string())
-                        .collect();
-                }
-            }
-        }
-        state
+        .to_string()
     }
 }
 
@@ -348,17 +208,14 @@ impl StatePlugin for EmbeddingModelPlugin {
     fn name(&self) -> &str {
         "embedding_model"
     }
-
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
-
     fn schema(&self) -> Option<PluginSchema> {
         let mut schema = embedding_model_schema();
         super::common::oscal::ensure_category_metadata_fields(&mut schema);
         Some(schema)
     }
-
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),
@@ -370,34 +227,25 @@ impl StatePlugin for EmbeddingModelPlugin {
             },
         })
     }
-
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
-            checkpoint: None,
-        })
+        anyhow::bail!("embedding configuration changes require set_model or update_config")
     }
-
-    async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+    async fn verify_state(&self, desired: &Value) -> Result<bool> {
+        let actual = simd_json::serde::to_owned_value(embedding_model_state().await?)?;
+        Ok(&actual == desired)
     }
-
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
             id: uuid::Uuid::new_v4().to_string(),
             plugin: self.name().to_string(),
             timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::live_state().await)?,
+            state_snapshot: simd_json::serde::to_owned_value(embedding_model_state().await?)?,
             backend_checkpoint: None,
         })
     }
-
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        anyhow::bail!("embedding configuration rollback requires an explicit update_config")
     }
-
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
@@ -408,117 +256,122 @@ impl StatePlugin for EmbeddingModelPlugin {
     }
 }
 
-/// Canonical `embedding_model` schema derived from [`EmbeddingModelState`] via
-/// schemars, plus the callable method surface.
+/// Every input/output is plugin-owned and seals with this versioned contract.
 pub(crate) fn embedding_model_schema() -> PluginSchema {
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+    use methods::*;
+    use op_state_store::SideEffect;
     let root = serde_json::to_value(schemars::schema_for!(EmbeddingModelState))
-        .expect("schemars schema serializes to JSON");
+        .expect("embedding state schema serializes");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "embedding_model",
-        "1.0.0",
-        "Generic provider-agnostic embedding surface (provider, model id, endpoint, shared dimensions); the model is a swappable field. The one embedding-kind sibling of large_language_model",
+        "2.0.0",
+        "Native embeddings through a configured Voyage, Ollama, or OpenAI-compatible provider",
         &root,
     );
-
-    // Typed method inputs / outputs.
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct EmbedInput {
-        /// Texts to embed. Documents and queries share one space; set
-        /// `input_type` to "document" or "query" for the retrieval prompt.
-        pub texts: Vec<String>,
-        #[serde(default)]
-        pub input_type: String,
+    macro_rules! method {
+        ($name:literal, $input:ty, $output:ty, $effect:ident, $cap:literal, $subid:literal) => {
+            schema.methods.insert(
+                $name.into(),
+                method_decl_from_schemars_with_output::<$input, $output>(
+                    $name,
+                    SideEffect::$effect,
+                    true,
+                    $cap,
+                    $subid,
+                ),
+            );
+        };
     }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct EmbedOutput {
-        pub vectors: Vec<Vec<f32>>,
-        pub dimensions: u32,
-        pub model: String,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListModelsOutput {
-        pub models: Vec<String>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetConfigOutput {
-        pub config: serde_json::Value,
-    }
-
-    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
-    use op_state_store::SideEffect;
-
-    schema.methods.insert(
-        "embed".to_string(),
-        method_decl_from_schemars_with_output::<EmbedInput, EmbedOutput>(
-            "embed",
-            SideEffect::Mutation,
-            true,
-            "embedding.invoke",
-            "mut.service.embedding.embed@v1",
-        ),
+    method!(
+        "embed",
+        EmbedInput,
+        EmbedOutput,
+        Mutation,
+        "embedding.invoke",
+        "mut.service.embedding.embed@v1"
     );
-    schema.methods.insert(
-        "list_models".to_string(),
-        method_decl_from_schemars_with_output::<(), ListModelsOutput>(
-            "list_models",
-            SideEffect::Read,
-            true,
+    method!(
+        "list_models",
+        EmptyInput,
+        ListModelsOutput,
+        Read,
+        "embedding.read",
+        "obs.service.embedding.model.list@v1"
+    );
+    method!(
+        "get_config",
+        EmptyInput,
+        ConfigOutput,
+        Read,
+        "embedding.read",
+        "obs.service.embedding.config.get@v1"
+    );
+    method!(
+        "set_model",
+        SetModelInput,
+        ConfigOutput,
+        Mutation,
+        "embedding.invoke",
+        "mut.service.embedding.model.set@v1"
+    );
+    method!(
+        "update_config",
+        UpdateConfigInput,
+        ConfigOutput,
+        Mutation,
+        "embedding.invoke",
+        "mut.service.embedding.config.update@v1"
+    );
+    for (id, description) in [
+        (
+            "embedding.invoke",
+            "Embed texts and change the nonsecret embedding selection",
+        ),
+        (
             "embedding.read",
-            "obs.service.embedding.model.list@v1",
+            "Read embedding configuration and provider model metadata",
         ),
-    );
-    schema.methods.insert(
-        "get_config".to_string(),
-        method_decl_from_schemars_with_output::<(), GetConfigOutput>(
-            "get_config",
-            SideEffect::Read,
-            true,
-            "embedding.read",
-            "obs.service.embedding.config.get@v1",
-        ),
-    );
-    schema.methods.insert(
-        "set_model".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "set_model",
-            SideEffect::Mutation,
-            false,
-            "embedding.invoke",
-            "mut.service.embedding.model.set@v1",
-        ),
-    );
-    schema.methods.insert(
-        "update_config".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
-            "update_config",
-            SideEffect::Mutation,
-            false,
-            "embedding.invoke",
-            "mut.service.embedding.config.update@v1",
-        ),
-    );
-
-    schema.capabilities.insert(
-        "embedding.invoke".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "embedding.invoke".to_string(),
-            description: "Grants: embed, set_model, update_config.".to_string(),
-        },
-    );
-    schema.capabilities.insert(
-        "embedding.read".to_string(),
-        op_state_store::CapabilityDecl {
-            id: "embedding.read".to_string(),
-            description: "Grants: list_models, get_config.".to_string(),
-        },
-    );
-
+    ] {
+        schema.capabilities.insert(
+            id.into(),
+            op_state_store::CapabilityDecl {
+                id: id.into(),
+                description: description.into(),
+            },
+        );
+    }
     schema
 }
-
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("embedding_model", |_ctx| std::sync::Arc::new(EmbeddingModelPlugin::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_voyage_consumer_rejects_other_protocols_and_vector_spaces() {
+        let mut state = EmbeddingModelState {
+            provider: "voyage".into(),
+            model_id: "voyage-4-lite".into(),
+            dimensions: 1024,
+            ..Default::default()
+        };
+        assert_eq!(
+            legacy_voyage_model(&state).as_deref(),
+            Some("voyage-4-lite")
+        );
+        for provider in ["ollama", "openai", "openai_compatible", "unknown"] {
+            state.provider = provider.into();
+            assert!(legacy_voyage_model(&state).is_none());
+        }
+        state.provider = "voyage".into();
+        state.dimensions = 512;
+        assert!(legacy_voyage_model(&state).is_none());
+        state.dimensions = 1024;
+        state.model_id = "different-vector-space".into();
+        assert!(legacy_voyage_model(&state).is_none());
+    }
 }

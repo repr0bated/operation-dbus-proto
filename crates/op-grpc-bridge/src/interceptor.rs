@@ -291,25 +291,26 @@ fn verify_per_identity(
 ) -> Option<Result<GhostbridgeIdentity, Status>> {
     let engine = ENGINE.read().expect("engine lock poisoned").clone()?;
     let session_id = pubkey.map(op_identity::session::derive_session_id);
-    let args = match (&session_id, trace_id) {
-        (Some(sid), _) => serde_json::json!({ "session_id": sid }),
-        (None, Some(trace)) => serde_json::json!({ "trace_id": trace }),
+    let handle = match (pubkey, trace_id) {
+        (Some(pubkey), _) => pubkey,
+        (None, Some(trace)) => trace,
         (None, None) => return None,
     };
 
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(
-            crate::identity_sled_dispatch::dispatch_identity_sled_method(
-                engine.as_ref(),
-                "get_identity",
-                &args,
-            ),
+            crate::identity_sled_dispatch::session_record_for_actor(engine.as_ref(), handle),
         )
     });
 
     let identity = match result {
-        Ok(value) => value.get("identity").cloned()?,
-        Err(_) => return None,
+        Ok(Some(value)) => serde_json::to_value(value).ok()?,
+        Ok(None) => return None,
+        Err(error) => {
+            return Some(Err(Status::unavailable(format!(
+                "identity credential projection unavailable: {error}"
+            ))))
+        }
     };
     // Session genesis is the authoritative arrival proof. Legacy hashed
     // identity values are deliberately not accepted as authorization input.
@@ -412,7 +413,7 @@ fn ghostbridge_genesis_interceptor(mut req: Request<()>) -> Result<Request<()>, 
         )
     });
     match record {
-        Some(sled) => {
+        Ok(Some(sled)) => {
             let principal_id = resolve_active_principal_id(&sled.wireguard_pubkey)?;
             req.extensions_mut().insert(GhostbridgeIdentity {
                 principal_id,
@@ -421,9 +422,12 @@ fn ghostbridge_genesis_interceptor(mut req: Request<()>) -> Result<Request<()>, 
             });
             Ok(req)
         }
-        None => Err(Status::permission_denied(
+        Ok(None) => Err(Status::permission_denied(
             "A.N.N.A. Scribe: Unknown session genesis. Connection Dropped.",
         )),
+        Err(error) => Err(Status::unavailable(format!(
+            "identity credential projection unavailable: {error}"
+        ))),
     }
 }
 
@@ -454,7 +458,7 @@ pub fn registration_interceptor(req: Request<()>) -> Result<Request<()>, Status>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::human_principal_dispatch::tests::{pk, register, temp_cozo};
+    use crate::human_principal_dispatch::tests::{pk, register, temp_cozo, TempShm};
     use crate::identity_sled_dispatch::tests::{sled_engine, write_identity};
     use crate::oracle_assertion::tests::{
         signed_with_fields, source_at, test_ip, test_issuer, trust_store_for_issuer,
@@ -518,12 +522,13 @@ pub(crate) mod tests {
         Arc::new(AssertionValidator::new(trust_store_for_issuer(&issuer)))
     }
 
-    async fn anchor_assertion_session(pubkey: &str) {
-        let (engine, _shm) = sled_engine();
+    async fn anchor_assertion_session(pubkey: &str) -> TempShm {
+        let (engine, shm) = sled_engine();
         write_identity(engine.as_ref(), pubkey)
             .await
             .expect("write assertion session identity");
         set_engine(engine);
+        shm
     }
 
     #[test]
@@ -633,7 +638,7 @@ pub(crate) mod tests {
         let issuer = test_issuer();
         let pubkey = pk(41);
         register(&pubkey, "interceptor").await.expect("register");
-        anchor_assertion_session(&pubkey).await;
+        let _shm = anchor_assertion_session(&pubkey).await;
         let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
             trust_store_for_issuer(&issuer),
         )));
@@ -667,7 +672,7 @@ pub(crate) mod tests {
         let issuer = test_issuer();
         let pubkey = pk(42);
         register(&pubkey, "shadow").await.expect("register");
-        anchor_assertion_session(&pubkey).await;
+        let _shm = anchor_assertion_session(&pubkey).await;
         let mut gate = make_ghostbridge_interceptor(Arc::new(AssertionValidator::new(
             trust_store_for_issuer(&issuer),
         )));
@@ -737,7 +742,7 @@ pub(crate) mod tests {
         let identity = write_identity(engine.as_ref(), &pubkey)
             .await
             .expect("write");
-        crate::identity_sled_dispatch::deactivate_session(engine.as_ref(), &identity.session_id)
+        crate::identity_sled_dispatch::tests::park_identity(engine.as_ref(), &identity.session_id)
             .await
             .expect("park");
         set_engine(engine);

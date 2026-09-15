@@ -31,7 +31,6 @@ use crate::oracle_assertion::{AssertionValidator, DecoyTrustStore};
 use crate::dynamic_reflection::{ActiveReflectionCatalog, DynamicReflectionService};
 use crate::mutation_engine::{ChangeType, MutationEngine};
 use crate::plugin_grpc_gen::MethodServiceRegistry;
-use crate::plugin_object_blob::blobify_plugin_schema;
 use crate::proto::{
     event_chain_service_server::EventChainService, ovsdb_mirror_server::OvsdbMirror,
     plugin_service_server::PluginService, runtime_mirror_server::RuntimeMirror,
@@ -58,12 +57,12 @@ use crate::proto::{
     RuntimeListServicesRequest, RuntimeListServicesResponse, RuntimeMetricUpdate,
     RuntimeNetworkInterface as ProtoRuntimeNetworkInterface,
     RuntimeServiceInfo as ProtoRuntimeServiceInfo, RuntimeStreamMetricsRequest,
-    SearchSemanticTraceRequest, SearchSemanticTraceResponse, SemanticTraceMatch,
-    SetPropertyRequest, SetPropertyResponse, Signal, StateChange as ProtoStateChange,
-    SubscribeEventsRequest, SubscribeRequest, SubscribeSignalsRequest, TagLock as ProtoTagLock,
-    VerifyChainRequest, VerifyChainResponse,
+    SearchSemanticTraceRequest, SearchSemanticTraceResponse, SetPropertyRequest,
+    SetPropertyResponse, Signal, StateChange as ProtoStateChange,
+    StateFrameKind as ProtoStateFrameKind, SubscribeEventsRequest, SubscribeRequest,
+    SubscribeSignalsRequest, TagLock as ProtoTagLock, VerifyChainRequest, VerifyChainResponse,
 };
-use op_state_store::{Decision, DenyReason, MerkleProof, PluginSchema};
+use op_state_store::{Decision, DenyReason, PluginSchema};
 use zbus::zvariant::{Array as ZArray, OwnedValue as ZOwnedValue, Str as ZStr, Value as ZValue};
 use zbus::{Connection, Proxy};
 
@@ -83,11 +82,11 @@ struct SchemaMethodCapability {
 }
 
 fn read_plugin_schema_json(plugin_id: &str) -> Option<JsonValue> {
-    let catalog_dir = std::env::var("OP_BLOB_CATALOG_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR));
-    let schema = op_blob::catalog::read_plugin_state_store_schema(&catalog_dir, plugin_id)?;
-    serde_json::to_value(&schema).ok()
+    let catalog_dir = crate::sealed_schema_reader::blob_catalog_dir_from_env();
+    let document =
+        crate::sealed_schema_reader::read_manifest_pinned_schema_document(&catalog_dir, plugin_id)
+            .ok()?;
+    serde_json::from_str(&document.blob.schema_json).ok()
 }
 
 /// Request metadata key by which a caller declares the capability it is exercising.
@@ -178,6 +177,68 @@ pub(crate) fn enforce_bridge_capability_with_schema(
             Some(&required),
             "matching request capability and exact-principal grant are required",
         ))
+    }
+}
+
+#[allow(clippy::result_large_err)] // Preserve tonic status at the RPC boundary.
+fn validate_generated_arguments(
+    schema: &JsonValue,
+    method_name: &str,
+    args: &mut JsonValue,
+) -> Result<(), Status> {
+    let contract = schema
+        .get("methods")
+        .and_then(|methods| methods.get(method_name))
+        .and_then(|method| method.get("args"))
+        .ok_or_else(|| Status::failed_precondition("sealed method input schema is unavailable"))?;
+    // A Rust unit input has a null JSON contract and an empty protobuf
+    // message. Normalize only that exact case; other inputs retain their
+    // required fields, nullability and domain constraints from the blob.
+    if contract.get("type").and_then(JsonValue::as_str) == Some("null")
+        && args.as_object().is_some_and(|object| object.is_empty())
+    {
+        *args = JsonValue::Null;
+    }
+    let validator = jsonschema::Validator::new(contract).map_err(|error| {
+        Status::failed_precondition(format!("invalid sealed method input schema: {error}"))
+    })?;
+    validator.validate(args).map_err(|error| {
+        Status::invalid_argument(format!(
+            "arguments do not conform to {method_name}: {error}"
+        ))
+    })
+}
+
+#[cfg(test)]
+mod generated_argument_tests {
+    use super::*;
+
+    #[test]
+    fn typed_requests_obey_sealed_constraints_and_unit_contracts() {
+        let schema = serde_json::json!({"methods":{
+            "configure":{"args":{"type":"object","required":["port","enabled"],"properties":{
+                "port":{"type":"integer","minimum":1,"maximum":65535},
+                "enabled":{"type":"boolean"}
+            }}},
+            "list":{"args":{"type":"null"}}
+        }});
+        let mut valid = serde_json::json!({"port":443,"enabled":false});
+        validate_generated_arguments(&schema, "configure", &mut valid).unwrap();
+        let mut invalid = serde_json::json!({"port":0,"enabled":false});
+        assert_eq!(
+            validate_generated_arguments(&schema, "configure", &mut invalid)
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        let mut missing = serde_json::json!({"port":443});
+        assert!(validate_generated_arguments(&schema, "configure", &mut missing).is_err());
+        let mut empty = serde_json::json!({});
+        validate_generated_arguments(&schema, "list", &mut empty).unwrap();
+        assert!(empty.is_null());
+        let mut supplied = serde_json::json!({"unexpected":true});
+        assert!(validate_generated_arguments(&schema, "list", &mut supplied).is_err());
+        assert!(validate_generated_arguments(&schema, "missing", &mut empty).is_err());
     }
 }
 
@@ -283,17 +344,16 @@ impl PluginSchemaProvider for SchemaCatalogPluginProvider {
 struct SchemaCatalogPluginProvider;
 
 fn read_schema_catalog_plugins() -> Vec<PluginInfo> {
-    // A blob in the catalog IS the plugin: enumerate the sealed catalog.
-    let Ok(store) = op_blob::BlobStore::open_default() else {
+    let directory = crate::sealed_schema_reader::blob_catalog_dir_from_env();
+    let Ok(catalog) = crate::sealed_schema_reader::read_manifest_pinned_catalog(&directory) else {
         return Vec::new();
     };
-    store
-        .plugin_object_blobs()
-        .iter()
-        .filter(|blob| !op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id))
-        .filter_map(|blob| {
-            let schema: JsonValue = serde_json::from_str(&blob.schema_json).ok()?;
-            Some(plugin_info_from_schema(&blob.manifest.plugin_id, &schema))
+    catalog
+        .plugins
+        .into_iter()
+        .filter_map(|(id, document)| {
+            let schema: JsonValue = serde_json::from_str(&document.blob.schema_json).ok()?;
+            Some(plugin_info_from_schema(&id, &schema))
         })
         .collect()
 }
@@ -302,8 +362,15 @@ fn read_schema(plugin_id: &str) -> Option<(String, String, String)> {
     if op_plugins::default_registry::is_retired_plugin(plugin_id) {
         return None;
     }
-    let schema = read_plugin_schema_json(plugin_id)?;
-    schema_response_from_value(&schema)
+    let document = crate::sealed_schema_reader::read_manifest_pinned_schema_document(
+        &crate::sealed_schema_reader::blob_catalog_dir_from_env(),
+        plugin_id,
+    )
+    .ok()?;
+    let mut response =
+        schema_response_from_value(&serde_json::from_str(&document.blob.schema_json).ok()?)?;
+    response.0 = document.blob.schema_json;
+    Some(response)
 }
 
 fn schema_response_from_value(schema: &JsonValue) -> Option<(String, String, String)> {
@@ -395,8 +462,6 @@ pub struct OperationGrpcServer {
     mutation_engine: Arc<MutationEngine>,
     plugin_provider: Arc<dyn PluginSchemaProvider>,
     semantic_shuttle: Option<Arc<QdrantSemanticShuttle>>,
-    /// Broadcast channel for chain events
-    chain_events: broadcast::Sender<ProtoChainEvent>,
     /// Component registry state (shared across clones)
     registry: Arc<RwLock<RegistryInner>>,
     /// Per-method gRPC services (frozen at D-Bus object creation)
@@ -409,13 +474,11 @@ pub struct OperationGrpcServer {
 
 impl OperationGrpcServer {
     pub fn new(mutation_engine: Arc<MutationEngine>) -> Self {
-        let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
             mutation_engine,
             plugin_provider: Arc::new(SchemaCatalogPluginProvider),
             semantic_shuttle: None,
-            chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
             per_method_services: PerMethodGrpcServices::new(),
             per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
@@ -431,13 +494,11 @@ impl OperationGrpcServer {
         mutation_engine: Arc<MutationEngine>,
         plugin_provider: Arc<dyn PluginSchemaProvider>,
     ) -> Self {
-        let (chain_tx, _) = broadcast::channel(1024);
         let (registry, _) = RegistryInner::new();
         Self {
             mutation_engine,
             plugin_provider,
             semantic_shuttle: None,
-            chain_events: chain_tx,
             registry: Arc::new(RwLock::new(registry)),
             per_method_services: PerMethodGrpcServices::new(),
             per_method_reflection: Arc::new(PerMethodReflectionRegistry::new()),
@@ -463,30 +524,7 @@ impl OperationGrpcServer {
     /// same plugin set that was sealed, without waiting for every plugin to
     /// re-register at runtime. Call once at server startup.
     pub async fn hydrate_reflection_from_shm(&self) -> usize {
-        let store = match op_blob::BlobStore::open_default() {
-            Ok(store) => store,
-            Err(error) => {
-                tracing::warn!(%error, "cannot open SHM blob catalog; reflection starts empty");
-                return 0;
-            }
-        };
-        let blobs = store
-            .plugin_object_blobs()
-            .into_iter()
-            .filter(|blob| {
-                !op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id)
-            })
-            .collect::<Vec<_>>();
-        let count = blobs.len();
-        for blob in blobs {
-            self.active_reflection.upsert_blob(blob).await;
-        }
-        // Record the manifest hash so the arrival-triggered resync in the
-        // reflection service doesn't reload what startup just loaded.
-        let hash = op_blob::catalog::ActiveReflectionCatalog::read_catalog_hash(
-            std::path::Path::new(op_blob::catalog::DEFAULT_SHM_DIR),
-        );
-        self.active_reflection.set_catalog_hash(hash).await;
+        let count = self.active_reflection.sync_from_shm().await;
         tracing::info!(count, "hydrated reflection from SHM blob catalog");
         count
     }
@@ -558,39 +596,33 @@ impl OperationGrpcServer {
         if op_plugins::default_registry::is_retired_plugin(&plugin_id) {
             anyhow::bail!("plugin '{}' is retired and cannot be registered", plugin_id);
         }
-        // Create frozen services for all methods
+        // Registration cannot create plugin existence or replace the sealed
+        // contract. A supplied schema must equal the manifest-pinned owner.
+        let pinned = crate::sealed_schema_reader::read_registration_document(
+            self.active_reflection.catalog_dir(),
+            &plugin_id,
+            schema,
+        )?;
         let registries = self
             .per_method_services
-            .create_frozen_services(plugin_id.clone(), schema)
+            .register_sealed_services(
+                plugin_id.clone(),
+                &pinned.schema,
+                &pinned.blob.descriptor_set,
+            )
             .await?;
 
         // Register each method with the reflection registry
-        for registry in &registries {
+        self.per_method_reflection
+            .unregister_plugin(&plugin_id)
+            .await;
+        for method in &pinned.blob.manifest.methods {
             self.per_method_reflection
-                .register(
-                    plugin_id.clone(),
-                    registry.method_name.clone(),
-                    registry.subid.clone(),
-                    registry.required_capability.clone(),
-                    registry.schema_version.clone(),
-                )
+                .register_sealed(plugin_id.clone(), method, pinned.schema.version.clone())
                 .await;
         }
 
-        let blob = blobify_plugin_schema(&plugin_id, schema.clone());
-        // Persist the sealed per-object blob to shm (zero-copy read-path for
-        // other processes) before handing it to the reflection catalog.
-        match op_blob::BlobStore::open_default() {
-            Ok(mut store) => {
-                if let Err(error) = store.write(&blob) {
-                    tracing::warn!(%plugin_id, %error, "failed to persist plugin object blob");
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to open plugin object blob store");
-            }
-        }
-        self.active_reflection.upsert_blob(blob).await;
+        self.active_reflection.sync_from_shm().await;
 
         Ok(registries)
     }
@@ -649,7 +681,9 @@ impl OperationGrpcServer {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
 
-        if let Err(error) = enforce_bridge_capability(
+        let sealed_schema = read_plugin_schema_json(plugin_id);
+        if let Err(error) = enforce_bridge_capability_with_schema(
+            sealed_schema.as_ref(),
             plugin_id,
             method_name,
             declared_capability.as_deref(),
@@ -678,23 +712,30 @@ impl OperationGrpcServer {
                 &mut serde_json::Serializer::new(&mut json_args),
                 &SerializeOptions::new()
                     .use_proto_field_name(true)
-                    .stringify_64_bit_integers(false),
+                    .stringify_64_bit_integers(false)
+                    .skip_default_fields(false),
             )
             .map_err(|error| {
                 Status::internal(format!(
                     "failed to serialize typed request for {plugin_id}.{method_name}: {error}"
                 ))
             })?;
-        let json_args = String::from_utf8(json_args).map_err(|error| {
+        let mut json_args = String::from_utf8(json_args).map_err(|error| {
             Status::internal(format!(
                 "typed request JSON was not UTF-8 for {plugin_id}.{method_name}: {error}"
             ))
         })?;
-        let args_value: JsonValue = serde_json::from_str(&json_args).map_err(|error| {
+        let mut args_value: JsonValue = serde_json::from_str(&json_args).map_err(|error| {
             Status::internal(format!(
                 "failed to inspect typed request for {plugin_id}.{method_name}: {error}"
             ))
         })?;
+        let sealed_schema = sealed_schema
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("sealed method schema is unavailable"))?;
+        validate_generated_arguments(sealed_schema, method_name, &mut args_value)?;
+        json_args = serde_json::to_string(&args_value)
+            .map_err(|error| Status::internal(error.to_string()))?;
         enforce_human_principal_self_service(
             plugin_id,
             method_name,
@@ -834,22 +875,21 @@ pub fn build_operation_routes_with_validator(
 
     let reflection_v1 = DynamicReflectionService::new(server.active_reflection()).into_v1_server();
 
-    // Human assertions are accepted only by PluginService, whose CallMethod
-    // handler enforces the schema-declared capability. Domain services expose
-    // legacy RPCs without per-method capability declarations, so widening
-    // their interceptor to human assertions would turn authentication into
-    // authorization (for example, OvsdbMirror.Transact).
+    // StateSync mutations, PluginService and EventChainService enforce exact
+    // schema-declared capabilities after strict credential validation. State
+    // reads expose only the sealed public projection. Other legacy domain
+    // RPCs must not accept assertions until their own authorization is closed.
     let assertion_intercept = interceptor::make_ghostbridge_interceptor(validator.clone());
     let legacy_intercept = interceptor::GhostbridgeInterceptor;
 
     let routes = tonic::service::Routes::new(crate::grpc_web::enable(
-        StateSyncServer::with_interceptor(server.clone(), legacy_intercept.clone()),
+        StateSyncServer::with_interceptor(server.clone(), assertion_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        PluginServiceServer::with_interceptor(server.clone(), assertion_intercept),
+        PluginServiceServer::with_interceptor(server.clone(), assertion_intercept.clone()),
     ))
     .add_service(crate::grpc_web::enable(
-        EventChainServiceServer::with_interceptor(server.clone(), legacy_intercept.clone()),
+        EventChainServiceServer::with_interceptor(server.clone(), assertion_intercept),
     ))
     .add_service(crate::grpc_web::enable(
         OvsdbMirrorServer::with_interceptor(server.clone(), legacy_intercept.clone()),
@@ -896,7 +936,7 @@ pub async fn run_grpc_server(
     mutation_engine: Arc<MutationEngine>,
     plugin_provider: Option<Arc<dyn PluginSchemaProvider>>,
     tls_identity: Option<Identity>,
-) -> Result<(), tonic::transport::Error> {
+) -> anyhow::Result<()> {
     // Imports here back only the `health_reporter.set_serving::<T>()` type args;
     // the service *instances* are mounted in `build_operation_routes`.
     use crate::proto::event_chain_service_server::EventChainServiceServer;
@@ -916,11 +956,26 @@ pub async fn run_grpc_server(
         info!(replayed, "audit trail restored from durable storage");
     }
 
+    mutation_engine.initialize_identity_sled_store().await?;
+    crate::identity_sled_dispatch::recover_identity_startup(mutation_engine.as_ref()).await?;
+    let parked =
+        crate::identity_sled_dispatch::park_orphaned_container_sessions(mutation_engine.as_ref())
+            .await?;
+    if parked > 0 {
+        warn!(
+            parked,
+            "parked orphaned identity containers before serving gRPC"
+        );
+    }
+
     match mutation_engine.seed_missing_plugin_projections().await {
         Ok(count) => info!(count, "Plugin projections seeded"),
         Err(error) => warn!(%error, "Plugin projection seeding failed"),
     }
-    crate::identity_sled_dispatch::replace_cache_from_cozo(mutation_engine.as_ref()).await;
+
+    if let Err(error) = mutation_engine.clone().start().await {
+        warn!(%error, "Native plugin observation startup failed");
+    }
 
     let server = if let Some(provider) = plugin_provider {
         OperationGrpcServer::with_plugin_provider(mutation_engine, provider)
@@ -1004,7 +1059,8 @@ pub async fn run_grpc_server(
         .add_routes(build_operation_routes(server))
         .add_service(crate::grpc_web::enable(health_service))
         .serve(addr)
-        .await
+        .await?;
+    Ok(())
 }
 
 // =============================================================================
@@ -1019,35 +1075,161 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
+        let verified_identity =
+            crate::event_chain_access::verified_identity(&self.mutation_engine, &request).await?;
+        if let Some(selection) = crate::chatbot_episode_stream::EpisodeSelection::from_subscription(
+            &request.get_ref().plugin_ids,
+            &request.get_ref().path_patterns,
+        )
+        .map_err(|_| Status::invalid_argument("invalid private chatbot episode selection"))?
+        {
+            return crate::chatbot_episode_stream::subscribe(
+                self.mutation_engine.clone(),
+                request,
+                verified_identity,
+                selection,
+            )
+            .await
+            .map(Response::new);
+        }
+        if let Some(selection) =
+            crate::generation_jobs_selection::GenerationSelection::from_subscription(
+                &request.get_ref().plugin_ids,
+                &request.get_ref().path_patterns,
+            )
+            .map_err(|_| Status::invalid_argument("invalid private generation selection"))?
+        {
+            return crate::generation_jobs_stream::subscribe(
+                self.mutation_engine.clone(),
+                request,
+                verified_identity,
+                selection,
+            )
+            .await
+            .map(Response::new);
+        }
+        let private_selection =
+            crate::ui_workspace_stream_selection::WorkspaceSelection::from_subscription(
+                &request.get_ref().plugin_ids,
+                &request.get_ref().path_patterns,
+            )
+            .map_err(|_| Status::invalid_argument("invalid private workspace selection"))?;
+        if let Some(selection) = private_selection {
+            return crate::ui_workspace_stream::subscribe(
+                self.mutation_engine.clone(),
+                request,
+                verified_identity,
+                selection,
+            )
+            .await
+            .map(Response::new);
+        }
         let req = request.into_inner();
         info!("gRPC Subscribe: plugins={:?}", req.plugin_ids);
 
         let mut rx = self.mutation_engine.change_tx().subscribe();
         let plugin_filters = req.plugin_ids;
         let path_filters = req.path_patterns;
-        let tag_filters = req.tags;
+        if !req.tags.is_empty() {
+            return Err(Status::unimplemented(
+                "StateSync tag filtering requires committed SHM tag provenance",
+            ));
+        }
+        crate::state_stream::validate_public_path_patterns(&path_filters)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let initial = crate::state_stream::read_public_state_snapshot(&plugin_filters)
+            .await
+            .map_err(public_state_status)?;
+        crate::state_stream::validate_path_patterns_against_snapshot(&initial, &path_filters)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let include_initial_state = req.include_initial_state;
+        let include_schema = req.include_schema;
 
+        let engine = self.mutation_engine.clone();
         let stream = stream! {
+            let mut previous = initial;
+            match state_snapshot_frames(
+                &previous,
+                None,
+                include_schema,
+                include_initial_state,
+                ProtoStateFrameKind::InitialState,
+                &path_filters,
+                false,
+            ) {
+                Ok(frames) => for frame in frames {
+                    if let Err(status) = crate::event_chain_access::validate_identity(&engine, &verified_identity).await {
+                        yield Err(status); return;
+                    }
+                    yield Ok(frame);
+                },
+                Err(status) => { yield Err(status); return; }
+            }
+            let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+            heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            heartbeat.tick().await;
             loop {
-                match rx.recv().await {
+                let force_rehydrate = tokio::select! {
+                    received = rx.recv() => match received {
                     Ok(update) => {
                         let matches_plugin = plugin_filters.is_empty()
                             || plugin_filters.contains(&update.plugin_id);
-                        let matches_path = path_filters.is_empty()
-                            || path_filters.iter().any(|p| update.object_path.starts_with(p));
-                        let matches_tag = tag_filters.is_empty()
-                            || update.tags_touched.iter().any(|t| tag_filters.contains(t));
+                        let commits_state = !matches!(
+                            update.change_type,
+                            ChangeType::MethodCall | ChangeType::Signal
+                        );
 
-                        if matches_plugin && matches_path && matches_tag {
-                            yield Ok(proto_state_change(&update));
+                        if update.change_type == ChangeType::SchemaMigration || (matches_plugin && commits_state) {
+                            Some(false)
+                        } else {
+                            continue;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Subscriber lagged, missed {} updates", n);
-                        continue;
+                        Some(true)
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
+                    },
+                    _ = heartbeat.tick() => None,
+                };
+                if let Err(status) = crate::event_chain_access::validate_identity(&engine, &verified_identity).await {
+                    yield Err(status); break;
                 }
+                let Some(force_rehydrate) = force_rehydrate else {
+                    yield Ok(state_heartbeat_frame(&previous));
+                    continue;
+                };
+                let current = match crate::state_stream::read_public_state_snapshot_after_admission(&plugin_filters).await {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        yield Err(public_state_status(error));
+                        break;
+                    }
+                };
+                let changed = current.generation != previous.generation
+                    || current.catalog_hash != previous.catalog_hash;
+                if changed || force_rehydrate {
+                    match state_snapshot_frames(
+                        &current,
+                        Some(&previous),
+                        include_schema,
+                        true,
+                        ProtoStateFrameKind::Update,
+                        &path_filters,
+                        force_rehydrate,
+                    ) {
+                        Ok(frames) => for frame in frames {
+                            if let Err(status) = crate::event_chain_access::validate_identity(&engine, &verified_identity).await {
+                                yield Err(status); return;
+                            }
+                            yield Ok(frame);
+                        },
+                        Err(status) => { yield Err(status); break; }
+                    }
+                    previous = current;
+                }
+                yield Ok(state_heartbeat_frame(&previous));
             }
         };
 
@@ -1058,126 +1240,151 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<MutateRequest>,
     ) -> Result<Response<MutateResponse>, Status> {
-        let human_identity = request
-            .extensions()
-            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
-            .cloned();
-        let identity = interceptor::bridge_capability_identity(request.extensions());
-        let req = request.into_inner();
-        let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
-        let change_type = match req.operation {
-            x if x == ProtoOperationType::SetProperty as i32 => ChangeType::PropertySet,
-            x if x == ProtoOperationType::CallMethod as i32 => ChangeType::MethodCall,
-            x if x == ProtoOperationType::ApplyPatch as i32 => ChangeType::ObjectAdded,
-            _ => ChangeType::PropertySet,
-        };
-        let capability_id = if req.capability_id.is_empty() {
-            None
-        } else {
-            Some(req.capability_id.clone())
-        };
-
-        if change_type == ChangeType::MethodCall {
-            if let Some(method_name) = req.member_name.strip_prefix("method:").or({
-                if req.member_name.is_empty() {
-                    None
-                } else {
-                    Some(req.member_name.as_str())
-                }
-            }) {
-                if let Err(error) = enforce_bridge_capability(
-                    &req.plugin_id,
-                    method_name,
-                    capability_id.as_deref(),
-                    identity.as_ref(),
-                ) {
-                    return Ok(Response::new(MutateResponse {
-                        success: false,
-                        event_id: 0,
-                        event_hash: String::new(),
-                        result: None,
-                        error: Some(error),
-                        effective_hash: String::new(),
-                    }));
-                }
-            }
-            let args_value = serde_json::to_value(&value)
-                .map_err(|error| Status::invalid_argument(error.to_string()))?;
-            if let Err(error) = enforce_human_principal_self_service(
-                &req.plugin_id,
-                req.member_name
+        let operation = request.get_ref().operation;
+        if operation == ProtoOperationType::CallMethod as i32 {
+            let request = request.map(|req| CallMethodRequest {
+                plugin_id: req.plugin_id,
+                object_path: req.object_path,
+                interface_name: op_plugins::canonical::PLUGIN_INTERFACE.to_string(),
+                method_name: req
+                    .member_name
                     .strip_prefix("method:")
-                    .unwrap_or(&req.member_name),
-                &args_value,
-                human_identity.as_ref(),
-            ) {
-                return Ok(Response::new(MutateResponse {
-                    success: false,
-                    event_id: 0,
-                    event_hash: String::new(),
-                    result: None,
-                    error: Some(error),
-                    effective_hash: String::new(),
-                }));
-            }
-        }
-
-        let result = self
-            .mutation_engine
-            .mutate(
-                req.plugin_id.clone(),
-                req.object_path.clone(),
-                change_type,
-                if req.member_name.is_empty() {
-                    None
-                } else {
-                    Some(req.member_name.clone())
-                },
-                value,
-                req.actor_id.clone(),
-                capability_id,
-            )
-            .await;
-
-        match result {
-            Ok(ok) => Ok(Response::new(MutateResponse {
-                success: ok.success,
-                event_id: ok.event_id,
-                event_hash: ok.event_hash,
-                result: ok.result.map(|v| simd_to_prost_value(&v)),
-                error: None,
+                    .unwrap_or(&req.member_name)
+                    .to_string(),
+                arguments: req.value.into_iter().collect(),
+                actor_id: req.actor_id,
+                capability_id: req.capability_id,
+            });
+            let response = <Self as PluginService>::call_method(self, request)
+                .await?
+                .into_inner();
+            return Ok(Response::new(MutateResponse {
+                success: response.success,
+                event_id: response.event_id,
+                event_hash: response.event_hash,
+                result: response.result,
+                error: response.error,
                 effective_hash: String::new(),
-            })),
-            Err(e) => Ok(Response::new(MutateResponse {
-                success: false,
-                event_id: 0,
-                event_hash: String::new(),
+            }));
+        }
+        if operation == ProtoOperationType::SetProperty as i32 {
+            let request = request.map(|req| SetPropertyRequest {
+                plugin_id: req.plugin_id,
+                object_path: req.object_path,
+                interface_name: op_plugins::canonical::PLUGIN_INTERFACE.to_string(),
+                property_name: req.member_name,
+                value: req.value,
+                actor_id: req.actor_id,
+                capability_id: req.capability_id,
+            });
+            let response = <Self as PluginService>::set_property(self, request)
+                .await?
+                .into_inner();
+            return Ok(Response::new(MutateResponse {
+                success: response.success,
+                event_id: response.event_id,
+                event_hash: response.event_hash,
                 result: None,
-                error: Some(ProtoMutationError {
-                    code: ProtoErrorCode::Internal as i32,
-                    message: e.to_string(),
-                    deny_reason: None,
-                }),
+                error: response.error,
                 effective_hash: String::new(),
-            })),
+            }));
         }
+        Err(Status::failed_precondition(
+            "raw state replacement is not a backend mutation; use a schema-declared plugin method",
+        ))
     }
 
     async fn get_state(
         &self,
         request: Request<GetStateRequest>,
     ) -> Result<Response<GetStateResponse>, Status> {
+        let verified_identity =
+            crate::event_chain_access::verified_identity(&self.mutation_engine, &request).await?;
+        if let Some(selection) = crate::chatbot_episode_stream::EpisodeSelection::from_get_state(
+            &request.get_ref().plugin_id,
+            &request.get_ref().object_path,
+        )
+        .map_err(|_| Status::invalid_argument("invalid private chatbot episode selection"))?
+        {
+            return crate::chatbot_episode_stream::get_state(
+                self.mutation_engine.clone(),
+                request,
+                verified_identity,
+                selection,
+            )
+            .await
+            .map(Response::new);
+        }
+        if let Some(selection) =
+            crate::generation_jobs_selection::GenerationSelection::from_get_state(
+                &request.get_ref().plugin_id,
+                &request.get_ref().object_path,
+            )
+            .map_err(|_| Status::invalid_argument("invalid private generation selection"))?
+        {
+            return crate::generation_jobs_stream::get_state(
+                self.mutation_engine.clone(),
+                request,
+                verified_identity,
+                selection,
+            )
+            .await
+            .map(Response::new);
+        }
+        let private_selection =
+            crate::ui_workspace_stream_selection::WorkspaceSelection::from_get_state(
+                &request.get_ref().plugin_id,
+                &request.get_ref().object_path,
+            )
+            .map_err(|_| Status::invalid_argument("invalid private workspace selection"))?;
+        if let Some(selection) = private_selection {
+            return crate::ui_workspace_stream::get_state(
+                self.mutation_engine.clone(),
+                request,
+                verified_identity,
+                selection,
+            )
+            .await
+            .map(Response::new);
+        }
         let req = request.into_inner();
-        let state = self.mutation_engine.get_public_state(&req.plugin_id).await;
-
-        let state_struct = state
-            .map(|v| simd_to_prost_struct(&v))
-            .unwrap_or_else(ProstStruct::default);
+        let snapshot =
+            crate::state_stream::read_public_state_snapshot(std::slice::from_ref(&req.plugin_id))
+                .await
+                .map_err(public_state_status)?;
+        let plugin = snapshot
+            .plugins
+            .get(&req.plugin_id)
+            .ok_or_else(|| Status::not_found("plugin is absent from the sealed catalog"))?;
+        let root_state = plugin
+            .state
+            .as_ref()
+            .ok_or_else(|| Status::not_found("plugin has no committed public SHM state"))?;
+        let requested_path = if req.object_path.is_empty() {
+            crate::state_stream::plugin_object_path(&req.plugin_id)
+        } else {
+            req.object_path
+        };
+        crate::state_stream::validate_public_path_patterns(std::slice::from_ref(&requested_path))
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let root_path = crate::state_stream::plugin_object_path(&req.plugin_id);
+        if requested_path != root_path && !requested_path.starts_with(&(root_path.clone() + "/")) {
+            return Err(Status::invalid_argument(
+                "GetState object path is outside the public plugin tree",
+            ));
+        }
+        let state =
+            crate::state_stream::state_at_object_path(&req.plugin_id, root_state, &requested_path)
+                .map_err(|error| Status::not_found(error.to_string()))?;
+        let state = simd_json::serde::to_owned_value(state)
+            .map_err(|error| Status::data_loss(error.to_string()))?;
+        let state_struct = simd_to_prost_struct(&state);
 
         Ok(Response::new(GetStateResponse {
             state: Some(state_struct),
             effective_hash: String::new(),
             at_event_id: 0,
+            value: Some(simd_to_prost_value(&state)),
         }))
     }
 
@@ -1185,16 +1392,20 @@ impl StateSync for OperationGrpcServer {
         &self,
         request: Request<BatchMutateRequest>,
     ) -> Result<Response<BatchMutateResponse>, Status> {
-        let req = request.into_inner();
+        let (metadata, extensions, req) = request.into_parts();
+        if req.atomic {
+            return Err(Status::unimplemented(
+                "atomic mutation across plugin backends is not supported",
+            ));
+        }
         let mut results = Vec::new();
         let mut failed_index = -1;
 
         for (idx, m) in req.mutations.into_iter().enumerate() {
-            let mut_req = Request::new(m);
+            let mut_req = Request::from_parts(metadata.clone(), extensions.clone(), m);
             let resp = self.mutate(mut_req).await?.into_inner();
-            if !resp.success && failed_index < 0 && req.atomic {
+            if !resp.success && failed_index < 0 {
                 failed_index = idx as i32;
-                break;
             }
             results.push(resp);
         }
@@ -1365,32 +1576,36 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<GetPropertyRequest>,
     ) -> Result<Response<GetPropertyResponse>, Status> {
+        if interceptor::bridge_capability_identity(request.extensions()).is_none() {
+            return Err(Status::unauthenticated(
+                "verified session identity is required",
+            ));
+        }
         let req = request.into_inner();
-        let connection = Connection::system()
+        if req.object_path != op_plugins::canonical::plugin_path(&req.plugin_id)
+            || req.interface_name != op_plugins::canonical::PLUGIN_INTERFACE
+        {
+            return Err(Status::invalid_argument(
+                "property reads require the canonical plugin root and interface",
+            ));
+        }
+        let arguments = serde_json::json!({
+            "plugin_id": req.plugin_id, "interface_name": req.interface_name,
+            "property_name": req.property_name,
+        });
+        let result = crate::freedesktop_dispatch::prepare(&self.mutation_engine, "Get", &arguments)
             .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        let proxy = zbus::fdo::PropertiesProxy::builder(&connection)
-            .destination(format!("org.opdbus.{}.v1", req.plugin_id))
-            .map_err(|e| Status::internal(e.to_string()))?
-            .path(req.object_path.as_str())
-            .map_err(|e| Status::internal(e.to_string()))?
-            .build()
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let iface = zbus::names::InterfaceName::try_from(req.interface_name.as_str())
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let val: ZOwnedValue = proxy
-            .get(iface, req.property_name.as_str())
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let json =
-            simd_json::serde::to_owned_value(&val).map_err(|e| Status::internal(e.to_string()))?;
-
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        let crate::freedesktop_dispatch::DispatchOutcome::Reply(value) = result else {
+            return Err(Status::internal("property read resolved to a write"));
+        };
+        let output: op_plugins::state_plugins::freedesktop::GetPropertyOutput =
+            serde_json::from_value(value).map_err(|error| Status::internal(error.to_string()))?;
+        let json = simd_json::serde::to_owned_value(output.value)
+            .map_err(|error| Status::internal(error.to_string()))?;
         Ok(Response::new(GetPropertyResponse {
             value: Some(simd_to_prost_value(&json)),
-            read_only: false,
+            read_only: output.read_only,
         }))
     }
 
@@ -1398,52 +1613,60 @@ impl PluginService for OperationGrpcServer {
         &self,
         request: Request<SetPropertyRequest>,
     ) -> Result<Response<SetPropertyResponse>, Status> {
-        if request
-            .extensions()
-            .get::<crate::oracle_assertion::HumanPrincipalIdentity>()
-            .is_some()
-        {
-            return Err(Status::permission_denied(
-                "human assertions may mutate only through capability-gated plugin methods",
+        if interceptor::bridge_capability_identity(request.extensions()).is_none() {
+            return Err(Status::unauthenticated(
+                "verified session identity is required",
             ));
         }
-        let req = request.into_inner();
-        let value = prost_value_to_simd(&req.value.unwrap_or_else(|| ProstValue::from(0)));
-
-        match self
-            .mutation_engine
-            .mutate(
-                req.plugin_id,
-                req.object_path,
-                ChangeType::PropertySet,
-                Some(req.property_name),
-                value,
-                req.actor_id,
-                if req.capability_id.is_empty() {
-                    None
-                } else {
-                    Some(req.capability_id)
-                },
-            )
-            .await
+        let req = request.get_ref();
+        if req.object_path != op_plugins::canonical::plugin_path(&req.plugin_id)
+            || req.interface_name != op_plugins::canonical::PLUGIN_INTERFACE
         {
-            Ok(ok) => Ok(Response::new(SetPropertyResponse {
-                success: ok.success,
-                event_id: ok.event_id,
-                event_hash: ok.event_hash,
-                error: None,
-            })),
-            Err(e) => Ok(Response::new(SetPropertyResponse {
-                success: false,
-                event_id: 0,
-                event_hash: String::new(),
-                error: Some(ProtoMutationError {
-                    code: ProtoErrorCode::Internal as i32,
-                    message: e.to_string(),
-                    deny_reason: None,
-                }),
-            })),
+            return Err(Status::invalid_argument(
+                "property writes require the canonical plugin root and interface",
+            ));
         }
+        let value = req
+            .value
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("property value is required"))?;
+        let arguments = serde_json::json!({
+            "plugin_id": req.plugin_id, "interface_name": req.interface_name,
+            "property_name": req.property_name, "value": prost_value_to_simd(value),
+        });
+        let plan = crate::freedesktop_dispatch::prepare(&self.mutation_engine, "Set", &arguments)
+            .await
+            .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        let crate::freedesktop_dispatch::DispatchOutcome::Write(plan) = plan else {
+            return Err(Status::internal(
+                "property write did not resolve to a declared method",
+            ));
+        };
+        if req.capability_id != plan.required_capability {
+            return Err(Status::permission_denied(
+                "property write requires its declared method capability",
+            ));
+        }
+        let args = simd_json::serde::to_owned_value(&plan.args)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let request = request.map(|req| CallMethodRequest {
+            plugin_id: plan.target_plugin,
+            object_path: req.object_path,
+            interface_name: req.interface_name,
+            method_name: plan.method,
+            arguments: vec![simd_to_prost_value(&args)],
+            actor_id: req.actor_id,
+            capability_id: plan.required_capability,
+        });
+        let response = <Self as PluginService>::call_method(self, request)
+            .await?
+            .into_inner();
+        Ok(Response::new(SetPropertyResponse {
+            success: response.success,
+            event_id: response.event_id,
+            event_hash: response.event_hash,
+            error: response.error,
+        }))
     }
 
     async fn subscribe_signals(
@@ -1508,6 +1731,8 @@ impl PluginService for OperationGrpcServer {
 // EventChainService
 // =============================================================================
 
+use crate::event_chain_access::{AuditAccess, AuditMethod};
+
 #[tonic::async_trait]
 impl EventChainService for OperationGrpcServer {
     type SubscribeEventsStream =
@@ -1517,69 +1742,46 @@ impl EventChainService for OperationGrpcServer {
         &self,
         request: Request<GetEventsRequest>,
     ) -> Result<Response<GetEventsResponse>, Status> {
-        let req = request.into_inner();
-        let chain = self.mutation_engine.event_chain.clone();
-        let chain = chain.read().await;
-
-        let events: Vec<ProtoChainEvent> = chain
-            .events()
-            .iter()
-            .filter(|e| req.from_event_id == 0 || e.event_id >= req.from_event_id)
-            .filter(|e| req.to_event_id == 0 || e.event_id <= req.to_event_id)
-            .filter(|e| req.plugin_id.is_empty() || e.plugin_id == req.plugin_id)
-            .filter(|e| req.tags.is_empty() || e.tags_touched.iter().any(|t| req.tags.contains(t)))
-            .filter(|e| match req.decision_filter {
-                x if x == ProtoDecision::Allow as i32 => e.decision == Decision::Allow,
-                x if x == ProtoDecision::Deny as i32 => e.decision == Decision::Deny,
-                _ => true,
-            })
-            .take(if req.limit == 0 {
-                usize::MAX
-            } else {
-                req.limit as usize
-            })
-            .map(proto_chain_event)
-            .collect();
-
-        let has_more = req.limit > 0 && (events.len() as u32) == req.limit;
-        Ok(Response::new(GetEventsResponse { events, has_more }))
+        let access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::QueryEvents).await?;
+        let chain = self.mutation_engine.event_chain.read().await;
+        let response = crate::event_chain_access::get_events(chain.events(), request.get_ref())?;
+        drop(chain);
+        access.revalidate(&self.mutation_engine).await?;
+        Ok(Response::new(response))
     }
 
     async fn subscribe_events(
         &self,
         request: Request<SubscribeEventsRequest>,
     ) -> Result<Response<Self::SubscribeEventsStream>, Status> {
-        let req = request.into_inner();
-        let mut rx = self.chain_events.subscribe();
-        let plugin_filter = req.plugin_id;
-        let tag_filters = req.tags;
-
-        let stream = stream! {
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        let matches_plugin = plugin_filter.is_empty() || event.plugin_id == plugin_filter;
-                        let matches_tag = tag_filters.is_empty() || event.tags_touched.iter().any(|t| tag_filters.contains(t));
-                        if matches_plugin && matches_tag {
-                            yield Ok(event);
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        };
-
-        Ok(Response::new(Box::pin(stream)))
+        let access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::QueryEvents).await?;
+        Ok(Response::new(
+            crate::event_chain_access::subscribe(
+                self.mutation_engine.clone(),
+                request.into_inner(),
+                access,
+            )
+            .await?,
+        ))
     }
 
     async fn verify_chain(
         &self,
-        _request: Request<VerifyChainRequest>,
+        request: Request<VerifyChainRequest>,
     ) -> Result<Response<VerifyChainResponse>, Status> {
-        let chain = self.mutation_engine.event_chain.clone();
-        let chain = chain.read().await;
+        let access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::VerifyChain).await?;
+        if request.get_ref().from_event_id != 0 || request.get_ref().to_event_id != 0 {
+            return Err(Status::invalid_argument(
+                "only complete-chain verification is supported",
+            ));
+        }
+        let chain = self.mutation_engine.event_chain.read().await;
         let result = chain.verify_chain();
+        drop(chain);
+        access.revalidate(&self.mutation_engine).await?;
         Ok(Response::new(VerifyChainResponse {
             valid: result.valid,
             events_verified: result.events_verified as u64,
@@ -1592,38 +1794,40 @@ impl EventChainService for OperationGrpcServer {
         &self,
         request: Request<GetProofRequest>,
     ) -> Result<Response<GetProofResponse>, Status> {
-        let req = request.into_inner();
-        let chain = self.mutation_engine.event_chain.clone();
-        let chain = chain.read().await;
-        let proof: Option<MerkleProof> =
-            op_state_store::EventBatch::generate_proof(chain.events(), req.event_id);
-
-        if let Some(proof) = proof {
-            let siblings = proof
+        let access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::VerifyChain).await?;
+        let chain = self.mutation_engine.event_chain.read().await;
+        let proof =
+            op_state_store::EventBatch::generate_proof(chain.events(), request.get_ref().event_id)
+                .ok_or_else(|| Status::not_found("proof not found"))?;
+        // This proof covers the current complete in-memory chain, not a fabricated batch.
+        let first = chain.events().first().map_or(0, |event| event.event_id);
+        let last = chain.events().last().map_or(0, |event| event.event_id);
+        drop(chain);
+        access.revalidate(&self.mutation_engine).await?;
+        Ok(Response::new(GetProofResponse {
+            event_hash: proof.event_hash,
+            siblings: proof
                 .siblings
                 .into_iter()
                 .map(|(hash, is_right)| MerkleProofSibling { hash, is_right })
-                .collect();
-            Ok(Response::new(GetProofResponse {
-                event_hash: proof.event_hash,
-                siblings,
-                root: proof.root,
-                batch_first_event_id: 0,
-                batch_last_event_id: 0,
-            }))
-        } else {
-            Err(Status::not_found("proof not found"))
-        }
+                .collect(),
+            root: proof.root,
+            batch_first_event_id: first,
+            batch_last_event_id: last,
+        }))
     }
 
     async fn prove_tag_immutability(
         &self,
         request: Request<ProveTagImmutabilityRequest>,
     ) -> Result<Response<ProveTagImmutabilityResponse>, Status> {
-        let req = request.into_inner();
-        let chain = self.mutation_engine.event_chain.clone();
-        let chain = chain.read().await;
-        let proof = chain.prove_tag_immutability(&req.tag);
+        let access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::VerifyChain).await?;
+        let chain = self.mutation_engine.event_chain.read().await;
+        let proof = chain.prove_tag_immutability(&request.get_ref().tag);
+        drop(chain);
+        access.revalidate(&self.mutation_engine).await?;
         Ok(Response::new(ProveTagImmutabilityResponse {
             tag: proof.tag,
             is_immutable: proof.is_immutable,
@@ -1636,61 +1840,30 @@ impl EventChainService for OperationGrpcServer {
         &self,
         request: Request<GetSnapshotRequest>,
     ) -> Result<Response<GetSnapshotResponse>, Status> {
-        let req = request.into_inner();
-        let chain = self.mutation_engine.event_chain.clone();
-        let chain = chain.read().await;
-        if let Some(snapshot) = chain.get_snapshot(&req.snapshot_id) {
-            Ok(Response::new(GetSnapshotResponse {
-                snapshot: Some(proto_snapshot(snapshot)),
-            }))
-        } else {
-            Err(Status::not_found("snapshot not found"))
-        }
+        let _access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::GetSnapshot).await?;
+        Err(Status::failed_precondition("legacy EventChain snapshot hashes and state are not a canonical Snowball snapshot contract; use snowball.get_snapshot"))
     }
 
     async fn create_snapshot(
         &self,
         request: Request<CreateSnapshotRequest>,
     ) -> Result<Response<CreateSnapshotResponse>, Status> {
-        let req = request.into_inner();
-        let state = self
-            .mutation_engine
-            .get_public_state(&req.plugin_id)
-            .await
-            .unwrap_or_else(|| simd_json::json!({}));
-        let chain = self.mutation_engine.event_chain.clone();
-        let mut chain = chain.write().await;
-        let snapshot = chain.create_snapshot(req.plugin_id, "1.0.0".to_string(), state);
-        Ok(Response::new(CreateSnapshotResponse {
-            snapshot: Some(proto_snapshot(snapshot)),
-        }))
+        let _access =
+            AuditAccess::admit(&self.mutation_engine, &request, AuditMethod::CreateSnapshot)
+                .await?;
+        Err(Status::failed_precondition("legacy EventChain snapshot creation bypasses canonical Snowball mutation; use snowball.create_snapshot"))
     }
 
     async fn search_semantic_trace(
         &self,
         request: Request<SearchSemanticTraceRequest>,
     ) -> Result<Response<SearchSemanticTraceResponse>, Status> {
-        let shuttle = self.semantic_shuttle.as_ref().ok_or_else(|| {
-            Status::failed_precondition(
-                "Qdrant Semantic Shuttle is not configured; check Voyage and Qdrant settings",
-            )
-        })?;
-        let req = request.into_inner();
-        let limit = u64::from(if req.limit == 0 { 5 } else { req.limit });
-        let trace = shuttle.current_trace_context().map_err(internal_status)?;
-        let matches = shuttle
-            .search_semantic_trace(limit)
-            .await
-            .map_err(internal_status)?
-            .into_iter()
-            .map(proto_semantic_trace_match)
-            .collect();
-
-        Ok(Response::new(SearchSemanticTraceResponse {
-            trace_id: trace.trace_id,
-            mutation_index: trace.mutation_index,
-            matches,
-        }))
+        crate::event_chain_access::verified_identity(&self.mutation_engine, &request).await?;
+        // No Snowball declaration authorizes process-scoped semantic payloads.
+        Err(Status::failed_precondition(
+            "semantic trace search requires a canonical caller-scoped method contract",
+        ))
     }
 }
 
@@ -1698,39 +1871,373 @@ impl EventChainService for OperationGrpcServer {
 // Helpers
 // =============================================================================
 
-fn proto_state_change(change: &crate::mutation_engine::StateChange) -> ProtoStateChange {
+fn public_state_status(error: anyhow::Error) -> Status {
+    let message = error.to_string();
+    if message.starts_with("invalid plugin id:") {
+        Status::invalid_argument(message)
+    } else if message.contains("absent from the sealed catalog") {
+        Status::not_found(message)
+    } else {
+        Status::unavailable(message)
+    }
+}
+
+#[allow(clippy::result_large_err)] // Native tonic error contract for the stream.
+pub(crate) fn state_snapshot_frames(
+    current: &crate::state_stream::StateSnapshot,
+    previous: Option<&crate::state_stream::StateSnapshot>,
+    include_schema: bool,
+    include_state: bool,
+    frame_kind: ProtoStateFrameKind,
+    path_patterns: &[String],
+    force_rehydrate: bool,
+) -> Result<Vec<ProtoStateChange>, Status> {
+    state_snapshot_frames_with_views(
+        current,
+        previous,
+        include_schema,
+        include_state,
+        frame_kind,
+        path_patterns,
+        force_rehydrate,
+        crate::state_stream::object_views,
+    )
+}
+
+pub(crate) type StateViewSelector =
+    fn(
+        &str,
+        &JsonValue,
+        &[String],
+    ) -> anyhow::Result<std::collections::BTreeMap<String, JsonValue>>;
+
+// Views are already admitted by the caller's public or private owner boundary.
+// This pure diff/bounds helper grants no read access and reads no filesystem.
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+pub(crate) fn state_snapshot_frames_with_views(
+    current: &crate::state_stream::StateSnapshot,
+    previous: Option<&crate::state_stream::StateSnapshot>,
+    include_schema: bool,
+    include_state: bool,
+    frame_kind: ProtoStateFrameKind,
+    path_patterns: &[String],
+    force_rehydrate: bool,
+    select_views: StateViewSelector,
+) -> Result<Vec<ProtoStateChange>, Status> {
+    let mut frames = Vec::new();
+    for (plugin_id, plugin) in &current.plugins {
+        let previous_plugin = previous.and_then(|snapshot| snapshot.plugins.get(plugin_id));
+        if include_schema
+            && (force_rehydrate
+                || previous_plugin.is_none()
+                || previous_plugin.is_some_and(|old| old.schema_hash != plugin.schema_hash))
+        {
+            frames.push(state_frame(
+                plugin_id,
+                crate::state_stream::plugin_object_path(plugin_id),
+                ProtoChangeType::SchemaMigration,
+                plugin.schema_hash.clone(),
+                None,
+                Some(&plugin.schema),
+                frame_kind,
+                &plugin.schema_hash,
+                current,
+            )?);
+        }
+        if !include_state {
+            continue;
+        }
+        let current_views = plugin
+            .state
+            .as_ref()
+            .map(|state| select_views(plugin_id, state, path_patterns))
+            .transpose()
+            .map_err(|error| Status::resource_exhausted(error.to_string()))?
+            .unwrap_or_default();
+        let previous_views = previous_plugin
+            .and_then(|old| old.state.as_ref())
+            .map(|state| select_views(plugin_id, state, path_patterns))
+            .transpose()
+            .map_err(|error| Status::resource_exhausted(error.to_string()))?
+            .unwrap_or_default();
+        let paths: std::collections::BTreeSet<_> = current_views
+            .keys()
+            .chain(previous_views.keys())
+            .cloned()
+            .collect();
+        for path in paths {
+            let new_state = current_views.get(&path);
+            let old_state = previous_views.get(&path);
+            if !force_rehydrate && previous.is_some() && new_state == old_state {
+                continue;
+            }
+            frames.push(state_frame(
+                plugin_id,
+                path,
+                if new_state.is_some() {
+                    ProtoChangeType::PropertySet
+                } else {
+                    ProtoChangeType::ObjectRemoved
+                },
+                String::new(),
+                if force_rehydrate { None } else { old_state },
+                new_state,
+                frame_kind,
+                &plugin.schema_hash,
+                current,
+            )?);
+        }
+    }
+    if let Some(previous) = previous {
+        for (plugin_id, plugin) in &previous.plugins {
+            if current.plugins.contains_key(plugin_id) {
+                continue;
+            }
+            if include_schema {
+                frames.push(state_frame(
+                    plugin_id,
+                    crate::state_stream::plugin_object_path(plugin_id),
+                    ProtoChangeType::SchemaMigration,
+                    plugin.schema_hash.clone(),
+                    None,
+                    None,
+                    frame_kind,
+                    "",
+                    current,
+                )?);
+            }
+            if include_state {
+                let Some(state) = plugin.state.as_ref() else {
+                    continue;
+                };
+                for (path, old_state) in select_views(plugin_id, state, path_patterns)
+                    .map_err(|error| Status::resource_exhausted(error.to_string()))?
+                {
+                    frames.push(state_frame(
+                        plugin_id,
+                        path,
+                        ProtoChangeType::ObjectRemoved,
+                        String::new(),
+                        if force_rehydrate {
+                            None
+                        } else {
+                            Some(&old_state)
+                        },
+                        None,
+                        frame_kind,
+                        "",
+                        current,
+                    )?);
+                }
+            }
+        }
+    }
+    if frames.len() > 4096 {
+        return Err(Status::resource_exhausted(
+            "state snapshot exceeds 4096 stream frames",
+        ));
+    }
+    let encoded_bytes = frames.iter().try_fold(0usize, |total, frame| {
+        total.checked_add(frame.encoded_len())
+    });
+    if encoded_bytes.is_none_or(|bytes| bytes > 16 * 1024 * 1024) {
+        return Err(Status::resource_exhausted(
+            "state snapshot exceeds 16 MiB of stream frames",
+        ));
+    }
+    Ok(frames)
+}
+
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+fn state_frame(
+    plugin_id: &str,
+    object_path: String,
+    change_type: ProtoChangeType,
+    member_name: String,
+    old_value: Option<&JsonValue>,
+    new_value: Option<&JsonValue>,
+    frame_kind: ProtoStateFrameKind,
+    schema_hash: &str,
+    snapshot: &crate::state_stream::StateSnapshot,
+) -> Result<ProtoStateChange, Status> {
+    let old_value = old_value
+        .map(simd_json::serde::to_owned_value)
+        .transpose()
+        .map_err(|error| Status::data_loss(error.to_string()))?;
+    let new_value = new_value
+        .map(simd_json::serde::to_owned_value)
+        .transpose()
+        .map_err(|error| Status::data_loss(error.to_string()))?;
+    Ok(ProtoStateChange {
+        change_id: String::new(),
+        event_id: 0,
+        plugin_id: plugin_id.to_string(),
+        object_path,
+        change_type: change_type as i32,
+        member_name,
+        old_value: old_value.as_ref().map(simd_to_prost_value),
+        new_value: new_value.as_ref().map(simd_to_prost_value),
+        tags_touched: Vec::new(),
+        event_hash: String::new(),
+        timestamp: None,
+        actor_id: String::new(),
+        frame_kind: frame_kind as i32,
+        schema_hash: schema_hash.to_string(),
+        catalog_hash: snapshot.catalog_hash.clone(),
+        state_generation: snapshot.generation,
+    })
+}
+
+pub(crate) fn state_heartbeat_frame(
+    snapshot: &crate::state_stream::StateSnapshot,
+) -> ProtoStateChange {
     ProtoStateChange {
-        change_id: change.change_id.clone(),
-        event_id: change.event_id,
-        plugin_id: change.plugin_id.clone(),
-        object_path: change.object_path.clone(),
-        change_type: proto_change_type(change.change_type) as i32,
-        member_name: change.member_name.clone().unwrap_or_default(),
-        old_value: change.old_value.as_ref().map(simd_to_prost_value),
-        new_value: Some(simd_to_prost_value(&change.new_value)),
-        tags_touched: change.tags_touched.clone(),
-        event_hash: change.event_hash.clone(),
-        timestamp: Some(proto_timestamp(change.timestamp)),
-        actor_id: change.actor_id.clone(),
-        frame_kind: 0,
+        change_id: String::new(),
+        event_id: 0,
+        plugin_id: String::new(),
+        object_path: String::new(),
+        change_type: ProtoChangeType::Unspecified as i32,
+        member_name: String::new(),
+        old_value: None,
+        new_value: None,
+        tags_touched: Vec::new(),
+        event_hash: String::new(),
+        timestamp: None,
+        actor_id: String::new(),
+        frame_kind: ProtoStateFrameKind::Heartbeat as i32,
         schema_hash: String::new(),
-        catalog_hash: String::new(),
+        catalog_hash: snapshot.catalog_hash.clone(),
+        state_generation: snapshot.generation,
     }
 }
 
-fn proto_change_type(change_type: ChangeType) -> ProtoChangeType {
-    match change_type {
-        ChangeType::PropertySet => ProtoChangeType::PropertySet,
-        ChangeType::PropertyDelete => ProtoChangeType::PropertyDelete,
-        ChangeType::MethodCall => ProtoChangeType::MethodCall,
-        ChangeType::Signal => ProtoChangeType::Signal,
-        ChangeType::ObjectAdded => ProtoChangeType::ObjectAdded,
-        ChangeType::ObjectRemoved => ProtoChangeType::ObjectRemoved,
-        ChangeType::SchemaMigration => ProtoChangeType::SchemaMigration,
+#[cfg(test)]
+mod public_state_frame_tests {
+    use super::*;
+    use crate::state_stream::{PluginSnapshot, StateSnapshot};
+
+    fn snapshot(generation: u64, state: JsonValue) -> StateSnapshot {
+        StateSnapshot {
+            generation,
+            catalog_hash: "c".repeat(64),
+            plugins: [(
+                "demo".to_string(),
+                PluginSnapshot {
+                    schema_hash: "s".repeat(64),
+                    schema: serde_json::json!({"name":"demo"}),
+                    state: Some(state),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn child_frames_are_snapshot_values_without_false_audit_correlation() {
+        let current = snapshot(7, serde_json::json!({"children":{"one":{"value":2}}}));
+        let frames = state_snapshot_frames(
+            &current,
+            None,
+            false,
+            true,
+            ProtoStateFrameKind::InitialState,
+            &["/org/opdbus/v1/plugins/demo/children/one".into()],
+            false,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        assert_eq!(
+            frame.object_path,
+            "/org/opdbus/v1/plugins/demo/children/one"
+        );
+        assert_eq!(frame.state_generation, 7);
+        assert_eq!(frame.event_id, 0);
+        assert!(frame.event_hash.is_empty());
+        assert!(frame.change_id.is_empty());
+        assert!(frame.actor_id.is_empty());
+        assert!(frame.timestamp.is_none());
+    }
+
+    #[test]
+    fn schema_and_lag_rehydrate_frames_carry_current_generation() {
+        let previous = snapshot(6, serde_json::json!({"value":1}));
+        let current = snapshot(7, serde_json::json!({"value":1}));
+        let frames = state_snapshot_frames(
+            &current,
+            Some(&previous),
+            true,
+            true,
+            ProtoStateFrameKind::Update,
+            &[],
+            true,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert!(frames.iter().all(|frame| frame.state_generation == 7));
+        assert!(frames.iter().any(|frame| {
+            frame.change_type == ProtoChangeType::SchemaMigration as i32
+                && frame.member_name == current.plugins["demo"].schema_hash
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.change_type == ProtoChangeType::PropertySet as i32 && frame.old_value.is_none()
+        }));
+    }
+
+    #[test]
+    fn lag_rehydrate_keeps_removed_child_tombstone() {
+        let previous = snapshot(6, serde_json::json!({"children":{"one":{"value":1}}}));
+        let current = snapshot(7, serde_json::json!({"children":{}}));
+        let frames = state_snapshot_frames(
+            &current,
+            Some(&previous),
+            false,
+            true,
+            ProtoStateFrameKind::Update,
+            &["/org/opdbus/v1/plugins/demo/children/*".into()],
+            true,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].change_type, ProtoChangeType::ObjectRemoved as i32);
+        assert_eq!(
+            frames[0].object_path,
+            "/org/opdbus/v1/plugins/demo/children/one"
+        );
+        assert!(frames[0].new_value.is_none());
+    }
+
+    #[test]
+    fn removed_schema_only_plugin_emits_tombstone_without_state_subscription() {
+        let previous = snapshot(6, serde_json::json!({}));
+        let current = StateSnapshot {
+            generation: 7,
+            catalog_hash: "new-catalog".into(),
+            plugins: Default::default(),
+        };
+        let frames = state_snapshot_frames(
+            &current,
+            Some(&previous),
+            true,
+            false,
+            ProtoStateFrameKind::Update,
+            &[],
+            false,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            frames[0].change_type,
+            ProtoChangeType::SchemaMigration as i32
+        );
+        assert_eq!(frames[0].member_name, "s".repeat(64));
+        assert!(frames[0].schema_hash.is_empty());
+        assert!(frames[0].new_value.is_none());
     }
 }
 
-fn proto_chain_event(event: &op_state_store::ChainEvent) -> ProtoChainEvent {
+pub(crate) fn proto_chain_event(event: &op_state_store::ChainEvent) -> ProtoChainEvent {
     ProtoChainEvent {
         event_id: event.event_id,
         prev_hash: event.prev_hash.clone(),
@@ -1805,21 +2312,6 @@ fn proto_deny_reason(reason: &DenyReason) -> ProtoDenyReason {
     }
 }
 
-fn proto_snapshot(snapshot: &op_state_store::StateSnapshot) -> crate::proto::Snapshot {
-    crate::proto::Snapshot {
-        snapshot_id: snapshot.snapshot_id.clone(),
-        at_event_id: snapshot.at_event_id,
-        plugin_id: snapshot.plugin_id.clone(),
-        schema_version: snapshot.schema_version.clone(),
-        stub_hash: snapshot.stub_hash.clone(),
-        immutable_wrappers_hash: snapshot.immutable_wrappers_hash.clone(),
-        tunable_patch_hash: snapshot.tunable_patch_hash.clone(),
-        effective_hash: snapshot.effective_hash.clone(),
-        timestamp: Some(proto_timestamp(snapshot.timestamp)),
-        state: Some(simd_to_prost_struct(&snapshot.state)),
-    }
-}
-
 fn proto_timestamp(ts: DateTime<Utc>) -> ProstTimestamp {
     ProstTimestamp {
         seconds: ts.timestamp(),
@@ -1827,66 +2319,7 @@ fn proto_timestamp(ts: DateTime<Utc>) -> ProstTimestamp {
     }
 }
 
-fn proto_semantic_trace_match(point: qdrant_client::qdrant::ScoredPoint) -> SemanticTraceMatch {
-    SemanticTraceMatch {
-        point_id: qdrant_point_id_to_string(point.id),
-        score: point.score,
-        payload: Some(qdrant_payload_to_prost_struct(point.payload)),
-    }
-}
-
-fn qdrant_point_id_to_string(point_id: Option<qdrant_client::qdrant::PointId>) -> String {
-    use qdrant_client::qdrant::point_id::PointIdOptions;
-
-    match point_id.and_then(|id| id.point_id_options) {
-        Some(PointIdOptions::Num(value)) => value.to_string(),
-        Some(PointIdOptions::Uuid(value)) => value,
-        None => String::new(),
-    }
-}
-
-fn qdrant_payload_to_prost_struct(
-    payload: std::collections::HashMap<String, qdrant_client::qdrant::Value>,
-) -> ProstStruct {
-    ProstStruct {
-        fields: payload
-            .into_iter()
-            .map(|(key, value)| (key, qdrant_value_to_prost_value(value)))
-            .collect(),
-    }
-}
-
-fn qdrant_value_to_prost_value(value: qdrant_client::qdrant::Value) -> ProstValue {
-    use prost_types::value::Kind as ProstKind;
-    use qdrant_client::qdrant::value::Kind as QdrantKind;
-
-    let kind = match value.kind {
-        Some(QdrantKind::NullValue(_)) => ProstKind::NullValue(0),
-        Some(QdrantKind::DoubleValue(number)) => ProstKind::NumberValue(number),
-        Some(QdrantKind::IntegerValue(number)) => ProstKind::NumberValue(number as f64),
-        Some(QdrantKind::StringValue(text)) => ProstKind::StringValue(text),
-        Some(QdrantKind::BoolValue(flag)) => ProstKind::BoolValue(flag),
-        Some(QdrantKind::StructValue(struct_value)) => {
-            ProstKind::StructValue(qdrant_payload_to_prost_struct(struct_value.fields))
-        }
-        Some(QdrantKind::ListValue(list_value)) => ProstKind::ListValue(prost_types::ListValue {
-            values: list_value
-                .values
-                .into_iter()
-                .map(qdrant_value_to_prost_value)
-                .collect(),
-        }),
-        None => ProstKind::NullValue(0),
-    };
-
-    ProstValue { kind: Some(kind) }
-}
-
-fn internal_status(error: anyhow::Error) -> Status {
-    Status::internal(error.to_string())
-}
-
-fn simd_to_prost_struct(value: &simd_json::OwnedValue) -> ProstStruct {
+pub(crate) fn simd_to_prost_struct(value: &simd_json::OwnedValue) -> ProstStruct {
     match value.as_object() {
         Some(map) => {
             let fields = map
@@ -1901,7 +2334,7 @@ fn simd_to_prost_struct(value: &simd_json::OwnedValue) -> ProstStruct {
     }
 }
 
-fn simd_to_prost_value(value: &simd_json::OwnedValue) -> ProstValue {
+pub(crate) fn simd_to_prost_value(value: &simd_json::OwnedValue) -> ProstValue {
     use prost_types::value::Kind;
     if value.as_null().is_some() {
         return ProstValue {

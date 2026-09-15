@@ -22,14 +22,24 @@ OPDBUS_NUMA_POLICY=localalloc
 # override for local-only debug.
 OP_DBUS_GRPC_ADDR=https://10.0.0.3:8090
 GRPC_BIND=0.0.0.0:8090
-ZEROCLAW_BIND_ADDR=0.0.0.0:8090
+TCHED_ROUTER_BIND_ADDR=0.0.0.0:8090
 # Host-local native gRPC (op-web, zbusctl)
-ZEROCLAW_UNIX_SOCKET=/run/opdbus/grpc.sock
+TCHED_ROUTER_UNIX_SOCKET=/run/opdbus/grpc.sock
 # Shared fabric for NIC-less containers (bind-mount /run/ghostbridge)
 GHOSTBRIDGE_SOCKET_PATH=/run/ghostbridge/container.sock
 # Root-owned append-only OIA replay journal. Every bridge ingress shares this
 # file, so accepted nonces remain rejected after an op-grpc-bridge restart.
 OP_AUTH_REPLAY_DB_PATH=/var/lib/op-dbus/auth-replay.db
+
+# Decoy-only native network control over mTLS D-Bus. Supply endpoint and
+# certificate DNS name in /etc/op-dbus/decoy-network-client.env before using
+# wireguard, wg_opdbus or wgcf. Provision these protected TLS files in the
+# offline server snapshot; they never belong in source or plugin blobs.
+# OP_DECOY_NATIVE_ADDRESS=<private-or-WARP-routed-IP>:8732
+# OP_DECOY_NATIVE_SERVER_NAME=<decoy-certificate-DNS-name>
+OP_DECOY_NATIVE_CA_FILE=/etc/op-dbus/decoy-native/ca.pem
+OP_DECOY_NATIVE_CERT_FILE=/etc/op-dbus/decoy-native/bridge.pem
+OP_DECOY_NATIVE_KEY_FILE=/etc/op-dbus/decoy-native/bridge-key.pem
 
 # OpenFlow controller on ovsbr0
 OPENFLOW_CONTROLLER=tcp:10.200.0.1:6653

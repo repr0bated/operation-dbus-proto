@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use op_grpc_bridge::{ChangeSource, ChangeType, MutationEngine};
+use op_state::StatePlugin;
+mod support;
 
 fn engine() -> Arc<MutationEngine> {
     let event_chain = Arc::new(tokio::sync::RwLock::new(op_state_store::EventChain::new(
@@ -30,6 +32,11 @@ async fn next_event(
 
 #[tokio::test]
 async fn dispatched_method_call_reaches_chain_subscribers() {
+    let _catalog = support::CatalogScope::new(&[
+        op_plugins::state_plugins::snowball_plugin::SnowballPlugin::new()
+            .schema()
+            .unwrap(),
+    ]);
     let engine = engine();
     let mut rx = engine.chain_tx().subscribe();
 
@@ -61,6 +68,10 @@ async fn dispatched_method_call_reaches_chain_subscribers() {
 
 #[tokio::test]
 async fn authoritative_change_reaches_chain_subscribers() {
+    let _catalog =
+        support::CatalogScope::new(&[op_plugins::state_plugins::incus::IncusPlugin::new()
+            .schema()
+            .unwrap()]);
     let engine = engine();
     let mut rx = engine.chain_tx().subscribe();
 
@@ -71,7 +82,7 @@ async fn authoritative_change_reaches_chain_subscribers() {
             ChangeType::PropertySet,
             Some("containers".to_string()),
             None,
-            simd_json::json!({"containers": []}),
+            simd_json::json!([]),
             vec!["state".to_string()],
             "test-actor".to_string(),
             None,

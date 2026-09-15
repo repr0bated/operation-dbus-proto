@@ -1,0 +1,98 @@
+   Compiling op-network v1.0.0 (/srv/git/odbus/crates/op-network)
+   Compiling op-state v1.0.0 (/srv/git/odbus/crates/op-state)
+   Compiling op-tools v0.1.0 (/srv/git/odbus/crates/op-tools)
+   Compiling op-dynamic-loader v0.1.0 (/srv/git/odbus/crates/op-dynamic-loader)
+   Compiling op-plugins v1.0.0 (/srv/git/odbus/crates/op-plugins)
+   Compiling op-mcp v0.4.0 (/srv/git/odbus/crates/op-mcp)
+   Compiling op-llm v1.0.0 (/srv/git/odbus/crates/op-llm)
+   Compiling op-cognitive-mcp v0.1.0 (/srv/git/odbus/crates/op-cognitive-mcp)
+   Compiling op-grpc-bridge v0.1.0 (/srv/git/odbus/crates/op-grpc-bridge)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 23s
+     Running unittests src/lib.rs (target/debug/deps/op_grpc_bridge-c77657c85c16ab79)
+
+running 58 tests
+test freedesktop_dispatch::tests::external_targets_and_unknown_interfaces_are_rejected ... ok
+test freedesktop_dispatch::tests::introspection_reports_wrapper_abi_and_exact_escaped_sealed_metadata ... ok
+test freedesktop_dispatch::tests::enumeration_requires_current_blob_and_filters_public_fields ... ok
+test freedesktop_dispatch::tests::incomplete_or_missing_manifest_never_exposes_raw_projection_files ... ok
+test freedesktop_dispatch::tests::missing_projection_has_no_default_or_example_state ... ok
+test freedesktop_dispatch::tests::credentials_are_redacted_even_from_declared_nested_fields ... ok
+test freedesktop_dispatch::tests::opaque_declared_fields_are_not_public_and_invalid_exposure_fails_closed ... ok
+test freedesktop_dispatch::tests::freedesktop_reader_waits_for_committed_state_instead_of_sampling_raw_file ... ok
+test freedesktop_dispatch::tests::outer_freedesktop_grant_cannot_authorize_target_mutation ... ok
+test freedesktop_dispatch::tests::write_respects_immutable_and_current_lock_metadata ... ok
+test freedesktop_dispatch::tests::write_rejects_missing_mapping_capability_and_invalid_argument_contract ... ok
+test freedesktop_dispatch::tests::write_plan_preserves_target_capability_and_does_not_mutate_projection ... ok
+test freedesktop_dispatch::tests::set_facade_applies_injected_owner_effect_and_reads_back_committed_state ... ok
+test generation_jobs_dispatch::tests::ready_batch_commits_valid_prefix_before_an_over_limit_successor ... ok
+test generation_jobs_dispatch::tests::ready_batch_never_waits_and_preserves_order_across_byte_and_count_boundaries ... ok
+test freedesktop_dispatch::tests::revalidation_rejects_resealed_or_relocked_target ... ok
+test freedesktop_dispatch::tests::absent_policy_withholds_values_without_disabling_valid_target_writes ... ok
+test freedesktop_dispatch::tests::public_read_only_metadata_does_not_disclose_hidden_lock_state ... ok
+test freedesktop_dispatch::tests::peer_methods_cross_private_dbus_and_read_sealed_identity ... FAILED
+test identity_sled_dispatch::tests::attach_btrfs_device_verifies_isolated_mount_and_commits_readback ... ok
+test identity_sled_dispatch::tests::malformed_durable_json_fails_closed ... ok
+test identity_sled_dispatch::tests::event_receipt_and_bounded_history_come_from_durable_ledger ... ok
+test identity_sled_dispatch::tests::caller_cannot_supply_sid1_or_legacy_psk ... ok
+test generation_jobs_dispatch::tests::private_generation_state_is_typed_but_never_part_of_public_router_policy ... ok
+test identity_sled_dispatch::tests::genesis_sid1_and_actor_class_survive_mutation_index_advance ... ok
+test identity_sled_dispatch::tests::pending_publication_does_not_disclose_native_credential_diagnostics ... ok
+test identity_sled_dispatch::tests::exact_authored_sid1_is_stable_and_expired_term_is_rejected ... ok
+test identity_sled_dispatch::tests::provision_policy_forces_parked_non_autostart_container ... ok
+test identity_sled_dispatch::tests::recovery_preserves_siblings_tombstones_and_event_order ... ok
+test identity_sled_dispatch::tests::mutation_index_queues_behind_native_lifecycle_and_preserves_result ... ok
+test identity_sled_dispatch::tests::overlapping_activate_then_park_is_serialized_per_session ... ok
+test identity_sled_dispatch::tests::owned_lifecycle_preserves_anchor_and_starts_and_stops_once ... ok
+test xray_methods::tests::add_and_remove_each_account_use_native_alter_inbound_envelopes ... ok
+test identity_sled_dispatch::tests::parked_anchored_sled_authenticates_without_treating_active_as_revocation ... ok
+test xray_methods::tests::add_inbounds_encode_real_receiver_and_protocol_configs ... ok
+test xray_methods::tests::credential_and_tls_bounds_are_enforced_before_transport ... ok
+test xray_methods::tests::concurrent_duplicate_adds_are_serialized_before_native_effects ... ok
+test xray_methods::tests::invalid_inputs_and_tls_keys_have_zero_native_requests ... ok
+test xray_methods::tests::malformed_native_account_response_prevents_user_mutation ... ok
+test xray_methods::tests::native_errors_are_preserved_and_deadline_cancels_wait ... ok
+test xray_methods::tests::mismatched_missing_and_duplicate_user_targets_never_mutate ... ok
+test xray_methods::tests::tls_material_is_validated_then_encoded_inline_without_paths ... ok
+test xray_methods::tests::vless_masked_uuid_alias_is_rejected_before_new_inbound ... ok
+test xray_methods::tests::stats_read_exact_native_counter_without_reset_and_bound_failures ... ok
+test identity_sled_dispatch::tests::provision_container_dispatches_lifecycle_and_commits_anchor_to_cozo_and_shm ... ok
+test identity_sled_dispatch::tests::session_record_resolves_every_authored_handle ... ok
+test identity_sled_dispatch::tests::stop_failure_keeps_committed_inactive_policy_without_rollback ... ok
+test generation_jobs_dispatch::tests::actual_handlers_require_owner_grants_and_serve_only_committed_children ... ok
+test identity_sled_dispatch::tests::touch_session_starts_parked_container_and_preserves_identity_metadata ... ok
+test generation_jobs_dispatch::tests::actual_subscription_lag_rereads_shm_and_retains_deleted_child_tombstones has been running for over 60 seconds
+test generation_jobs_dispatch::tests::cancel_closes_native_transport_and_disconnect_is_a_real_terminal_failure has been running for over 60 seconds
+test generation_jobs_dispatch::tests::cancelling_the_caller_does_not_cancel_owned_admission_or_publication has been running for over 60 seconds
+test generation_jobs_dispatch::tests::grant_withdrawal_stops_native_and_retains_pending_until_exact_recovery has been running for over 60 seconds
+test generation_jobs_dispatch::tests::llm_stream_facade_and_job_listing_use_private_committed_state has been running for over 60 seconds
+test generation_jobs_dispatch::tests::native_burst_terminal_follows_all_original_fragments_in_committed_shm has been running for over 60 seconds
+test generation_jobs_dispatch::tests::private_pending_failure_blocks_reads_and_recovery_uses_durable_state has been running for over 60 seconds
+test generation_jobs_dispatch::tests::queued_grant_withdrawal_rejects_before_any_durable_or_native_effect has been running for over 60 seconds
+test generation_jobs_dispatch::tests::queued_llm_origin_grant_and_both_original_seals_are_rechecked_before_effects has been running for over 60 seconds
+test generation_jobs_dispatch::tests::actual_subscription_lag_rereads_shm_and_retains_deleted_child_tombstones ... ok
+test generation_jobs_dispatch::tests::cancelling_the_caller_does_not_cancel_owned_admission_or_publication ... ok
+test generation_jobs_dispatch::tests::grant_withdrawal_stops_native_and_retains_pending_until_exact_recovery ... ok
+test generation_jobs_dispatch::tests::llm_stream_facade_and_job_listing_use_private_committed_state ... ok
+test generation_jobs_dispatch::tests::native_burst_terminal_follows_all_original_fragments_in_committed_shm ... ok
+test generation_jobs_dispatch::tests::queued_grant_withdrawal_rejects_before_any_durable_or_native_effect ... ok
+test generation_jobs_dispatch::tests::private_pending_failure_blocks_reads_and_recovery_uses_durable_state ... ok
+test generation_jobs_dispatch::tests::cancel_closes_native_transport_and_disconnect_is_a_real_terminal_failure ... ok
+test generation_jobs_dispatch::tests::queued_llm_origin_grant_and_both_original_seals_are_rechecked_before_effects ... ok
+
+failures:
+
+---- freedesktop_dispatch::tests::peer_methods_cross_private_dbus_and_read_sealed_identity stdout ----
+
+thread 'freedesktop_dispatch::tests::peer_methods_cross_private_dbus_and_read_sealed_identity' (13226) panicked at crates/op-grpc-bridge/src/freedesktop_dispatch.rs:1325:9:
+assertion `left == right` failed
+  left: String("5a4e736074a0f95aa50461526a5eb469")
+ right: "0123456789abcdef0123456789abcdef"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    freedesktop_dispatch::tests::peer_methods_cross_private_dbus_and_read_sealed_identity
+
+test result: FAILED. 57 passed; 1 failed; 0 ignored; 0 measured; 445 filtered out; finished in 245.99s
+
+error: test failed, to rerun pass `-p op-grpc-bridge --lib`

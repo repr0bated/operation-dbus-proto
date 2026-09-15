@@ -1,63 +1,88 @@
-use anyhow::Result;
+//! Fail2ban control-plane schema.
+//!
+//! Runtime calls use the daemon's configured Unix control socket through the
+//! native adapter in `fail2ban_methods`; this module never invents daemon state.
+
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.security.plugin.fail2ban.schema@v1"))]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.security.plugin.fail2ban.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "security"))]
 pub struct Fail2banState {
-    pub status: String,
-    #[schemars(with = "serde_json::Value")]
-    pub jails: JsonValue,
-    #[schemars(with = "serde_json::Value")]
-    pub bans: JsonValue,
-    #[schemars(with = "serde_json::Value")]
-    pub filters: JsonValue,
-    #[schemars(with = "serde_json::Value")]
-    pub actions: JsonValue,
-    #[schemars(with = "serde_json::Value")]
-    pub logs: JsonValue,
-    #[schemars(with = "serde_json::Value")]
-    pub config: JsonValue,
+    pub jails: Vec<JailStatusOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JailInput {
+    pub jail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BanIpInput {
+    pub jail: String,
+    pub ip: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorSourceKind {
+    Files,
+    Journal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct JailStatusOutput {
+    pub jail: String,
+    pub currently_failed: u64,
+    pub total_failed: u64,
+    pub currently_banned: u64,
+    pub total_banned: u64,
+    pub banned_ips: Vec<String>,
+    pub monitor_source_kind: MonitorSourceKind,
+    pub monitored_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BanIpOutput {
+    pub jail: String,
+    pub ip: String,
+    /// Number of bans the daemon reports it applied.
+    pub affected: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UnbanIpOutput {
+    pub jail: String,
+    pub ip: String,
+    /// Number of bans the daemon reports it removed.
+    pub affected: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReloadOutput {
+    pub scope: String,
+    pub reloaded: bool,
 }
 
 pub struct Fail2banPlugin;
-impl Default for Fail2banPlugin {
-    fn default() -> Self {
-        Self
-    }
-}
+
 impl Fail2banPlugin {
     pub fn new() -> Self {
         Self
     }
-    pub(crate) fn current_state() -> Fail2banState {
-        Fail2banState {
-            status: "active".to_string(),
-            jails: json!([
-                {"name": "sshd", "enabled": true, "maxretry": 5, "findtime": 600, "bantime": 3600, "filter": "sshd", "action": "iptables-multiport"},
-                {"name": "recidive", "enabled": true, "maxretry": 3, "findtime": 86400, "bantime": 604800, "filter": "recidive", "action": "iptables-multiport"},
-                {"name": "nginx-http-auth", "enabled": false, "maxretry": 3, "findtime": 600, "bantime": 1800}
-            ]),
-            bans: json!({"active_bans": 0, "total_bans": 0, "unbanned": 0, "by_jail": {}}),
-            filters: json!([
-                {"name": "sshd", "regex_count": 12, "journal_match": "_SYSTEMD_UNIT=sshd.service"},
-                {"name": "recidive", "regex_count": 4},
-                {"name": "nginx-http-auth", "regex_count": 8}
-            ]),
-            actions: json!([
-                {"name": "iptables-multiport", "type": "iptables", "blocktype": "REJECT --reject-with icmp-port-unreachable"},
-                {"name": "sendmail-whois", "type": "mail", "dest": "root@localhost"}
-            ]),
-            logs: json!({"paths": ["/var/log/auth.log", "/var/log/nginx/error.log"], "rotation": "daily", "max_days": 90}),
-            config: json!({"loglevel": "INFO", "logtarget": "/var/log/fail2ban.log", "socket": "/var/run/fail2ban/fail2ban.sock", "pidfile": "/var/run/fail2ban/fail2ban.pid"}),
-        }
+}
+
+impl Default for Fail2banPlugin {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -66,12 +91,15 @@ impl StatePlugin for Fail2banPlugin {
     fn name(&self) -> &str {
         "fail2ban"
     }
+
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
+
     fn schema(&self) -> Option<PluginSchema> {
         Some(fail2ban_schema())
     }
+
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
         Ok(StateDiff {
             plugin: self.name().to_string(),
@@ -83,6 +111,7 @@ impl StatePlugin for Fail2banPlugin {
             },
         })
     }
+
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
         Ok(ApplyResult {
             success: true,
@@ -91,26 +120,24 @@ impl StatePlugin for Fail2banPlugin {
             checkpoint: None,
         })
     }
+
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        bail!("Fail2ban StatePlugin verification is unsupported")
     }
+
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: simd_json::serde::to_owned_value(Self::current_state())?,
-            backend_checkpoint: None,
-        })
+        bail!("Fail2ban StatePlugin checkpoints are unsupported")
     }
+
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        bail!("Fail2ban StatePlugin rollback is unsupported")
     }
+
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
@@ -121,65 +148,53 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "fail2ban",
-        "1.0.0",
-        "Fail2ban intrusion prevention — jails, bans, filters, actions",
+        "2.0.0",
+        "Fail2ban jail status and daemon-native ban control",
         &root,
     );
     schema.category = "security".to_string();
-    if let Ok(defaults) = simd_json::serde::to_owned_value(Fail2banPlugin::current_state()) {
-        super::schemars_adapter::apply_state_defaults(&mut schema, &defaults);
-    }
+
+    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use op_state_store::SideEffect;
 
     schema.methods.insert(
         "ban_ip".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            BanIpInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "BanIp",
-            op_state_store::SideEffect::Mutation,
+        method_decl_from_schemars_with_output::<BanIpInput, BanIpOutput>(
+            "ban_ip",
+            SideEffect::Mutation,
             false,
             "fail2ban.write",
-            "mut.security.fail2ban.ip.ban@v1",
+            "mut.security.fail2ban.ip.ban@v2",
         ),
     );
     schema.methods.insert(
         "unban_ip".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            BanIpInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "UnbanIp",
-            op_state_store::SideEffect::Mutation,
+        method_decl_from_schemars_with_output::<BanIpInput, UnbanIpOutput>(
+            "unban_ip",
+            SideEffect::Mutation,
             false,
             "fail2ban.write",
-            "mut.security.fail2ban.ip.unban@v1",
+            "mut.security.fail2ban.ip.unban@v2",
         ),
     );
     schema.methods.insert(
         "get_jail_status".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            JailInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "GetJailStatus",
-            op_state_store::SideEffect::Read,
+        method_decl_from_schemars_with_output::<JailInput, JailStatusOutput>(
+            "get_jail_status",
+            SideEffect::Read,
             true,
             "fail2ban.read",
-            "obs.security.fail2ban.jail.status@v1",
+            "obs.security.fail2ban.jail.status@v2",
         ),
     );
     schema.methods.insert(
         "reload".to_string(),
-        super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
-            super::plugin_scaffold_helpers::EmptyInput,
-            super::plugin_scaffold_helpers::AckOutput,
-        >(
-            "Reload",
-            op_state_store::SideEffect::Mutation,
+        method_decl_from_schemars_with_output::<EmptyInput, ReloadOutput>(
+            "reload",
+            SideEffect::Mutation,
             false,
             "fail2ban.write",
-            "mut.security.fail2ban.service.reload@v1",
+            "mut.security.fail2ban.service.reload@v2",
         ),
     );
 
@@ -194,26 +209,29 @@ pub(crate) fn fail2ban_schema() -> PluginSchema {
         "fail2ban.write".to_string(),
         op_state_store::CapabilityDecl {
             id: "fail2ban.write".to_string(),
-            description: "Grants: ban_ip, unban_ip, reload.".to_string(),
+        description: "Grants daemon-native ban_ip and unban_ip; reload requires a validated configuration stream.".to_string(),
         },
     );
-
     schema
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct JailInput {
-    pub jail: String,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn methods_are_typed_and_names_match_keys() {
+        let schema = fail2ban_schema();
+        assert_eq!(schema.version, "2.0.0");
+        for name in ["ban_ip", "unban_ip", "get_jail_status", "reload"] {
+            let method = &schema.methods[name];
+            assert_eq!(method.name, name);
+            assert!(method.returns.is_some());
+        }
+        assert!(schema.example.is_none());
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct BanIpInput {
-    pub jail: String,
-    pub ip: String,
-}
-
-// Self-registration: the plugin registry discovers this via inventory
-// (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("fail2ban", |_ctx| std::sync::Arc::new(Fail2banPlugin::new()))
 }

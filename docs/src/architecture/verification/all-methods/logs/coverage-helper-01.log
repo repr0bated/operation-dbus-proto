@@ -1,0 +1,11 @@
+   Compiling op-plugins v1.0.0 (/srv/git/odbus/crates/op-plugins)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.64s
+     Running unittests examples/method_coverage.rs (target/debug/examples/method_coverage-b85ea69d84bff99c)
+
+running 3 tests
+test tests::ignored_filtered_and_similarly_named_tests_are_not_execution ... ok
+test tests::missing_duplicate_unknown_and_contract_drift_fail_completion ... ok
+test tests::changed_source_logs_and_failed_runs_cannot_reuse_a_passing_receipt ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

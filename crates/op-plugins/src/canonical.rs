@@ -22,12 +22,6 @@
 //! org.opdbus.v1.plugins
 //! ```
 //!
-//! ### Schema File Paths
-//! ```text
-//! schemas/plugin/{plugin_name}.json
-//! schemas/plugin/freedesktop.json
-//! ```
-//!
 //! ## Forbidden Patterns (DO NOT USE)
 //!
 //! These patterns are deprecated and MUST NOT be used:
@@ -65,15 +59,6 @@ pub const PLUGINS_INTERFACE: &str = PLUGIN_INTERFACE;
 
 /// Canonical plugin-host service name (bus name)
 pub const BASE_SERVICE_NAME: &str = "org.opdbus.v1.plugins";
-
-/// Schema file directory for plugins
-pub const PLUGIN_SCHEMA_DIR: &str = "schemas/plugin";
-
-/// Meta-schema file for plugin validation
-pub const PLUGIN_META_SCHEMA: &str = "schemas/plugin/org.opdbus.plugin.schema.json";
-
-/// FreeDesktop plugin schema
-pub const FREEDESKTOP_SCHEMA: &str = "schemas/plugin/freedesktop.json";
 
 /// ObjectManager interface (FreeDesktop standard)
 pub const OBJECT_MANAGER_INTERFACE: &str = "org.freedesktop.DBus.ObjectManager";
@@ -125,19 +110,6 @@ pub fn plugin_path(name: &str) -> String {
 /// ```
 pub fn plugin_interface(_name: &str) -> String {
     PLUGIN_INTERFACE.to_string()
-}
-
-/// Build the schema file path for a plugin
-///
-/// # Example
-/// ```
-/// use op_plugins::canonical::plugin_schema_path;
-///
-/// let path = plugin_schema_path("incus");
-/// assert_eq!(path, "schemas/plugin/incus.json");
-/// ```
-pub fn plugin_schema_path(name: &str) -> String {
-    format!("{}/{}.json", PLUGIN_SCHEMA_DIR, sanitize_plugin_name(name))
 }
 
 /// Build a child object path under a plugin
@@ -303,11 +275,6 @@ mod tests {
     fn test_plugin_interface() {
         assert_eq!(plugin_interface("incus"), "org.opdbus.v1.PluginV1");
         assert_eq!(plugin_interface("my-plugin"), "org.opdbus.v1.PluginV1");
-    }
-
-    #[test]
-    fn test_plugin_schema_path() {
-        assert_eq!(plugin_schema_path("incus"), "schemas/plugin/incus.json");
     }
 
     #[test]

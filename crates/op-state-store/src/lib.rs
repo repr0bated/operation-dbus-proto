@@ -14,11 +14,14 @@
 pub mod disaster_recovery;
 pub mod error;
 pub mod event_chain;
+pub mod exact_schema;
 pub mod execution_job;
 pub mod memory_store;
 pub mod metrics;
 pub mod plugin_schema;
+pub mod public_state;
 pub mod schema_validator;
+pub mod state_schema_shape;
 pub mod state_store;
 
 pub use disaster_recovery::{
@@ -33,11 +36,12 @@ pub use event_chain::{
 pub use execution_job::{ExecutionJob, ExecutionResult, ExecutionStatus};
 pub use memory_store::MemoryStore;
 pub use plugin_schema::{
-    builtin_plugin_schema, builtin_plugin_schemas, dialects, CapabilityDecl, Constraint,
-    FieldSchema, FieldType, MethodDecl, PluginCapabilities, PluginSchema, ReadOnlyCondition,
-    SchemaCatalog, SchemaLoadError, SchemaRegistry, SideEffect, SignalDecl,
-    ValidationResult as SchemaValidationResult, DEFAULT_SCHEMA_DIALECT,
+    dialects, CapabilityDecl, Constraint, FieldSchema, FieldType, FieldWriteDecl, MethodDecl,
+    PluginCapabilities, PluginSchema, ReadOnlyCondition, SchemaCatalog, SchemaLoadError,
+    SchemaRegistry, SideEffect, SignalDecl, ValidationResult as SchemaValidationResult,
+    DEFAULT_SCHEMA_DIALECT,
 };
+pub use public_state::{PublicStatePolicy, PublicStateProjectionError};
 pub use schema_validator::{
     canonicalize_json, SchemaValidator, ValidationError, ValidationReport, ValidatorError,
 };

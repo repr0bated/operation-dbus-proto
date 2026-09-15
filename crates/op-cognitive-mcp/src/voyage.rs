@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
+use futures::StreamExt;
+use op_plugins::state_plugins::embedding_model::methods::validate_voyage_credential_endpoint;
 use op_plugins::state_plugins::embedding_model::{voyage_embed_params, VoyageModel};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,7 @@ struct EmbeddingRequest<'a> {
 
 #[derive(Deserialize)]
 struct EmbeddingData {
+    index: usize,
     embedding: Vec<f32>,
 }
 
@@ -37,13 +40,19 @@ impl VoyageClient {
     /// Construct directly from resolved call-time parameters (endpoint,
     /// model, key) — the primary path, used when the `embedding_model`
     /// plugin's config is available.
-    pub fn from_params(endpoint: String, api_key: String, model: String) -> Self {
-        Self {
-            client: Client::new(),
+    pub fn from_params(endpoint: String, api_key: String, model: String) -> Result<Self> {
+        validate_voyage_credential_endpoint(&endpoint, &api_key)?;
+        Ok(Self {
+            client: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .no_proxy()
+                .build()?,
             api_key,
             model,
             base_url: endpoint,
-        }
+        })
     }
 
     /// Create a new Voyage client by resolving config through the
@@ -51,18 +60,15 @@ impl VoyageClient {
     /// reads — see [`op_plugins::state_plugins::embedding_model::voyage_embed_params`]).
     pub fn new() -> Result<Self> {
         let params = voyage_embed_params().context(
-            "Voyage API key not found: set COGNITIVE_MCP_VOYAGE_API_KEY, \
-             VOYAGE_API_KEY, or VOYAGE_API_KEY_RUST",
+            "Voyage credentials are missing or embedding_model's current \
+             provider, endpoint, dimensions, or vector space is incompatible",
         )?;
-        Ok(Self::from_params(
-            params.endpoint,
-            params.api_key,
-            params.model_id,
-        ))
+        Self::from_params(params.endpoint, params.api_key, params.model_id)
     }
 
     /// Embed text using Voyage API
     pub async fn embed(&self, text: &str, input_type: Option<&str>) -> Result<Vec<f32>> {
+        validate_voyage_credential_endpoint(&self.base_url, &self.api_key)?;
         let req = EmbeddingRequest {
             input: vec![text],
             model: &self.model,
@@ -71,7 +77,7 @@ impl VoyageClient {
             output_dimension: VoyageModel::SHARED_EMBEDDING_DIMS,
         };
 
-        let resp = self
+        let response = self
             .client
             .post(&self.base_url)
             .bearer_auth(&self.api_key)
@@ -80,10 +86,42 @@ impl VoyageClient {
             .await
             .context("Failed to send Voyage API request")?
             .error_for_status()
-            .context("Voyage API returned error status")?
-            .json::<EmbeddingResponse>()
-            .await
-            .context("Failed to parse Voyage API response")?;
+            .context("Voyage API returned error status")?;
+        ensure!(
+            response.status().is_success(),
+            "Voyage API returned a redirect"
+        );
+        const MAX_BYTES: usize = 1024 * 1024;
+        ensure!(
+            response
+                .content_length()
+                .is_none_or(|size| size <= MAX_BYTES as u64),
+            "Voyage response is too large"
+        );
+        let mut bytes = Vec::new();
+        let mut chunks = response.bytes_stream();
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.context("Voyage response body failed")?;
+            ensure!(
+                bytes.len().saturating_add(chunk.len()) <= MAX_BYTES,
+                "Voyage response is too large"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        let resp: EmbeddingResponse =
+            serde_json::from_slice(&bytes).context("Failed to parse Voyage API response")?;
+        ensure!(
+            resp.data.len() == 1 && resp.data[0].index == 0,
+            "Voyage returned an invalid embedding cardinality or index"
+        );
+        ensure!(
+            resp.data[0].embedding.len() == VoyageModel::SHARED_EMBEDDING_DIMS as usize
+                && resp.data[0]
+                    .embedding
+                    .iter()
+                    .all(|number| number.is_finite()),
+            "Voyage returned incompatible embedding dimensions or numeric values"
+        );
 
         resp.data
             .into_iter()

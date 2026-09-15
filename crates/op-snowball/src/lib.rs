@@ -14,6 +14,7 @@
 pub mod btrfs_delta;
 pub mod btrfs_numa_integration;
 pub mod footprint;
+pub mod replication;
 pub mod retention;
 pub mod snapshot;
 pub mod snowball;
@@ -26,7 +27,7 @@ pub use retention::RetentionPolicy;
 pub use snapshot::SnapshotInterval;
 pub use snowball::{
     decode_vector, encode_vector, parse_block_number, parse_vector_block_number, ChainBlockRef,
-    ReplicationReport, StreamingSnowball, SNAPSHOT_LABELS,
+    StreamingSnowball, SNAPSHOT_LABELS,
 };
 
 /// Prelude for convenient imports

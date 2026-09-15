@@ -1542,7 +1542,7 @@ pub mod tests {
     /// VAL-BRIDGE-017
     #[tokio::test(flavor = "multi_thread")]
     async fn validate_rejects_when_registry_unavailable() {
-        let _registry_guard = crate::human_principal_dispatch::tests::test_registry_guard();
+        let _cozo = temp_cozo();
         let blocker = tempfile::NamedTempFile::new().expect("blocker");
         std::env::set_var(
             "OP_HUMAN_PRINCIPAL_COZO_DB_PATH",

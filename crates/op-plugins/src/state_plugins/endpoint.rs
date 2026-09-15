@@ -36,6 +36,101 @@ impl EndpointPlugin {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EndpointInput {
+    /// Exact endpoint declaration to look up, add or remove. Registration
+    /// records a declaration; it does not open a listener or route traffic.
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListEndpointsOutput {
+    pub endpoints: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetEndpointOutput {
+    pub endpoint: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EndpointRegistrationOutput {
+    pub endpoint: String,
+    pub present: bool,
+    pub revision: u64,
+}
+
+fn endpoint_state(value: Option<serde_json::Value>) -> Result<EndpointState> {
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map(|s| s.unwrap_or_default())
+        .map_err(Into::into)
+}
+
+fn checked_endpoint(args: &serde_json::Value) -> Result<String> {
+    let input: EndpointInput = serde_json::from_value(args.clone())?;
+    anyhow::ensure!(!input.endpoint.is_empty() && input.endpoint.len() <= 2048
+        && input.endpoint.trim() == input.endpoint && !input.endpoint.chars().any(char::is_control),
+        "endpoint must be a nonempty declaration without surrounding whitespace or control characters");
+    Ok(input.endpoint)
+}
+
+pub async fn dispatch_endpoint_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let store = super::runtime_documents::runtime_documents().await?;
+    dispatch_endpoint_with_store(&store, method, args).await
+}
+
+pub async fn dispatch_endpoint_with_store(
+    store: &super::runtime_documents::RuntimeDocuments,
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match method {
+        "list_endpoints" => {
+            let mut state = endpoint_state(store.read("endpoint").await?.map(|r| r.document))?;
+            state.endpoints.sort();
+            Ok(serde_json::to_value(ListEndpointsOutput {
+                endpoints: state.endpoints,
+            })?)
+        }
+        "get_endpoint" => {
+            let endpoint = checked_endpoint(args)?;
+            let state = endpoint_state(store.read("endpoint").await?.map(|r| r.document))?;
+            Ok(serde_json::to_value(GetEndpointOutput {
+                endpoint: state.endpoints.into_iter().find(|item| item == &endpoint),
+            })?)
+        }
+        "add_endpoint" | "remove_endpoint" => {
+            let endpoint = checked_endpoint(args)?;
+            let key = endpoint.clone();
+            let add = method == "add_endpoint";
+            let row = store
+                .update("endpoint", move |old| {
+                    let mut state = endpoint_state(old)?;
+                    if add {
+                        state.endpoints.push(key);
+                    } else {
+                        state.endpoints.retain(|item| item != &key);
+                    }
+                    state.endpoints.sort();
+                    state.endpoints.dedup();
+                    Ok(serde_json::to_value(state)?)
+                })
+                .await?;
+            let state = endpoint_state(Some(row.document))?;
+            Ok(serde_json::to_value(EndpointRegistrationOutput {
+                present: state.endpoints.contains(&endpoint),
+                endpoint,
+                revision: row.revision,
+            })?)
+        }
+        _ => anyhow::bail!("unknown endpoint method '{method}'"),
+    }
+}
+
 #[async_trait]
 impl StatePlugin for EndpointPlugin {
     fn name(&self) -> &str {
@@ -43,7 +138,7 @@ impl StatePlugin for EndpointPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -105,24 +200,13 @@ pub fn endpoint_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "endpoint",
-        "1.0.0",
+        "2.0.0",
         "Endpoint configuration",
         &root,
     );
 
-    // Output structs
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListEndpointsOutput {
-        pub endpoints: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetEndpointOutput {
-        pub endpoint: Option<serde_json::Value>,
-    }
-
     // Add methods
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
     use op_state_store::SideEffect;
 
     schema.methods.insert(
@@ -137,7 +221,7 @@ pub fn endpoint_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "get_endpoint".to_string(),
-        method_decl_from_schemars_with_output::<(), GetEndpointOutput>(
+        method_decl_from_schemars_with_output::<EndpointInput, GetEndpointOutput>(
             "get_endpoint",
             SideEffect::Read,
             true,
@@ -147,7 +231,7 @@ pub fn endpoint_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "add_endpoint".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EndpointInput, EndpointRegistrationOutput>(
             "add_endpoint",
             SideEffect::Mutation,
             false,
@@ -157,7 +241,7 @@ pub fn endpoint_schema() -> PluginSchema {
     );
     schema.methods.insert(
         "remove_endpoint".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<EndpointInput, EndpointRegistrationOutput>(
             "remove_endpoint",
             SideEffect::Mutation,
             true,
@@ -192,7 +276,7 @@ mod tests {
     fn schema_is_schemars_seeded_and_typed() {
         let schema = endpoint_schema();
         assert_eq!(schema.name, "endpoint");
-        assert_eq!(schema.version, "1.0.0");
+        assert_eq!(schema.version, "2.0.0");
         assert!(schema.fields.contains_key("endpoints"));
         assert!(schema.methods.contains_key("list_endpoints"));
         assert!(schema.methods.contains_key("get_endpoint"));
@@ -227,6 +311,59 @@ mod tests {
                 collect_subids(v, out);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn registration_lookup_and_removal_use_committed_state() {
+        use serde_json::json;
+        let store = super::super::runtime_documents::RuntimeDocuments::new(
+            op_cozo_store::CozoGraphShuttle::new_in_memory().unwrap(),
+        );
+        let input = json!({"endpoint":"example.test:8080"});
+        assert_eq!(
+            dispatch_endpoint_with_store(&store, "get_endpoint", &input)
+                .await
+                .unwrap()["endpoint"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            dispatch_endpoint_with_store(&store, "add_endpoint", &input)
+                .await
+                .unwrap()["present"],
+            true
+        );
+        dispatch_endpoint_with_store(&store, "add_endpoint", &input)
+            .await
+            .unwrap();
+        assert_eq!(
+            dispatch_endpoint_with_store(&store, "list_endpoints", &json!({}))
+                .await
+                .unwrap()["endpoints"],
+            json!(["example.test:8080"])
+        );
+        assert_eq!(
+            dispatch_endpoint_with_store(&store, "get_endpoint", &input)
+                .await
+                .unwrap()["endpoint"],
+            "example.test:8080"
+        );
+        assert!(
+            dispatch_endpoint_with_store(&store, "remove_endpoint", &json!({}))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            dispatch_endpoint_with_store(&store, "remove_endpoint", &input)
+                .await
+                .unwrap()["present"],
+            false
+        );
+        assert_eq!(
+            dispatch_endpoint_with_store(&store, "list_endpoints", &json!({}))
+                .await
+                .unwrap()["endpoints"],
+            json!([])
+        );
     }
 }
 

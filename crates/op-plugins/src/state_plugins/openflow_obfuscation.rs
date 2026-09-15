@@ -1,11 +1,13 @@
 //! OpenFlow Traffic Obfuscation Plugin
 //!
-//! Implements three levels of traffic obfuscation using OpenFlow rules:
+//! Legacy proposals for three levels of traffic obfuscation:
 //! - Level 1: Basic security (drop invalid, rate limiting, connection tracking)
 //! - Level 2: Pattern hiding (TTL normalization, packet padding, timing jitter)
 //! - Level 3: Advanced obfuscation (protocol mimicry, decoy traffic, morphing)
 //!
-//! Works with OVS bridges to apply privacy-enhancing flow rules.
+//! Version 2 methods install explicit TTL-normalization flows through the
+//! canonical native controller with compare/readback receipts. Historical
+//! levels below remain test-only proposals, not advertised privacy effects.
 
 #![allow(clippy::vec_init_then_push)]
 
@@ -98,7 +100,10 @@ impl OpenFlowObfuscationPlugin {
     pub fn new(config: OpenFlowObfuscationConfig) -> Self {
         Self { config }
     }
+}
 
+#[cfg(test)]
+impl OpenFlowObfuscationPlugin {
     /// Generate Level 1 flows: Basic security
     fn generate_level1_flows(&self) -> Vec<OpenFlowRule> {
         let mut flows = vec![];
@@ -395,16 +400,16 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<PluginSchema> {
-        let root = serde_json::to_value(schemars::schema_for!(OpenFlowObfuscationConfig))
+        let root = serde_json::to_value(schemars::schema_for!(ObfuscationState))
             .expect("schemars schema serializes to JSON");
         let mut schema = super::schemars_adapter::plugin_schema_from_json(
             "openflow_obfuscation",
-            "1.0.0",
-            "OpenFlow traffic obfuscation configuration",
+            "2.0.0",
+            "Explicit TTL-normalization flows with native switch readback and exact removal",
             &root,
         );
 
@@ -413,7 +418,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
             "obfuscate_flow".to_string(),
             super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                 ObfuscateFlowInput,
-                super::plugin_scaffold_helpers::AckOutput,
+                ObfuscationOutput,
             >(
                 "ObfuscateFlow",
                 SideEffect::Mutation,
@@ -426,7 +431,7 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
             "deobfuscate_flow".to_string(),
             super::plugin_scaffold_helpers::method_decl_from_schemars_with_output::<
                 DeobfuscateFlowInput,
-                super::plugin_scaffold_helpers::AckOutput,
+                ObfuscationOutput,
             >(
                 "DeobfuscateFlow",
                 SideEffect::Mutation,
@@ -441,9 +446,9 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
-            supports_rollback: true,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_rollback: false,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
@@ -475,101 +480,32 @@ impl StatePlugin for OpenFlowObfuscationPlugin {
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        let mut changes_applied = Vec::new();
-        let errors = Vec::new();
-
-        log::info!(
-            "Applying OpenFlow obfuscation level {} to bridge {}",
-            self.config.obfuscation_level,
-            self.config.bridge_name
-        );
-
-        // Generate all flows
-        let flows = self.generate_all_flows();
-
-        changes_applied.push(format!(
-            "Generated {} OpenFlow rules (Level {})",
-            flows.len(),
-            self.config.obfuscation_level
-        ));
-
-        // In a real implementation, we would:
-        // 1. Use op_network::ovsdb to clear existing flows
-        // 2. Apply new flows via OVSDB or ovs-ofctl
-        // 3. Verify flow installation
-
-        // For now, log the commands that would be executed
-        for flow in &flows {
-            let cmd = self.flow_to_command(flow);
-            log::debug!("Flow: {} ({})", cmd, flow.description);
-            changes_applied.push(format!(
-                "  [T{}:P{}] {}",
-                flow.table, flow.priority, flow.description
-            ));
-        }
-
-        changes_applied.push(format!(
-            "Obfuscation breakdown: {} security, {} pattern-hiding, {} advanced, {} forwarding",
-            if self.config.obfuscation_level >= 1 {
-                11
-            } else {
-                0
-            },
-            if self.config.obfuscation_level >= 2 {
-                3
-            } else {
-                0
-            },
-            if self.config.obfuscation_level >= 3 {
-                4
-            } else {
-                0
-            },
-            self.config.privacy_ports.len() * 2 + 1,
-        ));
-
-        Ok(ApplyResult {
-            success: errors.is_empty(),
-            changes_applied,
-            errors,
-            checkpoint: None,
-        })
+        // This plugin has no controller binding.  The generated strings are
+        // planning output only: applying them would claim an OVS mutation
+        // without sending anything to the real openflow owner.  Keep the
+        // state reconciliation contract honest until the typed controller can
+        // represent and install this plugin's rules.
+        anyhow::bail!(
+            "openflow_obfuscation cannot apply state: no canonical OpenFlow backend supports its generated rules"
+        )
     }
 
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        anyhow::bail!(
+            "openflow_obfuscation cannot verify state: no canonical backend reports installed obfuscation rules"
+        )
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = simd_json::json!(null);
-        Ok(Checkpoint {
-            id: format!(
-                "openflow_obfuscation_{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_secs()
-            ),
-            plugin: self.name().to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_secs() as i64,
-            state_snapshot: state,
-            backend_checkpoint: None,
-        })
+        anyhow::bail!(
+            "openflow_obfuscation cannot checkpoint state: no canonical backend checkpoint exists"
+        )
     }
 
-    async fn rollback(&self, checkpoint: &Checkpoint) -> Result<()> {
-        log::info!(
-            "Rolling back OpenFlow obfuscation to checkpoint: {}",
-            checkpoint.id
-        );
-
-        // In real implementation:
-        // 1. Extract previous config from checkpoint
-        // 2. Delete all flows on bridge
-        // 3. Reapply flows from checkpoint state
-
-        Ok(())
+    async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
+        anyhow::bail!(
+            "openflow_obfuscation cannot roll back state: no canonical backend checkpoint exists"
+        )
     }
 }
 
@@ -650,6 +586,44 @@ mod tests {
         assert!(cmd.contains("tcp,tcp_dst=80"));
         assert!(cmd.contains("actions=output:1"));
     }
+
+    #[tokio::test]
+    async fn lifecycle_rejects_without_a_canonical_backend() {
+        let plugin = OpenFlowObfuscationPlugin::new(Default::default());
+        let diff = StateDiff {
+            plugin: "openflow_obfuscation".to_string(),
+            actions: vec![],
+            metadata: DiffMetadata {
+                timestamp: 0,
+                current_hash: String::new(),
+                desired_hash: String::new(),
+            },
+        };
+
+        for error in [
+            plugin.apply_state(&diff).await.unwrap_err(),
+            plugin
+                .verify_state(&simd_json::json!(null))
+                .await
+                .unwrap_err(),
+            plugin.create_checkpoint().await.unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("no canonical"));
+        }
+        let checkpoint = Checkpoint {
+            id: "test".to_string(),
+            plugin: "openflow_obfuscation".to_string(),
+            timestamp: 0,
+            state_snapshot: simd_json::json!(null),
+            backend_checkpoint: None,
+        };
+        assert!(plugin
+            .rollback(&checkpoint)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("no canonical backend"));
+    }
 }
 
 /// Input struct for ObfuscateFlow method
@@ -658,12 +632,13 @@ mod tests {
 pub struct ObfuscateFlowInput {
     /// Bridge name
     pub bridge: String,
-    /// Flow match specification
-    pub match_spec: String,
-    /// Obfuscation level (1-3)
-    pub obfuscation_level: u8,
-    /// Flow priority
-    pub priority: Option<u16>,
+    /// Explicit match and forwarding actions. The entry must be absent; the
+    /// owner assigns its cookie and prepends TTL normalization. No padding,
+    /// timing jitter or protocol mimicry is claimed.
+    pub flow: super::openflow::FlowEntry,
+    #[schemars(range(min = 1, max = 255))]
+    pub ttl: u8,
+    pub expected_revision: u64,
 }
 
 /// Input struct for DeobfuscateFlow method
@@ -672,8 +647,31 @@ pub struct ObfuscateFlowInput {
 pub struct DeobfuscateFlowInput {
     /// Bridge name
     pub bridge: String,
-    /// Flow match specification to remove obfuscation from
-    pub match_spec: String,
+    /// Receipt ID from obfuscate_flow. Only that exact installed entry may be removed.
+    pub flow_id: String,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ObfuscationState {
+    pub revision: u64,
+    #[schemars(extend("x-opdbus-exact-json-schema" = true))]
+    pub flows: std::collections::BTreeMap<String, ObfuscationRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ObfuscationRecord {
+    pub bridge: String,
+    pub flow: super::openflow::FlowEntry,
+    pub ttl: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ObfuscationOutput {
+    pub flow_id: String,
+    pub revision: u64,
+    pub installed: bool,
+    pub record: ObfuscationRecord,
 }
 
 // Self-registration: the plugin registry discovers this via inventory

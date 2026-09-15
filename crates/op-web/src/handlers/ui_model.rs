@@ -1,289 +1,247 @@
-//! Gemma / agent-GPU UI-spec gallery + catalog routes.
+//! Authenticated HTTP compatibility for the canonical private Gemma workspace.
 //!
-//! The LOVABLE SPA (`operation-dashboard-ui-07`) renders json-render `Spec`s.
-//! The inference agent (local Ollama historically, now the SaladCloud GPU
-//! agent — "just another model") is the producer: it reads the sealed blob
-//! `PluginSchema` (the base contract) plus the live SIGNALS/event-chain, notes
-//! an interesting *slice*, and emits a json-render `Spec` rendering just that
-//! part. The agent writes specs to `/dev/shm/gemma-ui-specs.json`; this module
-//! is the consumer surface that serves them over HTTP and provides the
-//! promote-to-catalog path that seals a winning lens into a durable SHM file.
-//!
-//! Source-of-truth rules (per CLAUDE.md):
-//! - Plugin schemas come from the sealed blob catalog via
-//!   `op_blob::catalog::read_plugin_schema_shm`, never a monolith file.
-//! - Spec files are tmpfs (`/dev/shm`); promotion rewrites them atomically.
+//! This module owns no gallery files, catalog, identity, or state cache. Every
+//! retained CRUD operation enters the schema-declared bridge method with the
+//! exact request SID1. Unsupported promoted-catalog operations stay explicit.
 
 use crate::state::AppState;
 use axum::{
-    extract::{Extension, Path},
-    http::StatusCode,
+    extract::{Extension, Path, Query},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
+use simd_json::prelude::*;
 use std::sync::Arc;
 
-// Deliberately renamed off the old "gemma"-prefixed paths (were independently
-// hardcoded in THREE places with no shared constant: op-gemma/ui_gallery.rs
-// the producer, op-plugins/ui_model_brain.rs a third undiscovered reader, and
-// here). Not synced to those other two on purpose — whatever silently keeps
-// assuming the old path was a hidden violator of "the blob/SHM path is the
-// single source of truth," and this will surface it instead of masking it.
-const GEMMA_SPECS_PATH: &str = "/dev/shm/ui-specs.json";
-const GEMMA_CATALOG_PATH: &str = "/dev/shm/ui-catalog.json";
-const BLOB_MANIFEST_PATH: &str = "/dev/shm/opdbus/plugin-blobs/.manifest.json";
+const PLUGIN: &str = "gemma_brain";
+const READ_CAPABILITY: &str = "gemma.read";
+const WRITE_CAPABILITY: &str = "gemma.invoke";
 
-// ── Wire types — mirror op-gemma's `GemmaSpecEntry`/`GemmaSpecGallery` ───────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SpecEntry {
-    id: String,
-    spec: Value,
-    prompt: String,
-    tags: Vec<String>,
-    created_at: u64,
-    signature: String,
+#[derive(Debug, PartialEq)]
+struct WorkspaceCall {
+    method: &'static str,
+    capability: &'static str,
+    arguments: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SpecGallery {
-    version: u32,
-    specs: Vec<SpecEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CatalogEntry {
-    id: String,
-    spec: Value,
-    prompt: String,
-    tags: Vec<String>,
-    created_at: u64,
-    signature: String,
-    promoted_at: u64,
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSpecsQuery {
+    pub after: Option<String>,
     #[serde(default)]
-    label: Option<String>,
+    pub limit: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Catalog {
-    version: u32,
-    entries: Vec<CatalogEntry>,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteSpecRequest {
+    pub expected_revision: u64,
 }
 
-// ── SHM read/write helpers ──────────────────────────────────────────────────
-
-fn read_json<T: for<'de> Deserialize<'de>>(path: &str) -> Option<T> {
-    let bytes = std::fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-/// Atomically rewrite a tmpfs JSON file via a temp file + rename.
-fn write_json_atomic(path: &str, value: &Value) -> std::io::Result<()> {
-    let tmp = format!("{path}.tmp");
-    let bytes = serde_json::to_vec_pretty(value)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
-fn now_secs() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn empty_gallery() -> SpecGallery {
-    SpecGallery {
-        version: 1,
-        specs: vec![],
+fn list_specs_call(query: ListSpecsQuery) -> WorkspaceCall {
+    WorkspaceCall {
+        method: "list_ui_specs",
+        capability: READ_CAPABILITY,
+        arguments: json!({"after":query.after,"limit":query.limit}),
     }
 }
 
-fn empty_catalog() -> Catalog {
-    Catalog {
-        version: 1,
-        entries: vec![],
+fn delete_spec_call(spec_id: String, request: DeleteSpecRequest) -> WorkspaceCall {
+    WorkspaceCall {
+        method: "delete_ui_spec",
+        capability: WRITE_CAPABILITY,
+        arguments: json!({
+            "spec_id":spec_id,
+            "expected_revision":request.expected_revision,
+        }),
     }
 }
 
-fn ok(value: Value) -> Response {
-    axum::Json(value).into_response()
+fn json_response(status: StatusCode, value: Value) -> Response {
+    (status, Json(value)).into_response()
 }
 
-fn err(status: StatusCode, msg: &str) -> Response {
-    (status, axum::Json(json!({ "error": msg }))).into_response()
+fn unavailable(operation: &str) -> Response {
+    json_response(
+        StatusCode::NOT_IMPLEMENTED,
+        json!({
+            "error":"Promoted UI galleries have no sealed owner contract",
+            "code":"gallery_contract_unavailable",
+            "operation":operation,
+        }),
+    )
 }
 
-// ── Gallery ─────────────────────────────────────────────────────────────────
-
-/// GET /api/ui-model/gallery
-pub async fn ui_model_gallery_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    let gallery: SpecGallery = read_json(GEMMA_SPECS_PATH).unwrap_or_else(empty_gallery);
-    ok(json!({ "version": gallery.version, "specs": gallery.specs }))
+fn bridge_error(error: anyhow::Error) -> Response {
+    let message = error.to_string();
+    let (status, code) = if message.contains("revision") || message.contains("pending") {
+        (StatusCode::CONFLICT, "workspace_conflict")
+    } else if message.contains("absent") || message.contains("not found") {
+        (StatusCode::NOT_FOUND, "workspace_item_absent")
+    } else if message.contains("Unauthenticated") {
+        (StatusCode::UNAUTHORIZED, "identity_rejected")
+    } else if message.contains("PermissionDenied") || message.contains("capability") {
+        (StatusCode::FORBIDDEN, "capability_rejected")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "workspace_unavailable")
+    };
+    json_response(
+        status,
+        json!({"error":"Canonical UI workspace request failed","code":code}),
+    )
 }
 
-/// DELETE /api/ui-model/gallery/:id
+async fn call_workspace(
+    headers: &HeaderMap,
+    method: &str,
+    capability: &str,
+    args: Value,
+) -> Result<Value, Response> {
+    let identity = super::tched_router::sid1_metadata(headers)?;
+    let mut bytes = serde_json::to_vec(&args)
+        .map_err(|_| json_response(StatusCode::BAD_REQUEST, json!({"error":"Invalid request"})))?;
+    let arguments = simd_json::to_owned_value(&mut bytes)
+        .map_err(|_| json_response(StatusCode::BAD_REQUEST, json!({"error":"Invalid request"})))?;
+    let envelope = crate::state_manager_client::call_plugin_method(
+        PLUGIN, method, arguments, capability, &identity,
+    )
+    .await
+    .map_err(bridge_error)?;
+    let payload = envelope.get("result").cloned().ok_or_else(|| {
+        json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({"error":"Canonical UI workspace response is missing its result"}),
+        )
+    })?;
+    let encoded = simd_json::to_string(&payload).map_err(|_| {
+        json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({"error":"Canonical UI workspace response cannot be encoded"}),
+        )
+    })?;
+    serde_json::from_str(&encoded).map_err(|_| {
+        json_response(
+            StatusCode::BAD_GATEWAY,
+            json!({"error":"Canonical UI workspace response is invalid"}),
+        )
+    })
+}
+
+/// GET /api/ui-model/gallery?after=<spec-id>&limit=<n>
+///
+/// This is a breaking compatibility response: it returns exact
+/// `UiListSpecsOutput`, never the former prompt/signature gallery DTO.
+pub async fn ui_model_gallery_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ListSpecsQuery>,
+) -> Response {
+    let call = list_specs_call(query);
+    match call_workspace(&headers, call.method, call.capability, call.arguments).await {
+        Ok(result) => Json(result).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// DELETE /api/ui-model/gallery/:id with `{ "expected_revision": n }`.
 pub async fn ui_model_gallery_delete_handler(
     Extension(_state): Extension<Arc<AppState>>,
-    Path(id): Path<String>,
+    headers: HeaderMap,
+    Path(spec_id): Path<String>,
+    Json(request): Json<DeleteSpecRequest>,
 ) -> Response {
-    let mut gallery: SpecGallery = read_json(GEMMA_SPECS_PATH).unwrap_or_else(empty_gallery);
-    gallery.specs.retain(|s| s.id != id);
-    match write_json_atomic(
-        GEMMA_SPECS_PATH,
-        &json!({ "version": gallery.version, "specs": gallery.specs }),
-    ) {
-        Ok(_) => ok(json!({ "ok": true })),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("write failed: {e}"),
-        ),
+    let call = delete_spec_call(spec_id, request);
+    match call_workspace(&headers, call.method, call.capability, call.arguments).await {
+        Ok(result) => Json(result).into_response(),
+        Err(response) => response,
     }
 }
 
-// ── Catalog (promoted) ──────────────────────────────────────────────────────
-
-/// GET /api/ui-model/catalog
 pub async fn ui_model_catalog_handler(Extension(_state): Extension<Arc<AppState>>) -> Response {
-    let catalog: Catalog = read_json(GEMMA_CATALOG_PATH).unwrap_or_else(empty_catalog);
-    ok(json!({ "version": catalog.version, "entries": catalog.entries }))
+    unavailable("list")
 }
 
-/// POST /api/ui-model/catalog/promote/:id
-/// Moves a spec from the gallery into the promoted catalog (seal the lens).
 pub async fn ui_model_catalog_promote_handler(
     Extension(_state): Extension<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> Response {
-    let mut gallery: SpecGallery = match read_json(GEMMA_SPECS_PATH) {
-        Some(g) => g,
-        None => return err(StatusCode::NOT_FOUND, "gallery not available"),
-    };
-    let idx = match gallery.specs.iter().position(|s| s.id == id) {
-        Some(i) => i,
-        None => return err(StatusCode::NOT_FOUND, "spec not in gallery"),
-    };
-    let entry = gallery.specs.remove(idx);
-
-    let mut catalog: Catalog = read_json(GEMMA_CATALOG_PATH).unwrap_or_else(empty_catalog);
-    let promoted = CatalogEntry {
-        id: entry.id.clone(),
-        spec: entry.spec,
-        prompt: entry.prompt,
-        tags: entry.tags,
-        created_at: entry.created_at,
-        signature: entry.signature,
-        promoted_at: now_secs(),
-        label: None,
-    };
-    catalog.entries.push(promoted);
-
-    if let Err(e) = write_json_atomic(
-        GEMMA_SPECS_PATH,
-        &json!({ "version": gallery.version, "specs": gallery.specs }),
-    ) {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("gallery write failed: {e}"),
-        );
-    }
-    match write_json_atomic(
-        GEMMA_CATALOG_PATH,
-        &json!({ "version": catalog.version, "entries": catalog.entries }),
-    ) {
-        Ok(_) => ok(json!({ "ok": true, "id": entry.id })),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("catalog write failed: {e}"),
-        ),
-    }
+    unavailable("promote")
 }
 
-/// DELETE /api/ui-model/catalog/:id
 pub async fn ui_model_catalog_delete_handler(
     Extension(_state): Extension<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> Response {
-    let mut catalog: Catalog = read_json(GEMMA_CATALOG_PATH).unwrap_or_else(empty_catalog);
-    catalog.entries.retain(|e| e.id != id);
-    match write_json_atomic(
-        GEMMA_CATALOG_PATH,
-        &json!({ "version": catalog.version, "entries": catalog.entries }),
-    ) {
-        Ok(_) => ok(json!({ "ok": true })),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("write failed: {e}"),
-        ),
-    }
+    unavailable("delete")
 }
 
-// ── Plugin schema (sealed blob catalog) ─────────────────────────────────────
-
-/// GET /api/ui-model/plugins — every plugin actually in the sealed blob catalog.
-/// A plugin exists iff its blob is sealed here; this is NOT the same list as
-/// "plugins with generated RPC methods" (some plugins, e.g. antigravity/
-/// antigravity_chat, are state-only with zero methods, so they're absent
-/// from the frontend's method-index but very much present as real blobs).
-pub async fn ui_model_list_plugins_handler(
-    Extension(_state): Extension<Arc<AppState>>,
-) -> Response {
-    match op_blob::catalog::read_manifest_plugin_ids_shm() {
-        Some(ids) => ok(json!({ "plugins": ids })),
-        None => err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "blob catalog manifest unavailable",
-        ),
-    }
-}
-
-/// GET /api/ui-model/plugin-schema/:plugin
-/// The base schema is the render source: read straight from the sealed blob
-/// catalog. Resolve by exact id, then by manifest prefix/contains match.
+/// Retained compatibility path delegates to the exact canonical route.
 pub async fn ui_model_plugin_schema_handler(
     Extension(_state): Extension<Arc<AppState>>,
     Path(plugin): Path<String>,
 ) -> Response {
-    let (resolved_id, schema) = match op_blob::catalog::read_plugin_schema_shm(&plugin) {
-        Some(s) => (plugin.clone(), s),
-        None => match resolve_plugin_by_prefix(&plugin) {
-            Some((id, s)) => (id, s),
-            None => {
-                return err(
-                    StatusCode::NOT_FOUND,
-                    &format!("plugin schema not found: {plugin}"),
-                )
-            }
-        },
-    };
-
-    ok(json!({
-        "plugin": resolved_id,
-        "schema_hash": schema_hash_for(&resolved_id),
-        "schema": schema,
-    }))
+    super::plugin_schema::plugin_schema_handler(Path(plugin))
+        .await
+        .into_response()
 }
 
-/// List manifest plugin ids and try a prefix/contains match for the request.
-fn resolve_plugin_by_prefix(request: &str) -> Option<(String, op_state_store::PluginSchema)> {
-    let ids = op_blob::catalog::read_manifest_plugin_ids_shm()?;
-    let hit = ids
-        .iter()
-        .find(|id| id == &request || id.contains(request) || request.contains(id.as_str()))?;
-    op_blob::catalog::read_plugin_schema_shm(hit).map(|s| (hit.clone(), s))
+/// Retained compatibility path delegates to the exact canonical route.
+pub async fn ui_model_list_plugins_handler(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Response {
+    super::plugin_schema::plugin_list_handler()
+        .await
+        .into_response()
 }
 
-/// Per-plugin schema_hash from the catalog manifest (single source of truth).
-fn schema_hash_for(plugin: &str) -> Option<String> {
-    let bytes = std::fs::read(BLOB_MANIFEST_PATH).ok()?;
-    let v: Value = serde_json::from_slice(&bytes).ok()?;
-    let plugins = v.get("plugins")?.as_object()?;
-    plugins
-        .get(plugin)
-        .and_then(|h| h.as_str())
-        .map(|s| s.to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_catalog_is_explicit_and_not_an_empty_gallery() {
+        let response = unavailable("promote");
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[test]
+    fn delete_requires_an_explicit_revision_and_rejects_extra_fields() {
+        assert!(
+            serde_json::from_value::<DeleteSpecRequest>(json!({"expected_revision":3})).is_ok()
+        );
+        assert!(serde_json::from_value::<DeleteSpecRequest>(json!({})).is_err());
+        assert!(serde_json::from_value::<DeleteSpecRequest>(
+            json!({"expected_revision":3,"latest":true})
+        )
+        .is_err());
+
+        let call = delete_spec_call(
+            "spec-a".into(),
+            DeleteSpecRequest {
+                expected_revision: 3,
+            },
+        );
+        assert_eq!(call.method, "delete_ui_spec");
+        assert_eq!(call.capability, "gemma.invoke");
+        assert_eq!(
+            call.arguments,
+            json!({"spec_id":"spec-a","expected_revision":3})
+        );
+    }
+
+    #[test]
+    fn list_query_is_bounded_by_canonical_method_not_a_hidden_http_default() {
+        let query: ListSpecsQuery = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(query.limit, 0);
+        assert!(query.after.is_none());
+        assert!(serde_json::from_value::<ListSpecsQuery>(json!({"owner":"other"})).is_err());
+
+        let call = list_specs_call(query);
+        assert_eq!(call.method, "list_ui_specs");
+        assert_eq!(call.capability, "gemma.read");
+        assert_eq!(call.arguments, json!({"after":null,"limit":0}));
+    }
 }

@@ -35,11 +35,22 @@ use crate::datapath_safe::{FALLBACK_COOKIE, MANAGED_COOKIE};
 use crate::openflow_translate::{json_flow_to_add, json_flow_to_delete};
 use crate::unixctl::{ensure_static_fdb_entries, static_fdb_from_env, StaticFdbEntry};
 
+#[path = "controller_flow_verify.rs"]
+mod flow_verify;
+
+#[cfg(test)]
+#[path = "controller_native_tests.rs"]
+mod native_tests;
+
 /// A request to install or delete a schema-driven flow on the currently
 /// connected switch, submitted via `OpenFlowControllerHandle::send_flow`.
 struct FlowRequest {
     flow_json: String,
     delete: bool,
+    compare: bool,
+    verify_only: bool,
+    expected: Option<String>,
+    bridge: Option<String>,
     reply: oneshot::Sender<Result<String>>,
 }
 
@@ -188,14 +199,28 @@ struct RawMsg {
 
 /// Read one complete OpenFlow message from `stream`.
 async fn recv_msg(stream: &mut TcpStream) -> Result<RawMsg> {
-    let mut hdr = [0u8; 8];
+    let mut first = [0];
     stream
-        .read_exact(&mut hdr)
+        .read_exact(&mut first)
+        .await
+        .context("reading OF header")?;
+    recv_msg_after_first(stream, first[0]).await
+}
+
+async fn recv_msg_after_first(stream: &mut TcpStream, first: u8) -> Result<RawMsg> {
+    let mut hdr = [0u8; 8];
+    hdr[0] = first;
+    stream
+        .read_exact(&mut hdr[1..])
         .await
         .context("reading OF header")?;
 
     let msg_type = hdr[1];
     let length = u16::from_be_bytes([hdr[2], hdr[3]]) as usize;
+    anyhow::ensure!(
+        hdr[0] == OF_VERSION as u8 && length >= 8,
+        "invalid OpenFlow frame header"
+    );
     let xid = u32::from_be_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
     let payload_len = length.saturating_sub(8);
 
@@ -512,7 +537,23 @@ async fn handle_connection(
                 }
                 xid = xid.wrapping_add(1);
             }
-            msg = recv_msg(&mut stream) => {
+            ready = stream.readable() => {
+                if let Err(error) = ready { break Err(error.into()); }
+                // Readiness can be stale after a prior successful read. Clear
+                // it with try_read before committing to a whole-frame wait.
+                let mut first = [0];
+                match stream.try_read(&mut first) {
+                    Ok(0) => break Err(anyhow::anyhow!("OpenFlow peer closed")),
+                    Ok(_) => {},
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+                    Err(error) => break Err(error.into()),
+                }
+                // Readiness is cancellation safe. Never cancel recv_msg after
+                // it has consumed part of a frame to handle another command.
+                let msg = match tokio::time::timeout(Duration::from_secs(10), recv_msg_after_first(&mut stream, first[0])).await {
+                    Ok(message) => message,
+                    Err(error) => break Err(error.into()),
+                };
                 match msg {
                     Ok(msg) if msg.msg_type == 2 /* EchoRequest */ => {
                         if let Err(e) = send_msg(&mut stream, &build_echo_reply(msg.xid, &msg.payload)).await {
@@ -535,12 +576,22 @@ async fn handle_connection(
                 }
             }
             Some(req) = cmd_rx.recv() => {
-                let outcome = if req.delete {
+                let outcome = if req.verify_only {
+                    verify_owned_flow(&mut stream, &req, &port_map, &port_macs, &mut xid).await
+                } else if req.compare {
+                    compare_exchange_flow(&mut stream, &req, &port_map, &port_macs, &mut xid).await
+                } else if req.delete {
                     push_flow_delete(&mut stream, &req.flow_json, &port_map, &port_macs, &mut xid).await
                 } else {
                     push_flow_add(&mut stream, &req.flow_json, &port_map, &port_macs, &mut xid).await
                 };
+                let disconnected = outcome.as_ref().err().is_some_and(|error| {
+                    error.downcast_ref::<std::io::Error>().is_some()
+                        || error.downcast_ref::<tokio::time::error::Elapsed>().is_some()
+                });
                 let _ = req.reply.send(outcome);
+                // A timed-out partial frame cannot be reused safely.
+                if disconnected { break Err(anyhow::anyhow!("OpenFlow command transport lost framing; reconnect required")); }
             }
         }
     };
@@ -558,10 +609,10 @@ async fn push_flow_add(
     xid: &mut u32,
 ) -> Result<String> {
     let flow = json_flow_to_add(flow_json, port_map, port_macs)?;
-    let msg = flow.to_message(OF_VERSION, *xid);
-    *xid += 1;
-    send_msg(stream, &msg.encode()).await?;
-    Ok(serde_json::json!({"ok": true, "action": "add"}).to_string())
+    flow_verify::apply(stream, &flow, xid).await?;
+    let entries = flow_verify::query(stream, &flow, xid).await?;
+    flow_verify::verify(&entries, Some(&flow), &flow)?;
+    Ok(serde_json::json!({"ok": true, "action": "add", "verified": true}).to_string())
 }
 
 /// Translate and push one schema-driven flow DELETE to the connected switch.
@@ -573,10 +624,75 @@ async fn push_flow_delete(
     xid: &mut u32,
 ) -> Result<String> {
     let flow = json_flow_to_delete(flow_json, port_map, port_macs)?;
-    let msg = flow.to_message(OF_VERSION, *xid);
-    *xid += 1;
-    send_msg(stream, &msg.encode()).await?;
-    Ok(serde_json::json!({"ok": true, "action": "delete"}).to_string())
+    flow_verify::apply(stream, &flow, xid).await?;
+    let entries = flow_verify::query(stream, &flow, xid).await?;
+    flow_verify::verify(&entries, None, &flow)?;
+    Ok(serde_json::json!({"ok": true, "action": "delete", "verified": true}).to_string())
+}
+
+async fn compare_exchange_flow(
+    stream: &mut TcpStream,
+    request: &FlowRequest,
+    ports: &HashMap<String, u32>,
+    macs: &HashMap<String, [u8; 6]>,
+    xid: &mut u32,
+) -> Result<String> {
+    let bridge = request
+        .bridge
+        .as_deref()
+        .context("managed flow requires bridge")?;
+    anyhow::ensure!(
+        ports.get(bridge) == Some(&0xffff_fffe),
+        "requested bridge does not match the connected switch LOCAL port"
+    );
+    let desired = json_flow_to_add(&request.flow_json, ports, macs)?;
+    let expected = request
+        .expected
+        .as_deref()
+        .map(|json| json_flow_to_add(json, ports, macs))
+        .transpose()?;
+    if let Some(expected) = &expected {
+        anyhow::ensure!(
+            expected.table_id == desired.table_id
+                && expected.priority == desired.priority
+                && expected.match_fields.encode() == desired.match_fields.encode(),
+            "flow compare/exchange cannot change entry identity"
+        );
+    }
+    let entries = flow_verify::query(stream, &desired, xid).await?;
+    flow_verify::verify(&entries, expected.as_ref(), &desired)?;
+    if request.delete {
+        push_flow_delete(stream, &request.flow_json, ports, macs, xid).await?;
+    } else {
+        push_flow_add(stream, &request.flow_json, ports, macs, xid).await?;
+    }
+    Ok(serde_json::json!({"verified":true,"action":if request.delete {"delete"} else {"add"},"flow":serde_json::from_str::<serde_json::Value>(&request.flow_json)?}).to_string())
+}
+
+async fn verify_owned_flow(
+    stream: &mut TcpStream,
+    request: &FlowRequest,
+    ports: &HashMap<String, u32>,
+    macs: &HashMap<String, [u8; 6]>,
+    xid: &mut u32,
+) -> Result<String> {
+    let bridge = request
+        .bridge
+        .as_deref()
+        .context("flow verification requires bridge")?;
+    anyhow::ensure!(
+        ports.get(bridge) == Some(&0xffff_fffe),
+        "requested bridge does not match the connected switch LOCAL port"
+    );
+    let flow = json_flow_to_add(&request.flow_json, ports, macs)?;
+    let entries = flow_verify::query(stream, &flow, xid).await?;
+    let matches = flow_verify::verify(
+        &entries,
+        if request.delete { None } else { Some(&flow) },
+        &flow,
+    )
+    .is_ok();
+    Ok(serde_json::json!({"matches":matches}).to_string())
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -736,6 +852,10 @@ impl OpenFlowControllerHandle {
                 .send(FlowRequest {
                     flow_json,
                     delete,
+                    compare: false,
+                    verify_only: false,
+                    expected: None,
+                    bridge: None,
                     reply: tx,
                 })
                 .map_err(|_| anyhow::anyhow!("controller connection task is no longer running"))?;
@@ -749,6 +869,71 @@ impl OpenFlowControllerHandle {
             flows.push(value);
         }
         Ok(result)
+    }
+
+    /// Serialized native compare/read/modify/barrier/readback, restricted to
+    /// the named connected bridge. No caller can wildcard-delete other flows.
+    pub async fn compare_exchange_flow(
+        &self,
+        bridge: String,
+        flow_json: String,
+        expected: Option<String>,
+        delete: bool,
+    ) -> Result<String> {
+        anyhow::ensure!(
+            !delete || expected.as_ref() == Some(&flow_json),
+            "delete requires the exact expected flow"
+        );
+        let (tx, rx) = oneshot::channel();
+        self.active_conn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .context("no connected OpenFlow switch")?
+            .send(FlowRequest {
+                flow_json,
+                delete,
+                compare: true,
+                verify_only: false,
+                expected,
+                bridge: Some(bridge),
+                reply: tx,
+            })
+            .map_err(|_| anyhow::anyhow!("OpenFlow owner disconnected"))?;
+        rx.await
+            .context("OpenFlow compare/exchange owner dropped result; reconcile outcome")?
+    }
+
+    /// Native readback for recovery of a previously attempted exact flow.
+    /// This does not mutate the switch or consult the installed-flow cache.
+    pub async fn verify_flow(
+        &self,
+        bridge: String,
+        flow_json: String,
+        absent: bool,
+    ) -> Result<bool> {
+        let (tx, rx) = oneshot::channel();
+        self.active_conn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .context("no connected OpenFlow switch")?
+            .send(FlowRequest {
+                flow_json,
+                delete: absent,
+                compare: false,
+                verify_only: true,
+                expected: None,
+                bridge: Some(bridge),
+                reply: tx,
+            })
+            .map_err(|_| anyhow::anyhow!("OpenFlow owner disconnected"))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&rx.await.context("flow verification owner disconnected")??)?;
+        value
+            .get("matches")
+            .and_then(serde_json::Value::as_bool)
+            .context("invalid verification result")
     }
 
     /// Return the flows this handle believes are currently installed

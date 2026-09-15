@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 pub const DEFAULT_NLM_BIN: &str = "/usr/local/bin/nlm";
@@ -20,6 +21,9 @@ pub const DEFAULT_XAUTHORITY: &str = "/home/jeremy/.Xauthority";
 const DEFAULT_CALL_TIMEOUT_SECS: u64 = 30;
 const AUTH_TIMEOUT_SECS: u64 = 660;
 const LONG_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_STDOUT_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+const QUERY_STDOUT_LIMIT_BYTES: usize = 1024 * 1024;
+const STDERR_LIMIT_BYTES: usize = 256 * 1024;
 
 const STRIP_ENV: &[&str] = &[
     "NOTEBOOKLM_COOKIES",
@@ -40,6 +44,8 @@ pub struct NlmInvocation {
     pub argv: Vec<String>,
     pub interactive: bool,
     pub timeout_secs: u64,
+    /// Maximum stdout accepted before the child is terminated.
+    pub stdout_limit_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,10 +143,14 @@ pub fn nlm_argv(
         }
         "source_get_content" => {
             let source_id = require_str(args, &["source_id", "id"])?;
-            let mut argv = vec_owned(["source", "content", &source_id, "--json"]);
+            let mut argv = vec_owned(["source", "content", &source_id]);
             if let Some(path) = arg_str(args, &["output_path", "output"]) {
+                // The pinned CLI prints a receipt when writing a file, even
+                // with --json. Select text mode so run_nlm handles it correctly.
                 argv.push("-o".into());
                 argv.push(path);
+            } else {
+                argv.push("--json".into());
             }
             argv
         }
@@ -268,6 +278,11 @@ pub fn nlm_argv(
     Ok(NlmInvocation {
         interactive: matches!(method, "setup_auth" | "reauth"),
         timeout_secs: timeout_for(method, args),
+        stdout_limit_bytes: if method == "notebook_query" {
+            QUERY_STDOUT_LIMIT_BYTES
+        } else {
+            DEFAULT_STDOUT_LIMIT_BYTES
+        },
         argv,
     })
 }
@@ -334,7 +349,34 @@ pub fn touch_bin_ready_marker(bin: &Path) -> std::io::Result<()> {
     }
 }
 
-pub async fn run_nlm(invocation: &NlmInvocation) -> anyhow::Result<Value> {
+async fn read_bounded<R>(
+    mut input: R,
+    limit: usize,
+    stream: &'static str,
+) -> anyhow::Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut output = Vec::with_capacity(limit.min(64 * 1024));
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = input
+            .read(&mut chunk)
+            .await
+            .with_context(|| format!("read nlm {stream}"))?;
+        if read == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(read) > limit {
+            bail!("nlm {stream} exceeded {limit} bytes");
+        }
+        output.extend_from_slice(&chunk[..read]);
+    }
+}
+
+/// Run the bounded child process without imposing a deadline. Dropping this
+/// future drops the `kill_on_drop` child process.
+async fn run_nlm_bounded(invocation: &NlmInvocation) -> anyhow::Result<Value> {
     let bin = nlm_bin();
     if !bin.is_file() {
         bail!(
@@ -381,18 +423,33 @@ pub async fn run_nlm(invocation: &NlmInvocation) -> anyhow::Result<Value> {
         command.env("XAUTHORITY", DEFAULT_XAUTHORITY);
     }
 
-    let output = tokio::time::timeout(
-        Duration::from_secs(invocation.timeout_secs),
-        command.output(),
-    )
-    .await
-    .map_err(|_| anyhow!("nlm timed out after {}s", invocation.timeout_secs))?
-    .with_context(|| format!("spawn {}", bin.display()))?;
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("spawn {}", bin.display()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("nlm stdout pipe is unavailable")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("nlm stderr pipe is unavailable")?;
+    let stdout_limit = invocation.stdout_limit_bytes;
+    let (stdout, stderr, status) = tokio::try_join!(
+        read_bounded(stdout, stdout_limit, "stdout"),
+        read_bounded(stderr, STDERR_LIMIT_BYTES, "stderr"),
+        async {
+            child
+                .wait()
+                .await
+                .with_context(|| format!("wait for {}", bin.display()))
+        }
+    )?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = redact_nlm_text(&String::from_utf8_lossy(&output.stderr));
-    if !output.status.success() {
-        let code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
+    let stderr = redact_nlm_text(&String::from_utf8_lossy(&stderr));
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
         bail!("nlm exited {code}: {}", stderr.trim());
     }
 
@@ -410,6 +467,22 @@ pub async fn run_nlm(invocation: &NlmInvocation) -> anyhow::Result<Value> {
     }
 }
 
+pub async fn run_nlm(invocation: &NlmInvocation) -> anyhow::Result<Value> {
+    tokio::time::timeout(
+        Duration::from_secs(invocation.timeout_secs),
+        run_nlm_bounded(invocation),
+    )
+    .await
+    .map_err(|_| anyhow!("nlm timed out after {}s", invocation.timeout_secs))?
+}
+
+/// Execute an asynchronous query with bounded pipes but no inner deadline.
+/// `NotebookQueries` owns the single caller-selected timeout around this
+/// future, avoiding a race between two equal timers.
+pub async fn run_notebooklm_query(invocation: &NlmInvocation) -> anyhow::Result<Value> {
+    normalize_notebooklm_result("notebook_query", run_nlm_bounded(invocation).await?)
+}
+
 pub async fn run_notebooklm_method(
     method: &str,
     invocation: &NlmInvocation,
@@ -420,7 +493,7 @@ pub async fn run_notebooklm_method(
         "setup_auth" | "reauth" | "refresh_auth" | "save_auth_tokens"
     );
     if !health && !auth {
-        return run_nlm(invocation).await;
+        return normalize_notebooklm_result(method, run_nlm(invocation).await?);
     }
     // Invalidate readiness before any attempt: cancellation, timeout, malformed
     // output or failed login must not leave a previous authenticated marker.
@@ -447,6 +520,37 @@ pub async fn run_notebooklm_method(
             Err(error.context("NotebookLM login completed but Google access was not verified"))
         }
     }
+}
+
+/// Project provider collection and embedded-JSON results into the schema's
+/// named fields. The same value is returned through D-Bus, MCP and native gRPC.
+/// Existing object fields (notably source_add.source_id) stay intact.
+pub fn normalize_notebooklm_result(method: &str, mut result: Value) -> anyhow::Result<Value> {
+    let collection = match method {
+        "notebook_list" => Some("notebooks"),
+        "source_list_drive" => Some("sources"),
+        "studio_status" if result.is_array() => Some("artifacts"),
+        _ => None,
+    };
+    if let Some(field) = collection {
+        if !result.is_array() {
+            bail!("nlm {method} returned an unexpected collection shape");
+        }
+        return Ok(serde_json::json!({field: result}));
+    }
+    if method == "studio_create" {
+        if let Some(object) = result.as_object_mut() {
+            if let Some(encoded) = object.remove("mind_map_json") {
+                let text = encoded.as_str().ok_or_else(|| {
+                    anyhow!("nlm studio_create returned a non-string mind_map_json")
+                })?;
+                let mind_map: Value = serde_json::from_str(text)
+                    .context("nlm studio_create returned invalid mind-map JSON")?;
+                object.insert("mind_map".into(), mind_map);
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn parse_structured_stdout(stdout: &str) -> anyhow::Result<Value> {
@@ -649,11 +753,21 @@ fn download_artifact_argv(args: &Value, selected: Option<&str>) -> anyhow::Resul
     let artifact = require_str(args, &["artifact_type", "type"])?;
     let output = require_str(args, &["output_path", "output"])?;
     let noun = match artifact.as_str() {
-        "slide_deck" | "slides" => "slide-deck".into(),
-        other => other.replace('_', "-"),
+        "slide_deck" | "slides" | "slide-deck" => "slide-deck",
+        "mindmap" | "mind_map" | "mind-map" => "mind-map",
+        "data_table" | "data-table" => "data-table",
+        "audio" | "video" | "report" | "infographic" | "quiz" | "flashcards" | "file" => {
+            artifact.as_str()
+        }
+        other => bail!("unsupported download artifact_type '{other}'"),
     };
-    let mut argv = vec_owned(["download", &noun, &id, "--output", &output, "--json"]);
+    // nlm 0.11.2 individual downloads emit text and have no --json option.
+    // download all has a separate structured result and retains --json.
+    let mut argv = vec_owned(["download", noun, &id, "--output", &output]);
     if let Some(format) = arg_str(args, &["format"]) {
+        if !matches!(noun, "slide-deck" | "quiz" | "flashcards") {
+            bail!("download format is not supported for '{noun}'");
+        }
         argv.push("--format".into());
         argv.push(format);
     }
@@ -1329,5 +1443,152 @@ mod tests {
     fn structured_stdout_rejects_rich_tables() {
         let err = parse_structured_stdout("╭──────────╮\n│ notebooks │\n╰──────────╯").unwrap_err();
         assert!(err.to_string().contains("Rich"));
+    }
+
+    #[test]
+    fn individual_downloads_use_the_pinned_text_command_contract() {
+        assert_eq!(
+            argv(
+                "download_artifact",
+                json!({"notebook_id": "nb", "artifact_type": "audio", "output_path": "a.mp3"}),
+                None,
+            ),
+            ["download", "audio", "nb", "--output", "a.mp3"]
+        );
+        assert_eq!(
+            argv(
+                "download_artifact",
+                json!({"notebook_id": "nb", "artifact_type": "mindmap", "output_path": "map.json"}),
+                None,
+            ),
+            ["download", "mind-map", "nb", "--output", "map.json"]
+        );
+        assert_eq!(
+            argv(
+                "download_artifact",
+                json!({"notebook_id": "nb", "artifact_type": "slides", "output_path": "s.pptx", "format": "pptx"}),
+                None,
+            ),
+            [
+                "download",
+                "slide-deck",
+                "nb",
+                "--output",
+                "s.pptx",
+                "--format",
+                "pptx"
+            ]
+        );
+        assert!(nlm_argv(
+            "download_artifact",
+            &json!({"notebook_id": "nb", "artifact_type": "audio", "output_path": "a.mp3", "format": "json"}),
+            None,
+        ).is_err());
+        assert!(
+            argv("download_all_artifacts", json!({"notebook_id": "nb"}), None)
+                .contains(&"--json".to_string())
+        );
+    }
+
+    #[test]
+    fn source_content_file_output_uses_a_text_receipt() {
+        assert_eq!(
+            argv("source_get_content", json!({"source_id": "src"}), None),
+            ["source", "content", "src", "--json"]
+        );
+        assert_eq!(
+            argv(
+                "source_get_content",
+                json!({"source_id": "src", "output_path": "content.txt"}),
+                None,
+            ),
+            ["source", "content", "src", "-o", "content.txt"]
+        );
+    }
+
+    #[test]
+    fn collection_projection_preserves_items_and_source_upload_ids() {
+        let notebooks = json!([{"id": "nb", "title": "Notes", "source_count": 0}]);
+        assert_eq!(
+            normalize_notebooklm_result("notebook_list", notebooks.clone()).unwrap(),
+            json!({"notebooks": notebooks})
+        );
+        assert!(
+            normalize_notebooklm_result("notebook_list", json!({"error": "bad shape"})).is_err()
+        );
+        let source = json!({"source_id": "src", "source_type": "text", "title": "Context"});
+        assert_eq!(
+            normalize_notebooklm_result("source_add", source.clone()).unwrap(),
+            source
+        );
+        let receipt = json!({"status": "command_completed", "output_format": "text", "message": "Renamed", "diagnostic": ""});
+        assert_eq!(
+            normalize_notebooklm_result("studio_status", receipt.clone()).unwrap(),
+            receipt
+        );
+    }
+
+    #[test]
+    fn mind_map_projection_decodes_json_without_scraping_or_losing_nodes() {
+        let tree = json!({"name": "Root", "children": [{"name": "Child", "children": []}]});
+        let result = normalize_notebooklm_result(
+            "studio_create",
+            json!({
+                "artifact_type": "mind_map", "artifact_id": "map", "mind_map_json": tree.to_string()
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["mind_map"], tree);
+        assert!(result.get("mind_map_json").is_none());
+        assert!(
+            normalize_notebooklm_result("studio_create", json!({"mind_map_json": "not JSON"}))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_accepts_exact_limit_and_rejects_next_byte() {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut writer, reader) = tokio::io::duplex(32);
+        let write = tokio::spawn(async move {
+            writer.write_all(b"12345678").await.unwrap();
+        });
+        assert_eq!(
+            read_bounded(reader, 8, "fixture").await.unwrap(),
+            b"12345678"
+        );
+        write.await.unwrap();
+
+        let (mut writer, reader) = tokio::io::duplex(32);
+        let write = tokio::spawn(async move {
+            writer.write_all(b"123456789").await.unwrap();
+        });
+        let error = read_bounded(reader, 8, "fixture").await.unwrap_err();
+        assert_eq!(error.to_string(), "nlm fixture exceeded 8 bytes");
+        write.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_is_cancellation_safe_while_pipe_remains_open() {
+        let (_writer, reader) = tokio::io::duplex(8);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), read_bounded(reader, 8, "fixture"))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn notebook_queries_use_the_wire_sized_stdout_cap() {
+        let invocation = nlm_argv(
+            "notebook_query",
+            &json!({"notebook_id":"nb","question":"q"}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(invocation.stdout_limit_bytes, QUERY_STDOUT_LIMIT_BYTES);
+        let list = nlm_argv("notebook_list", &json!({}), None).unwrap();
+        assert_eq!(list.stdout_limit_bytes, DEFAULT_STDOUT_LIMIT_BYTES);
     }
 }

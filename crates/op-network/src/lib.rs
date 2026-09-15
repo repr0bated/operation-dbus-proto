@@ -13,6 +13,7 @@
 pub mod btrfs;
 pub mod controller;
 pub mod datapath_safe;
+pub mod dbus_tls;
 pub mod openflow;
 pub mod openflow_translate;
 pub mod ovs_capabilities;
@@ -24,6 +25,7 @@ pub mod proxmox;
 pub mod rovs_proxy;
 pub mod rtnetlink;
 pub mod unixctl;
+pub mod wireguard_kernel;
 
 pub use controller::{OpenFlowController, OpenFlowControllerHandle};
 pub use datapath_safe::{

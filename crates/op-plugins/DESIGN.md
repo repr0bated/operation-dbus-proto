@@ -1,5 +1,12 @@
 # op-plugins — Design: Plugin Inventory & Schema Quality Survey
 
+> Historical survey: the schema counts and compatibility constructors below are
+> obsolete. September 13 consolidation removed the duplicate built-in definitions
+> and `schemas/` loaders. Current contracts belong to their plugins; runtime
+> presence comes from the sealed blob catalog. See
+> [current architecture](../../docs/src/architecture/overview.md) and
+> [tched_router contract ownership](../../docs/src/architecture/tched-router-baseline.md).
+
 **Crate**: `op-plugins`  
 **Scope**: Complete inventory of all state plugins, schema coverage audit, quality evaluation,
 and identification of missing plugins.

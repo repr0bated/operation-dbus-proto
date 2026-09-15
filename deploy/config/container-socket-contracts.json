@@ -2,6 +2,14 @@
   "$schema": "./container-socket-contract.schema.json",
   "schema_version": 1,
   "artifacts": {
+    "op-mail-admin": {
+      "installer": "workspace_bundle",
+      "package": "op-plugins",
+      "target": "x86_64-unknown-linux-gnu",
+      "runtime": "private-glibc-loader-bundle",
+      "archive": "mail-3tched-x86_64-linux-gnu-bundle.tar",
+      "binary": "/usr/local/bin/op-mail-admin"
+    },
     "rust-network-mgr": {
       "installer": "cargo_git",
       "git": "https://github.com/sparesparrow/rust-network-mgr",
@@ -117,15 +125,19 @@
       "name": "mail-3tched",
       "role": "mail",
       "depends_on": [
+        "artifact:op-mail-admin",
+        "service:op-mail-admin",
         "artifact:rust-network-mgr",
         "service:rust-network-mgr.service",
         "process:postfix",
         "process:dovecot"
       ],
       "services": [
+        "op-mail-admin",
         "rust-network-mgr.service"
       ],
       "unix_sockets": [
+        "/opt/run-mounts/ghostbridge/mail/admin.sock",
         "/run/rust-network-manager/rust-network-manager.sock"
       ],
       "tcp_ports": [

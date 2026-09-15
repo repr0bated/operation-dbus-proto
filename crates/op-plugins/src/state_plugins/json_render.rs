@@ -7,16 +7,28 @@ use async_trait::async_trait;
 use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::{PluginSchema, SideEffect};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use simd_json::OwnedValue as Value;
 
 use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
+
+#[path = "json_render_canvas_profile.rs"]
+pub mod canvas_profile;
+#[path = "json_render_catalog_v019.rs"]
+mod catalog_v019;
+#[path = "json_render_methods.rs"]
+pub mod methods;
+#[path = "json_render_runtime_contract.rs"]
+mod runtime_contract;
+#[path = "json_render_validation_bounds.rs"]
+pub mod validation_bounds;
 
 // =============================================================================
 // PLUGIN ENTRY: identity and typed schema seed
 // =============================================================================
 
 const PLUGIN_NAME: &str = "json_render";
-const PLUGIN_VERSION: &str = "1.0.0";
+const PLUGIN_VERSION: &str = "3.0.0";
 const PLUGIN_CATEGORY: &str = "software";
 const PLUGIN_DESCRIPTION: &str = "json-render catalog projection — schema, specs, catalogs, renderers, actions, validation, and upstream API inventory";
 const PLUGIN_DISPLAY_NAME: &str = "GB.JsonRender";
@@ -24,78 +36,79 @@ const JSON_RENDER_SOURCE_COMMIT: &str = "e2d00faeaabe2871ca18a4594a9ec39a245f9b6
 
 /// Runtime projection for the json-render generative UI framework.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "software"))]
 pub struct JsonRenderState {
+    /// Plugin-owned generated Canvas contract checked against the active UI
+    /// source. Distinct from the upstream reference inventory; no deployment claim.
+    #[serde(default)]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.canvas-profile@v3"))]
+    pub canvas_profile: canvas_profile::CanvasProfile,
     /// Operational status of the catalog projection.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.status@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.status@v2"))]
     pub status: String,
     /// Source authority used to define this projection.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source@v1"))]
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source@v2"))]
     pub source: JsonRenderSource,
     /// Local policy for exposing json-render through D-Bus projections.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.config@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.config@v2"))]
     pub config: JsonRenderConfig,
     /// Flat UI tree contract used by json-render specs.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-contract@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-contract@v2"))]
     pub spec_contract: SpecContract,
     /// Package inventory observed from the upstream workspace.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.packages@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.packages@v2"))]
     pub packages: Vec<JsonRenderPackage>,
     /// Core exported functions and schemas available to hosts.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.core-exports@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.core-exports@v2"))]
     pub core_exports: Vec<ApiExport>,
     /// Renderer packages and their host integration surfaces.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderers@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderers@v2"))]
     pub renderers: Vec<RendererSurface>,
     /// Catalog component declarations from the shadcn catalog exemplar.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.components@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.components@v2"))]
     pub components: Vec<ComponentDecl>,
     /// Built-in runtime actions exposed by the React action provider.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.actions@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.actions@v2"))]
     pub actions: Vec<ActionDecl>,
     /// Validation checks built into the core validation module.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.validation-checks@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.validation-checks@v2"))]
     pub validation_checks: Vec<NamedCapability>,
     /// Built-in and custom directive vocabulary.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.directives@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.directives@v2"))]
     pub directives: Vec<NamedCapability>,
-    /// D-Bus method declarations exported by this plugin.
-    #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.methods@v1"))]
-    pub methods: Vec<MethodSurface>,
 }
 
 /// Source provenance for this plugin's curated json-render model.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source.schema@v2"))]
 pub struct JsonRenderSource {
     /// Documentation home page.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source-docs@v1"))]
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source-docs@v2"))]
     pub docs_url: String,
     /// Upstream repository URL.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source-repository@v1"))]
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source-repository@v2"))]
     pub repository_url: String,
     /// Upstream commit inspected for package and API inventory.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source-commit@v1"))]
+    #[schemars(extend("x-oscal-subid" = "src.software.plugin.json-render.source-commit@v2"))]
     pub commit: String,
     /// Short source summary.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.source-summary@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.source-summary@v2"))]
     pub summary: String,
 }
 
@@ -105,31 +118,68 @@ impl Default for JsonRenderSource {
             docs_url: "https://json-render.dev/docs".to_string(),
             repository_url: "https://github.com/vercel-labs/json-render".to_string(),
             commit: JSON_RENDER_SOURCE_COMMIT.to_string(),
-            summary: "Generative UI framework with schema-defined specs, catalogs, registries, renderers, streaming, validation, actions, directives, and code export.".to_string(),
+            summary: "Manifest-pinned upstream reference catalog. Catalog presence does not claim that a component is implemented by the deployed UI.".to_string(),
         }
     }
 }
 
 /// Local D-Bus projection policy for json-render.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.config.schema@v1"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.config.schema@v2"))]
+#[serde(deny_unknown_fields)]
 pub struct JsonRenderConfig {
     /// Allow catalog metadata to be exposed through D-Bus.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-catalog-exposure@v1"))]
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-catalog-exposure@v2"))]
     pub expose_catalog: bool,
     /// Allow prompt-building metadata to be exposed through D-Bus.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-prompt-exposure@v1"))]
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-prompt-exposure@v2"))]
     pub expose_prompt_surface: bool,
     /// Default schema export mode.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-schema-mode@v1"))]
-    pub schema_mode: String,
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-schema-mode@v2"))]
+    pub schema_mode: JsonSchemaMode,
     /// Default renderer target for UI projection previews.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-renderer@v1"))]
-    pub default_renderer: String,
+    #[schemars(extend("x-oscal-subid" = "mut.software.plugin.json-render.config-renderer@v2"))]
+    pub default_renderer: RendererTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonSchemaMode {
+    Standard,
+    Strict,
+}
+
+impl Default for JsonSchemaMode {
+    fn default() -> Self {
+        Self::Strict
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RendererTarget {
+    React,
+    Next,
+    Vue,
+    Svelte,
+    Solid,
+    ReactNative,
+    ReactPdf,
+    ReactEmail,
+    Image,
+    Remotion,
+    Ink,
+    ReactThreeFiber,
+}
+
+impl Default for RendererTarget {
+    fn default() -> Self {
+        Self::React
+    }
 }
 
 impl Default for JsonRenderConfig {
@@ -137,35 +187,35 @@ impl Default for JsonRenderConfig {
         Self {
             expose_catalog: true,
             expose_prompt_surface: true,
-            schema_mode: "strict".to_string(),
-            default_renderer: "react".to_string(),
+            schema_mode: JsonSchemaMode::Strict,
+            default_renderer: RendererTarget::React,
         }
     }
 }
 
 /// json-render spec grammar at the shape level.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec.schema@v2"))]
 pub struct SpecContract {
     /// Required root element key.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-root@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-root@v2"))]
     pub root_field: String,
     /// Required elements map.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-elements@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-elements@v2"))]
     pub elements_field: String,
     /// Optional initial state field.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-state@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.spec-state@v2"))]
     pub state_field: String,
     /// UI element fields recognized by core.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.element-fields@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.element-fields@v2"))]
     pub element_fields: Vec<String>,
     /// Supported JSON Patch operations for streaming edits.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.patch-ops@v1"))]
+    #[schemars(extend("x-oscal-subid" = "sch.software.plugin.json-render.patch-ops@v2"))]
     pub patch_ops: Vec<String>,
 }
 
@@ -198,193 +248,217 @@ impl Default for SpecContract {
 
 /// Upstream package inventory item.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package.schema@v2"))]
 pub struct JsonRenderPackage {
     /// Workspace folder name.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-folder@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-folder@v2"))]
     pub folder: String,
     /// npm package name.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-name@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-name@v2"))]
     pub package_name: String,
     /// Package version observed upstream.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-version@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-version@v2"))]
     pub version: String,
     /// Package role in the json-render system.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-role@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.package-role@v2"))]
     pub role: String,
 }
 
 /// Public API export or host method.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export.schema@v2"))]
 pub struct ApiExport {
     /// Exported symbol.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-name@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-name@v2"))]
     pub name: String,
     /// Package or module that owns this symbol.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-package@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-package@v2"))]
     pub package: String,
     /// Export kind.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-kind@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-kind@v2"))]
     pub kind: String,
     /// Operational category.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-category@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.api-export-category@v2"))]
     pub category: String,
 }
 
 /// Renderer package surface.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer.schema@v2"))]
 pub struct RendererSurface {
     /// Renderer identifier.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-id@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-id@v2"))]
     pub id: String,
     /// Package providing this renderer.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-package@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-package@v2"))]
     pub package_name: String,
     /// Render target.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-target@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-target@v2"))]
     pub target: String,
     /// Important exported host methods.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-exports@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.renderer-exports@v2"))]
     pub exports: Vec<String>,
 }
 
 /// Catalog component declaration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component.schema@v2"))]
 pub struct ComponentDecl {
     /// Component name.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-name@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-name@v2"))]
     pub name: String,
     /// Component category.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-category@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-category@v2"))]
     pub category: String,
     /// Required or commonly used props.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-props@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-props@v2"))]
     pub props: Vec<String>,
+    /// Exact Draft 7 schema extracted once from the pinned upstream Zod
+    /// declaration. This structured value is the validation/export authority.
+    pub props_schema: JsonValue,
+    /// Named child slots accepted by the component.
+    #[serde(default)]
+    pub slots: Vec<String>,
     /// Supported event names.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-events@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-events@v2"))]
     pub events: Vec<String>,
     /// Human-readable description.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-description@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.component-description@v2"))]
     pub description: String,
 }
 
 /// Runtime action declaration.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action.schema@v2"))]
 pub struct ActionDecl {
     /// Action name.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-name@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-name@v2"))]
     pub name: String,
     /// Action parameter names.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-params@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-params@v2"))]
     pub params: Vec<String>,
+    /// Exact parameter schema for this built-in action.
+    pub params_schema: JsonValue,
+    /// Renderer targets whose pinned provider implements this action.
+    pub renderers: Vec<RendererTarget>,
     /// Whether the action mutates state.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-mutates-state@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-mutates-state@v2"))]
     pub mutates_state: bool,
     /// Human-readable description.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-description@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.action-description@v2"))]
     pub description: String,
 }
 
 /// Named capability for validation, directives, and feature inventories.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability.schema@v2"))]
 pub struct NamedCapability {
     /// Capability name.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability-name@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability-name@v2"))]
     pub name: String,
     /// Capability category.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability-category@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability-category@v2"))]
     pub category: String,
     /// Short description.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability-description@v1"))]
+    #[schemars(extend("x-oscal-subid" = "obs.software.plugin.json-render.capability-description@v2"))]
     pub description: String,
 }
 
 /// D-Bus method surface exposed by this state plugin.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method.schema@v1"))]
+#[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method.schema@v2"))]
 pub struct MethodSurface {
     /// D-Bus method name.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-name@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-name@v2"))]
     pub name: String,
     /// Read or mutation side effect.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-side-effect@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-side-effect@v2"))]
     pub side_effect: String,
     /// Required capability.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-capability@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-capability@v2"))]
     pub required_capability: String,
     /// Stable OSCAL subid for the method.
     #[serde(default)]
-    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-subid@v1"))]
+    #[schemars(extend("x-oscal-subid" = "exp.software.plugin.json-render.method-subid@v2"))]
     pub subid: String,
+    /// Whether current persisted policy permits this method's metadata surface.
+    pub available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EmptyJsonRenderInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetJsonRenderConfigInput {
     pub config: JsonRenderConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentLookupInput {
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PackageLookupInput {
     pub package_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SpecValidationInput {
-    pub spec: serde_json::Value,
-    #[serde(default)]
-    pub strict: bool,
+    pub spec: JsonValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SchemaExportInput {
     #[serde(default)]
-    pub strict: bool,
+    pub mode: Option<JsonSchemaMode>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptMode {
+    Standalone,
+    Inline,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PromptSurfaceInput {
     #[serde(default)]
-    pub mode: String,
+    pub mode: Option<PromptMode>,
     #[serde(default)]
     pub custom_rules: Vec<String>,
 }
@@ -396,17 +470,20 @@ pub struct HealthOutput {
     pub component_count: usize,
     pub action_count: usize,
     pub source_commit: String,
+    pub catalog_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConfigOutput {
     pub config: JsonRenderConfig,
+    pub revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SetConfigOutput {
-    pub accepted: bool,
     pub config: JsonRenderConfig,
+    pub changed: bool,
+    pub revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -458,25 +535,27 @@ pub struct SpecContractOutput {
 pub struct ValidationResultOutput {
     pub valid: bool,
     pub issues: Vec<String>,
+    pub checked_elements: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SchemaExportOutput {
-    pub schema: serde_json::Value,
+    pub mode: JsonSchemaMode,
+    pub schema: JsonValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PromptSurfaceOutput {
-    pub mode: String,
-    pub rules: Vec<String>,
-    pub components: Vec<String>,
-    pub actions: Vec<String>,
+    pub mode: PromptMode,
+    pub renderer: RendererTarget,
+    pub prompt: String,
 }
 
 impl Default for JsonRenderState {
     fn default() -> Self {
         Self {
-            status: "active".to_string(),
+            canvas_profile: canvas_profile::CanvasProfile::default(),
+            status: "catalog_snapshot".to_string(),
             source: JsonRenderSource::default(),
             config: JsonRenderConfig::default(),
             spec_contract: SpecContract::default(),
@@ -487,7 +566,6 @@ impl Default for JsonRenderState {
             actions: default_actions(),
             validation_checks: default_validation_checks(),
             directives: default_directives(),
-            methods: default_methods(),
         }
     }
 }
@@ -605,7 +683,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.config.get@v1",
+            "obs.software.plugin.json-render.config.get@v2",
         ),
     );
     schema.methods.insert(
@@ -615,7 +693,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Mutation,
             false,
             "json_render.invoke",
-            "mut.software.plugin.json-render.config.set@v1",
+            "mut.software.plugin.json-render.config.set@v2",
         ),
     );
     schema.methods.insert(
@@ -625,7 +703,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.health@v1",
+            "obs.software.plugin.json-render.health@v2",
         ),
     );
     schema.methods.insert(
@@ -635,7 +713,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.tool.list@v1",
+            "obs.software.plugin.json-render.tool.list@v2",
         ),
     );
     schema.methods.insert(
@@ -645,7 +723,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.package.list@v1",
+            "obs.software.plugin.json-render.package.list@v2",
         ),
     );
     schema.methods.insert(
@@ -655,7 +733,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.package.get@v1",
+            "obs.software.plugin.json-render.package.get@v2",
         ),
     );
     schema.methods.insert(
@@ -665,7 +743,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.component.list@v1",
+            "obs.software.plugin.json-render.component.list@v2",
         ),
     );
     schema.methods.insert(
@@ -675,7 +753,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.component.get@v1",
+            "obs.software.plugin.json-render.component.get@v2",
         ),
     );
     schema.methods.insert(
@@ -685,7 +763,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.action.list@v1",
+            "obs.software.plugin.json-render.action.list@v2",
         ),
     );
     schema.methods.insert(
@@ -695,7 +773,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.core-export.list@v1",
+            "obs.software.plugin.json-render.core-export.list@v2",
         ),
     );
     schema.methods.insert(
@@ -705,17 +783,17 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.renderer.list@v1",
+            "obs.software.plugin.json-render.renderer.list@v2",
         ),
     );
     schema.methods.insert(
         "get_spec_schema".to_string(),
-        method_decl_from_schemars_with_output::<EmptyJsonRenderInput, SpecContractOutput>(
+        method_decl_from_schemars_with_output::<EmptyJsonRenderInput, SchemaExportOutput>(
             "get_spec_schema",
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.spec.get@v1",
+            "obs.software.plugin.json-render.spec.get@v2",
         ),
     );
     schema.methods.insert(
@@ -725,7 +803,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.spec.validate@v1",
+            "obs.software.plugin.json-render.spec.validate@v2",
         ),
     );
     schema.methods.insert(
@@ -735,7 +813,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.schema.export@v1",
+            "obs.software.plugin.json-render.schema.export@v2",
         ),
     );
     schema.methods.insert(
@@ -745,7 +823,7 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             SideEffect::Read,
             true,
             "json_render.read",
-            "obs.software.plugin.json-render.prompt.build@v1",
+            "obs.software.plugin.json-render.prompt.build@v2",
         ),
     );
 
@@ -763,6 +841,16 @@ pub(crate) fn json_render_schema() -> PluginSchema {
             description: "Grants: set_config.".to_string(),
         },
     );
+
+    // The local exposure policy and source pin are themselves public
+    // metadata. Catalog and prompt material remains behind the plugin's
+    // runtime configuration and method surface rather than being streamed
+    // unconditionally.
+    schema.public_state.paths = vec![
+        "/status".to_string(),
+        "/source".to_string(),
+        "/config".to_string(),
+    ];
 
     schema
 }
@@ -1182,279 +1270,7 @@ fn default_renderers() -> Vec<RendererSurface> {
 }
 
 fn default_components() -> Vec<ComponentDecl> {
-    [
-        (
-            "Card",
-            "layout",
-            vec!["title", "description", "maxWidth", "centered", "className"],
-            vec![],
-            "Container card for content sections.",
-        ),
-        (
-            "Stack",
-            "layout",
-            vec!["direction", "gap", "align", "justify", "className"],
-            vec![],
-            "Flex container for layouts.",
-        ),
-        (
-            "Grid",
-            "layout",
-            vec!["columns", "gap", "className"],
-            vec![],
-            "Grid layout.",
-        ),
-        (
-            "Separator",
-            "layout",
-            vec!["orientation"],
-            vec![],
-            "Visual separator line.",
-        ),
-        (
-            "Tabs",
-            "layout",
-            vec!["tabs", "defaultValue", "value"],
-            vec!["change"],
-            "Tab navigation.",
-        ),
-        (
-            "Accordion",
-            "layout",
-            vec!["items", "type"],
-            vec![],
-            "Collapsible sections.",
-        ),
-        (
-            "Collapsible",
-            "layout",
-            vec!["title", "defaultOpen"],
-            vec![],
-            "Collapsible section with trigger.",
-        ),
-        (
-            "Dialog",
-            "overlay",
-            vec!["title", "description", "openPath"],
-            vec![],
-            "Modal dialog controlled by state.",
-        ),
-        (
-            "Drawer",
-            "overlay",
-            vec!["title", "description", "openPath"],
-            vec![],
-            "Bottom sheet drawer controlled by state.",
-        ),
-        (
-            "Carousel",
-            "layout",
-            vec!["items"],
-            vec![],
-            "Horizontally scrollable carousel.",
-        ),
-        (
-            "Table",
-            "data",
-            vec!["columns", "rows", "caption"],
-            vec![],
-            "Data table.",
-        ),
-        (
-            "Heading",
-            "typography",
-            vec!["text", "level"],
-            vec![],
-            "Heading text.",
-        ),
-        (
-            "Text",
-            "typography",
-            vec!["text", "variant"],
-            vec![],
-            "Paragraph text.",
-        ),
-        (
-            "Image",
-            "media",
-            vec!["src", "alt", "width", "height"],
-            vec![],
-            "Image or placeholder.",
-        ),
-        (
-            "Avatar",
-            "data",
-            vec!["src", "name", "size"],
-            vec![],
-            "User avatar with fallback initials.",
-        ),
-        (
-            "Badge",
-            "data",
-            vec!["text", "variant"],
-            vec![],
-            "Status badge.",
-        ),
-        (
-            "Alert",
-            "feedback",
-            vec!["title", "message", "type"],
-            vec![],
-            "Alert banner.",
-        ),
-        (
-            "Progress",
-            "feedback",
-            vec!["value", "max", "label"],
-            vec![],
-            "Progress bar.",
-        ),
-        (
-            "Skeleton",
-            "feedback",
-            vec!["width", "height", "rounded"],
-            vec![],
-            "Loading placeholder.",
-        ),
-        (
-            "Spinner",
-            "feedback",
-            vec!["size"],
-            vec![],
-            "Loading spinner.",
-        ),
-        (
-            "Tooltip",
-            "overlay",
-            vec!["content"],
-            vec![],
-            "Hover or focus tooltip.",
-        ),
-        (
-            "Popover",
-            "overlay",
-            vec!["trigger", "content"],
-            vec![],
-            "Floating popover.",
-        ),
-        (
-            "Input",
-            "form",
-            vec![
-                "label",
-                "placeholder",
-                "value",
-                "type",
-                "disabled",
-                "checks",
-                "validateOn",
-            ],
-            vec!["change", "blur"],
-            "Text input.",
-        ),
-        (
-            "Textarea",
-            "form",
-            vec!["label", "placeholder", "value", "rows", "disabled"],
-            vec!["change", "blur"],
-            "Multi-line input.",
-        ),
-        (
-            "Select",
-            "form",
-            vec!["label", "options", "value", "placeholder", "disabled"],
-            vec!["change"],
-            "Select input.",
-        ),
-        (
-            "Checkbox",
-            "form",
-            vec!["label", "checked", "disabled"],
-            vec!["change"],
-            "Checkbox input.",
-        ),
-        (
-            "Radio",
-            "form",
-            vec!["label", "options", "value", "disabled"],
-            vec!["change"],
-            "Radio group.",
-        ),
-        (
-            "Switch",
-            "form",
-            vec!["label", "checked", "disabled"],
-            vec!["change"],
-            "Boolean switch.",
-        ),
-        (
-            "Slider",
-            "form",
-            vec!["value", "min", "max", "step"],
-            vec!["change"],
-            "Numeric slider.",
-        ),
-        (
-            "Button",
-            "action",
-            vec!["label", "variant", "disabled"],
-            vec!["press"],
-            "Clickable button.",
-        ),
-        (
-            "Link",
-            "navigation",
-            vec!["label", "href", "target"],
-            vec!["press"],
-            "Navigation link.",
-        ),
-        (
-            "DropdownMenu",
-            "action",
-            vec!["items", "label"],
-            vec!["select"],
-            "Dropdown action menu.",
-        ),
-        (
-            "Toggle",
-            "form",
-            vec!["pressed", "label"],
-            vec!["change"],
-            "Toggle button.",
-        ),
-        (
-            "ToggleGroup",
-            "form",
-            vec!["options", "value", "type"],
-            vec!["change"],
-            "Toggle group.",
-        ),
-        (
-            "ButtonGroup",
-            "action",
-            vec!["buttons", "selected"],
-            vec!["press"],
-            "Segmented button group.",
-        ),
-        (
-            "Pagination",
-            "navigation",
-            vec!["page", "pageCount"],
-            vec!["change"],
-            "Pagination controls.",
-        ),
-    ]
-    .into_iter()
-    .map(
-        |(name, category, props, events, description)| ComponentDecl {
-            name: name.to_string(),
-            category: category.to_string(),
-            props: props.into_iter().map(str::to_string).collect(),
-            events: events.into_iter().map(str::to_string).collect(),
-            description: description.to_string(),
-        },
-    )
-    .collect()
+    catalog_v019::components()
 }
 
 fn default_actions() -> Vec<ActionDecl> {
@@ -1464,45 +1280,81 @@ fn default_actions() -> Vec<ActionDecl> {
             vec!["statePath", "value"],
             true,
             "Set a state value by JSON Pointer path.",
+            vec![
+                RendererTarget::React,
+                RendererTarget::Vue,
+                RendererTarget::Svelte,
+                RendererTarget::Solid,
+                RendererTarget::ReactNative,
+                RendererTarget::Ink,
+            ],
         ),
         (
             "pushState",
             vec!["statePath", "value", "clearStatePath"],
             true,
             "Append an item to an array in state.",
+            vec![
+                RendererTarget::React,
+                RendererTarget::Vue,
+                RendererTarget::Svelte,
+                RendererTarget::Solid,
+                RendererTarget::ReactNative,
+                RendererTarget::Ink,
+            ],
         ),
         (
             "removeState",
             vec!["statePath", "index"],
             true,
             "Remove an array item by index.",
+            vec![
+                RendererTarget::React,
+                RendererTarget::Vue,
+                RendererTarget::Svelte,
+                RendererTarget::Solid,
+                RendererTarget::ReactNative,
+                RendererTarget::Ink,
+            ],
         ),
         (
             "push",
             vec!["screen"],
             true,
             "Push a screen name onto navigation state.",
+            vec![RendererTarget::ReactNative],
         ),
         (
             "pop",
             vec![],
             true,
             "Pop the previous screen from navigation state.",
+            vec![RendererTarget::ReactNative],
         ),
         (
             "validateForm",
             vec!["statePath"],
             true,
             "Run registered validation and write the result to state.",
+            vec![
+                RendererTarget::React,
+                RendererTarget::Vue,
+                RendererTarget::Svelte,
+                RendererTarget::Solid,
+            ],
         ),
     ]
     .into_iter()
-    .map(|(name, params, mutates_state, description)| ActionDecl {
-        name: name.to_string(),
-        params: params.into_iter().map(str::to_string).collect(),
-        mutates_state,
-        description: description.to_string(),
-    })
+    .map(
+        |(name, params, mutates_state, description, renderers)| ActionDecl {
+            name: name.to_string(),
+            params: params.into_iter().map(str::to_string).collect(),
+            params_schema: runtime_contract::builtin_action_params_schema(name),
+            renderers,
+            mutates_state,
+            description: description.to_string(),
+        },
+    )
     .collect()
 }
 
@@ -1592,111 +1444,6 @@ fn default_directives() -> Vec<NamedCapability> {
         category: category.to_string(),
         description: description.to_string(),
     })
-    .collect()
-}
-
-fn default_methods() -> Vec<MethodSurface> {
-    [
-        (
-            "get_config",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.config.get@v1",
-        ),
-        (
-            "set_config",
-            "mutation",
-            "json_render.invoke",
-            "mut.software.plugin.json-render.config.set@v1",
-        ),
-        (
-            "get_health",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.health@v1",
-        ),
-        (
-            "list_tools",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.tool.list@v1",
-        ),
-        (
-            "list_packages",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.package.list@v1",
-        ),
-        (
-            "get_package",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.package.get@v1",
-        ),
-        (
-            "list_components",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.component.list@v1",
-        ),
-        (
-            "get_component_schema",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.component.get@v1",
-        ),
-        (
-            "list_actions",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.action.list@v1",
-        ),
-        (
-            "list_core_exports",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.core-export.list@v1",
-        ),
-        (
-            "list_renderers",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.renderer.list@v1",
-        ),
-        (
-            "get_spec_schema",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.spec.get@v1",
-        ),
-        (
-            "validate_spec",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.spec.validate@v1",
-        ),
-        (
-            "export_json_schema",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.schema.export@v1",
-        ),
-        (
-            "build_prompt_surface",
-            "read",
-            "json_render.read",
-            "obs.software.plugin.json-render.prompt.build@v1",
-        ),
-    ]
-    .into_iter()
-    .map(
-        |(name, side_effect, required_capability, subid)| MethodSurface {
-            name: name.to_string(),
-            side_effect: side_effect.to_string(),
-            required_capability: required_capability.to_string(),
-            subid: subid.to_string(),
-        },
-    )
     .collect()
 }
 

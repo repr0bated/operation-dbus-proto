@@ -1,7 +1,8 @@
 //! Provision a real NIC-less identity container via the real
 //! PluginService.CallMethod gRPC path (identity_sled.provision_container) —
-//! creates the Incus container AND the sled row atomically (sled exists iff
-//! container exists), per crates/op-plugins/src/state_plugins/identity_sled.rs.
+//! creates the Incus container, then commits its identity record through the
+//! durable Cozo/protected-SHM transaction owner. A typed pending error means
+//! the native effect may require recovery before retrying.
 use op_grpc_bridge::grpc_client::{GrpcClientPool, RemoteOperationClient};
 use std::sync::Arc;
 

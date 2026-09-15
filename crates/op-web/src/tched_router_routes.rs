@@ -11,9 +11,6 @@ use crate::state_tree;
 
 /// Canonical D-Bus / SHM plugin id after the OpenCode rebrand.
 pub const ROUTER_PLUGIN_ID: &str = "tched_router";
-/// Pre-rebrand plugin id. Still accepted so a host that has not resealed yet
-/// keeps serving the same UI endpoints.
-pub const LEGACY_ROUTER_PLUGIN_ID: &str = "zeroclaw";
 
 #[derive(Debug, Clone)]
 pub struct TchedRouterRoute {
@@ -82,10 +79,9 @@ impl TchedRouterRoute {
     }
 }
 
-/// Live router plugin state: `tched_router` first, then legacy `zeroclaw`.
-pub fn read_router_plugin() -> Option<Value> {
-    state_tree::read_plugin(ROUTER_PLUGIN_ID)
-        .or_else(|| state_tree::read_plugin(LEGACY_ROUTER_PLUGIN_ID))
+/// Current committed state for the canonical sealed router plugin.
+pub async fn read_router_plugin() -> Result<Option<Value>> {
+    state_tree::read_plugin(ROUTER_PLUGIN_ID).await
 }
 
 /// `model_routes` live at the top level (flattened catalog) or under the
@@ -108,23 +104,29 @@ pub fn model_route_values(state: &Value) -> Option<&Vec<Value>> {
         })
 }
 
-pub fn routes() -> Option<Vec<TchedRouterRoute>> {
-    let state = read_router_plugin()?;
-    let route_values = model_route_values(&state)?;
-    Some(
+pub async fn routes() -> Result<Option<Vec<TchedRouterRoute>>> {
+    let Some(state) = read_router_plugin().await? else {
+        return Ok(None);
+    };
+    let Some(route_values) = model_route_values(&state) else {
+        return Ok(None);
+    };
+    Ok(Some(
         route_values
             .iter()
             .filter_map(TchedRouterRoute::from_value)
             .collect(),
-    )
+    ))
 }
 
-pub fn route_for_model(model: &str) -> Option<TchedRouterRoute> {
-    routes()?.into_iter().find(|route| route.model == model)
+pub async fn route_for_model(model: &str) -> Result<Option<TchedRouterRoute>> {
+    Ok(routes()
+        .await?
+        .and_then(|routes| routes.into_iter().find(|route| route.model == model)))
 }
 
-pub fn ensure_model_available(model: &str) -> Result<()> {
-    if let Some(route) = route_for_model(model) {
+pub async fn ensure_model_available(model: &str) -> Result<()> {
+    if let Some(route) = route_for_model(model).await? {
         if !route.available {
             let reason = route
                 .status_reason
@@ -141,14 +143,25 @@ pub fn ensure_model_available(model: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn selected_provider_model() -> Option<(String, String)> {
-    let state = read_router_plugin()?;
-    let provider = state.get("selected_provider")?.as_str()?.to_string();
-    let model = state.get("selected_model")?.as_str()?.to_string();
+pub async fn selected_provider_model() -> Result<Option<(String, String)>> {
+    let Some(state) = read_router_plugin().await? else {
+        return Ok(None);
+    };
+    let Some(provider) = state
+        .get("selected_provider")
+        .and_then(|value| value.as_str())
+    else {
+        return Ok(None);
+    };
+    let Some(model) = state.get("selected_model").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    let provider = provider.to_string();
+    let model = model.to_string();
     if provider.is_empty() && model.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some((provider, model))
+    Ok(Some((provider, model)))
 }
 
 #[cfg(test)]

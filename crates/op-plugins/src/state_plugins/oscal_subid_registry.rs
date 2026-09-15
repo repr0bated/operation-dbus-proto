@@ -1,17 +1,23 @@
-//! OSCAL Subid Registry plugin — dual-identifier model for every system artifact.
+//! OSCAL Subid Registry plugin — sealed subid discovery and review metadata.
 //!
 //! Every D-Bus object, plugin, schema, mutation, event, and tool carries two
 //! identifiers: a `uuid` (machine identity) and a `subid` (human-readable
-//! operational taxonomy key). This plugin defines the canonical shape of one
-//! registry entry.
+//! operational taxonomy key). Runtime membership comes only from the sealed
+//! plugin catalog; this plugin can annotate an existing subid but cannot mint
+//! one.
 //!
 //! Compliance refs live in metadata arrays — never inside the subid string itself.
 
-use anyhow::Result;
-use op_state::{ApplyResult, Checkpoint, DiffMetadata, PluginCapabilities, StateDiff, StatePlugin};
+use anyhow::{bail, Result};
+use op_state::{ApplyResult, Checkpoint, PluginCapabilities, StateDiff, StatePlugin};
 use op_state_store::PluginSchema;
 use serde::{Deserialize, Serialize};
 use simd_json::OwnedValue as Value;
+
+use super::oscal_subid_registry_methods::{
+    ExportInput, ExportOutput, ListByCategoryInput, ListByCategoryOutput, LookupInput,
+    LookupOutput, RegisterInput, RegisterOutput, ResolveInput, ResolveOutput,
+};
 
 // ── Defaults for serde ───────────────────────────────────────────────────────
 
@@ -393,82 +399,63 @@ pub(crate) fn oscal_subid_registry_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "oscal_subid_registry",
-        "1.0.0",
-        "OSCAL subid registry — dual-identifier model for every system artifact. uuid = machine identity, subid = operational taxonomy key.",
+        "2.0.0",
+        "Manifest-pinned OSCAL subid discovery with durable review annotations for existing sealed identifiers.",
         &root,
     );
 
-    // Output structs
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct LookupOutput {
-        pub entry: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ListByCategoryOutput {
-        pub entries: Vec<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ResolveOutput {
-        pub resolved: Option<serde_json::Value>,
-    }
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct ExportOutput {
-        pub registry: serde_json::Value,
-    }
-
     // Add methods
     use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
-    use super::plugin_scaffold_helpers::AckOutput;
     use op_state_store::SideEffect;
 
     schema.methods.insert(
         "register".to_string(),
-        method_decl_from_schemars_with_output::<(), AckOutput>(
+        method_decl_from_schemars_with_output::<RegisterInput, RegisterOutput>(
             "register",
             SideEffect::Mutation,
             false,
             "oscal.invoke",
-            "mut.standard.oscal.subid.register@v1",
+            "mut.standard.oscal.subid.register@v2",
         ),
     );
     schema.methods.insert(
         "lookup".to_string(),
-        method_decl_from_schemars_with_output::<(), LookupOutput>(
+        method_decl_from_schemars_with_output::<LookupInput, LookupOutput>(
             "lookup",
             SideEffect::Read,
             true,
             "oscal.read",
-            "obs.standard.oscal.subid.lookup@v1",
+            "obs.standard.oscal.subid.lookup@v2",
         ),
     );
     schema.methods.insert(
         "list_by_category".to_string(),
-        method_decl_from_schemars_with_output::<(), ListByCategoryOutput>(
+        method_decl_from_schemars_with_output::<ListByCategoryInput, ListByCategoryOutput>(
             "list_by_category",
             SideEffect::Read,
             true,
             "oscal.read",
-            "obs.standard.oscal.category.list@v1",
+            "obs.standard.oscal.category.list@v2",
         ),
     );
     schema.methods.insert(
         "resolve".to_string(),
-        method_decl_from_schemars_with_output::<(), ResolveOutput>(
+        method_decl_from_schemars_with_output::<ResolveInput, ResolveOutput>(
             "resolve",
             SideEffect::Read,
             true,
             "oscal.read",
-            "obs.standard.oscal.subid.resolve@v1",
+            "obs.standard.oscal.subid.resolve@v2",
         ),
     );
     schema.methods.insert(
         "export".to_string(),
-        method_decl_from_schemars_with_output::<(), ExportOutput>(
+        method_decl_from_schemars_with_output::<ExportInput, ExportOutput>(
             "export",
             SideEffect::Read,
             true,
             "oscal.read",
-            "obs.standard.oscal.export@v1",
+            "obs.standard.oscal.export@v2",
         ),
     );
 
@@ -511,7 +498,7 @@ impl StatePlugin for OscalSubidRegistryPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn is_available(&self) -> bool {
@@ -523,50 +510,30 @@ impl StatePlugin for OscalSubidRegistryPlugin {
     }
 
     async fn calculate_diff(&self, _current: &Value, _desired: &Value) -> Result<StateDiff> {
-        Ok(StateDiff {
-            plugin: self.name().to_string(),
-            actions: vec![],
-            metadata: DiffMetadata {
-                timestamp: chrono::Utc::now().timestamp(),
-                current_hash: String::new(),
-                desired_hash: String::new(),
-            },
-        })
+        bail!("oscal_subid_registry is method-driven; state diff is unsupported")
     }
 
     async fn apply_state(&self, _diff: &StateDiff) -> Result<ApplyResult> {
-        Ok(ApplyResult {
-            success: true,
-            changes_applied: vec![],
-            errors: vec![],
-            checkpoint: None,
-        })
+        bail!("oscal_subid_registry is method-driven; state apply is unsupported")
     }
 
     async fn verify_state(&self, _desired: &Value) -> Result<bool> {
-        Ok(true)
+        bail!("oscal_subid_registry is method-driven; state verification is unsupported")
     }
 
     async fn create_checkpoint(&self) -> Result<Checkpoint> {
-        let state = simd_json::json!(null);
-        Ok(Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            plugin: self.name().to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            state_snapshot: state,
-            backend_checkpoint: None,
-        })
+        bail!("oscal_subid_registry does not support checkpoints")
     }
 
     async fn rollback(&self, _checkpoint: &Checkpoint) -> Result<()> {
-        Ok(())
+        bail!("oscal_subid_registry does not support rollback")
     }
 
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities {
             supports_rollback: false,
-            supports_checkpoints: true,
-            supports_verification: true,
+            supports_checkpoints: false,
+            supports_verification: false,
             atomic_operations: false,
         }
     }
@@ -576,4 +543,36 @@ impl StatePlugin for OscalSubidRegistryPlugin {
 // (single source of the catalog; no central dispatch list).
 inventory::submit! {
     crate::default_registry::PluginReg::new("oscal_subid_registry", |_ctx| std::sync::Arc::new(OscalSubidRegistryPlugin::new()))
+}
+
+#[cfg(test)]
+mod method_contract_tests {
+    use super::*;
+
+    #[test]
+    fn retained_methods_have_typed_v2_contracts() {
+        let schema = oscal_subid_registry_schema();
+        assert_eq!(schema.version, "2.0.0");
+        assert_eq!(schema.methods.len(), 5);
+        for (name, capability) in [
+            ("register", "oscal.invoke"),
+            ("lookup", "oscal.read"),
+            ("list_by_category", "oscal.read"),
+            ("resolve", "oscal.read"),
+            ("export", "oscal.read"),
+        ] {
+            let method = &schema.methods[name];
+            assert_eq!(method.name, name);
+            assert_eq!(method.required_capability.as_deref(), Some(capability));
+            assert!(method.subid.ends_with("@v2"));
+            let args = serde_json::to_value(&method.args).unwrap();
+            assert_eq!(args["type"], "object");
+            assert_ne!(args["properties"], serde_json::json!({}));
+            assert!(method.returns.is_some());
+        }
+        let guarantees = OscalSubidRegistryPlugin.capabilities();
+        assert!(!guarantees.supports_checkpoints);
+        assert!(!guarantees.supports_rollback);
+        assert!(!guarantees.supports_verification);
+    }
 }

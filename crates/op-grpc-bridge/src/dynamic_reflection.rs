@@ -37,7 +37,7 @@ pub struct ActiveReflectionCatalog {
 
 impl Default for ActiveReflectionCatalog {
     fn default() -> Self {
-        Self::with_dir(PathBuf::from(op_blob::catalog::DEFAULT_SHM_DIR))
+        Self::with_dir(crate::sealed_schema_reader::blob_catalog_dir_from_env())
     }
 }
 
@@ -46,8 +46,9 @@ struct ActiveReflectionInner {
     descriptor_sets: Vec<Vec<u8>>,
     blobs: BTreeMap<String, PluginObjectBlob>,
     index: ReflectionIndex,
-    /// Last seen `catalog_hash` from the sealed manifest — the change marker
-    /// for arrival-triggered resync (read, never re-hash).
+    /// Last stored catalog hash, used only for change logging. Schema hashes
+    /// do not cover descriptor/manifest producer revisions, so this must not
+    /// suppress arrival-triggered replacement of the pinned artifacts.
     catalog_hash: Option<String>,
 }
 
@@ -82,68 +83,49 @@ impl ActiveReflectionCatalog {
         }
     }
 
-    pub async fn upsert_blob(&self, blob: PluginObjectBlob) {
-        if op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id) {
-            return;
-        }
+    pub(crate) fn catalog_dir(&self) -> &std::path::Path {
+        &self.shm_dir
+    }
+
+    /// Arrival-triggered resync reads the complete manifest-pinned artifacts.
+    /// The sealer commits its manifest last. Every arrival replaces the index,
+    /// even when schema/catalog hashes are unchanged: a producer revision can
+    /// change descriptor or manifest bytes without changing schema JSON. No
+    /// watcher, polling loop, consumer hash, or parallel revision authority.
+    pub async fn sync_from_shm(&self) -> usize {
+        // Serialize snapshot loads so an older concurrent reader cannot
+        // overwrite newer advertisements. Even an unchanged manifest is
+        // checked for missing/corrupt pinned files; no directory is scanned.
         let mut inner = self.inner.write().await;
-        inner.blobs.insert(blob.manifest.plugin_id.clone(), blob);
-        inner.rebuild_index();
-    }
-
-    pub async fn remove_blob(&self, plugin_id: &str) {
-        let mut inner = self.inner.write().await;
-        inner.blobs.remove(plugin_id);
-        inner.rebuild_index();
-    }
-
-    /// Record the manifest hash observed at hydration so the first
-    /// [`sync_from_shm`](Self::sync_from_shm) doesn't reload what startup
-    /// already loaded.
-    pub async fn set_catalog_hash(&self, hash: Option<String>) {
-        self.inner.write().await.catalog_hash = hash;
-    }
-
-    /// Arrival-triggered resync: an incoming reflection request is the
-    /// arrival; the sealed manifest's `catalog_hash` (written LAST by the
-    /// sealer, the atomic commit point) is the staleness marker. No watcher,
-    /// no poll loop — when the op-blob sealer commits a new manifest, the
-    /// next reflection request picks the new blob set up from SHM.
-    pub async fn sync_from_shm(&self) {
-        let Some(hash) =
-            op_blob::catalog::ActiveReflectionCatalog::read_catalog_hash(&self.shm_dir)
-        else {
-            return;
-        };
-        {
-            let inner = self.inner.read().await;
-            if inner.catalog_hash.as_deref() == Some(hash.as_str()) {
-                return;
-            }
-        }
-        let blobs = match op_blob::BlobStore::open(&self.shm_dir) {
-            Ok(store) => store.plugin_object_blobs(),
+        let directory = self.shm_dir.clone();
+        let loaded = tokio::task::spawn_blocking(move || {
+            crate::sealed_schema_reader::read_manifest_pinned_catalog(&directory)
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|result| result);
+        let catalog = match loaded {
+            Ok(catalog) => catalog,
             Err(error) => {
-                tracing::warn!(%error, "reflection resync: cannot open SHM blob catalog");
-                return;
+                tracing::warn!(%error, "sealed reflection catalog unavailable or invalid; clearing plugin advertisements");
+                inner.blobs.clear();
+                inner.catalog_hash = None;
+                inner.rebuild_index();
+                return 0;
             }
         };
-        let mut inner = self.inner.write().await;
-        // Another request may have resynced while we loaded blobs.
-        if inner.catalog_hash.as_deref() == Some(hash.as_str()) {
-            return;
+        let count = catalog.plugins.len();
+        if inner.catalog_hash.as_deref() != Some(catalog.catalog_hash.as_str()) {
+            tracing::info!(count, "reflection loaded committed sealed catalog");
         }
-        let count = blobs.len();
-        inner.blobs = blobs
+        inner.blobs = catalog
+            .plugins
             .into_iter()
-            .filter(|blob| {
-                !op_plugins::default_registry::is_retired_plugin(&blob.manifest.plugin_id)
-            })
-            .map(|blob| (blob.manifest.plugin_id.clone(), blob))
+            .map(|(id, document)| (id, document.blob))
             .collect();
-        inner.catalog_hash = Some(hash);
+        inner.catalog_hash = Some(catalog.catalog_hash);
         inner.rebuild_index();
-        tracing::info!(count, "reflection resynced from SHM blob catalog");
+        count
     }
 
     pub async fn list_services(&self) -> Vec<String> {
@@ -452,8 +434,93 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn same_schema_and_catalog_hash_refreshes_changed_valid_descriptor_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema = op_state_store::PluginSchema::builder("tched_router")
+            .version("1.0.0")
+            .method(op_state_store::MethodDecl {
+                name: "Read".into(),
+                args: simd_json::json!({"type":"object", "properties":{}}),
+                returns: Some(simd_json::json!({"type":"object", "properties":{}})),
+                side_effect: op_state_store::SideEffect::Read,
+                idempotent: true,
+                required_capability: Some("fixture.read".into()),
+                subid: "obs.service.fixture.read@v1".into(),
+            })
+            .build();
+        let template = op_blob::blobify_plugin_schema("tched_router", schema);
+        // Model two valid sealer code-generation revisions. The source schema
+        // stays identical while a generated helper message changes. Only the
+        // local producer fixture writes artifacts and the committed manifest.
+        let revision = |helper: &str| {
+            let mut blob = template.clone();
+            let mut descriptors =
+                FileDescriptorSet::decode(blob.descriptor_set.as_slice()).unwrap();
+            let file = &mut descriptors.file[0];
+            let symbol = format!("{}.{}", file.package.as_deref().unwrap(), helper);
+            file.message_type.push(DescriptorProto {
+                name: Some(helper.into()),
+                ..Default::default()
+            });
+            blob.manifest.methods[0].symbols.push(symbol.clone());
+            blob.descriptor_set = descriptors.encode_to_vec();
+            (blob, symbol)
+        };
+        let (first, old_symbol) = revision("ArtifactRevisionOne");
+        let (second, new_symbol) = revision("ArtifactRevisionTwo");
+        assert_eq!(first.schema_json, second.schema_json);
+        assert_eq!(first.manifest.schema_hash, second.manifest.schema_hash);
+        assert_eq!(first.file_name(), second.file_name());
+        assert_ne!(first.descriptor_set, second.descriptor_set);
+
+        let mut producer = op_blob::BlobStore::open(dir.path()).unwrap();
+        producer.write(&first).unwrap();
+        let manifest_path = dir.path().join(op_blob::catalog::MANIFEST_FILENAME);
+        let first_manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        let catalog = ActiveReflectionCatalog::with_dir(dir.path().into());
+        assert_eq!(catalog.sync_from_shm().await, 1);
+        assert!(catalog.symbol_by_name(&old_symbol).await.is_ok());
+        assert!(catalog.symbol_by_name(&new_symbol).await.is_err());
+
+        producer.write(&second).unwrap();
+        let second_manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(
+            first_manifest["catalog_hash"],
+            second_manifest["catalog_hash"]
+        );
+        assert!(
+            second_manifest["generation"].as_u64().unwrap()
+                > first_manifest["generation"].as_u64().unwrap()
+        );
+        assert_eq!(catalog.sync_from_shm().await, 1);
+        assert!(catalog.symbol_by_name(&old_symbol).await.is_err());
+        let indexed = catalog.symbol_by_name(&new_symbol).await.unwrap();
+        let expected = FileDescriptorSet::decode(second.descriptor_set.as_slice())
+            .unwrap()
+            .file
+            .remove(0)
+            .encode_to_vec();
+        assert_eq!(indexed, expected);
+        assert_eq!(
+            catalog
+                .file_by_filename(&second.manifest.methods[0].grpc_file)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert!(catalog
+            .list_services()
+            .await
+            .iter()
+            .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
+    }
+
+    #[tokio::test]
     async fn active_reflection_advertises_only_active_blob_services() {
-        let catalog = ActiveReflectionCatalog::new();
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = ActiveReflectionCatalog::with_dir(dir.path().into());
         let before = catalog.list_services().await;
         assert!(before
             .iter()
@@ -462,9 +529,11 @@ mod tests {
             .iter()
             .any(|service| service == "operation.plugin.v1.TchedRouterPluginMethods"));
 
-        catalog
-            .upsert_blob(crate::tched_router_object_blob::from_plugin_schema())
-            .await;
+        let mut sealer = op_blob::BlobStore::open(dir.path()).unwrap();
+        sealer
+            .write(&crate::tched_router_object_blob::from_plugin_schema())
+            .unwrap();
+        catalog.sync_from_shm().await;
         let after = catalog.list_services().await;
         // Legacy service (mounted via build.rs) is advertised.
         assert!(after
@@ -475,7 +544,8 @@ mod tests {
                 || service == "operation.plugin.v1.TchedRouterPluginMethods"
         }));
 
-        catalog.remove_blob("tched_router").await;
+        sealer.remove_blob("tched_router").unwrap();
+        catalog.sync_from_shm().await;
         let removed = catalog.list_services().await;
         assert!(!removed
             .iter()

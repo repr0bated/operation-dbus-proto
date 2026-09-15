@@ -138,6 +138,12 @@ pub enum FieldType {
     Array {
         items: Box<FieldType>,
     },
+    Map {
+        values: Box<FieldType>,
+    },
+    JsonSchema {
+        schema: serde_json::Value,
+    },
     Object {
         properties: HashMap<String, FieldSchema>,
     },
@@ -446,6 +452,14 @@ fn parse_field_type(val: Option<&serde_json::Value>) -> Result<FieldType> {
                 let item_type = parse_field_type(Some(items))?;
                 Ok(FieldType::Array {
                     items: Box::new(item_type),
+                })
+            } else if let Some(schema) = obj.get("json_schema") {
+                Ok(FieldType::JsonSchema {
+                    schema: schema.clone(),
+                })
+            } else if let Some(values) = obj.get("map") {
+                Ok(FieldType::Map {
+                    values: Box::new(parse_field_type(Some(values))?),
                 })
             } else if let Some(props) = obj.get("object") {
                 let properties = parse_fields(Some(props))?;
@@ -763,6 +777,9 @@ fn convert_field_type(ft: &op_state_store::FieldType) -> FieldType {
         op_state_store::FieldType::Array(inner) => FieldType::Array {
             items: Box::new(convert_field_type(inner)),
         },
+        op_state_store::FieldType::Map(inner) => FieldType::Map {
+            values: Box::new(convert_field_type(inner)),
+        },
         op_state_store::FieldType::Object(props) => FieldType::Object {
             properties: props
                 .iter()
@@ -774,6 +791,9 @@ fn convert_field_type(ft: &op_state_store::FieldType) -> FieldType {
         },
         op_state_store::FieldType::OneOf(variants) => FieldType::OneOf {
             variants: variants.iter().map(|v| convert_field_type(v)).collect(),
+        },
+        op_state_store::FieldType::JsonSchema(schema) => FieldType::JsonSchema {
+            schema: owned_value_to_serde(schema.as_ref()),
         },
         op_state_store::FieldType::Any => FieldType::String, // fallback
     }

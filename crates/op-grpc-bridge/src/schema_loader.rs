@@ -1,8 +1,7 @@
-//! SchemaLoader — reads a canonical PluginSchema from tmpfs.
+//! SchemaLoader — reads a canonical PluginSchema from the sealed blob catalog.
 //!
-//! The loader accepts either the live SchemaEngine catalog or a plugin-owned
-//! schema file. Reloads are broadcast to `WatchSchema` streams via a tokio
-//! broadcast channel.
+//! The loader accepts only a catalog directory. A plugin-owned JSON file or
+//! monolithic schema document is not a valid source of authority.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -32,8 +31,8 @@ pub struct SchemaLoader {
 impl SchemaLoader {
     /// Create a loader and perform the initial read.
     ///
-    /// Panics with a descriptive message if the live schema catalog is absent.
-    /// This is intentional: the SchemaEngine must start first.
+    /// Panics with a descriptive message if the sealed schema catalog is absent.
+    /// This is intentional: the sealed catalog must start first.
     pub fn new(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         Self::new_for_plugin(path, TCHED_ROUTER_PLUGIN_ID)
     }
@@ -61,20 +60,13 @@ impl SchemaLoader {
     pub fn load(&self) -> anyhow::Result<()> {
         let start = Instant::now();
         let path = self.path.read().unwrap().clone();
-        if path.is_dir() {
-            return self.load_from_blob_catalog(&path, start);
+        if !path.is_dir() {
+            return Err(anyhow::anyhow!(
+                "plugin catalog must be a directory containing sealed blobs: {}",
+                path.display()
+            ));
         }
-        let bytes = std::fs::read(&path).map_err(|e| {
-            let plugin_id = self.plugin_id();
-            anyhow::anyhow!(
-                "{} schema file not readable at {}: {}. \
-                 Ensure the plugin has started and written the file first.",
-                plugin_id,
-                path.display(),
-                e
-            )
-        })?;
-        Self::parse_and_store(self, &bytes, start, &path)
+        self.load_from_blob_catalog(&path, start)
     }
 
     /// Read the plugin's canonical schema from its sealed blob in a catalog
@@ -82,14 +74,7 @@ impl SchemaLoader {
     fn load_from_blob_catalog(&self, dir: &Path, start: Instant) -> anyhow::Result<()> {
         let plugin_id = self.plugin_id();
         let schema =
-            op_blob::catalog::read_plugin_state_store_schema(dir, &plugin_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no sealed blob for '{}' in catalog {}. \
-                     Ensure the catalog has been sealed (opblob seal-shm) first.",
-                    plugin_id,
-                    dir.display()
-                )
-            })?;
+            crate::sealed_schema_reader::read_manifest_pinned_plugin_schema(dir, &plugin_id)?;
         let value = serde_json::to_value(&schema)?;
         let bytes = serde_json::to_vec(&value)?;
         Self::parse_and_store(self, &bytes, start, dir)
@@ -99,28 +84,15 @@ impl SchemaLoader {
     pub async fn reload(&self) -> anyhow::Result<()> {
         let start = Instant::now();
         let path = self.path.read().unwrap().clone();
-        if path.is_dir() {
-            let loader = self.clone();
-            return tokio::task::spawn_blocking(move || {
-                loader.load_from_blob_catalog(&path, start)
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("reload task panicked: {}", e))?;
+        if !path.is_dir() {
+            return Err(anyhow::anyhow!(
+                "plugin catalog must be a directory containing sealed blobs: {}",
+                path.display()
+            ));
         }
-        let bytes = tokio::fs::read(&path).await.map_err(|e| {
-            let plugin_id = self.plugin_id();
-            anyhow::anyhow!(
-                "{} schema file not readable at {}: {}. \
-                 Ensure the plugin has started and written the file first.",
-                plugin_id,
-                path.display(),
-                e
-            )
-        })?;
         tokio::task::spawn_blocking({
             let loader = self.clone();
-            let path = path.clone();
-            move || Self::parse_and_store(&loader, &bytes, start, &path)
+            move || loader.load_from_blob_catalog(&path, start)
         })
         .await
         .map_err(|e| anyhow::anyhow!("reload task panicked: {}", e))?
@@ -129,28 +101,26 @@ impl SchemaLoader {
     fn parse_and_store(&self, bytes: &[u8], start: Instant, path: &Path) -> anyhow::Result<()> {
         let text = std::str::from_utf8(bytes).map_err(|e| {
             anyhow::anyhow!(
-                "plugin schema file at {} is not valid UTF-8: {}",
+                "sealed plugin schema at {} is not valid UTF-8: {}",
                 path.display(),
                 e
             )
         })?;
         let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
             anyhow::anyhow!(
-                "plugin schema file at {} is not valid JSON: {}",
+                "sealed plugin schema at {} is not valid JSON: {}",
                 path.display(),
                 e
             )
         })?;
         let plugin_id = self.plugin_id();
-        let value = if let Some(schema) = extract_plugin_schema(&value, &plugin_id) {
-            schema.clone()
-        } else {
+        if value.get("name").and_then(|name| name.as_str()) != Some(plugin_id.as_str()) {
             return Err(anyhow::anyhow!(
-                "schema file at {} does not contain '{}'",
+                "sealed catalog at {} does not contain '{}'",
                 path.display(),
                 plugin_id
             ));
-        };
+        }
 
         {
             let mut schema = self.schema.write().unwrap();
@@ -183,24 +153,23 @@ impl SchemaLoader {
         self.schema.read().unwrap().clone()
     }
 
-    /// Return the configured schema file path.
+    /// Return the configured sealed catalog directory.
     pub fn path(&self) -> PathBuf {
         self.path.read().unwrap().clone()
     }
 
-    /// Return the plugin id extracted from live-schema catalogs.
+    /// Return the plugin id selected from the sealed catalog.
     pub fn plugin_id(&self) -> String {
         self.plugin_id.read().unwrap().clone()
     }
 
-    /// Update the plugin id; the next `load()` will extract that schema from
-    /// the live catalog when `path` points at `/dev/shm/live-schema.json`.
+    /// Update the plugin id; the next `load()` reads that plugin's sealed blob.
     pub fn set_plugin_id(&self, plugin_id: impl Into<String>) {
         let mut id = self.plugin_id.write().unwrap();
         *id = plugin_id.into();
     }
 
-    /// Update the schema file path; the next `load()` will read from the new path.
+    /// Update the sealed catalog directory; the next `load()` reads from it.
     pub fn set_path(&self, path: impl Into<PathBuf>) {
         let mut p = self.path.write().unwrap();
         *p = path.into();
@@ -259,103 +228,65 @@ impl SchemaLoader {
     }
 }
 
-fn first_schema_entry(value: &serde_json::Value) -> Option<&serde_json::Value> {
-    value
-        .as_array()
-        .and_then(|items| items.first())
-        .or(Some(value))
-}
-
-fn extract_plugin_schema<'a>(
-    value: &'a serde_json::Value,
-    plugin_id: &str,
-) -> Option<&'a serde_json::Value> {
-    if value
-        .as_object()
-        .and_then(|schema| schema.get("name"))
-        .and_then(|name| name.as_str())
-        .is_some_and(|name| name == plugin_id)
-    {
-        return Some(value);
-    }
-
-    value
-        .as_object()
-        .and_then(|catalog| catalog.get(plugin_id))
-        .and_then(first_schema_entry)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
-    fn write_json(path: &Path, value: &serde_json::Value) {
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(serde_json::to_string(value).unwrap().as_bytes())
+    fn seal(dir: &Path, schema: op_state_store::PluginSchema) {
+        let blob = op_blob::blobify_plugin_schema("tched_router", schema);
+        op_blob::catalog::BlobStore::open(dir)
+            .unwrap()
+            .write(&blob)
             .unwrap();
     }
 
     #[tokio::test]
     async fn should_load_schema_from_live_catalog() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("live-schema.json");
-        let value = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
-        write_json(
-            &path,
-            &serde_json::json!({ "tched_router": [value.clone()] }),
-        );
-
-        let loader = SchemaLoader::new(&path).unwrap();
+        let value = op_state_store::PluginSchema::builder("tched_router")
+            .version("1.0.0")
+            .description("test schema")
+            .build();
+        let path = dir.path();
+        seal(path, value);
+        let loader = SchemaLoader::new(path).unwrap();
         let loaded = loader.get().await;
-        assert_eq!(loaded, value);
+        assert_eq!(loaded["name"], "tched_router");
+        assert_eq!(loaded["version"], "1.0.0");
         assert_eq!(loader.health_status().await, "ok");
     }
 
     #[tokio::test]
-    async fn should_load_direct_plugin_schema_file() {
+    async fn should_reject_direct_plugin_schema_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tched_router.json");
-        let value = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
-        write_json(&path, &value);
-
-        let loader = SchemaLoader::new(&path).unwrap();
-        let loaded = loader.get().await;
-        assert_eq!(loaded, value);
-        assert_eq!(loader.health_status().await, "ok");
+        std::fs::write(&path, "{}").unwrap();
+        let error = SchemaLoader::new(&path)
+            .err()
+            .expect("direct schema file must be rejected");
+        assert!(error.to_string().contains("catalog must be a directory"));
     }
 
     #[tokio::test]
-    async fn should_extract_requested_plugin_from_live_schema_catalog() {
+    async fn should_reject_blob_without_catalog_manifest() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("live-schema.json");
-        let value = serde_json::json!({
-            "tched_router": [{"name": "tched_router", "version": "1.0.0"}],
-            "gemma_brain": [{"name": "gemma_brain", "version": "2.0.0"}]
-        });
-        write_json(&path, &value);
-
-        let loader = SchemaLoader::new_for_plugin(&path, "gemma_brain").unwrap();
-        let loaded = loader.get().await;
-        assert_eq!(
-            loaded,
-            serde_json::json!({"name": "gemma_brain", "version": "2.0.0"})
-        );
-        assert_eq!(loader.plugin_id(), "gemma_brain");
+        let schema = op_state_store::PluginSchema::builder("tched_router").build();
+        op_blob::blobify_plugin_schema("tched_router", schema)
+            .write_to_dir(dir.path())
+            .unwrap();
+        assert!(SchemaLoader::new(dir.path()).is_err());
     }
 
     #[tokio::test]
     async fn should_reload_schema_on_sighup() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("live-schema.json");
-        let initial = serde_json::json!({"name": "tched_router", "version": "1.0.0"});
-        let updated = serde_json::json!({"name": "tched_router", "version": "2.0.0"});
-        write_json(
-            &path,
-            &serde_json::json!({ "tched_router": [initial.clone()] }),
-        );
-
-        let loader = Arc::new(SchemaLoader::new(&path).unwrap());
+        let path = dir.path();
+        let initial = op_state_store::PluginSchema::builder("tched_router")
+            .version("1.0.0")
+            .description("initial")
+            .build();
+        seal(path, initial.clone());
+        let loader = Arc::new(SchemaLoader::new(path).unwrap());
         let mut rx = loader.reload_tx().subscribe();
 
         // Simulate a reload by calling load directly and sending the event.
@@ -367,13 +298,18 @@ mod tests {
         // Verify the broadcast is received.
         let event = rx.recv().await.unwrap();
         assert_eq!(event.event_type, "reload");
-        assert_eq!(loader.get().await, initial);
+        assert_eq!(loader.get().await["version"], "1.0.0");
 
         // Update the file and reload again.
-        write_json(
-            &path,
-            &serde_json::json!({ "tched_router": [updated.clone()] }),
-        );
+        let updated = op_state_store::PluginSchema::builder("tched_router")
+            .version("2.0.0")
+            .description("updated")
+            .build();
+        seal(path, updated);
+        // A stale file is not an authority: only the manifest-pinned blob is.
+        op_blob::blobify_plugin_schema("tched_router", initial)
+            .write_to_dir(path)
+            .unwrap();
         loader.load().unwrap();
         let _ = loader.reload_tx.send(SchemaReloadEvent {
             event_type: "reload".to_string(),
@@ -381,6 +317,6 @@ mod tests {
 
         let event = rx.recv().await.unwrap();
         assert_eq!(event.event_type, "reload");
-        assert_eq!(loader.get().await, updated);
+        assert_eq!(loader.get().await["version"], "2.0.0");
     }
 }

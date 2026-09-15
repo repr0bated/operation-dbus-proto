@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 use simd_json::prelude::*;
 use simd_json::OwnedValue as Value;
 
+const ADC_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// ADC plugin state schema.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[schemars(extend("x-oscal-subid" = "sch.software.plugin.adc.schema@v1"))]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("x-oscal-subid" = "sch.software.plugin.adc.schema@v2"))]
 #[schemars(extend("x-oscal-category" = "software"))]
 pub struct AdcState {
     /// Whether ADC is configured.
@@ -17,7 +20,15 @@ pub struct AdcState {
         extend("x-oscal-subid" = "exp.software.plugin.adc.configured.render@v1")
     )]
     pub configured: bool,
+    /// Whether Google has validated the configured credential.
+    pub authenticated: bool,
+    /// Current provider validation state.
+    pub validation: super::gcloud_adc::AdcValidationState,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetStatusInput {}
 
 pub struct AdcPlugin;
 
@@ -40,7 +51,7 @@ impl StatePlugin for AdcPlugin {
     }
 
     fn version(&self) -> &str {
-        "1.0.0"
+        "2.0.0"
     }
 
     fn schema(&self) -> Option<op_state_store::PluginSchema> {
@@ -102,27 +113,22 @@ pub fn adc_schema() -> PluginSchema {
         .expect("schemars schema serializes to JSON");
     let mut schema = super::schemars_adapter::plugin_schema_from_json(
         "adc",
-        "1.0.0",
-        "Application default credentials state",
+        "2.0.0",
+        "Application default credentials provider validation state",
         &root,
     );
 
-    use super::plugin_scaffold_helpers::{method_decl_from_schemars_with_output, EmptyInput};
+    use super::plugin_scaffold_helpers::method_decl_from_schemars_with_output;
     use op_state_store::SideEffect;
-
-    #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    pub struct GetStatusOutput {
-        pub configured: bool,
-    }
 
     schema.methods.insert(
         "get_status".to_string(),
-        method_decl_from_schemars_with_output::<EmptyInput, GetStatusOutput>(
+        method_decl_from_schemars_with_output::<GetStatusInput, super::gcloud_adc::AdcAuthStatus>(
             "get_status",
             SideEffect::Read,
             true,
             "adc.read",
-            "obs.software.plugin.adc.status.get@v1",
+            "obs.software.plugin.adc.status.get@v2",
         ),
     );
 
@@ -137,10 +143,127 @@ pub fn adc_schema() -> PluginSchema {
     schema
 }
 
+pub(crate) async fn dispatch_adc_with_provider(
+    provider: &dyn super::gcloud_adc::AdcStatusProvider,
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    dispatch_adc_with_provider_timeout(provider, method, args, ADC_PROBE_TIMEOUT).await
+}
+
+async fn dispatch_adc_with_provider_timeout(
+    provider: &dyn super::gcloud_adc::AdcStatusProvider,
+    method: &str,
+    args: &serde_json::Value,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value> {
+    match method {
+        "get_status" => {
+            serde_json::from_value::<GetStatusInput>(args.clone())?;
+            let status = match tokio::time::timeout(timeout, provider.check_auth_status()).await {
+                Ok(result) => result?,
+                Err(_) => super::gcloud_adc::provider_timeout_status(),
+            };
+            Ok(serde_json::to_value(status)?)
+        }
+        other => Err(anyhow::anyhow!("unknown adc method: {other}")),
+    }
+}
+
+/// Compatibility ADC surface backed by the same official Google provider as
+/// `gcloud_adc`; credential material remains inside that adapter.
+pub async fn dispatch_adc_method(
+    method: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    dispatch_adc_with_provider(&super::gcloud_adc::GoogleCloudAuthProvider, method, args).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_plugins::common::oscal::validate_subid;
+
+    struct FakeProvider(std::result::Result<super::super::gcloud_adc::AdcAuthStatus, &'static str>);
+
+    #[async_trait]
+    impl super::super::gcloud_adc::AdcStatusProvider for FakeProvider {
+        async fn check_auth_status(&self) -> Result<super::super::gcloud_adc::AdcAuthStatus> {
+            self.0.clone().map_err(anyhow::Error::msg)
+        }
+    }
+
+    fn validated() -> super::super::gcloud_adc::AdcAuthStatus {
+        super::super::gcloud_adc::AdcAuthStatus {
+            provider: "google_application_default_credentials".to_string(),
+            configured: true,
+            authenticated: true,
+            validation: super::super::gcloud_adc::AdcValidationState::Validated,
+            failure: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn compatibility_surface_returns_the_provider_validated_contract() {
+        let value = dispatch_adc_with_provider(
+            &FakeProvider(Ok(validated())),
+            "get_status",
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["configured"], true);
+        assert_eq!(value["authenticated"], true);
+        assert_eq!(value["validation"], "validated");
+    }
+
+    #[tokio::test]
+    async fn compatibility_surface_rejects_input_and_propagates_provider_errors() {
+        let provider = FakeProvider(Err("provider adapter failed"));
+        let error = dispatch_adc_with_provider(
+            &provider,
+            "get_status",
+            &serde_json::json!({"unexpected": true}),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+
+        let error = dispatch_adc_with_provider(&provider, "get_status", &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "provider adapter failed");
+    }
+
+    struct PendingProvider;
+
+    #[async_trait]
+    impl super::super::gcloud_adc::AdcStatusProvider for PendingProvider {
+        async fn check_auth_status(&self) -> Result<super::super::gcloud_adc::AdcAuthStatus> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn compatibility_surface_has_a_bounded_provider_deadline() {
+        let value = dispatch_adc_with_provider_timeout(
+            &PendingProvider,
+            "get_status",
+            &serde_json::json!({}),
+            std::time::Duration::from_millis(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["validation"], "provider_unavailable");
+        assert_eq!(value["authenticated"], false);
+    }
+
+    #[test]
+    fn method_schema_has_typed_input_and_output() {
+        let method = &adc_schema().methods["get_status"];
+        assert_eq!(method.args["type"], "object");
+        assert_eq!(method.returns.as_ref().unwrap()["type"], "object");
+    }
 
     #[test]
     fn all_subids_are_valid() {
