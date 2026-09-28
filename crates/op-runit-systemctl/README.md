@@ -1,110 +1,129 @@
-# op-s6-systemctl
+# op-runit-systemctl
 
-D-Bus service that maps `systemctl` commands to `s6`/`s6-rc` operations for Artix Linux systems using s6 as the init system.
+D-Bus service that exposes runit lifecycle and status operations on the system
+bus. It is the application-facing service-management boundary for the Artix
+runit host.
 
 ## Overview
 
-This daemon provides a D-Bus interface (`org.opdbus.v1.S6.Systemctl`) that translates traditional systemd commands to their s6 equivalents, enabling compatibility with tools and scripts that expect systemctl-like behavior.
+The crate builds two binaries:
+
+- `op-runit-systemctl`: owns the D-Bus interface and translates calls to runit.
+- `svd`: a diagnostic client for the same interface.
+
+Operators use `sudo sv` for routine host administration. Application code uses
+this D-Bus service so lifecycle calls cross one authenticated system-bus
+boundary. Mutating methods verify that the D-Bus caller has UID 0.
 
 ## D-Bus Interface
 
-**Bus Name**: `org.opdbus.v1.S6.Systemctl`
-**Object Path**: `/org/opdbus/v1/plugins/s6/systemctl`
-**Interface**: `org.opdbus.v1.S6.Systemctl`
+| Item | Value |
+|---|---|
+| Bus | system |
+| Destination | `org.opdbus.v1.Runit.Systemctl` |
+| Object path | `/org/opdbus/v1/plugins/runit/systemctl` |
+| Interface | `org.opdbus.v1.Runit.Systemctl` |
 
 ## Method Mapping
 
-| Method | systemctl Equivalent | s6 Equivalent | Description |
-|--------|---------------------|---------------|-------------|
-| `start(service)` | `start <svc>` | `s6-rc -u change <svc>` | Start a service |
-| `stop(service)` | `stop <svc>` | `s6-rc -d change <svc>` | Stop a service |
-| `restart(service)` | `restart <svc>` | `stop` then `start` | Restart a service |
-| `reload(service)` | `reload <svc>` | `s6-svc -h <svc>` | Send SIGHUP for config reload |
-| `enable(service)` | `enable <svc>` | `s6-rc-bundle add default <svc>` | Enable service at boot |
-| `disable(service)` | `disable <svc>` | `s6-rc-bundle delete default <svc>` | Disable service at boot |
-| `status(service)` | `status <svc>` | `s6-svstat <svc>` | Get detailed service status (JSON) |
-| `is_active(service)` | `is-active <svc>` | `s6-svstat <svc>` | Returns "active" or "inactive" |
-| `is_enabled(service)` | `is-enabled <svc>` | Check `/etc/s6-rc/default/` | Returns "enabled" or "disabled" |
-| `list_units()` | `list-units` | `s6-rc -a list` | List all active units (JSON) |
-| `daemon_status()` | N/A | `pgrep s6-svscan` | Returns "running" or "not-available" |
+Zbus exports the Rust method names in PascalCase.
 
-## Method Signatures
+| D-Bus method | Implementation | Result |
+|---|---|---|
+| `Start(service)` | Ensure live symlink, then `sv up` | `(bool, string)` |
+| `Stop(service)` | `sv down` if supervised | `(bool, string)` |
+| `Restart(service)` | `sv restart`, or add live symlink and start | `(bool, string)` |
+| `Reload(service)` | `sv hup` | `(bool, string)` |
+| `Enable(service)` | Add persistent and live symlinks; remove `down` | `(bool, string)` |
+| `Disable(service)` | `sv down`; remove persistent and live symlinks | `(bool, string)` |
+| `Status(service)` | Parse `sv status` | JSON string |
+| `IsActive(service)` | Query `sv status` | `active` or `inactive` |
+| `IsEnabled(service)` | Check persistent symlink | `enabled` or `disabled` |
+| `IsEnabledMethod(service)` | Compatibility alias for `IsEnabled` | `enabled` or `disabled` |
+| `Show(service)` | Compose systemctl-style properties | JSON string |
+| `ListUnits()` | Scan `/run/runit/service` | JSON array string |
+| `ListUnitFiles()` | Scan `/etc/runit/sv` | JSON array string |
+| `Journalctl(service, lines)` | Tail the first known service log | JSON array string |
+| `DaemonReload()` | Authorized no-op | `(bool, string)` |
+| `DaemonStatus()` | Check `runsvdir` or its runtime tree | `running` or `not-available` |
+| `GetUnitType(service)` | Read optional `type` marker | string; defaults to `longrun` |
 
-```rust
-// Start/stop/restart/reload/enable/disable all return (success: bool, message: String)
-async fn start(service: &str) -> (bool, String);
-async fn stop(service: &str) -> (bool, String);
-async fn restart(service: &str) -> (bool, String);
-async fn reload(service: &str) -> (bool, String);
-async fn enable(service: &str) -> (bool, String);
-async fn disable(service: &str) -> (bool, String);
+Runit has no compiled service database. `DaemonReload` exists for compatibility
+and returns success without changing state.
 
-// Status methods return strings
-async fn status(service: &str) -> String;        // JSON with ActiveState, SubState, MainPID
-async fn is_active(service: &str) -> String;     // "active" or "inactive"
-async fn is_enabled(service: &str) -> String;    // "enabled" or "disabled"
-async fn list_units() -> String;                // JSON array of service objects
-async fn daemon_status() -> String;             // "running" or "not-available"
-```
+## Runit Layout
 
-## Status JSON Format
+| Path | Meaning |
+|---|---|
+| `/etc/runit/sv/<service>` | Definition |
+| `/etc/runit/runsvdir/default/<service>` | Persistent boot-enable symlink |
+| `/run/runit/service/<service>` | Live supervised service |
+| `/etc/runit/sv/<service>/down` | Do-not-auto-start marker |
 
-The `status()` method returns JSON in this format:
+Do not edit `/run/runit/service` directly. It is the supervisor's runtime view.
+
+## Input and Authorization
+
+Lifecycle methods (`Start`, `Stop`, `Restart`, `Reload`, `Enable`, and
+`Disable`) require a root D-Bus caller. `DaemonReload` has the same root check.
+
+Lifecycle service names must:
+
+- be 1–128 bytes;
+- contain only ASCII letters, digits, `_`, `-`, `.`, or `@`;
+- not be `.` or `..`.
+
+Errors from lifecycle methods are returned as `(false, message)`. Transport and
+proxy failures remain D-Bus errors.
+
+## Status Output
+
+`Status` returns a serialized JSON object:
 
 ```json
 {
-  "name": "nginx",
+  "name": "op-web",
   "active_state": "active",
   "sub_state": "running",
   "main_pid": 1234,
   "ready": true,
-  "up_time": "3600"
+  "up_time": "56s"
 }
 ```
 
-The `list_units()` method returns a JSON array of status objects.
-
-## Error Handling
-
-All methods provide helpful error messages when s6 tools are not available or when operations fail. The service gracefully handles:
-
-- Missing s6 binaries
-- Invalid service names
-- Permission errors
-- Service not found errors
+The D-Bus type is a string, not a structured D-Bus object; callers must decode
+the JSON payload.
 
 ## Building
 
 ```bash
-cargo build -p op-s6-systemctl
-cargo build -p op-s6-systemctl --release
+cargo build -p op-runit-systemctl
+cargo test -p op-runit-systemctl
 ```
 
-## Running
+## Running and Inspecting
 
 ```bash
-# Run directly (requires D-Bus system bus access)
-sudo ./target/release/op-s6-systemctl
+# Normal deployment: runit supervises the daemon.
+sudo sv status op-runit-systemctl
 
-# Or with cargo
-sudo cargo run -p op-s6-systemctl
+# Verify the destination, path, and interface.
+sudo busctl --system introspect \
+  org.opdbus.v1.Runit.Systemctl \
+  /org/opdbus/v1/plugins/runit/systemctl \
+  org.opdbus.v1.Runit.Systemctl
+
+# Exercise the D-Bus client.
+sudo ./target/debug/svd status op-web
+
+# Direct development run; requires access to the system bus and bus name.
+sudo cargo run -p op-runit-systemctl --bin op-runit-systemctl
 ```
 
-## Dependencies
+The deployed run script waits for `dbus`, then executes
+`/usr/local/bin/op-runit-systemctl`. Its readiness check introspects this
+interface on the system bus.
 
-- Artix Linux with s6 init system
-- `s6`, `s6-rc`, `s6-svc`, `s6-svstat` tools
-- D-Bus system bus
-
-## Architecture
-
-Following the 3tched Architecture D-Bus-first principles:
-
-- All service operations go through D-Bus methods
-- No direct subprocess spawning from clients
-- Schema-driven interface with consistent error handling
-- Zero-copy shared memory design patterns
-
-## License
-
-Apache-2.0
+See the
+[service-management runbook](../../docs/src/operations/service-management.md)
+for deployment workflow and troubleshooting.
