@@ -1,59 +1,195 @@
 # Network Operations
 
-This page describes **how networking is supposed to work on the current Artix/runit host**, and points at the live inventory when the tree and the machine disagree.
+This page documents the release-owned OVS/OpenFlow path in the current tree.
+The [host topology snapshot](host-socket-topology-live.md) is useful incident
+history, but it was captured on 2026-07-22 and now disagrees with the release
+configuration. Re-read the host before making topology changes:
 
-For a dated, command-verified snapshot of interfaces, Incus devices, listeners, xray SNI, and mesh forwarders, see:
+```bash
+ip -br address
+ip route
+sudo ovs-vsctl show
+sudo incus config device show <container>
+sudo sv status ovsdb-server ovs-vswitchd ovsbr0-uplink ovsbr0-eth0 \
+  ovsbr0-svc-addr op-of-controller
+```
 
-**[Host socket & network topology (live)](host-socket-topology-live.md)**
+## Release model
 
-Re-verify that file against the host before topology-changing work (new proxies, prom/graf exposure, socket migrations).
+`deploy/config/network.conf` is installed as `/etc/op-dbus/network.conf` by
+`deploy/runit/build-golden.sh`. Its current target is:
 
-## Model in one paragraph
+| Item | Release value |
+| --- | --- |
+| Bridge and datapath | `ovsbr0`, kernel (`system`) datapath, `standalone` fail mode |
+| Physical uplink | `eth0` |
+| Public internal port | `pub0`, `188.68.58.237/22`, gateway `188.68.56.1` |
+| Internal ports | `3tched`, `svc0` |
+| Service addresses | `10.0.0.2/24` and `10.200.0.2/24` on `3tched`; `10.0.0.3/24` on `svc0` |
+| Bridge address | `10.200.0.1/24` |
+| OpenFlow controller | OVS connects to `tcp:10.200.0.1:6653` |
+| Accepted protocols | OpenFlow 1.0, 1.3, and 1.5 |
 
-One OVS bridge (`ovsbr0`) carries the private fabric. Physical uplink (`eth0`) is enslaved and unaddressed; host L3 lives on OVS internal ports **`pub0`** (public) and **`svc0`** (`10.200.0.2/24`). The **xray** container is the only instance with a NIC on the bridge (`10.200.0.1`). WireGuard mesh interface **`3tched`** (`100.69.0.254/16`) is separate L3 and must never be routed via `ovsbr0`.
+These are desired release values, not proof of live state. In particular, do
+not carry the older snapshot's address ownership or `127.0.0.1:6653` listener
+forward without checking the current host.
 
-**Shared socket fabric:** `op-grpc-bridge` dual-listens on host UDS `/run/opdbus/grpc.sock` and shared container UDS `/run/ghostbridge/container.sock` (same gRPC routes). NIC-less containers bind-mount `/run/ghostbridge`. Some services still use Incus TCP proxies / mesh `fwd-*` (migration is incremental).
+Container attachment remains mixed. Check each Incus device list before
+assuming a container has a NIC, shared UDS mount, or TCP proxy. The shared
+control-plane transports are `/run/opdbus/grpc.sock` for host clients and
+`/run/ghostbridge/container.sock` for mounted containers.
 
-**OpenFlow** (`op-of-controller` on `127.0.0.1:6653`) is intentionally NORMAL/standalone today — reserved for **future tag routing**, not a current blocker for the socket fabric.
+Xray's live configuration inside its container must be
+`/etc/xray/xray_config.json`. Do not point Xray at
+`/dev/shm/xray_config.json`, `/usr/local/etc/xray/config.json`, or
+`/etc/xray/config.json`.
 
-## Boot order (runit)
+## Boot and ownership
+
+The current runit dependency chain is:
 
 ```text
 opdbus-rundirs
-  → uplink-dhcp
-  → ovsdb-server → ovs-vswitchd
-  → ovsbr0-uplink → ovsbr0-addr → ovsbr0-svc-addr
-  → op-of-controller
-  → wg-3tched
-  → op-grpc-bridge / op-web / op-cognitive-mcp
+  -> uplink-dhcp
+  -> ovsdb-server
+  -> ovs-vswitchd
+  -> ovsbr0-uplink
+  -> ovsbr0-eth0
+  -> ovsbr0-svc-addr
+  -> op-of-controller
 ```
 
-Config: `/etc/op-dbus/network.conf`  
-Helpers: `/usr/local/libexec/3tched/*-up`
+`ovsdb-server` owns durable topology in `/etc/openvswitch/conf.db`.
+`ovs-vswitchd` materializes that topology; its run script deliberately does
+not recreate the bridge or ports. Topology changes must therefore update
+OVSDB deliberately instead of adding repair commands to the service script.
 
-## Public path
+The release config declares `OPENFLOW_CONTROLLER`, but the current
+`op-of-controller` run script does not consume it and no runit helper calls
+`set-controller`. A fresh OVSDB must be attached separately through the safe
+attach path; an existing host normally retains its Controller row in
+`conf.db`. Always verify:
 
-Client DNS (NextDNS) → Oracle decoy → WireGuard mesh → host `fwd-8444` → xray SNI on `10.200.0.1:8444` → host services on `10.200.0.2` (dashboard/registration → `:8080`, assistant gRPC → `:8090`, etc.). Live rules: `/dev/shm/xray_config.json` only.
+```bash
+sudo ovs-vsctl get-controller ovsbr0
+sudo ovs-vsctl get Bridge ovsbr0 fail_mode
+sudo ovs-vsctl get Bridge ovsbr0 protocols
+```
 
-## Attachment modes (summary)
+An empty controller result means `op-of-controller` may be listening while
+OVS never connects to it.
 
-| Pattern | Used by (live) |
+## What `op-of-controller` does
+
+The controller is passive: OVS opens the TCP connection. On each connection
+the controller:
+
+1. negotiates OpenFlow 1.5 and enables asynchronous delivery with
+   `miss_send_len=128`;
+2. requests all port descriptions with `OFPP_ANY`, building name-to-ofport and
+   name-to-MAC maps;
+3. installs the cookied `priority=0,actions=NORMAL` fallback before removing
+   only controller-managed flows;
+4. reasserts static FDB pins from `OF_STATIC_FDB`;
+5. translates and installs
+   `/etc/op-dbus/openflow-static-flows.json`, then waits on a barrier; and
+6. keeps the session alive with five-second OpenFlow echo requests.
+
+The two reserved cookies are:
+
+| Cookie | Purpose |
 | --- | --- |
-| Bridged NIC on `ovsbr0` | `xray` only |
-| Shared UDS `/run/ghostbridge/container.sock` | bridge + CT mounts (`assistant`, `qdrant`) |
-| Incus `proxy` TCP | `mail-3tched`, `netmaker`, `qdrant`, `cozo` |
-| Mesh `tcpfwd.py` (`fwd-*`) | side channels into xray/host |
-| Host UDS `/run/opdbus/grpc.sock` | host gRPC clients, session bus |
+| `0x3344434800000001` | Host-safety `NORMAL` fallback |
+| `0x3344434800000002` | Controller-managed port-pair and current release static flows |
 
-## Do / don't
+The controller never bulk-deletes the table during reconnect. It deletes only
+the managed cookie and preserves the fallback. This prevents the empty-table
+window that can black-hole host management traffic.
 
-- **Do** check `sudo incus config device show <name>` before assuming UDS-only or proxy-only.
-- **Do** keep mesh routes on `3tched`; strip accidental `100.69.0.0/16` via `ovsbr0`.
-- **Do** treat the [Netmaker ACL helper](host-socket-topology-live.md#break-glass-netmaker-acl-recovery) as break-glass recovery; it enables wildcard all-node traffic and bypasses the normal D-Bus path.
-- **Do not** put `10.200.0.1` on the host.
-- **Do not** point live xray at `/etc/xray/config.json`.
-- **Do not** expose Prometheus/Grafana from the netmaker container until the live topology doc is current and the path (mesh vs SNI vs loopback) is chosen.
+Static flows may use symbolic port names. `port_mac:<name>` resolves a MAC
+from the same port-description reply, so host-specific bridge MACs do not need
+to be copied into release JSON. Unsupported match fields or actions are hard
+errors rather than silently becoming broader flows. One invalid static flow
+is logged and skipped; it does not abort the connection or remove the
+fallback and FDB pins.
 
-## Stale references
+The vendored `rovs-openflow` supports the OpenFlow 1.5 `packet_type` match and
+`encap(ethernet)` action. The old Netmaker PTAP rule and its watchdog are not
+active in the current release: the rule was removed from
+`openflow-static-flows.json` when that mesh path was retired, and no current
+runit service calls `ensure-ptap-flow`.
 
-Older address tables and dinit/ens3 socket-port writeups under `docs/network-address-table.md` and `docs/operations/ghostbridge-incus-ovs-architecture.md` describe previous hosts or intent. Prefer the live topology snapshot and this page for the 2026-07 Artix/runit host.
+## D-Bus surfaces
+
+The controller backend owns:
+
+```text
+service:   org.opdbus.v1.plugins.openflow
+path:      /org/opdbus/v1/plugins/openflow
+interface: org.opdbus.v1.plugins.openflow
+```
+
+It exposes dynamic flow add/delete, in-memory flow tracking, datapath health,
+and guarded controller attachment. Inspect the deployed contract before use:
+
+```bash
+busctl --system introspect org.opdbus.v1.plugins.openflow \
+  /org/opdbus/v1/plugins/openflow
+busctl --system call org.opdbus.v1.plugins.openflow \
+  /org/opdbus/v1/plugins/openflow \
+  org.opdbus.v1.plugins.openflow GetDatapathHealth s ovsbr0
+```
+
+`DumpFlows` reports only flows pushed through the controller handle since
+process start. It is not a switch query. Use `ovs-ofctl` for read-only
+operator verification.
+
+The schema-driven `openflow` plugin is a separate front door. Its mutation
+methods ultimately call this backend over D-Bus. The plugin's
+`add_flow`/`delete_flow`/`modify_flow` declarations are validated contracts,
+but direct dispatch currently rejects those three names; state application or
+the backend `SendFlow`/`DeleteFlow` path performs the actual mutation.
+
+## Verification after restart or release
+
+```bash
+sudo sv status ovsdb-server ovs-vswitchd op-of-controller
+sudo ovs-vsctl get-controller ovsbr0
+sudo ovs-vsctl --columns=target,is_connected,status list Controller
+sudo ovs-ofctl -O OpenFlow15 dump-flows ovsbr0
+sudo ovs-appctl fdb/show ovsbr0
+sudo tail -n 100 /var/log/op-dbus/op-of-controller/current
+```
+
+Confirm all of the following:
+
+- the controller endpoint is present and OVS reports a connected controller;
+- the fallback cookie has `priority=0,actions=NORMAL`;
+- expected static flows are present and counters move when exercised;
+- the configured VRRP MAC is marked static in the FDB; and
+- logs show discovered ports, installed/skipped static-flow counts, and a
+  barrier reply rather than repeated reconnect errors.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Check or action |
+| --- | --- | --- |
+| Controller listens but logs no OVS connection | No Controller row in persistent OVSDB | Check `get-controller`; use the guarded `AttachControllerSafe` D-Bus method during a maintenance window, not a bare attach |
+| OVS immediately drops the controller session | Bridge protocol set excludes OpenFlow 1.5 | Ensure `protocols` contains `OpenFlow15` |
+| Every symbolic flow is skipped | Port discovery returned no matching names | Compare controller's discovered-port log with `ovs-vsctl list-ports ovsbr0` |
+| A static flow is skipped as unsupported | JSON requests a field/action the translator cannot encode | Fix the release JSON; the controller intentionally refuses a looser flow |
+| Gateway traffic floods multiple ports | Static FDB pin is absent | Check `OF_STATIC_FDB`, controller reconnect logs, and `fdb/show` |
+| Host traffic fails after controller changes | Fallback missing, fail mode changed, or in-band disabled | Remove the controller if necessary, restore standalone mode and the fallback, then use guarded attach |
+| `DumpFlows` omits visible switch flows | It is process-local tracking, not a live dump | Use `ovs-ofctl -O OpenFlow15 dump-flows ovsbr0` |
+
+Do not run an unfiltered `del-flows` on the live bridge. Do not set
+`disable-in-band=true`, and do not make host L3 depend on `PACKET_IN`.
+
+## Related and historical material
+
+- [Host socket & network topology](host-socket-topology-live.md) — dated live
+  inventory; re-verify before use.
+- `docs/runbook-vps-checklist.md` — incidents and provider constraints.
+- `docs/network-address-table.md` and
+  `docs/operations/ghostbridge-incus-ovs-architecture.md` — older hosts and
+  design history, not current operational authority.
