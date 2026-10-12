@@ -2,7 +2,9 @@
 
 **Host:** Artix Linux, runit (not s6), post 2026-07-20/21 provider move  
 **Verified:** 2026-07-22 against live `ip`, `ovs-vsctl`, `incus config device show`, `ss`, `/dev/shm/xray_config.json`, `/etc/op-dbus/network.conf`  
-**Status:** Read-only investigation. Tree and older docs lag; **this file documents live reality**, then contrasts intent.
+**Status:** Historical read-only snapshot. It documents what was observed on
+2026-07-22; the current release configuration and policy have since changed.
+Use [Network Operations](network.md) for the source-backed runbook.
 
 If more than a few days old, re-verify with:
 
@@ -150,7 +152,7 @@ No host Incus proxy or `fwd-*` for prom/graf as of this snapshot. Do not expose 
 
 | Container | NIC | Shared UDS mount | Incus TCP proxy | Notes |
 | --- | --- | --- | --- | --- |
-| **xray** | **yes** — `eth0` bridged on `ovsbr0` (`10.200.0.1`, `10.0.0.2`) | `/run/opdbus` disk; config bind of `/dev/shm/xray_config.json` | none | Sole public SNI terminator on fabric; only container with a real NIC |
+| **xray** | **yes** — `eth0` bridged on `ovsbr0` (`10.200.0.1`, `10.0.0.2`) | `/run/opdbus` disk; snapshot observed a host SHM config bind | none | Sole public SNI terminator on fabric; only container with a real NIC |
 | **assistant** | no | `/run/ghostbridge` → host `/run/ghostbridge` (**empty dir**) | none | Controlplane disk + identity mounts; pure shared-socket *shape*, not active sock |
 | **qdrant** | no | `/run/ghostbridge` (empty) | `6333`/`6334` host←container loopback | Hybrid |
 | **netmaker** | no | none | `8081`/`8083` on `svc0` + loopback; egress proxy to `10.0.0.2:10809` | systemd inside CT (prom/graf too) |
@@ -276,7 +278,7 @@ Host 3tched 100.69.0.254
   |
   v  fwd-8444: 100.69.0.254:8444 → 10.200.0.1:8444
 xray (VLESS xhttp-in on 10.200.0.1:8444)
-  |  SNI / domain route from /dev/shm/xray_config.json
+  |  SNI / domain route (snapshot observed a host SHM config source)
   +-- dashboard|registration.{3tched,ghostbridge}.tech → 10.200.0.2:8080  (op-web)
   +-- assistant.*                                      → 10.200.0.2:8090  (grpc-bridge)
   +-- api.*                                            → 10.200.0.2:8081  (netmaker API proxy)
@@ -285,7 +287,11 @@ xray (VLESS xhttp-in on 10.200.0.1:8444)
   +-- default                                          → blackhole
 ```
 
-**Xray live config location (mandatory):** `/dev/shm/xray_config.json` only (bind-mounted into the container). Never disk-backed live path under `/etc/xray`.
+**Current Xray policy:** the live file inside the container is
+`/etc/xray/xray_config.json`. The host-SHM bind described below is historical
+snapshot behavior, not a current path recommendation. Never point Xray at
+`/dev/shm/xray_config.json`, `/usr/local/etc/xray/config.json`, or
+`/etc/xray/config.json`.
 
 **Runit supervises the mount:** `xray-config-mount` (`/etc/runit/sv/xray-config-mount`, helper `/usr/local/libexec/3tched/xray-config-mount-up`). File bind mounts pin an *inode*; host `cp`/`mv` replaces leave the CT stale. The service polls (default 5s), compares host vs CT md5, re-attaches Incus device `xrayconf`, and restarts xray in the CT.
 
@@ -429,7 +435,9 @@ future ACL lifecycle support to the schema-driven `netmaker` plugin instead.
 1. **Re-read live devices** before adding any proxy, `fwd-*`, or SNI route.
 2. Prefer **documenting + minimal** exposure for prom/graf only after deciding: mesh-only vs SNI vs loopback.
 3. Do not put addresses on `ovsbr0` bridge device; do not steal mesh routes onto OVS.
-4. Do not point xray at disk config; regenerate `/dev/shm/xray_config.json` and reload via approved control path.
+4. Keep Xray's in-container live path at `/etc/xray/xray_config.json`; update
+   it through the approved bootstrap/control-plane path rather than writing or
+   reloading Xray directly.
 5. Shared sock **listen is live** (`/run/ghostbridge/container.sock`). New identity registrations attach via **UDS + loopback**, never Incus proxy.
 6. Provision identities via `identity_sled.provision_container` (existing WG keys); expect **UUID container names** in `incus list`. Attach fstorage with `btrfs device add` onto the RO seed, not subvolume layers.
 7. Do not put a NIC on anything except **xray**.

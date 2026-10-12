@@ -18,33 +18,35 @@ run (design rules). Each item cites the incident that earned it.
 
 ## Part 2 — design rules for any host we run
 
-1. **Never pin OpenFlow flows to an ofport.** The wire format carries port
-   *numbers*; netclient recreates interfaces and numbers churn (88→199 on
-   2026-08-24 overnight, mesh SSH died while handshakes stayed green).
-   Re-bind by interface name at runtime; a watchdog must do this, not a human.
-   Implemented: `/usr/local/libexec/3tched/ensure-ptap-flow.sh`, called from
-   the `wg-3tched` loop.
+1. **Never persist an OpenFlow rule with a discovered ofport number.** The wire
+   format carries numbers, but release configuration should name ports.
+   `op-of-controller` resolves those names from an OpenFlow 1.5 `PORT_DESC`
+   reply on every connection. This closes the failure that occurred when
+   netclient recreated an interface and its ofport changed from 88 to 199
+   while WireGuard handshakes still looked healthy.
 2. **Nothing critical lives only in tmpfs without a boot-time restorer.**
    The sealed blob catalog lives in `/dev/shm`; when the stager regressed
    (`opblob stage-shm` missing from the installed binary), op-grpc-bridge
    crash-looped all boot and took the mesh 8090 door down with it.
 3. **Every address has an owner service with a watchdog.** "netclient will
-   assign it" is not ownership. `100.69.0.1` vanished mid-run once already;
-   `wg-3tched` re-adds it every 10s and recreates the whole interface if the
-   link disappears.
-4. **One flow-table mutation path per flow class.** Controller-installed or
-   watchdog-installed, never both drifting. Today's PTAP flow is explicitly a
-   *stopgap* owned by the watchdog until `rovs-openflow` gains
-   `packet_type` + `Encap` and the controller installs it itself.
+   assign it" is not ownership. During the retired Netmaker path,
+   `100.69.0.1` vanished mid-run and proved that a healthy handshake is not an
+   address-reconciliation mechanism. Apply that lesson to any replacement
+   mesh service.
+4. **One flow-table mutation path per flow class.** Durable release flows come
+   from `/etc/op-dbus/openflow-static-flows.json`; runtime schema mutations go
+   through `op-of-controller`. Do not add a watchdog that installs a second
+   copy. The former Netmaker PTAP rule and watchdog are retired from the
+   current runit path.
 5. **After any control-plane restart, verify the data plane.** WG handshakes
    prove only the outer tunnel. Inner packets can be black-holed at the bridge,
    firewall, or listener while every status looks green. The 60-second ritual:
    ```sh
-   ovs-ofctl dump-flows -O OpenFlow15 ovsbr0 | grep packet_type  # counter moves?
-   ip -s link show netmaker            # tx errors not climbing?
-   ss -tln | grep '100.69.0.1:22'      # sshd still bound to the mesh IP?
-   # from a peer:
-   timeout 4 bash -c "</dev/tcp/100.69.0.1/22" && echo mesh-ssh-ok
+   ovs-vsctl --columns=target,is_connected,status list Controller
+   ovs-ofctl -O OpenFlow15 dump-flows ovsbr0 | grep 'actions=NORMAL'
+   ovs-appctl fdb/show ovsbr0 | grep -i '00:00:5e:00:01:0a'
+   ip route get 188.68.56.1
+   ping -c1 -W2 188.68.56.1
    ```
 
 ## Known stacked firewalls on this host (check both after edits)
@@ -65,15 +67,18 @@ run (design rules). Each item cites the incident that earned it.
   egress is its self-contained wgcf-ingress (WARP), policy asserted by
   `mesh-policy.service`; its underlay to Cloudflare rides the VPS link
   (mark `0x7777` → table 51822 → MASQ out pub0).
-- PTAP flow ownership: capability landed — vendored `rovs-openflow`
-  (`vendor/rovs-openflow`, `[patch.crates-io]`) now encodes OXM_OF_PACKET_TYPE
-  and OFPAT_ENCAP; translator installs via controller. RUNTIME BLOCKER left:
-  OVS rejects the rovs-encoded FlowMod with error type=2 code=10 (BAD_ACTION)
-  while identical semantics via `ovs-ofctl -O15 add-flow` install fine.
-  Until that wire delta is root-caused (capture 6653 during a controller
-  restart), the watchdog-owned flow stays authoritative: `ensure-ptap-flow.sh`
-  + `ptap-watch`, and `openflow-static-flows.json` keeps the entry so the
-  moment encoding matches, the controller takes over with no further change.
+- OpenFlow attachment is not boot-owned yet:
+  `/etc/op-dbus/network.conf` declares `OPENFLOW_CONTROLLER`, but the current
+  `op-of-controller` run script does not consume it and no runit helper invokes
+  the safe attach method. Existing hosts retain the Controller row in OVSDB;
+  a fresh database can leave the listener healthy but disconnected. Verify
+  `ovs-vsctl get-controller ovsbr0` after provisioning.
+- PTAP history: vendored `rovs-openflow` gained OXM_OF_PACKET_TYPE and
+  OFPAT_ENCAP support, but the affected Netmaker port was retired afterward.
+  The current `openflow-static-flows.json` has no PTAP entry and no runit
+  service calls the old `ensure-ptap-flow` helper. Re-test the encoder against
+  OVS before reintroducing that flow class; its last live attempt returned
+  BAD_ACTION while equivalent `ovs-ofctl` syntax worked.
 - Router (wrt-router) intentionally disconnected from this host: peer removed
   from static conf; its rc.local still dials a dead endpoint (harmless failed
   keepalives). Reconnect = re-add peer entry with pubkey
